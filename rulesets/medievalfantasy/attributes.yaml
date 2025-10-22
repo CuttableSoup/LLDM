@@ -1,0 +1,149 @@
+name: physique
+description:
+skills:
+  - name: athletics
+    description: Used for various feats of agility, climbing, swimming, etc.
+  - name: blades
+    description: Used to attack with blades and swords of varying length and styles.  Dagger, Sword, Scimitar, etc.
+    specializations:
+    - name: longsword
+      description: specialized training in the longsword
+  - name: throwing
+    description:
+  - name: fortitude
+    description:
+  - name: strength
+    description:
+  - name: axes
+    description:
+  - name: polearms
+    description:
+  - name: block
+    description:
+  - name: brawling
+    description:
+
+---
+
+name: dexterity
+description:
+skills:
+  - name: acrobatics
+    description:
+  - name: escape
+    description:
+  - name: fly
+    description:
+  - name: trickery
+    description:
+  - name: stealth
+    description:
+  - name: dodge
+    description:
+  - name: reflexes
+    description:
+  - name: missiles
+    description:
+
+---
+
+name: intelligence
+description:
+skills:
+  - name: appraise
+    description:
+  - name: linguistics
+    description:
+  - name: spellcraft
+    description: casting arcane spells
+    specializations:
+    - name: conjuration
+      description: specialized training in the school of conjuration
+    - name: evocation
+      description: specialized training in the school of evocation
+    - name: divination
+      description: specialized training in the school of divination
+    - name: transmutation
+      description: specialized training in the school of transmutation
+    - name: enchantment
+      description: specialized training in the school of enchantment
+    - name: abjuration
+      description: specialized training in the school of abjuration
+    - name: illusion
+      description: specialized training in the school of illusion
+    - name: necromancy
+      description: specialized training in the school of necromancy
+  - name: navigation
+    description:
+
+---
+
+name: wisdom
+description:
+skills:
+  - name: medicine
+    description:
+  - name: survival
+    description:
+  - name: willpower
+    description:
+  - name: miracles
+    description: casting divine spells
+    specializations:
+    - name: conjuration
+      description: specialized training in the school of conjuration
+    - name: evocation
+      description: specialized training in the school of evocation
+    - name: divination
+      description: specialized training in the school of divination
+    - name: transmutation
+      description: specialized training in the school of transmutation
+    - name: enchantment
+      description: specialized training in the school of enchantment
+    - name: abjuration
+      description: specialized training in the school of abjuration
+    - name: illusion
+      description: specialized training in the school of illusion
+    - name: necromancy
+      description: specialized training in the school of necromancy
+  - name: artistry
+    description:
+  - name: forgery
+    description:
+  - name: gambling
+    description:
+  - name: streetwise
+    description:
+  - name: observation
+    description:
+
+---
+
+name: presence
+description:
+skills:
+  - name: charisma
+    description:
+  - name: deception
+    description:
+  - name: disguise
+    description:
+  - name: husbandry
+    description:
+  - name: intimidation
+    description:
+  - name: psionics
+    description: manifesting psionic powers
+    specializations:
+    - name: clairsentient
+      description: specialized training in the discipline of clairsentience
+    - name: psychokinetic
+      description: specialized training in the discipline of psychokinetics
+    - name: psychometabolic
+      description: specialized training in the discipline of psychometabolics
+    - name: psychoportive
+      description: specialized training in the discipline of psychoportives
+    - name: telepathic
+      description: specialized training in the discipline of telepathy
+
+...

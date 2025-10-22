@@ -1,0 +1,93 @@
+name: fireball
+tags:
+- fire
+skill:
+- evocation: 15
+attributes:
+  physique:
+    strength: spellcraft:evocation/2
+target:
+- creature
+- object
+duration: [] # FIX: Was 0, must be a list
+area: 3x3
+resist:
+  reflex:
+    pass: strength/2
+range: spellcraft:base
+cost:
+  initial: # FIX: Must be a LIST of dictionaries
+    - cur_fp: -3
+    - hand: points a finger at the target
+    - mouth: shouts 'Burn!'
+    - item: bat guano
+supertype: supernatural
+type: arcane
+subtype: evocation
+
+---
+
+name: cure light wounds
+tags:
+- heal
+choice: none
+skill:
+- conjuration: 15
+- brawling
+attributes:
+  physique:
+    strength: miracles:conjuration/2
+target:
+- creature
+duration: [] # FIX: Was 0, must be a list
+range: 1
+area: none
+tags:
+- harmless
+resist:
+  fortitude:
+    pass: strength/2
+cost: # FIX: Merged two 'cost' blocks into one
+  initial: # FIX: Must be a LIST of dictionaries
+    - cur_fp: -3
+    - hand: lays hands over the wound
+    - mouth: whispers 'let the light flow through you'
+    - item: holy symbol
+supertype: supernatural
+type: divine
+subtype: healing
+
+---
+
+name: adrenaline control
+tags:
+- enhance:
+    choice:
+      attributes:
+      - physique
+      - dexterity
+skill:
+- psychometabolism: 15
+attributes:
+  physique:
+    strength: psionics:psychometabolism/2
+target:
+- self
+duration: # FIX: Was '10', must be a list of DurationComponents
+  - fequency: round # Note: 'fequency' typo matches dataclass
+    length: 10
+range: 0
+cost:
+  initial: [] # FIX: 'none' is not valid, use an empty list
+  ongoing:
+    - fequency: round
+      cur_fp: -1
+area: none
+tags:
+- harmless
+# FIX: Removed duplicate 'cost: none' key from here
+supertype: supernatural
+type: psionics
+subtype: psychometabolism
+
+...

@@ -1,0 +1,15 @@
+humanoid:
+- self: 10
+- hand: 2
+- head: 1
+- eyes: 1
+- mouth: 1
+- neck: 1
+- shoulders: 1
+- chest: 1
+- back: 1
+- belt: 1
+- pants: 1
+- feet: 1
+
+...

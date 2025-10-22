@@ -1,0 +1,25 @@
+name: wolf
+supertype: creature
+type: quadruped
+subtype: wolf
+max_hp: 30
+size: [X]
+skills:
+  brawling:
+    base: 6
+  dodge:
+    base: 6
+
+unique:
+  inventory:
+  - name: bite
+    description: sharp fangs
+    tags:
+    - piercing
+    strength: 6
+    equipped: mouth
+    range: 1
+    skill: brawling
+    type: weapon
+
+...

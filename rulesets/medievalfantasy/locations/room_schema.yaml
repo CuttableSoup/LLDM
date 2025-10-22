@@ -1,0 +1,109 @@
+scenario_name: The Training Grounds
+environment:
+  rooms:
+    - name: The Arena
+      description: A well lit arena.
+      map: # a tile map (W=wall, G=ground)
+        - [W,W,W,W,W,W,W]
+        - [W,G,G,G,G,G,W]
+        - [W,G,G,D,G,G,W]
+        - [W,T,G,G,G,C,W]
+        - [W,G,G,P,G,G,W]
+        - [W,G,G,G,G,G,W]
+        - [W,W,p,p,p,W,W]
+      objects:
+        - name: dummy
+          description: A wooden dummy
+          icon: D
+          id: dum
+          max_hp: 20
+          weight: 50
+          damage_mod:
+          - physical: -5
+        - name: spike trap
+          description: A wooden spike trap
+          icon: T
+          tags:
+          - hidden
+          id: trap
+          max_hp: 20
+          skill:
+          - observation:
+            difficulty: 10
+            pass:
+              description: you sucessfuly spot the trap
+              tags:
+              - spot
+            fail:
+              description: none
+          - trickery:
+            difficulty: 15
+            pass:
+              description: you sucessfuly disarmed the trap
+              tags:
+              - disarm
+            fail:
+              description: you triggered the trap
+              tags:
+              - trigger
+          trigger:
+          - polearms: 10
+            strength: 6
+        - name: chest
+          description: A wooden chest
+          icon: C
+          tags:
+          - closed
+          max_hp: 20
+          inventory:
+          - name: gold
+            quantity: 50
+        - name: portcullis
+          description: a closed portcullis
+          icon: p
+          id: p_gate
+          tags:
+          - closed
+          - locked
+          max_hp: 100
+          damage_mod:
+          - physical: -10
+          action:
+          - interact
+          skill:
+            - strength:
+              difficulty: 20
+              pass:
+                description: you sucessfuly lift the portcullis
+                tags:
+                - open
+                - broken
+              fail:
+                description: the portcullis does not budge
+            - trickery:
+              difficulty: 15
+              pass:
+                description: you sucessfuly unlock the portcullis
+                tags:
+                - open
+              fail:
+                description: the lock to the portcullis jams
+                tags:
+                - broken
+    - corridor:
+      description: a dim corridor leading to the arena
+      map: # a tile map (W=wall, G=ground)
+        - [W,p,p,p,W]
+        - [W,G,G,G,W]
+        - [W,G,G,G,W]
+        - [W,G,G,G,W]
+        - [W,G,G,G,W]
+        - [W,G,G,G,W]
+        - [W,W,W,W,W]
+      objects:
+      - name: portcullis
+        description: a closed portcullis
+        icon: p
+        id: p_gate
+
+...

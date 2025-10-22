@@ -1,0 +1,155 @@
+name: name
+
+type:
+- type1
+- type2
+
+subtype:
+- subtype1
+- subtype2
+
+body: body
+
+max_hp: 1
+cur_hp: 1
+max_fp: 1
+cur_fp: 1
+max_mp: 1
+cur_mp: 1
+
+exp: 1
+
+area:
+- [X]
+
+weight: 1
+
+attributes:
+  attribute1:
+    base: 1
+    current: 1
+  attribute2:
+    base: 1
+    current: 1
+  attribute3:
+    base: 1
+    current: 1
+
+skills:
+  skill1:
+    base: 1
+    current: 1
+    specializations:
+      specialization1:
+        base: 1
+        current: 1
+      specialization2:
+        base: 1
+        current: 1
+  skill2:
+    base: 1
+    current: 1
+    specializations:
+      specialization1:
+        base: 1
+        current: 1
+      specialization2:
+        base: 1
+        current: 1
+
+qualities:
+  body: body
+  eyes: eyes
+  gender: gender
+  hair: hair
+  height: 1
+  skin: skin
+
+tags:
+- tag1
+- tag2
+
+tag_mods:
+  tag1: formula
+  tag2: formula
+
+allies:
+
+enemies:
+
+attitudes:
+  default: 0,0,0,0,0
+
+languages:
+- language1
+- language2
+
+target:
+- target1
+- target2
+
+resist:
+  skill:
+    pass: formula
+    fail: formula
+
+range: 1
+
+proficiency:
+- skill1: 1
+- skill2
+
+cost:
+  initial:
+    - cur_hp: 1
+    - cur_mp: 1
+    - cur_fp: 1
+    - slot: slot1
+    - item: item1
+  ongoing:
+    - fequency: fequency
+      length: 1
+      cur_hp: 1
+    - fequency: fequency
+      length: 1
+      cur_mp: 1
+    - fequency: fequency
+      length: 1
+      cur_fp: 1
+    - fequency: fequency
+      length: 1
+      slot: slot1
+    - fequency: fequency
+      length: 1
+      item: item1
+
+
+duration:
+- fequency: fequency
+  length: 1
+
+value: 1
+
+slot: slot
+
+inventory:
+- item: item1
+  quantity: 1
+  equipped: true
+- item: item2
+  quantity: 1
+  equipped: false
+
+supernatural:
+- supernatural1
+- supernatural2
+
+memories:
+- memory1
+- memory2
+
+quotes:
+- quote1
+- quote2
+
+...

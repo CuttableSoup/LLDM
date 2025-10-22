@@ -1,0 +1,110 @@
+name: longsword # name of the item
+description: a metal blade # natural language description of the item
+tags: # predefined list of tags detailing the mechanical tag of the item
+  choice:
+  - piercing
+  - slashing
+strength: 6 # the strength of the tag in pips (3 pips to 1 die)
+slot: hand # predefined location on the character the item is equipped
+range: 1 # range in number of tiles 
+proficiency: blades # predefined proficiency rolled to use the item
+supertype: object
+type: weapon
+subtype: blade
+weight: 5 # weight of the item in pounds
+value: 10 # value of the item in currency
+
+---
+
+name: chainmail
+description: oiled chainmail
+tags:
+- physical
+strength: 5
+slot: chest
+range: 0
+proficiency: none
+supertype: object
+type: armor
+subtype: medium
+weight: 10
+value: 20
+
+---
+
+name: steel shield
+description: battered shield
+tags:
+- physical
+strength: 3
+slot: hand
+range: 0
+proficiency: block
+supertype: object
+type: shield
+subtype: medium
+weight: 7
+value: 5
+
+---
+
+name: potion of healing
+description: luminous vial of fluid
+tags:
+- heal
+slot: hand
+strength: '5' # this is static value greater than 3
+range: 0
+proficiency: none
+supertype: object
+type: consumable
+subtype: potion
+weight: 1
+value: 10
+
+---
+
+name: gold
+description: minted coins
+tags:
+- physical
+strength: 1
+slot: hand
+range: 0
+proficiency: none
+supertype: object
+type: currency
+weight: 0.01
+value: 1
+
+---
+
+name: silver
+description: minted coins
+tags:
+- physical
+strength: 1
+slot: hand
+range: 0
+proficiency: none
+supertype: object
+type: currency
+weight: 0.01
+value: 0.1
+
+---
+
+name: copper
+description: minted coins
+tags:
+- physical
+strength: 1
+slot: hand
+range: 0
+proficiency: none
+supertype: object
+type: currency
+weight: 0.01
+value: 0.01
+
+...
