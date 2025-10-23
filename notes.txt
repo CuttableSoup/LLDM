@@ -1,5 +1,5 @@
 hardcoded classes:
-- entity: [ type: (list of string), subtype: (list of string), name: (string), description: (string),
+- entity: [ supertype: (string), type: (string), subtype: (string), name: (string), description: (string),
             max_hp: (int), cur_hp: (int), max_mp: (int), cur_mp: (int), max_fp: (int), cur_fp: (int), exp: (int),
             weight: (int), body: (string), qualities: list of (string, any), languages: list of (string),
             attributes: list of (string, float), skills: list of (skill: base, int, specializations: list of (skill: int)),
@@ -7,17 +7,28 @@ hardcoded classes:
             target: list of (string: any), area: (size), resist: list of (string, any), range: (int), slot: (string),
             cost: (initial: any, ongoing: any), value: (int) tags: list of (string), tag_mod: list of (string, string),
             inventory: list of (string, int, bool), supernatural: list of (string), memories: list of (string), quotes: list of (string), unique ]
-- qualities: [ body, eyes, gender, hair, height, skin ]
-- supertype: [ supernatural, object, creature, environment ]
-- supernatural subtype: [ spell, miracle, power ]
-- object type: [ weapon, armor, consumable, currency, accessory ]
-- creature type: [ humanoid ]
-- humanoid subtype: [ human, alien ]
-- environment type: [ light, trap ]
+- qualities: [ body, eye, gender, hair, height, skin ]
 - attitudes: [ disposition, trust, confidence, respect, obligation ]
-- languages: [ human, alien ]
 - atlas: [ array: dimension->world->area->structure->room->tile, size ]
-- body: [ humanoid: self, 10 ]
-- tags: [ hidden, observed, unconcious, damaged, supressed, dead, broken, dispel, damage_hp, damage_mp, damage_fp, heal_hp, heal_mp, heal_fp, prone ]
+- tags: [ hidden, observed, unconcious, damaged, supressed, dead, broken, dispel, prone,
+            damage_max_hp, damage_max_mp, damage_max_fp, heal_max_hp, heal_max_mp, heal_max_fp,
+            damage_cur_hp, damage_cur_mp, damage_cur_fp, heal_cur_hp, heal_cur_mp, heal_cur_fp,
+            damage_attribute, damage_skill, damage_specialization, heal_attribute, heal_skill, heal_specialization ]
 - actions: [ attack, cast, move, speak, stand, pronate, use, memorize, craft ]
 - reactions: [ AoO ]
+
+medievalfantasy types:
+- supertypes: [ supernatural, object, creature, environment ]
+
+- object types: [ armor, blade, axe, polearm, shield, natural, throwing, consumable, currency, accessory ]
+- supernatural types: [ spell, miracle, power ]
+- environment types: [ weather, light, trap ]
+- creature types: [ humanoid ]
+
+- blades subtypes: [ shortsword, longsword, scimitar, dagger ]
+- armor subtypes: [ light, medium, heavy ]
+- shield subtypes: [ light, medium, heavy ]
+- humanoid subtypes: [ human, elf, dwarf, orc ]
+
+- languages: [ human, elf, dwarf, orc ]
+- body: [ humanoid: self 10, hands 2, etc... ]

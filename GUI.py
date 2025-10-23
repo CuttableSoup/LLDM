@@ -6,25 +6,12 @@ from tkinter.scrolledtext import ScrolledText
 from pathlib import Path
 
 try:
-    from debug_gui import DebugWindow
-except ImportError:
-    print("Warning: debug_gui.py not found. Debug window will not be available.") 
-    DebugWindow = None
-
-try:
     # NEW: Import Room for type hinting
     from classes import Entity, InventoryItem, Skill, RulesetLoader, Room
 except ImportError:
     print("Warning: 'classes.py' not found. Using placeholder classes.")
     # Define placeholder for Room if classes.py is missing
     class Room: pass
-
-try:
-    from dungeonmaster import IntentParser, LLMInterface, process_interaction, process_attitudes
-except ImportError:
-    print("FATAL: dungeonmaster.py not found. Game logic will not work.")
-    # You might want to exit or define placeholder functions
-    exit(1)
 
 class GameController:
     """
@@ -57,10 +44,6 @@ class GameController:
         # Load entities from the loader
         self.game_entities.update(self.loader.creatures)
         self.game_entities.update(self.loader.characters)
-        
-        # --- NEW: Initialize logic modules ---
-        self.parser = IntentParser()
-        self.llm = LLMInterface()
 
         # (Placeholder) List of all entities in the current encounter
         self.initiative_order: List[Entity] = []

@@ -1,149 +1,161 @@
-name: physique
+attribute: physique
 description:
-skills:
-  - name: athletics
+skill:
+  athletic:
     description: Used for various feats of agility, climbing, swimming, etc.
-  - name: blades
+  blade:
     description: Used to attack with blades and swords of varying length and styles.  Dagger, Sword, Scimitar, etc.
-    specializations:
-    - name: longsword
-      description: specialized training in the longsword
-  - name: throwing
+    specialization:
+      longsword:
+        description: specialized training in the longsword
+  throwing:
     description:
-  - name: fortitude
+  fortitude:
     description:
-  - name: strength
+  strength:
     description:
-  - name: axes
+  axe:
     description:
-  - name: polearms
+  polearm:
     description:
-  - name: block
+  shield:
     description:
-  - name: brawling
-    description:
-
----
-
-name: dexterity
-description:
-skills:
-  - name: acrobatics
-    description:
-  - name: escape
-    description:
-  - name: fly
-    description:
-  - name: trickery
-    description:
-  - name: stealth
-    description:
-  - name: dodge
-    description:
-  - name: reflexes
-    description:
-  - name: missiles
+  brawling:
     description:
 
 ---
 
-name: intelligence
+attribute: dexterity
 description:
-skills:
-  - name: appraise
+skill:
+  acrobatics:
     description:
-  - name: linguistics
+  escape:
     description:
-  - name: spellcraft
+  fly:
+    description:
+  trickery:
+    description:
+  stealth:
+    description:
+  dodge:
+    description:
+    opposes:
+    - blade
+    - axe
+    - polearm
+    - brawling
+  reflex:
+    description:
+  missile:
+    description:
+
+---
+
+attribute: intelligence
+description:
+skill:
+  appraise:
+    description:
+  linguistic:
+    description:
+  spellcraft:
     description: casting arcane spells
-    specializations:
-    - name: conjuration
+  specialization:
+    conjuration:
       description: specialized training in the school of conjuration
-    - name: evocation
+    evocation:
       description: specialized training in the school of evocation
-    - name: divination
+    divination:
       description: specialized training in the school of divination
-    - name: transmutation
+    transmutation:
       description: specialized training in the school of transmutation
-    - name: enchantment
+    enchantment:
       description: specialized training in the school of enchantment
-    - name: abjuration
+    abjuration:
       description: specialized training in the school of abjuration
-    - name: illusion
+    illusion:
       description: specialized training in the school of illusion
-    - name: necromancy
+    necromancy:
       description: specialized training in the school of necromancy
-  - name: navigation
+  navigation:
     description:
 
 ---
 
-name: wisdom
+attribute: wisdom
 description:
-skills:
-  - name: medicine
+skill:
+  medicine:
     description:
-  - name: survival
+  survival:
     description:
-  - name: willpower
+  willpower:
     description:
-  - name: miracles
+    opposes:
+    - intimidation
+    - charisma
+  miracle:
     description: casting divine spells
-    specializations:
-    - name: conjuration
+  specialization:
+    conjuration:
       description: specialized training in the school of conjuration
-    - name: evocation
+    evocation:
       description: specialized training in the school of evocation
-    - name: divination
+    divination:
       description: specialized training in the school of divination
-    - name: transmutation
+    transmutation:
       description: specialized training in the school of transmutation
-    - name: enchantment
+    enchantment:
       description: specialized training in the school of enchantment
-    - name: abjuration
+    abjuration:
       description: specialized training in the school of abjuration
-    - name: illusion
+    illusion:
       description: specialized training in the school of illusion
-    - name: necromancy
+    necromancy:
       description: specialized training in the school of necromancy
-  - name: artistry
+  artistry:
     description:
-  - name: forgery
+  forgery:
     description:
-  - name: gambling
+  gambling:
     description:
-  - name: streetwise
+  streetwise:
     description:
-  - name: observation
+  observation:
     description:
+    opposes:
+    - trickery
+    - stealth
+    - disguise
 
 ---
 
-name: presence
+attribute: presence
 description:
-skills:
-  - name: charisma
+skill:
+  charisma:
     description:
-  - name: deception
+  deception:
     description:
-  - name: disguise
+  disguise:
     description:
-  - name: husbandry
+  husbandry:
     description:
-  - name: intimidation
+  intimidation:
     description:
-  - name: psionics
+  psionic:
     description: manifesting psionic powers
-    specializations:
-    - name: clairsentient
+  specialization:
+    clairsentience:
       description: specialized training in the discipline of clairsentience
-    - name: psychokinetic
+    psychokinetic:
       description: specialized training in the discipline of psychokinetics
-    - name: psychometabolic
+    psychometabolic:
       description: specialized training in the discipline of psychometabolics
-    - name: psychoportive
+    psychoportative:
       description: specialized training in the discipline of psychoportives
-    - name: telepathic
+    telepathy:
       description: specialized training in the discipline of telepathy
 
 ...

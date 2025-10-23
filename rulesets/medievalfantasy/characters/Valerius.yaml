@@ -3,107 +3,109 @@ supertype: creature
 type: humanoid
 subtype: human
 max_hp: 30 # maximum hit points
-cur_hp: 30 # current hit points
 max_fp: 15 # maximum fatigue points
-cur_fp: 15 # current fatigue points
 max_mp: 20 # maximum mental points
-cur_mp: 20 # current mental points
 exp: 50 # expecience to be expended
-area:
-- [X]
 weight: 180
 
-attributes: # list of attributes, in pips (3 pips to 1 die)
-  physique: 9
-  dexterity: 9
-  intelligence: 9
-  wisdom: 9
-  presence: 9
+attribute: # list of attributes, in pips (3 pips to 1 die)
+  physique:
+    base: 9
+    skill:
+      blade:
+        base: 3
+  dexterity:
+    base: 9
+    skill:
+      dodge:
+        base: 3
+      missile:
+        base: 3
+  intelligence:
+    base: 9
+  spellcraft:
+    base: 3
+    specialization:
+      evocation: 3
+  wisdom:
+    base: 9
+    skill:
+      observation:
+        base: 3
+      willpower:
+        base: 3
+      miracle:
+        base: 3
+        specialization:
+          conjuration: 3
+  presence:
+    base: 9
+    skill:
+      psionic:
+        base: 3
+        specialization:
+          psychometabolism: 3
 
 tag_mod: # list of tags and how the value is modified
-  fire: strength-10 # fire damage is reduced by 10
-  frost: strength/2 # frost damage is doubled
+- fire: strength-10 # fire damage is reduced by 10
+- frost: strength*2 # frost damage is doubled
 
-allies: # list of entities considered allies
-  type:
-  - creature:
-    subtype:
-    - human:
-      name:
-      - Kael
+ally: # list of entities considered allies
+  creature:
+    humanoid:
+      human:
+        name:
+        - Kael
 
-enemies: # list of entities considered allies
-  type:
-  - creature:
-    subtype:
-    - human:
-      name:
-      - Grog
+enemy: # list of entities considered allies
+  creature:
+    humanoid:
+      orc:
+        name:
+        - Grog
 
-attitudes: # list of attitudes by category, an array of five values, lower taking precedent
+attitude: # list of attitudes by category, an array of five values, lower taking precedent
 # Disposition (Hostile ↔ Friendly)
 # Trust (Suspicious ↔ Trusting)
 # Confidence (Fearful ↔ Confident)
 # Respect (Disdainful ↔ Admiring)
 # Obligation (Unfettered ↔ Indebted)
   default: 0,0,0,0,0 # base attitude applied to all before modified
-  type:
-  - creature:
-    subtype:
-    - human: 0.5,0.5,0,0,0 # likes and trusts humans
-      name:
-      - Kael: 0,1,0,1,0 # trusts and respects Kael
-    - orc: -0.5,-0.5,0,0,0 # hates and distrusts orcs
-      name:
-      - Grog: -1,-1,0,0,0 # will attack Grog on sight
+  creature:
+    humanoid:
+      human: 
+        default: 0.5,0.5,0,0,0 # likes and trusts humans
+        name:
+        - Kael: 0,1,0,1,0 # trusts and respects Kael
+      orc:
+        default: -0.5,-0.5,0,0,0 # hates and distrusts orcs
+        name:
+        - Grog: -1,-1,0,0,0 # will attack Grog on sight
 
-tags: # list of predefined temporary tags that modify various elements
+tag: # list of predefined temporary tags that modify various elements
 - none
 
-languages: # list of languages
+language: # list of languages
 - human
 
 target:
 resist:
 range:
 proficiency:
+requirement:
 cost:
   initial: []
   ongoing: []
 value:
 slot:
 
-qualities: # list of various character descriptions
+quality: # list of various character descriptions
   body: lightly scarred
-  eyes: brown
+  eye: brown
   gender: male
   hair: brown
   height: 72
   skin: tan
-
-skills: # list of predefined skills, in pips (3 pips to 1 die)
-  dodge:
-    base: 3
-  missiles:
-    base: 3
-  blades:
-    base: 3
-  observation:
-    base: 3
-  willpower:
-    base: 3
-  spellcraft:
-    base: 3
-    specializations:
-      evocation: 3
-  miracles:
-    base: 3
-    specializations:
-      conjuration: 3
-  psionics:
-    base: 3
-    specializations:
-      psychometabolism: 3
 
 inventory: # list of predefined items
 - item: longsword # name of item
@@ -130,10 +132,10 @@ supernatural: # list of supernatural abilities
 - fireball
 - adrenaline control
 
-memories: # list of memory description in natural language
+memory: # list of memory description in natural language
 - home village destoryed by orcs, led by a one named Grog
 
-quotes: # list of quotes to affect the dialogue of the character
-- how's it going'?
+quote: # list of quotes to affect the dialogue of the character
+- how's it goin'?
 
 ...

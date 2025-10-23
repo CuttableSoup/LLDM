@@ -1,59 +1,58 @@
-name: drunk
+tag: drunk
 description: the entity is inebriated
 max_hp: +5
-attributes:
-- intelligence: -3
-- wisdom: -3
-skills:
-- willpower: -3
+attribute:
+  intelligence: -3
+  wisdom: -3
 
 ---
 
-name: asleep
+tag: asleep
 description: the entity is asleep
-skills:
-- observation: -6
+attribute:
+  wisdom:
+    observation: -6
 
 ---
 
-name: sleepless
+tag: sleepless
 description: the entity does not sleep
 tag_mod:
-- sleep: immune
+  sleep: immune
 
 ---
 
-name: invisible
+tag: invisible
 description: the entity cannot be seen without aid
-tags:
+tag:
 - hidden
 
 ---
 
-name: undead
+tag: undead
 description: the character is in a stage of un-life
 tag_mod:
-  heal: damage
+  heal_cur_hp: damage_cur_hp
 
 ---
 
-name: fire
+tag: fire
 description: the damage is dealt through burning
-tags:
-- damage
+tag:
+- damage_cur_hp
 
 ---
 
-name: physical
-tags:
+tag: physical
+tag:
 - bludgeoning
 - slashing
 - piercing
 
 ---
 
-name: elemental
-tags:
+tag: elemental
+tag:
 - frost
 - fire
 - acid

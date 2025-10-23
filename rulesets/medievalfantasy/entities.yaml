@@ -1,0 +1,259 @@
+name: wolf
+supertype: creature
+type: quadruped
+subtype: wolf
+max_hp: 30
+skill:
+  brawling:
+    base: 6
+  dodge:
+    base: 6
+
+unique:
+  inventory:
+  - name: bite
+    supertype: object
+    type: natural
+    subtype: fangs
+    description: sharp fangs
+    tags:
+    - piercing
+    strength: 6
+    equipped: mouth
+    range: 1
+    skill: brawling
+
+---
+
+name: longsword
+description: a metal blade
+tags:
+  choice:
+  - piercing
+  - slashing
+strength: 6
+slot: hand
+range: 1
+proficiency: blade
+supertype: object
+type: blade
+subtype: longsword
+weight: 5
+value: 10
+
+---
+
+name: chainmail
+description: oiled chainmail
+tags:
+- physical
+strength: 5
+slot: chest
+range: 0
+proficiency: none
+supertype: object
+type: armor
+subtype: medium
+weight: 10
+value: 20
+
+---
+
+name: tower shield
+description: battered shield
+tags:
+- physical
+strength: 6
+slot: hand
+range: 0
+proficiency: shield
+supertype: object
+type: shield
+subtype: heavy
+weight: 40
+value: 20
+
+---
+
+name: steel shield
+description: battered shield
+tags:
+- physical
+strength: 3
+slot: hand
+range: 0
+proficiency: shield
+supertype: object
+type: shield
+subtype: medium
+weight: 7
+value: 5
+
+---
+
+name: buckler
+description: battered shield
+tags:
+- physical
+strength: 1
+slot: hand
+range: 0
+proficiency: shield
+supertype: object
+type: shield
+subtype: light
+weight: 3
+value: 2
+
+---
+
+name: potion of healing
+description: luminous vial of fluid
+tags:
+- heal
+slot: hand
+strength: '5' # this is static value greater than 3
+range: 0
+proficiency: none
+supertype: object
+type: consumable
+subtype: potion
+weight: 1
+value: 10
+
+---
+
+name: gold
+description: minted coins
+tags:
+- physical
+strength: 1
+slot: hand
+range: 0
+proficiency: none
+supertype: object
+type: currency
+weight: 0.01
+value: 1
+
+---
+
+name: silver
+description: minted coins
+tags:
+- physical
+strength: 1
+slot: hand
+range: 0
+proficiency: none
+supertype: object
+type: currency
+weight: 0.01
+value: 0.1
+
+---
+
+name: copper
+description: minted coins
+tags:
+- physical
+strength: 1
+slot: hand
+range: 0
+proficiency: none
+supertype: object
+type: currency
+weight: 0.01
+value: 0.01
+
+---
+
+name: fireball
+tags:
+- fire
+skill:
+  evocation: 15
+attribute:
+  physique:
+    strength: spellcraft:evocation/2
+target:
+- creature
+- object
+duration: []
+resist:
+  reflex:
+    pass: strength/2
+range: spellcraft:base
+cost:
+  initial:
+    - cur_fp: -3
+    - hand: points a finger at the target
+    - mouth: shouts 'Burn!'
+    - item: bat guano
+supertype: supernatural
+type: arcane
+subtype: evocation
+
+---
+
+name: cure light wounds
+tags:
+- heal
+choice: none
+skill:
+- conjuration: 15
+- brawling
+attribute:
+  physique:
+    strength: miracle:conjuration/2
+target:
+- creature
+duration: []
+range: 1
+tags:
+- harmless
+resist:
+  fortitude:
+    pass: strength/2
+cost:
+  initial:
+    - cur_fp: -3
+    - hand: lays hands over the wound
+    - mouth: whispers 'let the light flow through you'
+    - item: holy symbol
+supertype: supernatural
+type: divine
+subtype: healing
+
+---
+
+name: adrenaline control
+tags:
+  enhance:
+    choice:
+      attribute:
+      - physique
+      - dexterity
+skill:
+  psychometabolism: 15
+attribute:
+  physique:
+    strength: psionic:psychometabolism/2
+target:
+- self
+duration:
+  - frequency: round
+    length: 10
+range: 0
+cost:
+  initial: []
+  ongoing:
+    - frequency: round
+      cur_fp: -1
+tags:
+- harmless
+supertype: supernatural
+type: psionic
+subtype: psychometabolism
+
+...
