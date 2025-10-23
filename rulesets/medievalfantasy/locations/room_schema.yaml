@@ -1,4 +1,8 @@
 scenario_name: The Training Grounds
+entities:
+  player:
+    icon: P
+    character: Valerius
 environment:
   rooms:
     - name: The Arena
@@ -90,7 +94,7 @@ environment:
                 description: the lock to the portcullis jams
                 tags:
                 - broken
-    - corridor:
+    - name: corridor
       description: a dim corridor leading to the arena
       map: # a tile map (W=wall, G=ground)
         - [W,p,p,p,W]

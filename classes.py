@@ -143,6 +143,61 @@ class InventoryItem:
     """An optional note or description for the item."""
 
 
+# --- NEW: Dataclasses for Location/Scenario ---
+
+@dataclass
+class GameObject:
+    """
+    Represents a single object within a room, as defined in
+    room_schema.yaml.
+    """
+    name: str = ""
+    description: str = ""
+    icon: str = ""
+    id: str = ""
+    max_hp: Optional[int] = None
+    tags: List[str] = field(default_factory=list)
+    # Note: Other complex fields like 'skill', 'trigger', 'damage_mod'
+    # are loaded as raw dicts/lists by default.
+    skill: Any = field(default_factory=dict)
+    trigger: Any = field(default_factory=dict)
+    damage_mod: Any = field(default_factory=dict)
+    inventory: List[Dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass
+class Room:
+    """
+    Represents a single room or area in the game world.
+    """
+    name: str = ""
+    description: str = ""
+    map: List[List[str]] = field(default_factory=list)
+    """A 2D grid representing the tile map."""
+    objects: List[GameObject] = field(default_factory=list)
+    """A list of interactive objects within the room."""
+
+
+@dataclass
+class Environment:
+    """
+    Holds the list of all rooms defined in the scenario.
+    """
+    rooms: List[Room] = field(default_factory=list)
+
+
+@dataclass
+class Scenario:
+    """
+    The top-level object for a scenario, loaded from room_schema.yaml.
+    """
+    scenario_name: str = ""
+    environment: Environment = field(default_factory=Environment)
+
+
+# --- END: New Dataclasses ---
+
+
 @dataclass
 class Entity:
     """
@@ -347,7 +402,9 @@ class RulesetLoader:
         self.supernatural: Dict[str, Entity] = {}
         self.characters: Dict[str, Entity] = {}
         
-        self.locations: Dict[str, Any] = {}
+        # self.locations: Dict[str, Any] = {} # Replaced by self.scenario
+        self.scenario: Optional[Scenario] = None # NEW: To hold room_schema.yaml
+        
         self.lorebooks: Dict[str, Any] = {}
         
         print(f"RulesetLoader initialized for: {self.base_path}")
@@ -458,6 +515,100 @@ class RulesetLoader:
                 print(f"Error creating entity '{entity_name_from_file}' from {yaml_file}: {e}")
         return entities
 
+    def _load_scenario(self, file_path: Path) -> Optional[Scenario]:
+        """
+        (NEW & FIXED) Loads the scenario file (room_schema.yaml) into Scenario objects.
+        """
+        print(f"Loading scenario from: {file_path}")
+        data = self._load_yaml(file_path)
+
+        # --- FIX: Handle multi-doc YAML giving a list (e.g., from '...') ---
+        if isinstance(data, list):
+            if not data or not isinstance(data[0], dict):
+                print(f"Warning: Scenario file {file_path} is multi-doc but first doc is not valid.")
+                return None
+            data = data[0] # Take only the first document
+        # --- END FIX ---
+            
+        if not data:
+            print(f"Warning: No data loaded from {file_path}.")
+            return None
+        
+        try:
+            # Manually parse the nested structure
+            env_data = data.get('environment', {})
+            if not env_data: # Handle case where environment key is missing
+                 print(f"Warning: No 'environment' key found in {file_path}.")
+                 return None
+                 
+            rooms_data = env_data.get('rooms', [])
+            
+            loaded_rooms = []
+            for room_data in rooms_data:
+                
+                if not room_data or not isinstance(room_data, dict):
+                    continue # Skip empty list items (like None)
+
+                room_details: Optional[Dict[str, Any]] = None
+                
+                # Handle {'name': '...'} format
+                if 'name' in room_data:
+                    room_details = room_data
+                
+                # Handle {'corridor': {...}} format
+                else:
+                    if not room_data.items():
+                        continue # Skip empty dicts {}
+                        
+                    # Get the first key/value pair
+                    room_name, room_details = next(iter(room_data.items()))
+                    
+                    # --- FIX for the 'NoneType' error ---
+                    if room_details is None:
+                        print(f"Warning: Skipping room entry '{room_name}' which has no data in {file_path}.")
+                        continue
+                    # --- END FIX ---
+                    
+                    if not isinstance(room_details, dict):
+                        print(f"Warning: Skipping room entry '{room_name}' which is not a dictionary.")
+                        continue
+                    
+                    room_details['name'] = room_name
+
+                # If room_details is still None (shouldn't happen, but good to check)
+                if room_details is None:
+                    continue 
+
+                objects_data = room_details.get('objects', [])
+                loaded_objects = []
+                if objects_data:
+                    for obj_data in objects_data:
+                        # Filter obj_data to only keys that GameObject accepts
+                        obj_field_names = {f.name for f in fields(GameObject)}
+                        filtered_obj_data = {k: v for k, v in obj_data.items() if k in obj_field_names}
+                        loaded_objects.append(GameObject(**filtered_obj_data))
+                
+                loaded_rooms.append(Room(
+                    name=room_details.get('name'),
+                    description=room_details.get('description'),
+                    map=room_details.get('map', []),
+                    objects=loaded_objects
+                ))
+            
+            loaded_env = Environment(rooms=loaded_rooms)
+            loaded_scenario = Scenario(
+                scenario_name=data.get('scenario_name'),
+                environment=loaded_env
+            )
+            print(f"Successfully loaded scenario '{loaded_scenario.scenario_name}' with {len(loaded_rooms)} rooms.")
+            return loaded_scenario
+        except Exception as e:
+            # Print the full traceback for debugging
+            import traceback
+            print(f"Error creating Scenario from {file_path}: {e}")
+            traceback.print_exc()
+            return None
+
     def load_all(self):
         """
         Loads all YAML files from the ruleset directory.
@@ -478,8 +629,11 @@ class RulesetLoader:
         
         # Entity directory loads (uses _load_entities_from_dir)
         self.characters = self._load_entities_from_dir("characters")
-        self.locations = self._load_entities_from_dir("locations") # Note: May not be Entities
-        self.lorebooks = self._load_entities_from_dir("lorebooks") # Note: May not be Entities
+        # self.locations = self._load_entities_from_dir("locations") # OLD
+        self.lorebooks = self._load_entities_from_dir("lorebooks")
+        
+        # NEW: Load scenario
+        self.scenario = self._load_scenario(self.base_path / "locations" / "room_schema.yaml")
         
         print(f"Loaded {len(self.attributes)} attribute definitions (from multi-doc).")
         print(f"Loaded {len(self.skills)} skills.")

@@ -8,13 +8,16 @@ from pathlib import Path
 try:
     from debug_gui import DebugWindow
 except ImportError:
-    print("Warning: debug_gui.py not found. Debug window will not be available.")
+    print("Warning: debug_gui.py not found. Debug window will not be available.") 
     DebugWindow = None
 
 try:
-    from classes import Entity, InventoryItem, Skill, RulesetLoader
+    # NEW: Import Room for type hinting
+    from classes import Entity, InventoryItem, Skill, RulesetLoader, Room
 except ImportError:
     print("Warning: 'classes.py' not found. Using placeholder classes.")
+    # Define placeholder for Room if classes.py is missing
+    class Room: pass
 
 try:
     from dungeonmaster import IntentParser, LLMInterface, process_interaction, process_attitudes
@@ -47,6 +50,10 @@ class GameController:
         self.game_entities: Dict[str, Entity] = {}
         """A dictionary of all entities in the scene, indexed by name."""
         
+        # NEW: Store the current room
+        self.current_room: Optional[Room] = None
+        """The currently active room object."""
+        
         # Load entities from the loader
         self.game_entities.update(self.loader.creatures)
         self.game_entities.update(self.loader.characters)
@@ -65,7 +72,8 @@ class GameController:
         self.update_narrative_callback: Callable[[str], None] = lambda text: None
         self.update_character_sheet_callback: Callable[[Entity], None] = lambda entity: None
         self.update_inventory_callback: Callable[[Entity], None] = lambda entity: None
-        self.update_map_callback: Callable[[], None] = lambda: None
+        # NEW: Callback now passes the Room object
+        self.update_map_callback: Callable[[Optional[Room]], None] = lambda room: None
 
     def start_game(self, player: Entity):
         """
@@ -77,6 +85,13 @@ class GameController:
         self.player_entity = player
         if player.name not in self.game_entities:
             self.game_entities[player.name] = player
+            
+        # NEW: Load the first room from the scenario
+        if self.loader.scenario and self.loader.scenario.environment.rooms:
+            self.current_room = self.loader.scenario.environment.rooms[0]
+            print(f"Loaded initial room: {self.current_room.name}")
+        else:
+            print("Warning: No scenario or rooms found in loader.")
         
         # (Placeholder) Set up the initial scene
         # This is where you'd add NPCs to the encounter
@@ -99,7 +114,8 @@ class GameController:
         self.update_narrative_callback(f"The adventure begins for {player.name}...")
         self.update_character_sheet_callback(self.player_entity)
         self.update_inventory_callback(self.player_entity)
-        self.update_map_callback()
+        # NEW: Pass the loaded room to the map callback
+        self.update_map_callback(self.current_room)
         
         print("GameController started.")
 
@@ -247,9 +263,14 @@ class GameController:
         if actor.attitudes:
             attitudes_str = json.dumps(actor.attitudes) # Simple serialization
         
+        # NEW: Add room objects to game state
+        objects_in_room = []
+        if self.current_room and self.current_room.objects:
+            objects_in_room = [obj.name for obj in self.current_room.objects]
+
         return {
             "actors_present": ", ".join(actors_in_room) if actors_in_room else "none",
-            "objects_present": "none", # (Placeholder)
+            "objects_present": ", ".join(objects_in_room) if objects_in_room else "none",
             "attitudes": attitudes_str,
             "game_history": "\n".join(self.round_history)
         }
@@ -321,7 +342,7 @@ class MapPanel(ttk.Frame):
         self.map_canvas = tk.Canvas(self, bg='darkgrey', relief='sunken', borderwidth=2)
         self.map_canvas.pack(expand=True, fill='both')
         
-        # Placeholder text
+        # Placeholder text (will be cleared on update)
         self.map_canvas.create_text(
             150, 150, 
             text="Map Area", 
@@ -330,16 +351,85 @@ class MapPanel(ttk.Frame):
         )
         print("MapPanel created.")
         
-    def update_map(self, map_data: Any = None, tokens: List[Entity] = []):
+    def update_map(self, room: Optional[Room] = None, tokens: List[Entity] = []):
         """
-        Redraws the map based on new data.
+        (MODIFIED) Redraws the map based on new data.
         
         Args:
-            map_data: The map grid/image (placeholder).
+            room: The Room object to display.
             tokens: A list of entities to draw on the map.
         """
-        # (GUI logic to clear canvas and draw/redraw map/tokens)
         print("MAP: Refreshing map display.")
+        self.map_canvas.delete("all") # Clear the canvas
+
+        if not room:
+            self.map_canvas.create_text(
+                150, 150, 
+                text="No Map Data Loaded", 
+                font=("Arial", 20, "italic"), 
+                fill="white"
+            )
+            return
+
+        # --- Render Room Name and Description ---
+        self.map_canvas.create_text(
+            10, 10, 
+            text=f"{room.name}: {room.description}", 
+            font=("Arial", 14, "bold"), 
+            fill="white",
+            anchor="nw" # Anchor to top-left corner
+        )
+
+        # --- Render Map Grid ---
+        TILE_SIZE = 25 # Size of each map tile in pixels
+        MAP_OFFSET_Y = 40 # Offset to leave space for title
+        
+        # Define tile properties (color, text)
+        TILE_INFO = {
+            'W': ("#333", "Wall"),  # Dark grey
+            'G': ("#888", "Ground"), # Lighter grey
+            'D': ("#8B4513", "Dummy"), # Brown
+            'T': ("#DC143C", "Trap"),  # Crimson
+            'C': ("#FFD700", "Chest"), # Gold
+            'p': ("#708090", "Gate")   # Slate grey
+        }
+        DEFAULT_COLOR = "#FF00FF" # Magenta for unknown tiles
+
+        map_grid = room.map
+        if not map_grid:
+            return
+
+        for y, row in enumerate(map_grid):
+            for x, tile_char in enumerate(row):
+                
+                color, text = TILE_INFO.get(tile_char, (DEFAULT_COLOR, "?"))
+                
+                # Calculate pixel coordinates
+                x0 = x * TILE_SIZE
+                y0 = (y * TILE_SIZE) + MAP_OFFSET_Y
+                x1 = x0 + TILE_SIZE
+                y1 = y0 + TILE_SIZE
+                
+                # Draw the tile rectangle
+                self.map_canvas.create_rectangle(
+                    x0, y0, x1, y1, 
+                    fill=color, 
+                    outline="#222" # Dark outline
+                )
+                
+                # Draw the icon text (if not ground)
+                if tile_char != 'G':
+                    self.map_canvas.create_text(
+                        x0 + (TILE_SIZE / 2),
+                        y0 + (TILE_SIZE / 2),
+                        text=tile_char,
+                        font=("Arial", 12, "bold"),
+                        fill="white"
+                    )
+        
+        # (Placeholder for token rendering)
+        # for token in tokens:
+        #   ...
         pass
 
 
