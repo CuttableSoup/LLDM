@@ -1,16 +1,3 @@
-#!/usr/bin/env python3
-
-"""
-Skeleton classes for the TTRPG AI Dungeon Master GUI.
-
-This file defines the 'View' (GUI components) and a 'Controller'
-(GameController) to manage game state, parse input, and update
-the interface. It is designed to work with the data models
-from 'classes.py'.
-
-This version is implemented using tkinter.
-"""
-
 from __future__ import annotations
 from typing import List, Dict, Any, Optional, Callable
 import tkinter as tk
@@ -18,85 +5,23 @@ from tkinter import ttk
 from tkinter.scrolledtext import ScrolledText
 from pathlib import Path
 
-# --- New Import for the Debug Window ---
 try:
     from debug_gui import DebugWindow
 except ImportError:
     print("Warning: debug_gui.py not found. Debug window will not be available.")
     DebugWindow = None
 
-
-# --- Data Models (from classes.py) ---
-# Import the data models from your provided file
 try:
-    # RulesetLoader is the new class for loading YAML data
     from classes import Entity, InventoryItem, Skill, RulesetLoader
 except ImportError:
     print("Warning: 'classes.py' not found. Using placeholder classes.")
-    # Define minimal placeholders if classes.py is missing
-    from dataclasses import dataclass, field
-    
-    @dataclass
-    class Skill:
-        base: int = 0
-        specializations: Dict[str, int] = field(default_factory=dict)
-    
-    @dataclass
-    class InventoryItem:
-        item: str = ""
-        quantity: int = 0
-        equipped: bool = False
-        inventory: List[InventoryItem] = field(default_factory=list)
-        note: Optional[str] = None
-    
-    @dataclass
-    class Entity:
-        name: str = ""
-        cur_hp: int = 0
-        max_hp: int = 1
-        cur_fp: int = 0
-        max_fp: int = 1
-        cur_mp: int = 0
-        max_mp: int = 1
-        attributes: Dict[str, int] = field(default_factory=dict)
-        skills: Dict[str, Skill] = field(default_factory=dict)
-        inventory: List[InventoryItem] = field(default_factory=list)
 
-    # Placeholder loader if classes.py is missing
-    class RulesetLoader:
-        def __init__(self, base_path: Path):
-            print(f"Placeholder loader for {base_path}")
-            self.characters = {}
-            self.creatures = {}
-            self.items = {}
-            self.supernatural = {}
-            self.skills = {}
-            self.tags = {}
-            self.types = {}
-            self.attributes = []
-            self.slots = []
-            self.locations = {}
-            self.lorebooks = {}
-        def load_all(self):
-            print("Placeholder loader: load_all()")
-            # Create a fallback mock player
-            self.characters["Valerius"] = Entity(
-                name="Valerius (Mock)",
-                cur_hp=35, max_hp=50,
-                cur_mp=10, max_mp=20,
-                cur_fp=40, max_fp=40,
-                attributes={"physique": 9, "intelligence": 12, "dexterity": 10},
-                skills={"blades": Skill(base=2), "spellcraft": Skill(base=3)},
-                inventory=[
-                    InventoryItem(item="Health Potion", quantity=3),
-                    InventoryItem(item="Broadsword", quantity=1, equipped=True),
-                ]
-            )
-        def get_character(self, name: str) -> Optional[Entity]:
-            return self.characters.get(name)
-
-
-# --- Controller Class (No GUI code) ---
+try:
+    from dungeonmaster import IntentParser, LLMInterface, process_interaction, process_attitudes
+except ImportError:
+    print("FATAL: dungeonmaster.py not found. Game logic will not work.")
+    # You might want to exit or define placeholder functions
+    exit(1)
 
 class GameController:
     """
@@ -104,7 +29,6 @@ class GameController:
     
     This class acts as the 'Controller' in an MVC pattern,
     connecting the data (Models from classes.py) to the GUI (Views).
-    It implements the hybrid parsing logic described.
     """
 
     def __init__(self, loader: RulesetLoader):
@@ -126,7 +50,16 @@ class GameController:
         # Load entities from the loader
         self.game_entities.update(self.loader.creatures)
         self.game_entities.update(self.loader.characters)
-        # (We can add items, etc., as needed)
+        
+        # --- NEW: Initialize logic modules ---
+        self.parser = IntentParser()
+        self.llm = LLMInterface()
+
+        # (Placeholder) List of all entities in the current encounter
+        self.initiative_order: List[Entity] = []
+        
+        # (Placeholder) Game history for narrative summaries
+        self.round_history: List[str] = []
 
         # --- GUI Callbacks ---
         self.update_narrative_callback: Callable[[str], None] = lambda text: None
@@ -142,11 +75,25 @@ class GameController:
             player: The pre-loaded player Entity object.
         """
         self.player_entity = player
-        # Ensure player is in game_entities (if not already from loader)
         if player.name not in self.game_entities:
             self.game_entities[player.name] = player
         
-        # ... (Load NPCs, set up game world) ...
+        # (Placeholder) Set up the initial scene
+        # This is where you'd add NPCs to the encounter
+        # For testing, we'll add the first creature from the loader
+        if self.loader.creatures:
+            first_creature_name = list(self.loader.creatures.keys())[0]
+            first_creature = self.loader.creatures[first_creature_name]
+            if first_creature.name not in self.game_entities:
+                 self.game_entities[first_creature.name] = first_creature
+            
+            # (Placeholder) Add entities to the combat order
+            self.initiative_order = [self.player_entity, first_creature]
+            
+            print(f"Starting game with {player.name} and {first_creature.name}.")
+        else:
+            self.initiative_order = [self.player_entity]
+            print(f"Starting game with only {player.name}.")
         
         # Manually update GUI on start
         self.update_narrative_callback(f"The adventure begins for {player.name}...")
@@ -155,17 +102,11 @@ class GameController:
         self.update_map_callback()
         
         print("GameController started.")
-        pass
 
     def process_player_input(self, player_input: str):
         """
         Receives raw text input from the InputBar and processes it
         using the hybrid parser model.
-        
-        This matches the 'player' branch of your pseudocode.
-        
-        Args:
-            player_input: The raw string from the user.
         """
         if not self.player_entity:
             return
@@ -173,75 +114,154 @@ class GameController:
         print(f"Processing input: {player_input}")
         
         # 1. Fast Intent + Entity Pipeline
-        confidence, action, target, language = self._run_fast_pipeline(player_input)
+        pipeline_result = self.parser.run_fast_pipeline(player_input)
+        
+        confidence = pipeline_result['confidence']
+        action = pipeline_result['intent']
+        target_name = pipeline_result['target']
+        language = pipeline_result['language']
         
         # 2. Triage: Fallback to Pattern-Constrained LLM if needed
-        if confidence < 0.7: # Example threshold
-            print("Low confidence. Falling back to LLM parser...")
-            action, target, language = self._run_llm_parser(player_input)
+        # (Confidence < 0.7 is an example threshold)
+        if confidence < 0.7:
+            print(f"Low confidence ({confidence:.2f}). Falling back to LLM parser...")
+            # Get the list of all available skills for the player
+            player_skills = list(self.player_entity.skills.keys())
+            
+            llm_result = self.llm.run_llm_parser(player_input, player_skills)
+            action = llm_result['intent']
+            target_name = llm_result['target']
+            language = llm_result['language']
         
         # 3. Process the results
-        self._process_interaction(self.player_entity, action, target)
-        self._process_attitudes(self.player_entity, action, target, language)
+        target_entity = self.game_entities.get(target_name)
         
-        # 4. Generate narrative
-        if action: # Only generate summary if it was a real action
-            narrative_summary = self._generate_narrative_summary(action, target)
+        if action:
             self.update_narrative_callback(f"You: \"{player_input}\"")
-            self.update_narrative_callback(narrative_summary)
+            process_interaction(self.player_entity, action, target_entity)
+            process_attitudes(self.player_entity, target_entity, action, language)
+            
+            # (Placeholder) Log action for summary
+            self.round_history.append(f"{self.player_entity.name} {action}s {target_name}.")
+        else:
+            self.update_narrative_callback(f"You say, \"{player_input}\"")
+            self.round_history.append(f"{self.player_entity.name} says: \"{player_input}\"")
         
-        # 5. Update GUI with any state changes
+        # 4. Update GUI with any state changes
         # (e.g., if HP changed or an item was used)
+        if target_entity:
+            self.update_character_sheet_callback(target_entity) # Update target's sheet if visible
         self.update_character_sheet_callback(self.player_entity)
         self.update_inventory_callback(self.player_entity)
         
-        # 6. Trigger NPC turn (simplified)
+        # 5. Trigger NPC turns
         self._run_npc_turns()
-        pass
 
     def _run_npc_turns(self):
         """
-        (Pseudo-method) Simulates the 'else' block of your loop.
+        Runs the 'else' block of the loop for all non-player characters.
         """
         print("Running NPC turns...")
-        # for npc in (all_npcs_in_initiative):
-        #   ...
+        if not self.player_entity: return
+        
+        # This defines the "tools" NPCs can use.
+        # This list comes from your llm_calls.py pseudocode.
+        # It's a placeholder; a real one would be loaded from a file.
+        npc_tools = [
+            {
+                "type": "function", "function": {
+                    "name": "execute_skill_check",
+                    "description": "Use a non-magical skill on an object or another character.",
+                    "parameters": {"type": "object", "properties": {
+                        "skill": {"type": "string", "description": "The name of the skill being used."},
+                        "target": {"type": "string", "description": "The target of the skill (an object or character name)."}
+                    }, "required": ["skill", "target"]}
+                }
+            },
+            {
+                "type": "function", "function": {
+                    "name": "manage_item",
+                    "description": "Manage an item: equip, unequip, or use.",
+                    "parameters": {"type": "object", "properties": {
+                        "action": {"type": "string", "enum": ["equip", "unequip", "use"]},
+                        "item_name": {"type": "string"}
+                    }, "required": ["action", "item_name"]}
+                }
+            }
+        ]
+        
+        all_actions_taken = False
+        
+        for npc in self.initiative_order:
+            if npc == self.player_entity:
+                continue # Skip the player
+
+            # 1. Get Game State for the NPC
+            game_state = self._get_current_game_state(npc)
+            
+            # 2. Get NPC action from LLM
+            llm_result = self.llm.get_npc_action(npc, game_state, npc_tools)
+            
+            narrative = llm_result['narrative']
+            mechanical_data = llm_result['mechanical_data']
+            
+            # 3. Output narrative
+            if narrative:
+                self.update_narrative_callback(narrative)
+                self.round_history.append(narrative)
+            
+            # 4. Execute mechanical action
+            if mechanical_data:
+                action_name = mechanical_data['name']
+                arguments = mechanical_data['arguments']
+                
+                # (Placeholder) This is where you would call an ActionHandler
+                # For now, we'll just print it.
+                print(f"MECHANICS: {npc.name} calls tool '{action_name}' with args: {arguments}")
+                
+                # (Placeholder) Simulate a skill check
+                if action_name == 'execute_skill_check':
+                    target_entity = self.game_entities.get(arguments.get('target'))
+                    if target_entity:
+                        process_interaction(npc, arguments.get('skill', 'attack'), target_entity)
+                
+                all_actions_taken = True
+
+        # 5. (Placeholder) Process round updates (e.g., poison, regeneration)
+        self._process_round_updates()
+        
+        # 6. (Placeholder) Generate narrative summary
+        if all_actions_taken:
+            summary = self.llm.get_narrative_summary("\n".join(self.round_history))
+            self.update_narrative_callback(f"\n--- Round Summary ---\n{summary}")
+            self.round_history = [] # Clear history for next round
+
+    def _get_current_game_state(self, actor: Entity) -> Dict[str, Any]:
+        """(Helper) Gathers all context for an LLM prompt."""
+        
+        # This is a stub, but it's what your `npc_action` in GUI.py was doing
+        actors_in_room = [e.name for e in self.initiative_order if e.name != actor.name]
+        
+        # Format attitudes
+        attitudes_str = "none"
+        if actor.attitudes:
+            attitudes_str = json.dumps(actor.attitudes) # Simple serialization
+        
+        return {
+            "actors_present": ", ".join(actors_in_room) if actors_in_room else "none",
+            "objects_present": "none", # (Placeholder)
+            "attitudes": attitudes_str,
+            "game_history": "\n".join(self.round_history)
+        }
+
+    def _process_round_updates(self):
+        """(Placeholder) Processes end-of-round effects like poison, regen, etc."""
+        # for entity in self.initiative_order:
+        #   if 'poisoned' in entity.tags:
+        #       entity.cur_hp -= 1
+        #       self.update_narrative_callback(f"{entity.name} takes 1 poison damage.")
+        #   self.update_character_sheet_callback(entity)
         pass
-
-    def _run_fast_pipeline(self, text: str) -> tuple[float, str, str, str]:
-        """(Pseudo-method) Runs semantic similarity and NER."""
-        print("Running fast Intent+Entity pipeline...")
-        confidence = 0.9 # Placeholder
-        action = "attack" # Placeholder
-        target = "goblin" # Placeholder
-        language = "aggressive" # Placeholder
-        return confidence, action, target, language
-
-    def _run_llm_parser(self, text: str) -> tuple[str, str, str]:
-        """(Pseudo-method) Runs the Pattern-Constrained LLM."""
-        print("Running Pattern-Constrained LLM...")
-        action = "cast_fireball" # Placeholder
-        target = "goblin_shaman" # Placeholder
-        language = "desperate" # Placeholder
-        return action, target, language
-
-    def _process_interaction(self, actor: Entity, action: str, target_name: str):
-        """(Pseudo-method) Enacts the game mechanics for an action."""
-        print(f"MECHANICS: {actor.name} performs '{action}' on '{target_name}'")
-        pass
-
-    def _process_attitudes(self, actor: Entity, action: str, target_name: str, language: str):
-        """(Pseudo-method) Updates NPC attitudes based on interaction."""
-        print(f"ATTITUDES: '{target_name}' reacts to {actor.name}'s {language} '{action}'")
-        pass
-
-    def _generate_narrative_summary(self, action: str, target: str) -> str:
-        """(Pseudo-method) Prompts an LLM for a narrative summary."""
-        print("Generating narrative summary...")
-        return f"You skillfully {action} the {target}!"
-
-
-# --- View Classes (Tkinter Implementation) ---
 
 class NarrativePanel(ttk.Frame):
     """
@@ -281,7 +301,6 @@ class NarrativePanel(ttk.Frame):
         self.text_area.see(tk.END) # Auto-scroll to the bottom
         print(f"NARRATIVE: {text}")
         pass
-
 
 class MapPanel(ttk.Frame):
     """
@@ -478,7 +497,6 @@ class CharacterPanel(ttk.Frame):
             row += 1
         pass
 
-
 class InfoMultipane(ttk.Notebook):
     """
     The GUI component (right pane) that holds the tabs for
@@ -526,14 +544,14 @@ class InputBar(ttk.Frame):
     """
     
     def __init__(self, parent_widget: tk.Widget,
-                 submit_callback: Callable[[str], None]):
+                submit_callback: Callable[[str], None]):
         """
         Initializes the input bar.
         
         Args:
             parent_widget: The parent GUI object.
-            submit_callback: The function to call when the
-                             user presses Enter.
+            submit_callback: The function to call
+            when the user presses Enter.
         """
         super().__init__(parent_widget, padding=5)
         self.submit_callback = submit_callback
@@ -564,7 +582,6 @@ class InputBar(ttk.Frame):
             # Clear the text box
             self.entry.delete(0, tk.END)
         pass
-
 
 class MainWindow:
     """
@@ -624,7 +641,7 @@ class MainWindow:
             submit_callback=self.controller.process_player_input
         )
         self.input_bar.pack(fill='x', expand=True)
-                                          
+
         # 4. Connect Controller callbacks to GUI update methods
         self.controller.update_narrative_callback = self.narrative_panel.add_narrative_text
         self.controller.update_character_sheet_callback = self.info_multipane.get_character_panel().update_character_sheet
@@ -652,7 +669,6 @@ class MainWindow:
         else:
             debug_menu.add_command(label="View Loaded Ruleset", state="disabled")
 
-
     def _open_debug_window(self):
         """
         Opens the debug inspector window. If one is already open,
@@ -666,7 +682,6 @@ class MainWindow:
                 parent=self.root, 
                 loader=self.controller.loader
             )
-
 
     def run(self, player: Entity):
         """
@@ -683,7 +698,6 @@ class MainWindow:
         self.root.mainloop()
         pass
 
-# --- Example Usage (Conceptual) ---
 if __name__ == "__main__":
     """
     Example of how to run the application.
