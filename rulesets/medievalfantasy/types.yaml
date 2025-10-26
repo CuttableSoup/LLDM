@@ -46,6 +46,7 @@ category:
 
 category:
   supertype: object
+  passable: yes
   types:
     test:
       subtypes:
@@ -58,7 +59,7 @@ category:
         pommel: 1
     armor:
     axe:
-    polearm:
+    polearm: 
     shield:
     natural:
     throwing:
@@ -70,6 +71,7 @@ category:
 
 category:
   supertype: environment
+  passable: yes
   types:
     tile:
       subtypes:

@@ -3,13 +3,41 @@ environment:
   rooms:
     - name: The Arena
       description: A well lit arena.
-      map:
-        - [W,W,W,W,W,W,W]
-        - [W,G,G,G,G,G,W]
-        - [W,G,G,D,G,G,W]
-        - [W,T,G,G,G,C,W]
-        - [W,G,G,P,G,G,W]
-        - [W,G,G,G,G,G,W]
-        - [W,W,W,W,W,W,W]
+      
+      layers:
+        - [ [G,G,G,G,G,G,G],
+            [G,G,G,G,G,G,G],
+            [G,G,G,G,G,G,G],
+            [G,T,G,G,G,G,G],
+            [G,G,G,G,G,G,G],
+            [G,G,G,G,G,G,G],
+            [G,G,G,G,G,G,G] ]
+            
+        - [ [W,W,W,W,W,W,W],
+            [W,x,x,x,x,x,W],
+            [W,x,w,D,g,g,W],
+            [W,x,x,x,g,g,W],
+            [W,x,x,P,x,C,W],
+            [W,x,x,x,x,x,W],
+            [W,W,W,W,W,W,W] ]
 
-...
+      legend:
+        - { char: G, name: ground }    
+        - { char: T, name: spike trap }
+        
+        - { char: W, name: stone wall }  
+        - { char: D, name: dummy }       
+        - { char: P, name: Valerius }    
+        - { char: w, name: wolf }        
+        
+        - char: C
+          name: chest
+          inventory:
+            - { item: "gold coin", quantity: 50 }
+            - { item: "silver coin", quantity: 100 }
+          
+        - char: g
+          name: giant
+          pattern: 
+            - ['g', 'g']
+            - ['g', 'g']
