@@ -1,0 +1,15 @@
+scenario_name: The Training Grounds
+environment:
+  rooms:
+    - name: The Arena
+      description: A well lit arena.
+      map:
+        - [W,W,W,W,W,W,W]
+        - [W,G,G,G,G,G,W]
+        - [W,G,G,D,G,G,W]
+        - [W,T,G,G,G,C,W]
+        - [W,G,G,P,G,G,W]
+        - [W,G,G,G,G,G,W]
+        - [W,W,W,W,W,W,W]
+
+...

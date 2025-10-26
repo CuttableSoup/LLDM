@@ -1,0 +1,49 @@
+entity:
+  name: buzzed
+  description: the entity is intoxicated
+  status:
+  - attribute:
+      intelligence:
+        base: -1
+      wisdom:
+        base: -1
+
+---
+
+entity:
+  name: drunk
+  description: the entity is inebriated
+  status:
+  - max_hp: +5
+  - attribute:
+      intelligence:
+        base: -3
+      wisdom:
+        base: -3
+
+---
+
+entity:
+  name: asleep
+  description: the entity is sleeping
+  status:
+  - unconcious
+  - attribute:
+      wisdom:
+        base:
+        skill:
+          observation:
+            base: -6
+
+---
+
+entity:
+  name: wet
+  description: you're all wet
+  status:
+  - fire: -3
+  - acid: -3
+  - shock: +3
+  - frost: +3
+
+...

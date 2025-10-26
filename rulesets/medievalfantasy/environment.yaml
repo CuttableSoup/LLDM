@@ -1,0 +1,142 @@
+entity:
+  name: stone wall
+  supertype: environment
+  type: tile
+  subtype: wall
+  max_hp: 500
+  status:
+    physical: -50
+
+---
+
+entity:
+  name: ground
+  supertype: environment
+  type: tile
+  subtype: floor
+  max_hp: 100
+  status:
+    physical: -5
+
+---
+
+entity:
+  name: water
+  supertype: environment
+  type: tile
+  subtype: floor
+  range: 0
+  apply:
+    status:
+      wet
+
+---
+
+entity:
+  name: air
+  supertype: environment
+  type: tile
+  subtype: floor
+
+---
+
+entity:
+  supertype: object
+  type: practice
+  subtype: dummy
+  name: dummy
+  description: a wooden dummy
+  max_hp: 20
+  weight: 50
+  status:
+    physical: -5
+
+---
+
+entity:
+  supertype: object
+  type: container
+  subtype: chest
+  name: chest
+  description: a wooden dummy
+  max_hp: 20
+  weight: 50
+  status:
+    physical: -5
+
+---
+
+entity:
+  name: spike trap
+  supertype: environment
+  type: trap
+  subtype: spike
+  description: A wooden spike trap
+  status:
+    hidden
+    armed
+  max_hp: 20
+  apply:
+    piercing:
+      damage_cur_hp: physique:strength
+  range: 0
+  proficiency:
+    observation:
+      difficulty: 15
+      pass:
+        description: you sucessfuly spot the trap
+        status:
+          observed
+      fail:
+        description: none
+    trickery:
+      difficulty: 15
+      pass:
+        description: you sucessfuly disarmed the trap
+        status:
+          disarm
+      fail:
+        description: you triggered the trap
+        status:
+          trigger
+          disarm
+  attribute:
+    physique:
+      base: 9
+      skill:
+        polearm:
+          base: 6
+
+---
+
+entity:
+  name: portcullis
+  description: a closed portcullis
+  status:
+    closed
+    locked
+  max_hp: 100
+  damage_mod:
+    physical: -10
+  proficiency:
+    strength:
+      difficulty: 20
+      pass:
+        description: you sucessfuly lift the portcullis
+        status:
+          open
+          broken
+      fail:
+        description: the portcullis does not budge
+    trickery:
+      difficulty: 15
+      pass:
+        description: you sucessfuly unlock the portcullis
+        status:
+          open
+      fail:
+        description: the lock to the portcullis jams
+        status:
+          broken
+
+...

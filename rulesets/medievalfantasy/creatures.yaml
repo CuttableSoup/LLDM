@@ -1,0 +1,49 @@
+entity:
+  name: wolf
+  supertype: creature
+  type: quadruped
+  subtype: canine
+  max_hp: 30
+  attribute:
+    physique:
+      base: 6
+    dexterity:
+      base: 6
+  
+  movement:
+    land: 10
+
+  inventory:
+  - item: bite
+    quantity: 1
+    equipped: true
+
+  unique_entity:
+  - name: bite
+    supertype: object
+    type: natural
+    subtype: fangs
+    description: sharp fangs
+    slot:
+    - mouth
+    apply:
+      piercing:
+        damage_cur_hp: physique:strength
+    range: 1
+    skill: brawling
+
+---
+
+entity:
+  name: giant
+  supertype: creature
+  type: humanoid
+  subtype: giant
+  max_hp: 50
+  attribute:
+    physique:
+      base: 21
+  movement:
+    land: 15
+
+...

@@ -1,62 +1,79 @@
-supertype: creature
-description:
-humanoid:
+category:
+  supertype: creature
   description:
-  slot:
-    self: 10
-    hand: 2
-    ring: 2
-    head: 1
-    eye: 1
-    mouth: 1
-    neck: 1
-    shoulder: 1
-    chest: 1
-    back: 1
-    belt: 1
-    pant: 1
-    feet: 1
-  subtype:
-    human:
+  types:
+    humanoid:
       description:
-    orc:
-      description:
-      attribute:
-        intelligence: -3
-        wisdom: -3
-        physique: +3
-      skills:
-        brawling: +3
-quadruped:
-  slot:
-    self: 10
-    ring: 2
-    head: 1
-    eye: 1
-    mouth: 1
-    neck: 1
-    back: 1
-    feet: 2
-  subtype:
-    wolf:
+      slot:
+        self: 10
+        hand: 2
+        ring: 2
+        head: 1
+        eye: 1
+        mouth: 1
+        neck: 1
+        shoulder: 1
+        chest: 1
+        back: 1
+        belt: 1
+        pant: 1
+        feet: 1
+      subtypes:
+        human:
+          description:
+        orc:
+          description:
+          attribute:
+            intelligence: -3
+            wisdom: -3
+            physique: +3
+          skills:
+            brawling: +3
+    quadruped:
+      slot:
+        self: 10
+        ring: 2
+        head: 1
+        eye: 1
+        mouth: 1
+        neck: 1
+        back: 1
+        feet: 2
+      subtype:
+        wolf:
 
 ---
 
-supertype: object
-blade:
-  slot:
-    blade: 1
-    hilt: 1
-    grip: 1
-    pommel: 1
-armor:
-axe:
-polearm:
-shield:
-natural:
-throwing:
-consumable:
-currency:
-accessory:
+category:
+  supertype: object
+  types:
+    test:
+      subtypes:
+        test:
+    blade:
+      slot:
+        blade: 1
+        hilt: 1
+        grip: 1
+        pommel: 1
+    armor:
+    axe:
+    polearm:
+    shield:
+    natural:
+    throwing:
+    consumable:
+    currency:
+    accessory:
+
+---
+
+category:
+  supertype: environment
+  types:
+    tile:
+      subtypes:
+        wall:
+          description: a stone wall
 
 ...

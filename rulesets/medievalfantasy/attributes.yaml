@@ -1,161 +1,166 @@
-attribute: physique
-description:
-skill:
-  athletic:
-    description: Used for various feats of agility, climbing, swimming, etc.
-  blade:
-    description: Used to attack with blades and swords of varying length and styles.  Dagger, Sword, Scimitar, etc.
+aptitude:
+  attribute: physique
+  description:
+  skill:
+    athletic:
+      description: Used for various feats of agility, climbing, swimming, etc.
+    blade:
+      description: Used to attack with blades and swords of varying length and styles.  Dagger, Sword, Scimitar, etc.
+      specialization:
+        longsword:
+          description: specialized training in the longsword
+    throwing:
+      description:
+    fortitude:
+      description:
+    strength:
+      description:
+    axe:
+      description:
+    polearm:
+      description:
+    shield:
+      description:
+    brawling:
+      description:
+
+---
+
+aptitude:
+  attribute: dexterity
+  description:
+  skill:
+    acrobatics:
+      description:
+    escape:
+      description:
+    fly:
+      description:
+    trickery:
+      description:
+    stealth:
+      description:
+    dodge:
+      description:
+      opposes:
+      - blade
+      - axe
+      - polearm
+      - brawling
+    reflex:
+      description:
+    missile:
+      description:
+
+---
+
+aptitude:
+  attribute: intelligence
+  description:
+  skill:
+    appraise:
+      description:
+    linguistic:
+      description:
+    spellcraft:
+      description: casting arcane spells
     specialization:
-      longsword:
-        description: specialized training in the longsword
-  throwing:
-    description:
-  fortitude:
-    description:
-  strength:
-    description:
-  axe:
-    description:
-  polearm:
-    description:
-  shield:
-    description:
-  brawling:
-    description:
+      conjuration:
+        description: specialized training in the school of conjuration
+      evocation:
+        description: specialized training in the school of evocation
+      divination:
+        description: specialized training in the school of divination
+      transmutation:
+        description: specialized training in the school of transmutation
+      enchantment:
+        description: specialized training in the school of enchantment
+      abjuration:
+        description: specialized training in the school of abjuration
+      illusion:
+        description: specialized training in the school of illusion
+      necromancy:
+        description: specialized training in the school of necromancy
+    navigation:
+      description:
 
 ---
 
-attribute: dexterity
-description:
-skill:
-  acrobatics:
-    description:
-  escape:
-    description:
-  fly:
-    description:
-  trickery:
-    description:
-  stealth:
-    description:
-  dodge:
-    description:
-    opposes:
-    - blade
-    - axe
-    - polearm
-    - brawling
-  reflex:
-    description:
-  missile:
-    description:
+aptitude:
+  attribute: wisdom
+  description:
+  skill:
+    medicine:
+      description:
+    survival:
+      description:
+    willpower:
+      description:
+      opposes:
+      - intimidation
+      - charisma
+    miracle:
+      description: casting divine spells
+    specialization:
+      conjuration:
+        description: specialized training in the school of conjuration
+      evocation:
+        description: specialized training in the school of evocation
+      divination:
+        description: specialized training in the school of divination
+      transmutation:
+        description: specialized training in the school of transmutation
+      enchantment:
+        description: specialized training in the school of enchantment
+      abjuration:
+        description: specialized training in the school of abjuration
+      illusion:
+        description: specialized training in the school of illusion
+      necromancy:
+        description: specialized training in the school of necromancy
+    artistry:
+      description:
+    forgery:
+      description:
+    gambling:
+      description:
+    streetwise:
+      description:
+    observation:
+      description:
+      opposes:
+      - trickery
+      - stealth
+      - disguise
 
 ---
 
-attribute: intelligence
-description:
-skill:
-  appraise:
-    description:
-  linguistic:
-    description:
-  spellcraft:
-    description: casting arcane spells
-  specialization:
-    conjuration:
-      description: specialized training in the school of conjuration
-    evocation:
-      description: specialized training in the school of evocation
-    divination:
-      description: specialized training in the school of divination
-    transmutation:
-      description: specialized training in the school of transmutation
-    enchantment:
-      description: specialized training in the school of enchantment
-    abjuration:
-      description: specialized training in the school of abjuration
-    illusion:
-      description: specialized training in the school of illusion
-    necromancy:
-      description: specialized training in the school of necromancy
-  navigation:
-    description:
-
----
-
-attribute: wisdom
-description:
-skill:
-  medicine:
-    description:
-  survival:
-    description:
-  willpower:
-    description:
-    opposes:
-    - intimidation
-    - charisma
-  miracle:
-    description: casting divine spells
-  specialization:
-    conjuration:
-      description: specialized training in the school of conjuration
-    evocation:
-      description: specialized training in the school of evocation
-    divination:
-      description: specialized training in the school of divination
-    transmutation:
-      description: specialized training in the school of transmutation
-    enchantment:
-      description: specialized training in the school of enchantment
-    abjuration:
-      description: specialized training in the school of abjuration
-    illusion:
-      description: specialized training in the school of illusion
-    necromancy:
-      description: specialized training in the school of necromancy
-  artistry:
-    description:
-  forgery:
-    description:
-  gambling:
-    description:
-  streetwise:
-    description:
-  observation:
-    description:
-    opposes:
-    - trickery
-    - stealth
-    - disguise
-
----
-
-attribute: presence
-description:
-skill:
-  charisma:
-    description:
-  deception:
-    description:
-  disguise:
-    description:
-  husbandry:
-    description:
-  intimidation:
-    description:
-  psionic:
-    description: manifesting psionic powers
-  specialization:
-    clairsentience:
-      description: specialized training in the discipline of clairsentience
-    psychokinetic:
-      description: specialized training in the discipline of psychokinetics
-    psychometabolic:
-      description: specialized training in the discipline of psychometabolics
-    psychoportative:
-      description: specialized training in the discipline of psychoportives
-    telepathy:
-      description: specialized training in the discipline of telepathy
+aptitude:
+  attribute: presence
+  description:
+  skill:
+    charisma:
+      description:
+    deception:
+      description:
+    disguise:
+      description:
+    husbandry:
+      description:
+    intimidation:
+      description:
+    psionic:
+      description: manifesting psionic powers
+    specialization:
+      clairsentience:
+        description: specialized training in the discipline of clairsentience
+      psychokinetic:
+        description: specialized training in the discipline of psychokinetics
+      psychometabolic:
+        description: specialized training in the discipline of psychometabolics
+      psychoportative:
+        description: specialized training in the discipline of psychoportives
+      telepathy:
+        description: specialized training in the discipline of telepathy
 
 ...

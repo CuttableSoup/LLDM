@@ -1,0 +1,127 @@
+
+entity:
+  name: fireball
+  supertype: supernatural
+  type: arcane
+  subtype: evocation
+  target:
+    creature
+    object
+    environment
+  range: spellcraft:base
+  duration: []
+  slot:
+  - hand
+  - mouth
+  apply:
+    fire:
+      damage_cur_hp: spellcraft:evocation/2
+  resist:
+    reflex:
+      pass: spellcraft:base
+  proficiency:
+    evocation:
+      difficulty: 15
+      pass:
+        description:
+      fail:
+        description:
+  requirement:
+    intellegence:
+      base: 3
+      skill:
+        spellcraft:
+          base: 3
+          specialization:
+            evocation:
+              base: 3
+  cost:
+    initial:
+      - cur_fp: -3
+      - hand: points a finger at the target
+      - mouth: shouts 'Burn!'
+      - item: bat guano
+
+---
+
+entity:
+  name: cure light wounds
+  supertype: supernatural
+  type: divine
+  subtype: healing
+  target:
+    creature
+  range: 1
+  duration: []
+  slot:
+  - hand
+  - mouth
+  apply:
+    heal: 
+      heal_cur_hp: miracle:conjuration/2
+  resist:
+    fortitude:
+      pass: miracle:conjuration
+  proficiency:
+    conjuration:
+      difficulty: 15
+      pass:
+        description:
+      fail:
+        description:
+    brawling: opposed
+  requirement:
+    wisdom:
+      base:
+      skill:
+        miracle:
+          base: 3
+          specialization:
+            conjuration:
+              base: 3
+  cost:
+    initial:
+      - cur_fp: -3
+      - hand: lays hands over the wound
+      - mouth: whispers 'let the light flow through you'
+      - focus: holy symbol
+
+---
+
+entity:
+  name: adrenaline control
+  supertype: supernatural
+  type: psionic
+  subtype: psychometabolism
+  target:
+    self
+  range: 0
+  duration:
+    - frequency: round
+      length: 10
+  apply:
+    enhance:
+      choice:
+        attribute:
+          physique: psionic:psychometabolism/2
+          dexterity: psionic:psychometabolism/2
+  proficiency:
+    psychometabolism:
+      difficulty: 15
+      pass:
+        description:
+      fail:
+        description:
+  requirement:
+    intellegence:
+      base: 3
+      skill:
+        psychometabolism:
+          base: 3
+  cost:
+    initial: []
+    ongoing:
+      - frequency: round
+        cur_fp: -1
+
+...

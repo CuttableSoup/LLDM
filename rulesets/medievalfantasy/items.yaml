@@ -1,0 +1,242 @@
+
+entity:
+  name: longsword
+  description: a metal blade
+  supertype: object
+  type: blade
+  subtype: sword
+  target:
+    creature
+    object
+  slot:
+  - hand
+  range: 1
+  apply:
+    choice:
+      piercing:
+        damage_cur_hp: physique:strength
+      slashing:
+        damage_cur_hp: physique:strength
+  status:
+    attribute:
+      physique:
+        base: 0
+        skill:
+          strength:
+            base: 6
+  proficiency:
+    blade: opposed
+  weight: 5
+  value: 10
+
+---
+
+entity:
+  name: greatsword
+  description: a large metal blade
+  supertype: object
+  type: blade
+  subtype: sword
+  slot:
+  - hand
+  - hand
+  range: 1
+  apply:
+    choice:
+      piercing:
+        damage_cur_hp: physique:strength
+      slashing:
+        damage_cur_hp: physique:strength
+  status:
+    attribute:
+      physique:
+        base: 0
+        skill:
+          strength:
+            base: 9
+  proficiency:
+    blade: opposed
+  weight: 5
+  value: 10
+
+---
+
+entity:
+  name: chainmail
+  description: oiled chainmail
+  supertype: object
+  type: armor
+  subtype: medium
+  slot: 
+  - chest
+  status:
+    bludgeoning: -6
+    slashing: -6
+    piercing: -6
+  weight: 10
+  value: 20
+
+---
+
+entity:
+  name: tower shield
+  description: battered shield
+  supertype: object
+  type: shield
+  subtype: heavy
+  slot:
+  - hand
+  status:
+    bludgeoning: -6
+    slashing: -6
+    piercing: -6
+  proficiency:
+    shield: opposed
+  weight: 40
+  value: 20
+
+---
+
+entity:
+  name: steel shield
+  description: battered shield
+  supertype: object
+  type: shield
+  subtype: medium
+  slot:
+  - hand
+  status:
+    bludgeoning: -4
+    slashing: -4
+    piercing: -4
+  proficiency:
+    shield: opposed
+  weight: 7
+  value: 5
+
+---
+
+entity:
+  name: buckler
+  description: battered shield
+  supertype: object
+  type: shield
+  subtype: light
+  slot:
+  - hand
+  status:
+    bludgeoning: -2
+    slashing: -2
+    piercing: -2
+  proficiency:
+    shield: opposed
+  weight: 3
+  value: 2
+
+---
+
+entity:
+  name: potion of healing
+  description: luminous vial of fluid
+  supertype: object
+  type: consumable
+  subtype: potion
+  slot:
+  - hand
+  apply:
+    heal:
+      heal_cur_hp: self:physique:strength
+  attribute:
+    physique:
+      base: 0
+      skill:
+        strength:
+          base: 6
+  weight: 1
+  value: 10
+
+---
+
+entity:
+  name: gem
+  description: precious gem
+  supertype: object
+  type: treasure
+  subtype: gem
+  weight: 0.1
+  value: 50
+
+---
+
+entity:
+  name: gold coin
+  description: minted coin
+  supertype: object
+  type: treasure
+  subtype: gold
+  weight: 0.01
+  value: 1
+
+---
+
+entity:
+  name: silver coin
+  description: minted coin
+  supertype: object
+  type: treasure
+  subtype: silver
+  weight: 0.01
+  value: 0.1
+
+---
+
+entity:
+  name: copper coin
+  description: minted coin
+  supertype: object
+  type: treasure
+  subtype: copper
+  weight: 0.01
+  value: 0.01
+
+---
+
+
+entity:
+  name: beer
+  supertype: object
+  type: drink
+  subtype: alcohol
+  apply:
+  - alcohol: +1
+    status:
+    - buzzed:
+        requirement:
+          alcohol: 5
+    - drunk:
+        requirement:
+          alcohol: 10
+    - asleep:
+        requirement:
+          alcohol: 15
+  duration:
+    - frequency: hour
+      length: 8
+
+---
+
+entity:
+  name: blue whinnis
+  supertype: object
+  type: consumable
+  subtype: poison
+  slot:
+  - blade
+  apply:
+    status:
+    - unconcious
+  duration:
+    - frequency: hour
+      length: 8
+
+...

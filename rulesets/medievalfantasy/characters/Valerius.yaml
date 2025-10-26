@@ -1,141 +1,150 @@
-name: Valerius # character name
-supertype: creature
-type: humanoid
-subtype: human
-max_hp: 30 # maximum hit points
-max_fp: 15 # maximum fatigue points
-max_mp: 20 # maximum mental points
-exp: 50 # expecience to be expended
-weight: 180
+entity:
+  name: Valerius # character name
+  supertype: creature
+  type: humanoid
+  subtype: human
+  max_hp: 30 # maximum hit points
+  max_fp: 15 # maximum fatigue points
+  max_mp: 20 # maximum mental points
+  exp: 50 # expecience to be expended
+  weight: 180
 
-attribute: # list of attributes, in pips (3 pips to 1 die)
-  physique:
-    base: 9
-    skill:
-      blade:
-        base: 3
-  dexterity:
-    base: 9
-    skill:
-      dodge:
-        base: 3
-      missile:
-        base: 3
-  intelligence:
-    base: 9
-  spellcraft:
-    base: 3
-    specialization:
-      evocation: 3
-  wisdom:
-    base: 9
-    skill:
-      observation:
-        base: 3
-      willpower:
-        base: 3
-      miracle:
-        base: 3
-        specialization:
-          conjuration: 3
-  presence:
-    base: 9
-    skill:
-      psionic:
-        base: 3
-        specialization:
-          psychometabolism: 3
+  attribute:
+    physique:
+      base: 9
+      skill:
+        strength:
+          base: 3
+        blade:
+          base: 3
+    dexterity:
+      base: 9
+      skill:
+        dodge:
+          base: 3
+        missile:
+          base: 3
+    intelligence:
+      base: 9
+      skill:
+        spellcraft:
+          base: 3
+          specialization:
+            evocation: 3
+    wisdom:
+      base: 9
+      skill:
+        observation:
+          base: 3
+        willpower:
+          base: 3
+        miracle:
+          base: 3
+          specialization:
+            conjuration:
+              base: 3
+    presence:
+      base: 9
+      skill:
+        psionic:
+          base: 3
+          specialization:
+            psychometabolism:
+              base: 3
 
-tag_mod: # list of tags and how the value is modified
-- fire: strength-10 # fire damage is reduced by 10
-- frost: strength*2 # frost damage is doubled
+  movement:
+    land: 10
+    water: 5
+    air: 0
 
-ally: # list of entities considered allies
-  creature:
-    humanoid:
-      human:
-        name:
-        - Kael
+  status:
+    fire: -10 # fire damage is reduced by 10
+    frost: *2 # frost damage is doubled
 
-enemy: # list of entities considered allies
-  creature:
-    humanoid:
-      orc:
-        name:
-        - Grog
+  ally: # list of entities considered allies
+    creature:
+      humanoid:
+        human:
+          name:
+          - Kael
 
-attitude: # list of attitudes by category, an array of five values, lower taking precedent
-# Disposition (Hostile ↔ Friendly)
-# Trust (Suspicious ↔ Trusting)
-# Confidence (Fearful ↔ Confident)
-# Respect (Disdainful ↔ Admiring)
-# Obligation (Unfettered ↔ Indebted)
-  default: 0,0,0,0,0 # base attitude applied to all before modified
-  creature:
-    humanoid:
-      human: 
-        default: 0.5,0.5,0,0,0 # likes and trusts humans
-        name:
-        - Kael: 0,1,0,1,0 # trusts and respects Kael
-      orc:
-        default: -0.5,-0.5,0,0,0 # hates and distrusts orcs
-        name:
-        - Grog: -1,-1,0,0,0 # will attack Grog on sight
+  enemy: # list of entities considered allies
+    creature:
+      humanoid:
+        orc:
+          name:
+          - Grog
 
-tag: # list of predefined temporary tags that modify various elements
-- none
+  attitude: # list of attitudes by category, an array of five values, lower taking precedent
+  # Disposition (Hostile ↔ Friendly)
+  # Trust (Suspicious ↔ Trusting)
+  # Confidence (Fearful ↔ Confident)
+  # Respect (Disdainful ↔ Admiring)
+  # Obligation (Unfettered ↔ Indebted)
+    default: 0,0,0,0,0 # base attitude applied to all before modified
+    creature:
+      humanoid:
+        human: 
+          default: 0.5,0.5,0,0,0 # likes and trusts humans
+          name:
+          - Kael: 0,1,0,1,0 # trusts and respects Kael
+        orc:
+          default: -0.5,-0.5,0,0,0 # hates and distrusts orcs
+          name:
+          - Grog: -1,-1,0,0,0 # will attack Grog on sight
 
-language: # list of languages
-- human
+  language: # list of languages
+  - human
 
-target:
-resist:
-range:
-proficiency:
-requirement:
-cost:
-  initial: []
-  ongoing: []
-value:
-slot:
+  apply:
+  target:
+  resist:
+  range: 10
+  proficiency:
+  requirement:
+  cost:
+    initial: []
+    ongoing: []
+  value:
+  slot:
 
-quality: # list of various character descriptions
-  body: lightly scarred
-  eye: brown
-  gender: male
-  hair: brown
-  height: 72
-  skin: tan
+  quality: # list of various character descriptions
+    body: lightly scarred
+    eye: brown
+    gender: male
+    hair: brown
+    height: 72
+    skin: tan
 
-inventory: # list of predefined items
-- item: longsword # name of item
-  quantity: 1 # number of that item
-  equipped: true # is it equipped
-- item: chainmail
-  quantity: 1
-  equipped: true
-- item: steel shield
-  quantity: 1
-  equipped: true
-- item: backpack
-  quantity: 1
-  equipped: true
-  inventory:
-  - item: gold
-    quantity: 10
-  - item: scroll
+  inventory: # list of predefined items
+  - item: longsword # name of item
+    quantity: 1 # number of that item
+    equipped: true # is it equipped
+  - item: chainmail
     quantity: 1
-    note: contains a treasure map
+    equipped: true
+  - item: steel shield
+    quantity: 1
+    equipped: true
+  - item: backpack
+    quantity: 1
+    equipped: true
+    inventory:
+    - item: gold
+      quantity: 10
+    - item: scroll
+      quantity: 1
+      note: contains a treasure map
 
-supernatural: # list of supernatural abilities
-- cure light wounds
-- fireball
-- adrenaline control
+  supernatural: # list of supernatural abilities
+  - cure light wounds
+  - fireball
+  - adrenaline control
 
-memory: # list of memory description in natural language
-- home village destoryed by orcs, led by a one named Grog
+  memory: # list of memory description in natural language
+  - home village destoryed by orcs, led by a one named Grog
 
-quote: # list of quotes to affect the dialogue of the character
-- how's it goin'?
+  quote: # list of quotes to affect the dialogue of the character
+  - how's it goin'?
 
 ...
