@@ -1,43 +1,44 @@
-scenario_name: The Training Grounds
-environment:
-  rooms:
-    - name: The Arena
-      description: A well lit arena.
-      scale: 1
-      layers:
-        - [ [G,G,G,G,G,G,G],
-            [G,G,G,G,G,G,G],
-            [G,G,G,G,G,G,G],
-            [G,G,G,G,G,G,G],
-            [G,G,G,G,G,G,G],
-            [G,G,G,G,G,G,G],
-            [G,G,G,G,G,G,G] ]
-            
-        - [ [W,W,W,W,W,W,W],
-            [W,x,x,x,x,x,W],
-            [W,x,C,x,D,x,W],
-            [W,x,x,x,x,x,W],
-            [W,x,x,P,x,x,W],
-            [W,x,x,x,x,x,W],
-            [W,W,W,W,W,W,W] ]
+map:
+  name: The Training Grounds
+  environment:
+    rooms:
+      - name: The Arena
+        description: A well lit arena.
+        scale: 1
+        layers:
+          - [ [G,G,G,G,G,G,G],
+              [G,G,G,G,G,G,G],
+              [G,G,G,G,G,G,G],
+              [G,G,G,G,G,G,G],
+              [G,G,G,G,G,G,G],
+              [G,G,G,G,G,G,G],
+              [G,G,G,G,G,G,G] ]
+              
+          - [ [W,W,W,W,W,W,W],
+              [W,x,x,x,x,x,W],
+              [W,x,C,x,D,x,W],
+              [W,x,x,x,x,x,W],
+              [W,x,x,P,x,x,W],
+              [W,x,x,x,x,x,W],
+              [W,W,W,W,W,W,W] ]
 
-      legend:
-        - { char: G, entity: ground }
-        - { char: T, entity: spike trap }
-        
-        - { char: W, entity: stone wall }
-        - { char: D, entity: dummy }
-        - { char: P, entity: Valerius, is_player: true }
-        - { char: w, entity: wolf }
-        
-        - char: C
-          entity: chest
-          inventory:
-            - { item: "gold coin", quantity: 50 }
-            - { item: "silver coin", quantity: 100 }
+        legend:
+          - { char: G, entity: ground }
+          - { char: T, entity: spike trap }
           
-        - char: g
-          entity: giant
-          pattern: 
-            - ['g', 'g']
-            - ['g', 'g']
+          - { char: W, entity: stone wall }
+          - { char: D, entity: dummy }
+          - { char: P, entity: Valerius, is_player: true }
+          - { char: w, entity: wolf }
+          
+          - char: C
+            entity: chest
+            inventory:
+              - { item: "gold coin", quantity: 50 }
+              - { item: "silver coin", quantity: 100 }
+            
+          - char: g
+            entity: giant
+            pattern: 
+              - ['g', 'g']
+              - ['g', 'g']

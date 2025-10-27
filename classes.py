@@ -3,6 +3,13 @@ from dataclasses import dataclass, field, fields
 from typing import List, Dict, Any, Optional, Union
 from pathlib import Path
 
+# NEW IMPORTS
+try:
+    import yaml
+except ImportError:
+    print("PyYAML not found. Please install: pip install PyYAML")
+    yaml = None
+
 @dataclass
 class Skill:
     """
@@ -46,7 +53,7 @@ class Cost:
     ongoing: List[Dict[str, Any]] = field(default_factory=list)
     """
     List of ongoing costs.
-    e.g., [{'fequency': 'turn', 'length': 1, 'cur_mp': 5}]
+    e.g., [{'frequency': 'turn', 'length': 1, 'cur_mp': 5}]
     """
 
 @dataclass
@@ -54,7 +61,7 @@ class DurationComponent:
     """
     Defines a single component of an effect's duration.
     """
-    fequency: str = ""  # Note: Typo 'fequency' matches original schema
+    frequency: str = ""
     """The unit of time (e.g., 'turn', 'minute', 'scene')."""
     length: int = 0
     """The number of frequency units the effect lasts."""
@@ -220,7 +227,45 @@ def create_entity_from_dict(data: Dict[str, Any]) -> Entity:
         data_copy['duration'] = [DurationComponent(**comp) for comp in data_copy['duration']]
         
     if 'skill' in data_copy:
-        data_copy['skill'] = {name: Skill(**s_data) for name, s_data in data_copy['skill'].items()}
+        # Handle new structure: {'physique': {'base': 9, 'skill': {...}}}
+        # The Entity dataclass expects: {'physique': 9}
+        # And skill: {'strength': {'base': 3, ...}}
+        
+        # This function seems to be designed for the *final* entity structure,
+        # but the YAML structure for attributes/skills is nested.
+        # Let's adjust for the YAML structure seen in Valerius.yaml
+        
+        final_attributes = {}
+        final_skills = {}
+        
+        if 'attribute' in data_copy:
+            for attr_name, attr_data in data_copy['attribute'].items():
+                if isinstance(attr_data, dict):
+                    final_attributes[attr_name] = attr_data.get('base', 0)
+                    if 'skill' in attr_data:
+                        for skill_name, skill_data in attr_data['skill'].items():
+                            if isinstance(skill_data, dict):
+                                final_skills[skill_name] = Skill(**skill_data)
+                            else:
+                                # Handle simple skill: val
+                                final_skills[skill_name] = Skill(base=skill_data)
+                else:
+                    # Handle simple attr: val
+                    final_attributes[attr_name] = attr_data
+            
+            data_copy['attribute'] = final_attributes
+        
+        if 'skill' in data_copy:
+             for skill_name, skill_data in data_copy['skill'].items():
+                if isinstance(skill_data, dict):
+                    final_skills[skill_name] = Skill(**skill_data)
+                else:
+                    final_skills[skill_name] = Skill(base=skill_data)
+
+        # Only overwrite skills if we found some in attributes
+        if final_skills:
+            data_copy['skill'] = final_skills
+
 
     # Handle recursive inventory
     def _create_inventory(items_list: List[Dict]) -> List[InventoryItem]:
@@ -237,5 +282,195 @@ def create_entity_from_dict(data: Dict[str, Any]) -> Entity:
 
     entity_field_names = {f.name for f in fields(Entity)}
     filtered_data = {k: v for k, v in data_copy.items() if k in entity_field_names}
+    
+    # Auto-populate cur_hp, cur_mp, cur_fp if they are 0
+    if 'max_hp' in filtered_data and 'cur_hp' not in filtered_data:
+        filtered_data['cur_hp'] = filtered_data['max_hp']
+    if 'max_mp' in filtered_data and 'cur_mp' not in filtered_data:
+        filtered_data['cur_mp'] = filtered_data['max_mp']
+    if 'max_fp' in filtered_data and 'cur_fp' not in filtered_data:
+        filtered_data['cur_fp'] = filtered_data['max_fp']
 
     return Entity(**filtered_data)
+
+
+# --- NEW CLASSES ADDED BELOW ---
+
+@dataclass
+class RoomLegendItem:
+    """Dataclass for items in the room's legend."""
+    char: str = ""
+    entity: str = ""
+    is_player: bool = False
+    inventory: List[Dict[str, Any]] = field(default_factory=list)
+    pattern: Optional[List[List[str]]] = None
+
+@dataclass
+class Room:
+    """Dataclass to hold room data from rooms.yaml."""
+    name: str = ""
+    description: str = ""
+    scale: int = 1
+    layers: List[List[List[str]]] = field(default_factory=list)
+    legend: List[RoomLegendItem] = field(default_factory=list)
+
+    @property
+    def map(self) -> Optional[List[List[str]]]:
+        """
+        Returns the object/actor layer of the map.
+        GUI.py's MapPanel expects this.
+        In rooms.yaml, layer[0] is ground, layer[1] is objects/actors.
+        """
+        if len(self.layers) > 1:
+            return self.layers[1] # Return the second layer
+        elif self.layers:
+            return self.layers[0] # Fallback to first layer
+        return None
+
+@dataclass
+class Environment:
+    """Dataclass to hold the environment (list of rooms)."""
+    rooms: List[Room] = field(default_factory=list)
+
+@dataclass
+class Scenario:
+    """Dataclass to hold the entire scenario from rooms.yaml."""
+    scenario_name: str = ""
+    environment: Environment = field(default_factory=Environment)
+
+
+class RulesetLoader:
+    """
+    Loads all .yaml files from a specified ruleset directory,
+    handling the 'entity:' prefix.
+    """
+    def __init__(self, ruleset_path: Path):
+        if not yaml:
+            raise ImportError("PyYAML is required to load rulesets.")
+        self.ruleset_path = ruleset_path
+        self.characters: Dict[str, Entity] = {}
+        self.creatures: Dict[str, Entity] = {}
+        self.items: Dict[str, Entity] = {}
+        self.spells: Dict[str, Entity] = {}
+        self.conditions: Dict[str, Entity] = {}
+        self.environment_ents: Dict[str, Entity] = {}
+        self.scenario: Optional[Scenario] = None
+        
+        self.attributes: List[Any] = []
+        self.types: List[Any] = []
+        print(f"RulesetLoader initialized for path: {self.ruleset_path}")
+
+    def load_all(self):
+        """Loads all YAML files from the ruleset directory."""
+        if not self.ruleset_path.is_dir():
+            print(f"Error: Ruleset path not found: {self.ruleset_path}")
+            return
+
+        for yaml_file in self.ruleset_path.glob("**/*.yaml"):
+            print(f"Processing file: {yaml_file.name}")
+            
+            # Special handling for rooms.yaml
+            if yaml_file.name == "rooms.yaml":
+                self._load_scenario(yaml_file)
+                continue
+            
+            # Special handling for attributes.yaml and types.yaml
+            if yaml_file.name == "attributes.yaml":
+                self.attributes = self._load_generic_yaml_all(yaml_file)
+                continue
+            if yaml_file.name == "types.yaml":
+                self.types = self._load_generic_yaml_all(yaml_file)
+                continue
+
+            # Load all other files as entities
+            entities_data = self._load_generic_yaml_all(yaml_file)
+            
+            for entity_data in entities_data:
+                if not isinstance(entity_data, dict) or 'entity' not in entity_data:
+                    print(f"Warning: Skipping document in {yaml_file.name} (missing 'entity:' tag).")
+                    continue
+                
+                # Extract data from under the 'entity:' key
+                data = entity_data['entity']
+                
+                if 'name' not in data:
+                    print(f"Warning: Skipping entity in {yaml_file.name} (missing 'name').")
+                    continue
+                
+                entity_obj = create_entity_from_dict(data)
+                
+                # Sort entity into the correct dictionary
+                parent_dir = yaml_file.parent.name
+                
+                if parent_dir == "characters":
+                    self.characters[entity_obj.name] = entity_obj
+                elif parent_dir == "creatures":
+                    self.creatures[entity_obj.name] = entity_obj
+                elif parent_dir == "items":
+                    self.items[entity_obj.name] = entity_obj
+                elif parent_dir == "spells":
+                    self.spells[entity_obj.name] = entity_obj
+                elif parent_dir == "conditions":
+                    self.conditions[entity_obj.name] = entity_obj
+                elif parent_dir == "medievalfantasy" and yaml_file.name == "environment.yaml":
+                    self.environment_ents[entity_obj.name] = entity_obj
+                else:
+                    # Fallback for entities not in a sub-directory
+                    if entity_obj.supertype == "creature" and data.get("is_player", False):
+                         self.characters[entity_obj.name] = entity_obj
+                    elif entity_obj.supertype == "creature":
+                        self.creatures[entity_obj.name] = entity_obj
+                    elif entity_obj.supertype == "object":
+                        self.items[entity_obj.name] = entity_obj
+                    elif entity_obj.supertype == "supernatural":
+                        self.spells[entity_obj.name] = entity_obj
+                    elif entity_obj.supertype == "environment":
+                        self.environment_ents[entity_obj.name] = entity_obj
+
+
+    def _load_generic_yaml_all(self, file_path: Path) -> List[Any]:
+        """Helper to load all documents from a YAML file."""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                return list(yaml.safe_load_all(f))
+        except Exception as e:
+            print(f"Error loading YAML file {file_path}: {e}")
+            return []
+
+    def _load_scenario(self, file_path: Path):
+        """Helper to load and parse the scenario/rooms.yaml file."""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = yaml.safe_load(f)
+            
+            if not data:
+                return
+            
+            # Manually parse the scenario data into dataclasses
+            env_data = data.get('environment', {})
+            room_list_data = env_data.get('rooms', [])
+            parsed_rooms = []
+            
+            for room_data in room_list_data:
+                legend_list_data = room_data.get('legend', [])
+                parsed_legend = []
+                for item in legend_list_data:
+                    if isinstance(item, dict):
+                        parsed_legend.append(RoomLegendItem(**item))
+                
+                room_data['legend'] = parsed_legend
+                parsed_rooms.append(Room(**room_data))
+            
+            parsed_env = Environment(rooms=parsed_rooms)
+            self.scenario = Scenario(
+                scenario_name=data.get('scenario_name', 'Unnamed Scenario'),
+                environment=parsed_env
+            )
+            print(f"Successfully loaded scenario: {self.scenario.scenario_name}")
+
+        except Exception as e:
+            print(f"Error loading scenario file {file_path}: {e}")
+
+    def get_character(self, name: str) -> Optional[Entity]:
+        """Retrieves a loaded character by name."""
+        return self.characters.get(name)

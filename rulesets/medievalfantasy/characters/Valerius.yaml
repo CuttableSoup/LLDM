@@ -61,7 +61,7 @@ entity:
   status:
   - intelligent
   - fire: -10 # fire damage is reduced by 10
-  - frost: *2 # frost damage is doubled
+  - frost: 2 # frost damage is doubled
 
   ally: # list of entities considered allies
     creature:
