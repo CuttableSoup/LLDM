@@ -133,14 +133,8 @@ class Entity:
     quality: Quality = field(default_factory=Quality)
     """An object holding the entity's physical descriptors."""
 
-    tag: List[str] = field(default_factory=list)
-    """A list of arbitrary tags for game logic (e.g., ['Merchant', 'Undead'])."""
-
-    tag_mod: Dict[str, str] = field(default_factory=dict)
-    """
-    A dictionary mapping tags to formulas that modify behavior.
-    e.g., {'fire': 'strength-10'}
-    """
+    status: List[Any] = field(default_factory=list)
+    """A list of status tags, modifiers, etc. (e.g., 'intelligent', {'fire': -10})"""
 
     ally: Dict[str, Any] = field(default_factory=dict)
     """

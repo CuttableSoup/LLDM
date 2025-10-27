@@ -10,6 +10,9 @@ entity:
     dexterity:
       base: 6
   
+  status:
+  - animalistic
+  
   movement:
     land: 10
 

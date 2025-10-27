@@ -89,26 +89,63 @@ class GameController:
         else:
             print("Warning: No scenario or rooms found in loader.")
         
-        # (Placeholder) Set up the initial scene
-        # This is where you'd add NPCs to the encounter
-        # For testing, we'll add the first creature from the loader
-        if self.loader.creatures:
-            try:
-                first_creature_name = list(self.loader.creatures.keys())[0]
-                first_creature = self.loader.creatures[first_creature_name]
-                if first_creature.name not in self.game_entities:
-                     self.game_entities[first_creature.name] = first_creature
+        # --- MODIFICATION START ---
+        # Build the initiative order from the entities placed in the room
+        self.initiative_order = []
+        
+        if self.current_room and self.current_room.map:
+            # 1. Create a quick lookup map from char -> entity_name
+            legend_lookup: Dict[str, str] = {}
+            if self.current_room.legend:
+                for item in self.current_room.legend:
+                    legend_lookup[item.char] = item.entity
+
+            # 2. Find all unique entity characters on the map
+            placed_chars = set()
+            for y, row in enumerate(self.current_room.map):
+                for x, char_code in enumerate(row):
+                    # 'x' is empty floor, 'G' is ground layer
+                    if char_code != 'x' and char_code != 'G': 
+                        placed_chars.add(char_code)
+            
+            # 3. Get the Entity object for each placed character
+            print("--- Loading Entities for Initiative ---")
+            for char_code in placed_chars:
+                entity_name = legend_lookup.get(char_code)
+                if not entity_name:
+                    print(f"Warning: Character '{char_code}' on map but not in legend.")
+                    continue
                 
-                # (Placeholder) Add entities to the combat order
-                self.initiative_order = [self.player_entity, first_creature]
+                # Check for creature/player
+                entity_obj = self.game_entities.get(entity_name)
                 
-                print(f"Starting game with {player.name} and {first_creature.name}.")
-            except Exception as e:
-                print(f"Warning: Could not add creature to encounter. {e}")
-                self.initiative_order = [self.player_entity]
+                if not entity_obj:
+                    # Check for environment entity (dummy, chest, wall, etc.)
+                    entity_obj = self.loader.environment_ents.get(entity_name)
+                    if entity_obj and entity_name not in self.game_entities:
+                        # Add to game_entities for tracking
+                        self.game_entities[entity_name] = entity_obj
+                
+                if entity_obj:
+                    if entity_obj not in self.initiative_order:
+                        self.initiative_order.append(entity_obj)
+                        print(f"Added '{entity_name}' (char: '{char_code}') to initiative.")
+                else:
+                    print(f"Warning: Entity '{entity_name}' (char: '{char_code}') not found in any loader.")
+
         else:
-            self.initiative_order = [self.player_entity]
-            print(f"Starting game with only {player.name}.")
+            # Fallback if no room is loaded
+            print("Warning: No room loaded, adding only player to initiative.")
+            if self.player_entity:
+                self.initiative_order = [self.player_entity]
+
+        # Ensure player is always in the list (if they weren't placed via 'P')
+        if self.player_entity and self.player_entity not in self.initiative_order:
+            print(f"Warning: Player '{self.player_entity.name}' not placed on map, adding to initiative.")
+            self.initiative_order.append(self.player_entity)
+            
+        print(f"Starting game with {len(self.initiative_order)} entities in initiative.")
+        # --- MODIFICATION END ---
         
         # Manually update GUI on start
         self.update_narrative_callback(f"The adventure begins for {player.name}...")
@@ -185,9 +222,16 @@ class GameController:
             if npc == self.player_entity:
                 continue 
 
+            # --- MODIFIED FIX ---
+            # Check if the entity has a status that allows it to take actions.
+            # If not, skip its turn entirely.
+            if not ("intelligent" in npc.status or "animalistic" in npc.status or "robotic" in npc.status):
+                continue
+            # --- END MODIFICATION ---
+
             # (Placeholder) Simulate simple NPC AI
             print(f"Simulating turn for {npc.name}")
-            narrative = f"{npc.name} growls menacingly at {self.player_entity.name}."
+            narrative = f"{npc.name}: 'I took my turn!'"
             
             self.update_narrative_callback(narrative)
             self.round_history.append(narrative)
