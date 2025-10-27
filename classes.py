@@ -226,45 +226,51 @@ def create_entity_from_dict(data: Dict[str, Any]) -> Entity:
     if 'duration' in data_copy:
         data_copy['duration'] = [DurationComponent(**comp) for comp in data_copy['duration']]
         
+    # --- START MODIFICATION ---
+    # Removed the 'if 'skill' in data_copy:' wrapper from this block.
+    # This logic must run to parse the nested attribute/skill structure
+    # from files like Valerius.yaml.
+    
+    # Handle new structure: {'physique': {'base': 9, 'skill': {...}}}
+    # The Entity dataclass expects: {'physique': 9}
+    # And skill: {'strength': {'base': 3, ...}}
+    
+    # This function seems to be designed for the *final* entity structure,
+    # but the YAML structure for attributes/skills is nested.
+    # Let's adjust for the YAML structure seen in Valerius.yaml
+    
+    final_attributes = {}
+    final_skills = {}
+    
+    if 'attribute' in data_copy:
+        for attr_name, attr_data in data_copy['attribute'].items():
+            if isinstance(attr_data, dict):
+                final_attributes[attr_name] = attr_data.get('base', 0)
+                if 'skill' in attr_data:
+                    for skill_name, skill_data in attr_data['skill'].items():
+                        if isinstance(skill_data, dict):
+                            final_skills[skill_name] = Skill(**skill_data)
+                        else:
+                            # Handle simple skill: val
+                            final_skills[skill_name] = Skill(base=skill_data)
+            else:
+                # Handle simple attr: val
+                final_attributes[attr_name] = attr_data
+        
+        data_copy['attribute'] = final_attributes
+    
     if 'skill' in data_copy:
-        # Handle new structure: {'physique': {'base': 9, 'skill': {...}}}
-        # The Entity dataclass expects: {'physique': 9}
-        # And skill: {'strength': {'base': 3, ...}}
-        
-        # This function seems to be designed for the *final* entity structure,
-        # but the YAML structure for attributes/skills is nested.
-        # Let's adjust for the YAML structure seen in Valerius.yaml
-        
-        final_attributes = {}
-        final_skills = {}
-        
-        if 'attribute' in data_copy:
-            for attr_name, attr_data in data_copy['attribute'].items():
-                if isinstance(attr_data, dict):
-                    final_attributes[attr_name] = attr_data.get('base', 0)
-                    if 'skill' in attr_data:
-                        for skill_name, skill_data in attr_data['skill'].items():
-                            if isinstance(skill_data, dict):
-                                final_skills[skill_name] = Skill(**skill_data)
-                            else:
-                                # Handle simple skill: val
-                                final_skills[skill_name] = Skill(base=skill_data)
-                else:
-                    # Handle simple attr: val
-                    final_attributes[attr_name] = attr_data
-            
-            data_copy['attribute'] = final_attributes
-        
-        if 'skill' in data_copy:
-             for skill_name, skill_data in data_copy['skill'].items():
-                if isinstance(skill_data, dict):
-                    final_skills[skill_name] = Skill(**skill_data)
-                else:
-                    final_skills[skill_name] = Skill(base=skill_data)
+         for skill_name, skill_data in data_copy['skill'].items():
+            if isinstance(skill_data, dict):
+                final_skills[skill_name] = Skill(**skill_data)
+            else:
+                final_skills[skill_name] = Skill(base=skill_data)
 
-        # Only overwrite skills if we found some in attributes
-        if final_skills:
-            data_copy['skill'] = final_skills
+    # Only overwrite skills if we found some in attributes
+    if final_skills:
+        data_copy['skill'] = final_skills
+        
+    # --- END MODIFICATION ---
 
 
     # Handle recursive inventory
@@ -445,9 +451,16 @@ class RulesetLoader:
             
             if not data:
                 return
-            
+
+            # --- START MODIFICATION ---
+            # Get data from under the top-level 'map:' key
+            map_data = data.get('map', {})
+            if not map_data:
+                print(f"Warning: 'map:' key not found in {file_path.name}. Skipping scenario load.")
+                return
+
             # Manually parse the scenario data into dataclasses
-            env_data = data.get('environment', {})
+            env_data = map_data.get('environment', {}) # Get environment from map_data
             room_list_data = env_data.get('rooms', [])
             parsed_rooms = []
             
@@ -463,9 +476,10 @@ class RulesetLoader:
             
             parsed_env = Environment(rooms=parsed_rooms)
             self.scenario = Scenario(
-                scenario_name=data.get('scenario_name', 'Unnamed Scenario'),
+                scenario_name=map_data.get('name', 'Unnamed Scenario'), # Get name from map_data
                 environment=parsed_env
             )
+            # --- END MODIFICATION ---
             print(f"Successfully loaded scenario: {self.scenario.scenario_name}")
 
         except Exception as e:
