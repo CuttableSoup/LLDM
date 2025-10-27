@@ -8,6 +8,7 @@ entity:
   max_mp: 20 # maximum mental points
   exp: 50 # expecience to be expended
   weight: 180
+  is_player: true
 
   attribute:
     physique:
@@ -52,14 +53,15 @@ entity:
             psychometabolism:
               base: 3
 
-  movement:
+  move:
     land: 10
     water: 5
     air: 0
 
   status:
-    fire: -10 # fire damage is reduced by 10
-    frost: *2 # frost damage is doubled
+  - intelligent
+  - fire: -10 # fire damage is reduced by 10
+  - frost: *2 # frost damage is doubled
 
   ally: # list of entities considered allies
     creature:

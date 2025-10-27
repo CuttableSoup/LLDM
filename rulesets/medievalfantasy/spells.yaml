@@ -15,7 +15,7 @@ entity:
   - mouth
   apply:
     fire:
-      damage_cur_hp: spellcraft:evocation/2
+      damage(cur_hp): spellcraft:evocation/2
   resist:
     reflex:
       pass: spellcraft:base
@@ -58,7 +58,7 @@ entity:
   - mouth
   apply:
     heal: 
-      heal_cur_hp: miracle:conjuration/2
+      heal(cur_hp): miracle:conjuration/2
   resist:
     fortitude:
       pass: miracle:conjuration

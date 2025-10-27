@@ -10,9 +10,8 @@ hardcoded classes:
 - qualities: [ body, eye, gender, hair, height, skin ]
 - attitudes: [ disposition, trust, confidence, respect, obligation ]
 - atlas: [ array: dimension->world->area->structure->room->tile, size ]
-- tags: [ hidden, observed, unconcious, damaged, supressed, dead, broken, dispel, prone, arm, disarm, trigger, locked,
-            damage_max_hp, damage_max_mp, damage_max_fp, heal_max_hp, heal_max_mp, heal_max_fp,
-            damage_cur_hp, damage_cur_mp, damage_cur_fp, heal_cur_hp, heal_cur_mp, heal_cur_fp ]
+- tags: [ hidden, observed, unconcious, damaged, supressed, dead, broken, dispel, prone, arm, disarm, trigger, locked, intelligent, animalistic, robotic.
+        damage(max_hp, max_fp, max_mp, cur_hp, cur_fp, cur_mp), heal(max_hp, max_fp, max_mp, cur_hp, cur_fp, cur_mp) ]
 - actions: [ attack, cast, move, speak, stand, pronate, interact, memorize, craft, give, take ]
 - reactions: [ AoO ]
 

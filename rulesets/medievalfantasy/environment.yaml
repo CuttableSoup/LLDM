@@ -78,7 +78,7 @@ entity:
   max_hp: 20
   apply:
     piercing:
-      damage_cur_hp: physique:strength
+      damage(cur_hp): physique:strength
   range: 0
   proficiency:
     observation:

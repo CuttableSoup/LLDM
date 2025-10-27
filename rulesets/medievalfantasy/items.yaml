@@ -14,9 +14,9 @@ entity:
   apply:
     choice:
       piercing:
-        damage_cur_hp: physique:strength
+        damage(cur_hp): physique:strength
       slashing:
-        damage_cur_hp: physique:strength
+        damage(cur_hp): physique:strength
   status:
     attribute:
       physique:
@@ -44,9 +44,9 @@ entity:
   apply:
     choice:
       piercing:
-        damage_cur_hp: physique:strength
+        damage(cur_hp): physique:strength
       slashing:
-        damage_cur_hp: physique:strength
+        damage(cur_hp): physique:strength
   status:
     attribute:
       physique:
@@ -145,7 +145,7 @@ entity:
   - hand
   apply:
     heal:
-      heal_cur_hp: self:physique:strength
+      heal(cur_hp): self:physique:strength
   attribute:
     physique:
       base: 0

@@ -28,7 +28,7 @@ entity:
     - mouth
     apply:
       piercing:
-        damage_cur_hp: physique:strength
+        damage(cur_hp): physique:strength
     range: 1
     skill: brawling
 
