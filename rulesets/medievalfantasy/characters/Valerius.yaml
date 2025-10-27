@@ -28,7 +28,7 @@ entity:
     intelligence:
       base: 9
       skill:
-        spellcraft:
+        arcane:
           base: 3
           specialization:
             evocation: 3
@@ -50,7 +50,7 @@ entity:
         psionic:
           base: 3
           specialization:
-            psychometabolism:
+            psychometabolic:
               base: 3
 
   move:

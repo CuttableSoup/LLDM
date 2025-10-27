@@ -29,6 +29,7 @@ category:
             physique: +3
           skills:
             brawling: +3
+        giant:
     quadruped:
       slot:
         self: 10
@@ -39,8 +40,8 @@ category:
         neck: 1
         back: 1
         feet: 2
-      subtype:
-        wolf:
+      subtypes:
+        canine:
 
 ---
 
@@ -60,21 +61,50 @@ category:
         hilt: 1
         grip: 1
         pommel: 1
+      subtypes:
+        sword:
     armor:
+      subtypes:
+        medium:
     axe:
     polearm: 
     shield:
+      subtypes:
+        light:
+        medium:
+        heavy:
     natural:
     throwing:
-    consumable:
     currency:
     accessory:
+    practice:
+      subtypes:
+        dummy:
+    container:
+      subtypes:
+        chest:
+    treasure:
+      subtypes:
+        gold:
+        silver:
+        copper:
+        gem:
+    drink:
+      subtypes:
+        alcohol:
+    consumable:
+      subtypes:
+        potion:
+        poison:
 
 ---
 
 category:
   supertype: environment
   types:
+    trap:
+      subtypes:
+        spike:
     tile:
       subtypes:
         wall:
@@ -82,5 +112,31 @@ category:
         floor:
           movement:
             land: 1
+
+---
+
+category:
+  supertype: supernatural
+  types:
+    arcane:
+      subtypes:
+        evocation:
+        conjuration:
+        divination:
+        transmutation:
+        enchantment:
+        abjuration:
+        illusion:
+        necromancy:
+    miracle:
+      subtypes:
+        healing:
+    psionic:
+      subtypes:
+        clairsentience:
+        psychokinetic:
+        psychometabolic:
+        psychoportative:
+        telepathy:
 
 ...

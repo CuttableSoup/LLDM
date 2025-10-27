@@ -8,17 +8,17 @@ entity:
     creature
     object
     environment
-  range: spellcraft:base
+  range: arcane:base
   duration: []
   slot:
   - hand
   - mouth
   apply:
     fire:
-      damage(cur_hp): spellcraft:evocation/2
+      damage(cur_hp): arcane:evocation/2
   resist:
     reflex:
-      pass: spellcraft:base
+      pass: arcane:base
   proficiency:
     evocation:
       difficulty: 15
@@ -27,10 +27,10 @@ entity:
       fail:
         description:
   requirement:
-    intellegence:
+    intelligence:
       base: 3
       skill:
-        spellcraft:
+        arcane:
           base: 3
           specialization:
             evocation:
@@ -47,7 +47,7 @@ entity:
 entity:
   name: cure light wounds
   supertype: supernatural
-  type: divine
+  type: miracle
   subtype: healing
   target:
     creature
@@ -92,7 +92,7 @@ entity:
   name: adrenaline control
   supertype: supernatural
   type: psionic
-  subtype: psychometabolism
+  subtype: psychometabolic
   target:
     self
   range: 0
@@ -103,21 +103,27 @@ entity:
     enhance:
       choice:
         attribute:
-          physique: psionic:psychometabolism/2
-          dexterity: psionic:psychometabolism/2
+          physique: psionic:psychometabolic/2
+          dexterity: psionic:psychometabolic/2
   proficiency:
-    psychometabolism:
-      difficulty: 15
-      pass:
-        description:
-      fail:
-        description:
-  requirement:
-    intellegence:
+    presence:
       base: 3
       skill:
-        psychometabolism:
+        psychometabolic:
+          difficulty: 15
+          pass:
+            description:
+          fail:
+            description:
+  requirement:
+    presence:
+      base:
+      skill:
+        psionic:
           base: 3
+          specialization:
+            psychometabolic:
+              base: 3
   cost:
     initial: []
     ongoing:

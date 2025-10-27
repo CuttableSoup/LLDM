@@ -62,25 +62,25 @@ aptitude:
       description:
     linguistic:
       description:
-    spellcraft:
+    arcane:
       description: casting arcane spells
-    specialization:
-      conjuration:
-        description: specialized training in the school of conjuration
-      evocation:
-        description: specialized training in the school of evocation
-      divination:
-        description: specialized training in the school of divination
-      transmutation:
-        description: specialized training in the school of transmutation
-      enchantment:
-        description: specialized training in the school of enchantment
-      abjuration:
-        description: specialized training in the school of abjuration
-      illusion:
-        description: specialized training in the school of illusion
-      necromancy:
-        description: specialized training in the school of necromancy
+      specialization:
+        conjuration:
+          description: specialized training in the school of conjuration
+        evocation:
+          description: specialized training in the school of evocation
+        divination:
+          description: specialized training in the school of divination
+        transmutation:
+          description: specialized training in the school of transmutation
+        enchantment:
+          description: specialized training in the school of enchantment
+        abjuration:
+          description: specialized training in the school of abjuration
+        illusion:
+          description: specialized training in the school of illusion
+        necromancy:
+          description: specialized training in the school of necromancy
     navigation:
       description:
 
@@ -101,23 +101,23 @@ aptitude:
       - charisma
     miracle:
       description: casting divine spells
-    specialization:
-      conjuration:
-        description: specialized training in the school of conjuration
-      evocation:
-        description: specialized training in the school of evocation
-      divination:
-        description: specialized training in the school of divination
-      transmutation:
-        description: specialized training in the school of transmutation
-      enchantment:
-        description: specialized training in the school of enchantment
-      abjuration:
-        description: specialized training in the school of abjuration
-      illusion:
-        description: specialized training in the school of illusion
-      necromancy:
-        description: specialized training in the school of necromancy
+      specialization:
+        conjuration:
+          description: specialized training in the school of conjuration
+        evocation:
+          description: specialized training in the school of evocation
+        divination:
+          description: specialized training in the school of divination
+        transmutation:
+          description: specialized training in the school of transmutation
+        enchantment:
+          description: specialized training in the school of enchantment
+        abjuration:
+          description: specialized training in the school of abjuration
+        illusion:
+          description: specialized training in the school of illusion
+        necromancy:
+          description: specialized training in the school of necromancy
     artistry:
       description:
     forgery:
@@ -151,16 +151,16 @@ aptitude:
       description:
     psionic:
       description: manifesting psionic powers
-    specialization:
-      clairsentience:
-        description: specialized training in the discipline of clairsentience
-      psychokinetic:
-        description: specialized training in the discipline of psychokinetics
-      psychometabolic:
-        description: specialized training in the discipline of psychometabolics
-      psychoportative:
-        description: specialized training in the discipline of psychoportives
-      telepathy:
-        description: specialized training in the discipline of telepathy
+      specialization:
+        clairsentience:
+          description: specialized training in the discipline of clairsentience
+        psychokinetic:
+          description: specialized training in the discipline of psychokinetics
+        psychometabolic:
+          description: specialized training in the discipline of psychometabolics
+        psychoportative:
+          description: specialized training in the discipline of psychoportives
+        telepathy:
+          description: specialized training in the discipline of telepathy
 
 ...
