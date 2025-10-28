@@ -193,6 +193,12 @@ class GameController:
         action_taken = False
         narrative_msg = ""
         
+        # Flaw, can only identify one intent.
+        # Processing input: I move up and attack the dummy
+        # NLP Result: Intent=ATTACK, Targets=['dummy']
+        # should be
+        # NLP Result: Intent=ATTACK and MOVE, Targets=['dummy']
+        # extract to other file. will be very lengthy otherwise
         if intent_name == "ATTACK":
             if target_entities:
                 target = target_entities[0] # Simple: just attack the first target
