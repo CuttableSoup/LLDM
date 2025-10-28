@@ -11,14 +11,12 @@ except ImportError:
     print("DebugWindow Error: PyYAML not found. Please install: pip install PyYAML")
     yaml = None
 
-# Import classes from your project
 try:
     if TYPE_CHECKING:
         from classes import RulesetLoader, Entity
     from classes import create_entity_from_dict, Entity, RulesetLoader
 except ImportError:
     print("DebugWindow Error: 'classes.py' not found.")
-    # Define placeholder classes if missing
     class RulesetLoader:
         characters: Dict[str, Any] = {}
         creatures: Dict[str, Any] = {}
@@ -61,7 +59,6 @@ class EntityDebugTab(ttk.Frame):
             return
 
         # --- Main Layout ---
-        # Create a resizable paned window
         self.paned_window = ttk.PanedWindow(self, orient='horizontal')
         self.paned_window.pack(expand=True, fill='both')
 
@@ -89,7 +86,7 @@ class EntityDebugTab(ttk.Frame):
             right_frame, 
             wrap=tk.WORD, 
             font=("Courier New", 10), 
-            state='disabled' # Start disabled
+            state='disabled'
         )
         self.text_editor.grid(row=0, column=0, columnspan=2, sticky='nsew')
         
@@ -149,11 +146,8 @@ class EntityDebugTab(ttk.Frame):
             return
 
         try:
-            # Convert the dataclass object to a dictionary
             entity_dict = dataclasses.asdict(entity_obj)
             
-            # Dump the dictionary to a YAML string
-            # Use SafeDumper to handle dataclass-to-dict conversion gracefully
             entity_yaml = yaml.dump(
                 entity_dict, 
                 indent=2, 
@@ -161,7 +155,6 @@ class EntityDebugTab(ttk.Frame):
                 Dumper=yaml.SafeDumper
             )
             
-            # Update the text editor
             self.text_editor.config(state='normal')
             self.text_editor.delete('1.0', tk.END)
             self.text_editor.insert('1.0', entity_yaml)
@@ -198,8 +191,8 @@ class EntityDebugTab(ttk.Frame):
             # This function is designed to handle nested dicts for skills, etc.
             new_entity = create_entity_from_dict(new_data_dict)
             if not new_entity:
-                 raise ValueError("create_entity_from_dict returned None.")
-                 
+                raise ValueError("create_entity_from_dict returned None.")
+
             new_entity.name = self.selected_entity_name # Ensure name consistency
             
             # 3. Find the original entity and replace it in the loader

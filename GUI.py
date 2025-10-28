@@ -62,7 +62,6 @@ class GameController:
         self.game_entities: Dict[str, Entity] = {}
         """A dictionary of all entities in the scene, indexed by name."""
         
-        # NEW: Store the current room
         self.current_room: Optional[Room] = None
         """The currently active room object."""
         
@@ -76,11 +75,9 @@ class GameController:
         # (Placeholder) Game history for narrative summaries
         self.round_history: List[str] = []
 
-        # --- GUI Callbacks ---
         self.update_narrative_callback: Callable[[str], None] = lambda text: None
         self.update_character_sheet_callback: Callable[[Entity], None] = lambda entity: None
         self.update_inventory_callback: Callable[[Entity], None] = lambda entity: None
-        # NEW: Callback now passes the Room object
         self.update_map_callback: Callable[[Optional[Room]], None] = lambda room: None
 
     def start_game(self, player: Entity):
@@ -94,14 +91,12 @@ class GameController:
         if player.name not in self.game_entities:
             self.game_entities[player.name] = player
             
-        # NEW: Load the first room from the scenario
         if self.loader.scenario and self.loader.scenario.environment.rooms:
             self.current_room = self.loader.scenario.environment.rooms[0]
             print(f"Loaded initial room: {self.current_room.name}")
         else:
             print("Warning: No scenario or rooms found in loader.")
         
-        # --- MODIFICATION START ---
         # Build the initiative order from the entities placed in the room
         self.initiative_order = []
         
@@ -157,13 +152,11 @@ class GameController:
             self.initiative_order.append(self.player_entity)
             
         print(f"Starting game with {len(self.initiative_order)} entities in initiative.")
-        # --- MODIFICATION END ---
         
         # Manually update GUI on start
         self.update_narrative_callback(f"The adventure begins for {player.name}...")
         self.update_character_sheet_callback(self.player_entity)
         self.update_inventory_callback(self.player_entity)
-        # NEW: Pass the loaded room to the map callback
         self.update_map_callback(self.current_room)
         
         print("GameController started.")
@@ -177,8 +170,6 @@ class GameController:
             return
 
         print(f"Processing input: {player_input}")
-        
-        # --- START MODIFICATION ---
         
         # 1. Run the NLP Pipeline
         # We pass all game_entities as the "known_entities" for the NER step
@@ -253,7 +244,7 @@ class GameController:
         # so they can react to it.
         self._run_npc_turns(processed_action)
 
-    def _run_npc_turns(self, player_action: ProcessedInput): # <--- MODIFIED
+    def _run_npc_turns(self, player_action: ProcessedInput):
         """
         Runs the 'else' block of the loop for all non-player characters.
         
@@ -276,8 +267,6 @@ class GameController:
             if not ("intelligent" in npc.status or "animalistic" in npc.status or "robotic" in npc.status):
                 continue
 
-            # --- START MODIFICATION ---
-            
             # 1. (LLM) Generate NPC Response/Reaction to player's action
             reaction_narrative = self.nlp_processor.generate_npc_response(
                 npc_entity=npc,
@@ -299,8 +288,6 @@ class GameController:
             # (Example: A real call might look like this)
             # npc_action = self.nlp_processor.generate_npc_action(npc, game_state_context)
             # self.process_npc_action(npc, npc_action)
-            
-            # --- END MODIFICATION ---
             
             self.update_narrative_callback(turn_narrative)
             self.round_history.append(turn_narrative)
@@ -330,7 +317,6 @@ class GameController:
             except ImportError:
                 pass
         
-        # NEW: Add room objects to game state
         objects_in_room = []
         # (Placeholder) This needs to be populated from the room/legend
         # if self.current_room and self.current_room.objects:
@@ -383,7 +369,7 @@ class NarrativePanel(ttk.Frame):
         self.text_area.config(state='normal')
         self.text_area.insert(tk.END, text + "\n\n")
         self.text_area.config(state='disabled')
-        self.text_area.see(tk.END) # Auto-scroll to the bottom
+        self.text_area.see(tk.END)
         print(f"NARRATIVE: {text}")
         pass
 
@@ -417,7 +403,6 @@ class MapPanel(ttk.Frame):
         
     def update_map(self, room: Optional[Room] = None, tokens: List[Entity] = []):
         """
-        (MODIFIED) Redraws the map based on new data.
         
         Args:
             room: The Room object to display.
@@ -448,7 +433,6 @@ class MapPanel(ttk.Frame):
         TILE_SIZE = 25 # Size of each map tile in pixels
         MAP_OFFSET_Y = 40 # Offset to leave space for title
         
-        # --- MODIFIED TILE_INFO ---
         # Define tile properties (color, text)
         TILE_INFO = {
             'W': ("#333", "Wall"),  # Dark grey
@@ -458,7 +442,6 @@ class MapPanel(ttk.Frame):
             'C': ("#FFD700", "Chest"), # Gold
             'p': ("#708090", "Gate"),   # Slate grey (e.g. 'portcullis')
 
-            # NEW: Add tokens from rooms.yaml legend
             'P': ("#007BFF", "Player"), # Blue
             'w': ("#A52A2A", "Wolf"),   # Brown (matches 'wolf')
             'g': ("#2F4F4F", "Giant"),  # Dark Slate Grey (matches 'giant')
@@ -473,7 +456,6 @@ class MapPanel(ttk.Frame):
             print("MAP: Room has no .map property to draw.")
             return
             
-        # --- NEW: Render Ground Layer First (Optional, but looks better) ---
         if room.layers and room.layers[0]:
             for y, row in enumerate(room.layers[0]):
                 for x, tile_char in enumerate(row):
@@ -800,7 +782,6 @@ class MainWindow:
         # 1. Initialize the Game Controller
         self.controller = GameController(loader=loader, ruleset_path=ruleset_path)
         
-        # --- NEW: Create Menu Bar ---
         self._create_menu()
         
         # 2. Create main layout frames

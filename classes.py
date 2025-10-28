@@ -3,7 +3,6 @@ from dataclasses import dataclass, field, fields
 from typing import List, Dict, Any, Optional, Union
 from pathlib import Path
 
-# NEW IMPORTS
 try:
     import yaml
 except ImportError:
@@ -176,16 +175,11 @@ class Entity:
     e.g., ['skill_name', {'skill_name_2': 1}]
     """
     
-    # --- START MODIFICATION ---
-    # Added 'apply' and 'requirement' fields that were missing.
-    
     apply: Dict[str, Any] = field(default_factory=dict)
     """A dictionary of 'apply' effects (e.g., {'fire': {'damage(cur_hp)': 'formula'}})."""
     
     requirement: Dict[str, Any] = field(default_factory=dict)
     """A dictionary of requirements to use/equip (e.g., {'intelligence': {'base': 3}})."""
-    
-    # --- END MODIFICATION ---
 
     cost: Cost = field(default_factory=Cost)
     """An object holding the initial and ongoing costs."""
@@ -219,7 +213,6 @@ def create_entity_from_dict(data: Dict[str, Any]) -> Entity:
     Cost, Duration, and recursive InventoryItems.
     """
     
-    # Make a copy to avoid modifying the original dict
     data_copy = data.copy()
 
     if 'quality' in data_copy:
@@ -231,18 +224,6 @@ def create_entity_from_dict(data: Dict[str, Any]) -> Entity:
     if 'duration' in data_copy:
         data_copy['duration'] = [DurationComponent(**comp) for comp in data_copy['duration']]
         
-    # --- START MODIFICATION ---
-    # Removed the 'if 'skill' in data_copy:' wrapper from this block.
-    # This logic must run to parse the nested attribute/skill structure
-    # from files like Valerius.yaml.
-    
-    # Handle new structure: {'physique': {'base': 9, 'skill': {...}}}
-    # The Entity dataclass expects: {'physique': 9}
-    # And skill: {'strength': {'base': 3, ...}}
-    
-    # This function seems to be designed for the *final* entity structure,
-    # but the YAML structure for attributes/skills is nested.
-    # Let's adjust for the YAML structure seen in Valerius.yaml
     
     final_attributes = {}
     final_skills = {}
@@ -256,10 +237,8 @@ def create_entity_from_dict(data: Dict[str, Any]) -> Entity:
                         if isinstance(skill_data, dict):
                             final_skills[skill_name] = Skill(**skill_data)
                         else:
-                            # Handle simple skill: val
                             final_skills[skill_name] = Skill(base=skill_data)
             else:
-                # Handle simple attr: val
                 final_attributes[attr_name] = attr_data
         
         data_copy['attribute'] = final_attributes
@@ -271,14 +250,9 @@ def create_entity_from_dict(data: Dict[str, Any]) -> Entity:
             else:
                 final_skills[skill_name] = Skill(base=skill_data)
 
-    # Only overwrite skills if we found some in attributes
     if final_skills:
         data_copy['skill'] = final_skills
-        
-    # --- END MODIFICATION ---
 
-
-    # Handle recursive inventory
     def _create_inventory(items_list: List[Dict]) -> List[InventoryItem]:
         """Helper to recursively build InventoryItem objects."""
         output = []
@@ -294,7 +268,6 @@ def create_entity_from_dict(data: Dict[str, Any]) -> Entity:
     entity_field_names = {f.name for f in fields(Entity)}
     filtered_data = {k: v for k, v in data_copy.items() if k in entity_field_names}
     
-    # Auto-populate cur_hp, cur_mp, cur_fp if they are 0
     if 'max_hp' in filtered_data and 'cur_hp' not in filtered_data:
         filtered_data['cur_hp'] = filtered_data['max_hp']
     if 'max_mp' in filtered_data and 'cur_mp' not in filtered_data:
@@ -303,9 +276,6 @@ def create_entity_from_dict(data: Dict[str, Any]) -> Entity:
         filtered_data['cur_fp'] = filtered_data['max_fp']
 
     return Entity(**filtered_data)
-
-
-# --- NEW CLASSES ADDED BELOW ---
 
 @dataclass
 class RoomLegendItem:
@@ -332,10 +302,12 @@ class Room:
         GUI.py's MapPanel expects this.
         In rooms.yaml, layer[0] is ground, layer[1] is objects/actors.
         """
+        
+        # needs to be any number of layers
         if len(self.layers) > 1:
-            return self.layers[1] # Return the second layer
+            return self.layers[1]
         elif self.layers:
-            return self.layers[0] # Fallback to first layer
+            return self.layers[0]
         return None
 
 @dataclass
@@ -380,12 +352,10 @@ class RulesetLoader:
         for yaml_file in self.ruleset_path.glob("**/*.yaml"):
             print(f"Processing file: {yaml_file.name}")
             
-            # Special handling for rooms.yaml
             if yaml_file.name == "rooms.yaml":
                 self._load_scenario(yaml_file)
                 continue
             
-            # Special handling for attributes.yaml and types.yaml
             if yaml_file.name == "attributes.yaml":
                 self.attributes = self._load_generic_yaml_all(yaml_file)
                 continue
@@ -393,7 +363,6 @@ class RulesetLoader:
                 self.types = self._load_generic_yaml_all(yaml_file)
                 continue
 
-            # Load all other files as entities
             entities_data = self._load_generic_yaml_all(yaml_file)
             
             for entity_data in entities_data:
@@ -401,7 +370,6 @@ class RulesetLoader:
                     print(f"Warning: Skipping document in {yaml_file.name} (missing 'entity:' tag).")
                     continue
                 
-                # Extract data from under the 'entity:' key
                 data = entity_data['entity']
                 
                 if 'name' not in data:
@@ -410,7 +378,6 @@ class RulesetLoader:
                 
                 entity_obj = create_entity_from_dict(data)
                 
-                # Sort entity into the correct dictionary
                 parent_dir = yaml_file.parent.name
                 
                 if parent_dir == "characters":
@@ -426,9 +393,8 @@ class RulesetLoader:
                 elif parent_dir == "medievalfantasy" and yaml_file.name == "environment.yaml":
                     self.environment_ents[entity_obj.name] = entity_obj
                 else:
-                    # Fallback for entities not in a sub-directory
                     if entity_obj.supertype == "creature" and data.get("is_player", False):
-                         self.characters[entity_obj.name] = entity_obj
+                        self.characters[entity_obj.name] = entity_obj
                     elif entity_obj.supertype == "creature":
                         self.creatures[entity_obj.name] = entity_obj
                     elif entity_obj.supertype == "object":
@@ -457,15 +423,12 @@ class RulesetLoader:
             if not data:
                 return
 
-            # --- START MODIFICATION ---
-            # Get data from under the top-level 'map:' key
             map_data = data.get('map', {})
             if not map_data:
                 print(f"Warning: 'map:' key not found in {file_path.name}. Skipping scenario load.")
                 return
 
-            # Manually parse the scenario data into dataclasses
-            env_data = map_data.get('environment', {}) # Get environment from map_data
+            env_data = map_data.get('environment', {})
             room_list_data = env_data.get('rooms', [])
             parsed_rooms = []
             
@@ -481,10 +444,9 @@ class RulesetLoader:
             
             parsed_env = Environment(rooms=parsed_rooms)
             self.scenario = Scenario(
-                scenario_name=map_data.get('name', 'Unnamed Scenario'), # Get name from map_data
+                scenario_name=map_data.get('name', 'Unnamed Scenario'),
                 environment=parsed_env
             )
-            # --- END MODIFICATION ---
             print(f"Successfully loaded scenario: {self.scenario.scenario_name}")
 
         except Exception as e:
