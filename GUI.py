@@ -53,7 +53,7 @@ class GameController:
         self.loader = loader
         """The data loader with all ruleset data."""
         
-        self.nlp_processor = NLPProcessor(ruleset_path / "intents.yaml")
+        self.nlp_processor = NLPProcessor(ruleset_path)
         """The NLP system for processing commands."""
         
         self.player_entity: Optional[Entity] = None
@@ -224,6 +224,21 @@ class GameController:
             else:
                 narrative_msg = "You look around."
             action_taken = True
+            
+        elif intent_name == "USE_SKILL":
+            skill_name = processed_action.skill_name
+            target = target_entities[0] if target_entities else None
+            
+            if skill_name:
+                # You now have everything you need to make a skill check!
+                # (Placeholder) self.process_skill_check(self.player_entity, skill_name, target)
+                
+                target_name = f" on {target.name}" if target else ""
+                narrative_msg = f"You attempt to use your {skill_name} skill{target_name}."
+                self.round_history.append(f"{self.player_entity.name} uses {skill_name}{target_name}.")
+                action_taken = True
+            else:
+                narrative_msg = "You try to... do something, but are unsure what skill to use."
 
         # Fallback for OTHER or unhandled intents
         if not action_taken:

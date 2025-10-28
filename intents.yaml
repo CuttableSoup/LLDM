@@ -1,0 +1,133 @@
+# Defines the core, hardcoded actions the game will try to
+# understand from player input.
+
+intents:
+  - name: ATTACK
+    description: To assault or strike at an entity.
+    keywords:
+      - attack
+      - hit
+      - swing
+      - strike
+      - fight
+      - harm
+      - punch
+      - kick
+      - stab
+      - slash
+
+  - name: MOVE
+    description: To change physical location.
+    keywords:
+      - move
+      - go
+      - walk
+      - run
+      - head
+      - travel
+      - approach
+      - leave
+      - exit
+      - enter
+      - flee
+
+  - name: CHANGE_STANCE
+    description: To change the creature's physical stance.
+    keywords:
+      - stand
+      - stand up
+      - get up
+      - crouch
+      - duck
+      - hide
+      - pronate
+      - lie down
+      - go prone
+      - get down
+
+  - name: INTERACT
+    description: To use, open, or manipulate an object or entity.
+    keywords:
+      - open
+      - get
+      - take
+      - use
+      - pull
+      - push
+      - look
+      - inspect
+      - examine
+      - touch
+      - read
+      - activate
+      - deactivate
+      - equip
+      - unequip
+
+  - name: GIVE
+    description: To give an item to another entity.
+    keywords:
+      - give
+      - hand
+      - offer
+
+  - name: DIALOGUE
+    description: To engage in conversation with an entity.
+    keywords:
+      - talk
+      - speak
+      - say
+      - ask
+      - tell
+      - shout
+      - whisper
+      - dialogue
+      - question
+      - respond
+
+  - name: TRADE
+    description: To exchange items with another entity.
+    keywords:
+      - trade
+      - buy
+      - sell
+      - barter
+      - purchase
+      - shop
+      - vendor
+
+  - name: CAST
+    description: To use a supernatural ability, spell, or miracle.
+    keywords:
+      - cast
+      - conjure
+      - invoke
+      - manifest
+      - use
+      - chant
+      - pray
+
+  - name: CRAFT
+    description: To create or repair an item.
+    keywords:
+      - craft
+      - build
+      - make
+      - forge
+      - brew
+      - create
+      - repair
+      - fix
+
+  - name: MEMORIZE
+    description: To study or commit something to memory.
+    keywords:
+      - memorize
+      - study
+      - learn
+      - read
+      - recall
+
+  - name: OTHER
+    description: General conversation or actions not covered.
+    keywords: [] # Fallback intent

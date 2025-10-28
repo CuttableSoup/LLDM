@@ -169,7 +169,7 @@ class Entity:
     range: int = 0
     """The effective range of the entity (if an item/ability) or its senses."""
 
-    proficiency: List[Union[str, Dict[str, int]]] = field(default_factory=list)
+    proficiency: Dict[str, Any] = field(default_factory=dict)
     """
     A list of skill proficiencies.
     e.g., ['skill_name', {'skill_name_2': 1}]

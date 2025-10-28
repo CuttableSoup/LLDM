@@ -1,7 +1,7 @@
 from __future__ import annotations
 from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
-from dataclasses import dataclass, field # <--- ADDED THIS IMPORT
+from dataclasses import dataclass, field
 
 try:
     import yaml
@@ -31,39 +31,83 @@ class ProcessedInput:
     raw_text: str
     intent: Intent
     targets: List[Entity] = field(default_factory=list)
-    # e.g., for "give potion to Kael", targets would be [potion_entity, kael_entity]
+    skill_name: Optional[str] = None
     
 class NLPProcessor:
     """
     Handles processing natural language input from the player
     and generating responses for NPCs.
-    
-    This is a placeholder implementation that uses simple keyword
-    matching. This can be swapped out for real ML models.
     """
     
-    def __init__(self, intents_filepath: Path):
+    def __init__(self, ruleset_path: Path):
         """
-        Initializes the processor and loads the intent definitions.
+        Initializes the processor and loads the intent definitions
+        from both the root directory and the ruleset directory.
         
         Args:
-            intents_filepath: Path to the 'intents.yaml' file.
+            ruleset_path: Path to the active ruleset
+                          (e.g., '.../rulesets/medievalfantasy')
         """
         self.intents: Dict[str, Intent] = {}
         if not yaml:
             raise ImportError("PyYAML is required to load intents.")
-        self.load_intents(intents_filepath)
+        
+        # This will hold the mappings from skill_map.yaml
+        self.skill_keyword_map: Dict[str, str] = {}
+        
+        # 1. Define paths
+        root_path = ruleset_path.parent.parent
+        core_intents_path = root_path / "intents.yaml"
+        ruleset_intents_path = ruleset_path / "intents.yaml"
+        skill_map_path = ruleset_path / "skill_map.yaml" # <-- New path
 
-    def load_intents(self, filepath: Path):
-        """Loads intent definitions from the YAML file."""
-        print(f"NLP: Loading intents from {filepath.name}...")
+        # 2. Load core intents
+        print(f"NLP: Loading core intents from {core_intents_path.name}...")
+        core_intents = self.load_intents_from_file(core_intents_path)
+        self.intents.update(core_intents)
+        
+        # 3. Load ruleset-specific intents (if file exists)
+        if ruleset_intents_path.exists():
+            print(f"NLP: Loading ruleset intents from {ruleset_intents_path.name}...")
+            ruleset_intents = self.load_intents_from_file(ruleset_intents_path)
+            self.intents.update(ruleset_intents)
+        else:
+            print(f"NLP: No ruleset intents file found at {ruleset_intents_path.name}.")
+            
+        print(f"NLP: Loaded a total of {len(self.intents)} intents.")
+
+        # 4. Load the skill map
+        self.load_skill_map(skill_map_path)
+
+    def load_skill_map(self, filepath: Path):
+        """Loads the keyword-to-skill mapping from skill_map.yaml."""
+        if not filepath.exists():
+            print(f"NLP: No skill map file found at {filepath.name}. Using keywords as-is.")
+            return
+            
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                data = yaml.safe_load(f)
+            
+            if data and 'skill_map' in data and isinstance(data['skill_map'], dict):
+                self.skill_keyword_map = data['skill_map']
+                print(f"NLP: Loaded {len(self.skill_keyword_map)} skill keyword mappings.")
+            else:
+                print(f"Warning: '{filepath.name}' is invalid or empty.")
+        except Exception as e:
+            print(f"Error loading skill map file {filepath}: {e}")
+
+    def load_intents_from_file(self, filepath: Path) -> Dict[str, Intent]:
+        """Loads intent definitions from a single YAML file."""
+        # ... (this function is unchanged from last time) ...
+        loaded_intents: Dict[str, Intent] = {}
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 data = yaml.safe_load(f)
             
             if not data or 'intents' not in data:
                 print(f"Warning: 'intents:' key not found in {filepath.name}")
-                return
+                return loaded_intents
                 
             for intent_data in data['intents']:
                 intent = Intent(
@@ -72,41 +116,36 @@ class NLPProcessor:
                     keywords=intent_data.get('keywords', [])
                 )
                 if intent.name != 'UNKNOWN':
-                    self.intents[intent.name] = intent
+                    loaded_intents[intent.name] = intent
             
-            print(f"NLP: Loaded {len(self.intents)} intents.")
+            return loaded_intents
 
         except Exception as e:
             print(f"Error loading intents file {filepath}: {e}")
+            return loaded_intents
 
-    def classify_intent(self, text_input: str) -> Intent:
+    def classify_intent(self, text_input: str) -> Tuple[Intent, Optional[str]]:
         """
         (Placeholder) Simulates Intent Classification.
-        
-        Finds the best-matching intent based on keywords.
-        A real implementation would use semantic similarity models.
         """
+        # ... (this function is unchanged from last time) ...
         text_lower = text_input.lower()
         
-        # Iterate and find the first match
         for intent in self.intents.values():
-            if intent.name == "OTHER": # Skip the fallback
+            if intent.name == "OTHER":
                 continue
             for keyword in intent.keywords:
                 if keyword in text_lower:
-                    return intent
+                    return (intent, keyword) 
                     
-        # Fallback to OTHER
-        return self.intents.get("OTHER", Intent(name="OTHER", description="", keywords=[]))
+        other_intent = self.intents.get("OTHER", Intent(name="OTHER", description="", keywords=[]))
+        return (other_intent, None)
 
     def extract_entities(self, text_input: str, known_entities: Dict[str, Entity]) -> List[Entity]:
         """
         (Placeholder) Simulates Named Entity Recognition (NER).
-        
-        Finds entities whose names appear in the text.
-        A real implementation would use a proper NER model to handle
-        pronouns, context, and descriptors ("the orc", "it", "the chest").
         """
+        # ... (this function is unchanged from last time) ...
         text_lower = text_input.lower()
         found_entities = []
         
@@ -119,49 +158,37 @@ class NLPProcessor:
     def process_player_input(self, text_input: str, known_entities: Dict[str, Entity]) -> ProcessedInput:
         """
         Runs the full (simulated) NLP pipeline on player input.
-        
-        Args:
-            text_input: The raw string from the player.
-            known_entities: The dictionary of all entities in the
-                           controller's current scope (room, game, etc.)
-                           
-        Returns:
-            A ProcessedInput object with the intent and targets.
         """
         # 1. Classify Intent
-        intent = self.classify_intent(text_input)
+        intent, matched_keyword = self.classify_intent(text_input)
         
         # 2. Extract Entities
         targets = self.extract_entities(text_input, known_entities)
         
+        # 3. Store the skill name if the intent was USE_SKILL
+        skill_name_to_store = None
+        if intent.name == "USE_SKILL" and matched_keyword:
+            # --- This logic is now data-driven ---
+            # Use the map to find the base skill name.
+            # Fall back to the keyword itself if not in the map
+            # (for base skills like 'athletic', 'blade', etc.)
+            skill_name_to_store = self.skill_keyword_map.get(matched_keyword, matched_keyword)
+        
         return ProcessedInput(
             raw_text=text_input,
             intent=intent,
-            targets=targets
+            targets=targets,
+            skill_name=skill_name_to_store # This now stores the *base skill name*
         )
 
     def generate_npc_response(self, npc_entity: Entity, player_input: ProcessedInput, game_state: Dict[str, Any]) -> str:
         """
         (Placeholder) Simulates an LLM call to generate an NPC response.
-        
-        A real implementation would build a detailed prompt with the
-        NPC's personality, memories, attitudes, game state, and the
-        player's input, then call an LLM API.
-        
-        Args:
-            npc_entity: The Entity object for the NPC who is speaking.
-            player_input: The processed input from the player.
-            game_state: A dictionary of context (e.g., other actors, history).
-        
-        Returns:
-            A string response for the NPC to "say".
         """
-        
-        # Simple rule-based simulation
+        # ... (this function is unchanged from last time) ...
         
         # 1. Check for a direct "talk" intent
-        if player_input.intent.name == "INTERACT" and npc_entity in player_input.targets:
-            # If NPC has a quote, use it
+        if player_input.intent.name == "DIALOGUE" and npc_entity in player_input.targets:
             if npc_entity.quote:
                 return f"{npc_entity.name} says: \"{npc_entity.quote[0]}\""
             else:
@@ -171,9 +198,5 @@ class NLPProcessor:
         if player_input.intent.name == "ATTACK" and npc_entity in player_input.targets:
             return f"{npc_entity.name} shouts: \"Aargh! You'll pay for that!\""
             
-        # 3. Fallback for other actions (e.g., player moves or attacks someone else)
-        # In a real system, the LLM would decide if the NPC
-        # should comment on the player's actions.
-        
-        # For this placeholder, we'll just return None to say nothing.
+        # 3. Fallback
         return None
