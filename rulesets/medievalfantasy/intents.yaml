@@ -12,6 +12,10 @@ intents:
       - strike
       - fight
       - harm
+      - punch
+      - kick
+      - stab
+      - slash
 
   - name: MOVE
     description: To change physical location.
@@ -23,6 +27,24 @@ intents:
       - head
       - travel
       - approach
+      - leave
+      - exit
+      - enter
+      - flee
+
+  - name: CHANGE_STANCE
+    description: To change the creature's physical stance.
+    keywords:
+      - stand
+      - stand up
+      - get up
+      - crouch
+      - duck
+      - hide
+      - pronate
+      - lie down
+      - go prone
+      - get down
 
   - name: INTERACT
     description: To use, open, or manipulate an object or entity.
@@ -36,8 +58,33 @@ intents:
       - look
       - inspect
       - examine
+      - touch
+      - read
+      - activate
+      - deactivate
+      - equip
+      - unequip
+
+  - name: GIVE
+    description: To give an item to another entity.
+    keywords:
+      - give
+      - hand
+      - offer
+
+  - name: DIALOGUE
+    description: To engage in conversation with an entity.
+    keywords:
       - talk
       - speak
+      - say
+      - ask
+      - tell
+      - shout
+      - whisper
+      - dialogue
+      - question
+      - respond
 
   - name: TRADE
     description: To exchange items with another entity.
@@ -47,6 +94,8 @@ intents:
       - sell
       - barter
       - purchase
+      - shop
+      - vendor
 
   - name: CAST
     description: To use a supernatural ability, spell, or miracle.
@@ -56,6 +105,128 @@ intents:
       - invoke
       - manifest
       - use
+      - chant
+      - pray
+
+  - name: CRAFT
+    description: To create or repair an item.
+    keywords:
+      - craft
+      - build
+      - make
+      - forge
+      - brew
+      - create
+      - repair
+      - fix
+
+  - name: MEMORIZE
+    description: To study or commit something to memory.
+    keywords:
+      - memorize
+      - study
+      - learn
+      - read
+      - recall
+
+  - name: USE_SKILL
+    description: To explicitly use a character skill.
+    keywords:
+      # --- Physique Skills ---
+      - athletic
+      - climb
+      - swim
+      - jump
+      - blade
+      - throwing
+      - throw
+      - fortitude
+      - resist
+      - strength
+      - lift
+      - bend
+      - break
+      - axe
+      - polearm
+      - shield
+      - block
+      - brawling
+      # --- Dexterity Skills ---
+      - acrobatics
+      - tumble
+      - balance
+      - escape
+      - slip
+      - fly
+      - trickery
+      - pick lock
+      - pick pocket
+      - disarm trap
+      - sleight of hand
+      - stealth
+      - sneak
+      - hide
+      - dodge
+      - reflex
+      - missile
+      - shoot
+      # --- Intelligence Skills ---
+      - appraise
+      - value
+      - linguistic
+      - translate
+      - decipher
+      - arcane
+      - navigation
+      - navigate
+      # --- Wisdom Skills ---
+      - medicine
+      - heal
+      - first aid
+      - treat
+      - survival
+      - track
+      - forage
+      - hunt
+      - willpower
+      - resist
+      - miracle
+      - pray
+      - artistry
+      - draw
+      - sing
+      - perform
+      - forgery
+      - forge document
+      - gambling
+      - gamble
+      - streetwise
+      - gather rumors
+      - observation
+      - observe
+      - look
+      - search
+      - spot
+      - notice
+      # --- Presence Skills ---
+      - charisma
+      - persuade
+      - charm
+      - diplomacy
+      - negotiate
+      - deception
+      - lie
+      - bluff
+      - disguise
+      - husbandry
+      - handle animal
+      - intimidation
+      - intimidate
+      - threaten
+      - psionic
+      - manifest
+      - telepathy
+      - psychokinetic
 
   - name: OTHER
     description: General conversation or actions not covered.

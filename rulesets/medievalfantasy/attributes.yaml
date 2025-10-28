@@ -1,166 +1,200 @@
 aptitude:
   attribute: physique
-  description:
+  description: Represents the entity's physical power, health, and toughness.
   skill:
     athletic:
-      description: Used for various feats of agility, climbing, swimming, etc.
+      description: Used for various feats of agility, climbing, swimming, and jumping.
     blade:
-      description: Used to attack with blades and swords of varying length and styles.  Dagger, Sword, Scimitar, etc.
+      description: Used to attack with blades and swords of varying length and styles. Dagger, Sword, Scimitar, etc.
       specialization:
         longsword:
-          description: specialized training in the longsword
+          description: Specialized training in the longsword.
+        shortsword:
+          description: Specialized training with shortswords and daggers.
+        greatsword:
+          description: Specialized training with large, two-handed swords.
     throwing:
-      description:
+      description: Skill with thrown weapons like javelins, daggers, and hand axes.
     fortitude:
-      description:
+      description: Resisting poison, disease, and physical exhaustion or hardship.
     strength:
-      description:
+      description: Raw physical power, affecting lift capacity and melee damage.
     axe:
-      description:
+      description: Wielding battle axes, hand axes, and other chopping weapons.
+      specialization:
+        battle-axe:
+          description: Specialized training with one-handed battle axes.
+        great-axe:
+          description: Specialized training with large, two-handed axes.
     polearm:
-      description:
+      description: Using weapons on long shafts, like spears, halberds, and glaives.
+      specialization:
+        spear:
+          description: Specialized training with spears and javelins.
+        halberd:
+          description: Specialized training with heavy polearms like halberds and pikes.
     shield:
-      description:
-    brawling:
-      description:
-
----
-
-aptitude:
-  attribute: dexterity
-  description:
-  skill:
-    acrobatics:
-      description:
-    escape:
-      description:
-    fly:
-      description:
-    trickery:
-      description:
-    stealth:
-      description:
-    dodge:
-      description:
+      description: Using a shield for active blocking and defense.
       opposes:
       - blade
       - axe
       - polearm
       - brawling
+      - missile
+      - throwing
+    brawling:
+      description: Unarmed combat, including punches, kicks, and grapples.
+
+---
+
+aptitude:
+  attribute: dexterity
+  description: Represents agility, reflexes, fine motor control, and coordination.
+  skill:
+    acrobatics:
+      description: Feats of balance, tumbling, and graceful movement.
+    escape:
+      description: Slipping bindings, escaping grapples, and freeing oneself from nets.
+      opposes:
+      - brawling
+    fly:
+      description: Maneuvering while flying, through magic or natural means.
+    trickery:
+      description: Sleight of hand, picking pockets, opening locks, and disabling traps.
+    stealth:
+      description: Moving silently and remaining unseen in shadows or cover.
+    dodge:
+      description: Physically evading melee attacks, ranged fire, and area effects.
+      opposes:
+      - blade
+      - axe
+      - polearm
+      - brawling
+      - missile
+      - throwing
     reflex:
-      description:
+      description: Reacting quickly to danger, such as magical traps or sudden spells.
     missile:
-      description:
+      description: Using ranged weapons like bows and crossbows.
+      specialization:
+        bow:
+          description: Specialized training with shortbows and longbows.
+        crossbow:
+          description: Specialized training with light and heavy crossbows.
 
 ---
 
 aptitude:
   attribute: intelligence
-  description:
+  description: Represents reasoning, memory, and academic or arcane knowledge.
   skill:
     appraise:
-      description:
+      description: Assessing the value, origin, and authenticity of items.
     linguistic:
-      description:
+      description: Understanding, speaking, and reading multiple languages.
     arcane:
-      description: casting arcane spells
+      description: Casting arcane spells and identifying magical phenomena.
       specialization:
         conjuration:
-          description: specialized training in the school of conjuration
+          description: Spells that create, summon, or transport matter or beings.
         evocation:
-          description: specialized training in the school of evocation
+          description: Spells that channel raw elemental or magical energy to create effects.
         divination:
-          description: specialized training in the school of divination
+          description: Spells that reveal information about the past, present, or future.
         transmutation:
-          description: specialized training in the school of transmutation
+          description: Spells that alter the physical properties of creatures or objects.
         enchantment:
-          description: specialized training in the school of enchantment
+          description: Spells that affect the minds of others, compelling or controlling them.
         abjuration:
-          description: specialized training in the school of abjuration
+          description: Spells that protect, block, banish, or counter other magic.
         illusion:
-          description: specialized training in the school of illusion
+          description: Spells that create false sensory perceptions or phantom images.
         necromancy:
-          description: specialized training in the school of necromancy
+          description: Spells that manipulate life, death, and life-force.
     navigation:
-      description:
+      description: Plotting courses, reading maps, and finding paths by land or sea.
 
 ---
 
 aptitude:
   attribute: wisdom
-  description:
+  description: Represents willpower, intuition, common sense, and awareness.
   skill:
     medicine:
-      description:
+      description: Treating wounds, diagnosing illnesses, and neutralizing poisons.
     survival:
-      description:
+      description: Foraging, hunting, tracking, and navigating in the wilderness.
     willpower:
-      description:
+      description: Resisting mental domination, fear, and magical influence.
       opposes:
       - intimidation
       - charisma
+      - deception
     miracle:
-      description: casting divine spells
+      description: Casting divine spells and calling upon a higher power.
       specialization:
         conjuration:
-          description: specialized training in the school of conjuration
+          description: Miracles that create holy water, summon celestial aid, or heal.
         evocation:
-          description: specialized training in the school of evocation
+          description: Miracles that channel divine wrath as holy fire or smiting bolts.
         divination:
-          description: specialized training in the school of divination
+          description: Receiving omens, guidance, or prophecies from a divine source.
         transmutation:
-          description: specialized training in the school of transmutation
+          description: Miracles that alter the body, like blessing water or cursing food.
         enchantment:
-          description: specialized training in the school of enchantment
+          description: Miracles that inspire awe, instill divine fear, or bless allies.
         abjuration:
-          description: specialized training in the school of abjuration
+          description: Divine wards, blessings of protection, and banishing unholy entities.
         illusion:
-          description: specialized training in the school of illusion
+          description: Creating holy symbols of light or cloaking allies in divine shadow.
         necromancy:
-          description: specialized training in the school of necromancy
+          description: Miracles related to death, speaking with the dead, or destroying undead.
     artistry:
-      description:
+      description: Skill in creating art, from painting to music or sculpture.
     forgery:
-      description:
+      description: Creating convincing false documents or imitating handwriting.
     gambling:
-      description:
+      description: Skill and luck in games of chance, and spotting cheaters.
     streetwise:
-      description:
+      description: Gathering information and navigating urban underworlds.
     observation:
-      description:
+      description: Noticing fine details, spotting hidden objects, or seeing through deceptions.
       opposes:
       - trickery
       - stealth
       - disguise
+      - deception
+      - forgery
+      - gambling
 
 ---
 
 aptitude:
   attribute: presence
-  description:
+  description: Represents force of personality, social influence, and inner power.
   skill:
     charisma:
-      description:
+      description: Influencing others through charm, negotiation, and diplomacy.
     deception:
-      description:
+      description: Lying convincingly and misleading others in conversation.
     disguise:
-      description:
+      description: Altering one's appearance and mannerisms to seem like someone else.
     husbandry:
-      description:
+      description: Training and handling animals, from horses to war dogs.
     intimidation:
-      description:
+      description: Influencing others through threats and force of will.
     psionic:
-      description: manifesting psionic powers
+      description: Manifesting psionic powers and resisting mental intrusion.
       specialization:
         clairsentience:
-          description: specialized training in the discipline of clairsentience
+          description: Powers that expand the senses, like seeing the future or remote viewing.
         psychokinetic:
-          description: specialized training in the discipline of psychokinetics
+          description: Powers that move objects or create energy with the mind.
         psychometabolic:
-          description: specialized training in the discipline of psychometabolics
+          description: Powers that alter the manifester's own body.
         psychoportative:
-          description: specialized training in the discipline of psychoportives
+          description: Powers that move the manifester or objects through space.
         telepathy:
-          description: specialized training in the discipline of telepathy
+          description: Powers that read or project thoughts and emotions.
 
 ...
