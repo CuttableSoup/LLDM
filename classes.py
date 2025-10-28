@@ -175,6 +175,17 @@ class Entity:
     A list of skill proficiencies.
     e.g., ['skill_name', {'skill_name_2': 1}]
     """
+    
+    # --- START MODIFICATION ---
+    # Added 'apply' and 'requirement' fields that were missing.
+    
+    apply: Dict[str, Any] = field(default_factory=dict)
+    """A dictionary of 'apply' effects (e.g., {'fire': {'damage(cur_hp)': 'formula'}})."""
+    
+    requirement: Dict[str, Any] = field(default_factory=dict)
+    """A dictionary of requirements to use/equip (e.g., {'intelligence': {'base': 3}})."""
+    
+    # --- END MODIFICATION ---
 
     cost: Cost = field(default_factory=Cost)
     """An object holding the initial and ongoing costs."""

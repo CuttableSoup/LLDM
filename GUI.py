@@ -6,8 +6,17 @@ from tkinter.scrolledtext import ScrolledText
 from pathlib import Path
 
 try:
-    # NEW: Import Room for type hinting
+    from nlp_processor import NLPProcessor, ProcessedInput
+except ImportError:
+    print("Warning: 'nlp_processor.py' not found. Using placeholder classes.")
+    class NLPProcessor:
+        def __init__(self, *args): pass
+        def process_player_input(self, *args): return None
+    class ProcessedInput: pass
+
+try:
     from classes import Entity, InventoryItem, Skill, RulesetLoader, Room
+    from DebugWindow import DebugWindow
 except ImportError:
     print("Warning: 'classes.py' not found. Using placeholder classes.")
     # Define placeholder for Room if classes.py is missing
@@ -34,7 +43,7 @@ class GameController:
     connecting the data (Models from classes.py) to the GUI (Views).
     """
 
-    def __init__(self, loader: RulesetLoader):
+    def __init__(self, loader: RulesetLoader, ruleset_path: Path):
         """
         Initializes the game controller.
         
@@ -43,6 +52,9 @@ class GameController:
         """
         self.loader = loader
         """The data loader with all ruleset data."""
+        
+        self.nlp_processor = NLPProcessor(ruleset_path / "intents.yaml")
+        """The NLP system for processing commands."""
         
         self.player_entity: Optional[Entity] = None
         """The main player character entity."""
@@ -161,82 +173,138 @@ class GameController:
         Receives raw text input from the InputBar and processes it
         using the hybrid parser model.
         """
-        if not self.player_entity:
+        if not self.player_entity or not self.nlp_processor:
             return
 
         print(f"Processing input: {player_input}")
         
-        # (Placeholder) This section requires the parser and LLM models
-        # For now, we'll just echo the input as a "say" action.
+        # --- START MODIFICATION ---
         
-        # 1. Fast Intent + Entity Pipeline
-        # ...
+        # 1. Run the NLP Pipeline
+        # We pass all game_entities as the "known_entities" for the NER step
+        processed_action = self.nlp_processor.process_player_input(
+            player_input, 
+            self.game_entities
+        )
+
+        if not processed_action:
+            self.update_narrative_callback("Error: Could not process input.")
+            return
+
+        intent_name = processed_action.intent.name
+        target_entities = processed_action.targets
         
-        # 2. Triage
-        # ...
+        print(f"NLP Result: Intent={intent_name}, Targets={[e.name for e in target_entities]}")
+
+        # 2. Triage & Process Action (Placeholder Logic)
+        # This is where you would build your game logic for each intent
         
-        # 3. Process the results (SIMULATED)
-        action = None
-        target_name = None
+        action_taken = False
+        narrative_msg = ""
         
-        # (Placeholder) Simulate a simple "attack" command
-        if player_input.lower().startswith("attack"):
-            target_name = player_input.lower().replace("attack", "").strip()
-            action = "attack"
-            
-        target_entity = self.game_entities.get(target_name)
-        
-        if action and target_entity:
-            self.update_narrative_callback(f"You attack {target_name}!")
-            # (Placeholder) process_interaction(self.player_entity, action, target_entity)
-            # (Placeholder) process_attitudes(self.player_entity, target_entity, action, language)
-            
-            self.round_history.append(f"{self.player_entity.name} {action}s {target_name}.")
-        elif action:
-             self.update_narrative_callback(f"You try to attack, but can't find '{target_name}'.")
-        else:
-            self.update_narrative_callback(f"You say, \"{player_input}\"")
+        if intent_name == "ATTACK":
+            if target_entities:
+                target = target_entities[0] # Simple: just attack the first target
+                narrative_msg = f"You attack {target.name}!"
+                # (Placeholder) process_interaction(self.player_entity, "attack", target)
+                self.round_history.append(f"{self.player_entity.name} attacks {target.name}.")
+                action_taken = True
+            else:
+                narrative_msg = "You swing your weapon at the air."
+                action_taken = True
+
+        elif intent_name == "MOVE":
+            if target_entities:
+                target = target_entities[0]
+                narrative_msg = f"You move towards {target.name}."
+            else:
+                narrative_msg = "You move to a new position."
+            # (Placeholder) process_movement(...)
+            action_taken = True
+
+        elif intent_name == "INTERACT":
+            if target_entities:
+                target = target_entities[0]
+                # Check if it's an "open" action or "talk" action
+                if "open" in player_input.lower() and target.supertype == "object":
+                    narrative_msg = f"You attempt to open {target.name}."
+                else:
+                    narrative_msg = f"You interact with {target.name}."
+            else:
+                narrative_msg = "You look around."
+            action_taken = True
+
+        # Fallback for OTHER or unhandled intents
+        if not action_taken:
+            narrative_msg = f"You say, \"{player_input}\""
             self.round_history.append(f"{self.player_entity.name} says: \"{player_input}\"")
-        
-        # 4. Update GUI with any state changes
-        if target_entity:
-            self.update_character_sheet_callback(target_entity)
+
+        # 3. Update GUI
+        self.update_narrative_callback(narrative_msg)
+        if target_entities:
+            # Update any targets that were affected
+            for target in target_entities:
+                self.update_character_sheet_callback(target)
         self.update_character_sheet_callback(self.player_entity)
         self.update_inventory_callback(self.player_entity)
         
-        # 5. Trigger NPC turns
-        self._run_npc_turns()
+        # 4. Trigger NPC turns
+        # We pass the player's processed action to the NPCs
+        # so they can react to it.
+        self._run_npc_turns(processed_action)
 
-    def _run_npc_turns(self):
+    def _run_npc_turns(self, player_action: ProcessedInput): # <--- MODIFIED
         """
         Runs the 'else' block of the loop for all non-player characters.
+        
+        Args:
+            player_action: The processed action the player just took.
         """
         print("Running NPC turns...")
         if not self.player_entity: return
         
-        # (Placeholder) This requires the LLM model
-        
         all_actions_taken = False
+        
+        # Get the current game state for the LLM
+        # (This is simplified for the placeholder)
+        game_state_context = self._get_current_game_state(self.player_entity)
         
         for npc in self.initiative_order:
             if npc == self.player_entity:
                 continue 
 
-            # --- MODIFIED FIX ---
-            # Check if the entity has a status that allows it to take actions.
-            # If not, skip its turn entirely.
             if not ("intelligent" in npc.status or "animalistic" in npc.status or "robotic" in npc.status):
                 continue
-            # --- END MODIFICATION ---
 
-            # (Placeholder) Simulate simple NPC AI
-            print(f"Simulating turn for {npc.name}")
-            narrative = f"{npc.name}: 'I took my turn!'"
+            # --- START MODIFICATION ---
             
-            self.update_narrative_callback(narrative)
-            self.round_history.append(narrative)
+            # 1. (LLM) Generate NPC Response/Reaction to player's action
+            reaction_narrative = self.nlp_processor.generate_npc_response(
+                npc_entity=npc,
+                player_input=player_action,
+                game_state=game_state_context
+            )
+            
+            if reaction_narrative:
+                self.update_narrative_callback(reaction_narrative)
+                self.round_history.append(reaction_narrative)
+            
+            # 2. (AI) Simulate NPC's own turn
+            # (This is where you'd call the LLM for the NPC's *own* action)
+            # For now, we'll keep the simple placeholder
+            print(f"Simulating turn for {npc.name}")
+            turn_narrative = f"{npc.name} takes its turn." 
+            # (Placeholder: old 'I took my turn' was too chatty)
+            
+            # (Example: A real call might look like this)
+            # npc_action = self.nlp_processor.generate_npc_action(npc, game_state_context)
+            # self.process_npc_action(npc, npc_action)
+            
+            # --- END MODIFICATION ---
+            
+            self.update_narrative_callback(turn_narrative)
+            self.round_history.append(turn_narrative)
             all_actions_taken = True
-
 
         # 5. (Placeholder) Process round updates (e.g., poison, regeneration)
         self._process_round_updates()
@@ -709,7 +777,7 @@ class MainWindow:
     GUI components (NarrativePanel, InfoMultipane, InputBar).
     """
     
-    def __init__(self, root_widget: tk.Tk, loader: RulesetLoader):
+    def __init__(self, root_widget: tk.Tk, loader: RulesetLoader, ruleset_path: Path):
         """
         Initializes the main window and creates all child widgets.
         
@@ -730,7 +798,7 @@ class MainWindow:
         self.root.grid_rowconfigure(1, weight=0) # Bottom input bar
         
         # 1. Initialize the Game Controller
-        self.controller = GameController(loader=loader)
+        self.controller = GameController(loader=loader, ruleset_path=ruleset_path)
         
         # --- NEW: Create Menu Bar ---
         self._create_menu()
@@ -783,12 +851,10 @@ class MainWindow:
         # Debug Menu
         debug_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Debug", menu=debug_menu)
-        
-        # (Placeholder: DebugWindow class is not defined)
-        # if DebugWindow:
-        #     debug_menu.add_command(label="View Loaded Ruleset", command=self._open_debug_window)
-        # else:
-        debug_menu.add_command(label="View Loaded Ruleset", state="disabled")
+        if DebugWindow:
+            debug_menu.add_command(label="View Loaded Ruleset", command=self._open_debug_window)
+        else:
+            debug_menu.add_command(label="View Loaded Ruleset", state="disabled")
 
     def _open_debug_window(self):
         """
@@ -796,15 +862,19 @@ class MainWindow:
         it brings it to the front.
         """
         # (Requires DebugWindow class)
-        print("DebugWindow class not implemented.")
-        # if self.debug_window_instance and self.debug_window_instance.winfo_exists():
-        #     self.debug_window_instance.lift()
-        #     self.debug_window_instance.focus()
-        # else:
-        #     self.debug_window_instance = DebugWindow(
-        #         parent=self.root, 
-        #         loader=self.controller.loader
-        #     )
+        # print("DebugWindow class not implemented.") # <-- REMOVE THIS LINE
+
+        # --- ADD/UNCOMMENT THIS BLOCK ---
+        if self.debug_window_instance and self.debug_window_instance.winfo_exists():
+            # If window exists, bring to front
+            self.debug_window_instance.lift()
+            self.debug_window_instance.focus()
+        else:
+            # Otherwise, create a new one
+            self.debug_window_instance = DebugWindow(
+                parent=self.root, 
+                loader=self.controller.loader
+            )
 
     def run(self, player: Entity):
         """
@@ -877,7 +947,11 @@ if __name__ == "__main__":
         print("Ttk 'clam' theme not available, using default.")
     
     # 5. Create the main window, passing in the loaded data
-    app = MainWindow(root_widget=root, loader=loader)
+    app = MainWindow(
+        root_widget=root, 
+        loader=loader, 
+        ruleset_path=RULESET_PATH # Pass the path
+    )
     
     # 6. Start the app (which calls root.mainloop())
     app.run(player=player_character)
