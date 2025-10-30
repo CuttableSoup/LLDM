@@ -8,6 +8,7 @@ entity:
   max_mp: 20 # maximum mental points
   exp: 50 # expecience to be expended
   weight: 180
+  size: medium
   is_player: true
 
   attribute:
@@ -117,6 +118,7 @@ entity:
     hair: brown
     height: 72
     skin: tan
+    age: adult
 
   inventory: # list of predefined items
   - item: longsword # name of item

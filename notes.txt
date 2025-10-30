@@ -1,18 +1,22 @@
 hardcoded classes:
 - entity: [ supertype: (string), type: (string), subtype: (string), name: (string), description: (string),
-            max_hp: (int), cur_hp: (int), max_mp: (int), cur_mp: (int), max_fp: (int), cur_fp: (int), exp: (int),
-            weight: (int), body: (string), qualities: list of (string, any), languages: list of (string),
-            attributes: list of (string, float), skills: list of (skill: base, int, specializations: list of (skill: int)),
-            attitudes: (default: string, string: string), allies: list of (string: string), enemies: list of (string: string),
-            target: list of (string: any), area: (size), resist: list of (string, any), range: (int), slot: (string),
-            cost: (initial: any, ongoing: any), value: (int) tags: list of (string), tag_mod: list of (string, string),
-            inventory: list of (string, int, bool), supernatural: list of (string), memories: list of (string), quotes: list of (string), unique ]
-- qualities: [ body, eye, gender, hair, height, skin ]
+        max_hp: (int), cur_hp: (int), max_mp: (int), cur_mp: (int), max_fp: (int), cur_fp: (int), exp: (int),
+        weight: (int), body: (string), qualities: list of (string, any), languages: list of (string),
+        attributes: list of (string, float), skills: list of (skill: base, int, specializations: list of (skill: int)),
+        attitudes: (default: string, string: string), allies: list of (string: string), enemies: list of (string: string),
+        target: list of (string: any), area: (size), resist: list of (string, any), range: (int), slot: (string),
+        cost: (initial: any, ongoing: any), value: (int) tags: list of (string), tag_mod: list of (string, string),
+        inventory: list of (string, int, bool), supernatural: list of (string), memories: list of (string), quotes: list of (string), unique ]
+- qualities: [ body, eye, gender, hair, height, skin, age ]
+- age: [ infant, child, juvenile, adult, mature, venerable, ancient ]
+- size: [ fine, diminutive, tiny, small, medium, large, huge, gargantuan, colossal ]
+- target: [ blast, line, cone, mark ]
 - attitudes: [ disposition, trust, confidence, respect, obligation ]
 - atlas: [ array: dimension->world->area->structure->room->tile, size ]
-- tags: [ hidden, observed, unconcious, damaged, supressed, dead, broken, dispel, prone, arm, disarm, trigger, locked, intelligent, animalistic, robotic.
+- tags: [ hidden, observed, unconcious, damaged, supress, dead, broken, dispel,
+        prone, arm, disarm, trigger, locked, intelligent, animalistic, robotic,
         damage(max_hp, max_fp, max_mp, cur_hp, cur_fp, cur_mp), heal(max_hp, max_fp, max_mp, cur_hp, cur_fp, cur_mp) ]
-- actions: [ attack, cast, move, speak, stand, pronate, interact, memorize, craft, give, take, trade, dialogue ]
+- actions: [ attack, cast, move, speak, stand, pronate, interact, memorize, craft, give, take, trade ]
 - reactions: [ AoO ]
 
 medievalfantasy types:
@@ -21,7 +25,7 @@ medievalfantasy types:
 - object types: [ armor, blade, axe, polearm, shield, natural, throwing, consumable, currency, accessory ]
 - supernatural types: [ spell, miracle, power ]
 - environment types: [ weather, light, trap ]
-- creature types: [ humanoid ]
+- creature types: [ humanoid, quadruped ]
 
 - blades subtypes: [ shortsword, longsword, scimitar, dagger ]
 - armor subtypes: [ light, medium, heavy ]

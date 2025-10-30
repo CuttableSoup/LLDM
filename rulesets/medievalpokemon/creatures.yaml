@@ -1,0 +1,13 @@
+entity:
+  name: human
+  supertype: creature
+  type: humanoid
+  subtype: human
+  max_hp: 50
+  attribute:
+    physique:
+      base: 21
+  movement:
+    land: 10
+
+...
