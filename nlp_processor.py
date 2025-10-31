@@ -2,6 +2,8 @@ from __future__ import annotations
 from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
 from dataclasses import dataclass, field
+import re # Import regex for splitting
+import logging # Import logging
 
 try:
     import yaml
@@ -44,6 +46,9 @@ except ImportError:
         name: str = ""
         quote: List[str] = []
 
+# Get the same logger used by the test script
+logger = logging.getLogger("NLPTestLogger")
+
 @dataclass
 class Intent:
     """Holds data for a single intent."""
@@ -52,12 +57,18 @@ class Intent:
     keywords: List[str]
 
 @dataclass
+class ActionComponent:
+    """Represents a single classified action."""
+    intent: Intent
+    keyword: str # The keyword that triggered this intent
+    skill_name: Optional[str] = None # Mapped skill name if intent is USE_SKILL
+
+@dataclass
 class ProcessedInput:
     """A structured object for the output of the NLP pipeline."""
     raw_text: str
-    intent: Intent
+    actions: List[ActionComponent] = field(default_factory=list)
     targets: List[Entity] = field(default_factory=list)
-    skill_name: Optional[str] = None
     
 class NLPProcessor:
     """
@@ -69,21 +80,14 @@ class NLPProcessor:
     - Token-based Matching (spaCy) for Named Entity Recognition.
     """
     
-    # --- Intent Classification Attributes ---
     MODEL_NAME = 'all-MiniLM-L6-v2'
     SIMILARITY_THRESHOLD = 0.4 
-    
-    # --- NER Attributes ---
     SPACY_MODEL_NAME = 'en_core_web_sm'
 
     def __init__(self, ruleset_path: Path):
         """
         Initializes the processor, loads intents, and pre-computes
         embeddings for all intent keywords.
-        
-        Args:
-            ruleset_path: Path to the active ruleset
-                          (e.g., '.../rulesets/medievalfantasy')
         """
         
         self.intents: Dict[str, Intent] = {}
@@ -97,14 +101,13 @@ class NLPProcessor:
             print("CRITICAL: spaCy library not found. Stopping.")
             raise ImportError("spaCy library is required.")
         
-        # This will hold the mappings from skill_map.yaml
         self.skill_keyword_map: Dict[str, str] = {}
         
         # 1. Define paths
         root_path = ruleset_path.parent.parent
         core_intents_path = root_path / "intents.yaml"
         ruleset_intents_path = ruleset_path / "intents.yaml"
-        skill_map_path = ruleset_path / "skll_map.yaml" #
+        skill_map_path = ruleset_path / "skll_map.yaml"
 
         # 2. Load core intents
         print(f"NLP: Loading core intents from {core_intents_path.name}...")
@@ -115,7 +118,6 @@ class NLPProcessor:
         if ruleset_intents_path.exists():
             print(f"NLP: Loading ruleset intents from {ruleset_intents_path.name}...")
             ruleset_intents = self.load_intents_from_file(ruleset_intents_path)
-            # This will merge/overwrite intents, e.g., adding keywords to USE_SKILL
             for name, intent_data in ruleset_intents.items():
                 if name in self.intents:
                     self.intents[name].keywords.extend(intent_data.keywords)
@@ -149,7 +151,7 @@ class NLPProcessor:
             convert_to_tensor=True
         )
         
-        # --- New: Load spaCy Model and Matcher ---
+        # 6. Load spaCy Model
         print(f"NLP: Loading spaCy model '{self.SPACY_MODEL_NAME}'...")
         try:
             self.nlp: Language = spacy.load(self.SPACY_MODEL_NAME)
@@ -158,10 +160,8 @@ class NLPProcessor:
             print(f"Please run: python -m spacy download {self.SPACY_MODEL_NAME}")
             raise
             
-        # Initialize the Matcher with the model's vocabulary
-        self.matcher = Matcher(self.nlp.vocab)
         print("NLP: Initialization complete.")
-        # --- End New ---
+
 
     def load_skill_map(self, filepath: Path):
         """Loads the keyword-to-skill mapping from skll_map.yaml."""
@@ -215,15 +215,13 @@ class NLPProcessor:
             print(f"Error loading intents file {filepath}: {e}")
             return loaded_intents
 
-    def classify_intent(self, text_input: str) -> Tuple[Intent, Optional[str]]:
+    def classify_intent(self, text_input: str) -> Optional[Tuple[Intent, str]]:
         """
-        Classifies player input by finding the most semantically similar
-        intent keyword.
+        Classifies a single piece of text by finding the SINGLE BEST
+        intent keyword that meets the similarity threshold.
         """
-        other_intent = self.intents.get("OTHER", Intent(name="OTHER", description="", keywords=[]))
-
         if not text_input or not self.all_intent_keywords:
-            return (other_intent, None)
+            return None
 
         try:
             input_embedding = self.model.encode(
@@ -232,69 +230,58 @@ class NLPProcessor:
             )
             
             cos_scores = util.cos_sim(input_embedding, self.keyword_embeddings)[0]
-            
             top_score, top_index = torch.topk(cos_scores, k=1)
             
-            top_score = top_score.item()
-            top_index = top_index.item()
+            top_score_item = top_score.item()
+            top_index_item = top_index.item()
 
-            if top_score >= self.SIMILARITY_THRESHOLD:
-                matched_keyword, matched_intent = self.all_intent_keywords[top_index]
-                
-                print(f"NLP: Intent classified. "
-                      f"Input='{text_input}', "
-                      f"BestMatch='{matched_keyword}', "
-                      f"Score={top_score:.4f}, "
-                      f"Intent='{matched_intent.name}'")
-                
-                return (matched_intent, matched_keyword)
+            if top_score_item >= self.SIMILARITY_THRESHOLD:
+                keyword, intent = self.all_intent_keywords[top_index_item]
+                logger.info(f"NLP: classify_intent processed clause: '{text_input}'. "
+                            f"Best Match=['{intent.name}' (from '{keyword}', score={top_score_item:.2f})]")
+                return (intent, keyword)
             else:
-                print(f"NLP: No intent match found. "
-                      f"Input='{text_input}', "
-                      f"BestScore={top_score:.4f} (Threshold: {self.SIMILARITY_THRESHOLD})")
-                return (other_intent, None)
+                logger.info(f"NLP: No intent match for clause: '{text_input}'. "
+                            f"BestScore={top_score_item:.4f} (Threshold: {self.SIMILARITY_THRESHOLD})")
+                return None
 
         except Exception as e:
-            print(f"Error during intent classification: {e}")
-            return (other_intent, None)
+            logger.error(f"Error during intent classification for clause '{text_input}': {e}")
+            return None
 
-    # --- REPLACED: This method now uses spaCy Matcher ---
     def extract_entities(self, text_input: str, known_entities: Dict[str, Entity]) -> List[Entity]:
         """
         Uses spaCy's Matcher to find game-specific entities in the text.
         """
-        if not self.matcher or not self.nlp:
-            return [] # spaCy failed to load
-
-        # 1. Create a lowercase name -> Entity map for quick lookup
-        # This is built on every call, which is fine since known_entities can change
-        known_entities_lower_map = {name.lower(): obj for name, obj in known_entities.items()}
-
-        # 2. Create Matcher patterns from our known_entities
-        # We must remove old patterns first
-        self.matcher.remove("GAME_ENTITY")
-        patterns = []
         
-        # Sort by length, longest first, to match "spike trap" before "spike"
+        logger.info(f"NLP_NER: extract_entities called for text: '{text_input}'")
+        logger.info(f"NLP_NER: Received {len(known_entities)} known_entities. Names: {list(known_entities.keys())}")
+        
+        matcher = Matcher(self.nlp.vocab)
+        
+        if not self.nlp or not known_entities:
+            logger.warning("NLP_NER: NLP model or known_entities list is empty. Aborting NER.")
+            return []
+
+        known_entities_lower_map = {name.lower(): obj for name, obj in known_entities.items()}
+        patterns = []
         sorted_names = sorted(known_entities.keys(), key=len, reverse=True)
         
         for entity_name in sorted_names:
-            # Create a pattern for each name, e.g., "spike trap"
-            # becomes [{'LOWER': 'spike'}, {'LOWER': 'trap'}]
             pattern = [{"LOWER": word} for word in entity_name.lower().split()]
             patterns.append(pattern)
         
-        # Add all patterns to the matcher
-        self.matcher.add("GAME_ENTITY", patterns)
+        if not patterns:
+            logger.warning("NLP_NER: No patterns were generated for the matcher.")
+            return []
+            
+        matcher.add("GAME_ENTITY", patterns)
+        logger.info(f"NLP_NER: Added {len(patterns)} patterns to matcher. (e.g., {patterns[0]})")
 
-        # 3. Process the text and find matches
         doc = self.nlp(text_input)
-        matches = self.matcher(doc)
+        matches = matcher(doc)
 
-        # 4. Convert matches back into Entity objects
         found_entities = []
-        # Use a set to avoid adding the same entity multiple times
-        # if it's mentioned more than once
         found_entity_names = set() 
 
         for match_id, start, end in matches:
@@ -308,52 +295,102 @@ class NLPProcessor:
                     found_entity_names.add(span_text_lower)
                     
         if found_entities:
-            print(f"NLP: Entities extracted: {[e.name for e in found_entities]}")
+            logger.info(f"NLP_NER: Entities extracted: {[e.name for e in found_entities]}")
+        else:
+            logger.info(f"NLP_NER: Matcher found 0 entities in: '{text_input}'")
 
         return found_entities
-    # --- END REPLACED METHOD ---
 
     def process_player_input(self, text_input: str, known_entities: Dict[str, Entity]) -> ProcessedInput:
         """
         Runs the full NLP pipeline on player input.
         """
-        # 1. Classify Intent (uses semantic similarity)
-        intent, matched_keyword = self.classify_intent(text_input)
         
-        # 2. Extract Entities (now uses spaCy Matcher)
+        # 1. Extract Entities (NER)
         targets = self.extract_entities(text_input, known_entities)
         
-        # 3. Store the skill name if the intent was USE_SKILL
-        skill_name_to_store = None
-        if intent.name == "USE_SKILL" and matched_keyword:
-            # This logic is data-driven
-            skill_name_to_store = self.skill_keyword_map.get(matched_keyword, matched_keyword)
-            print(f"NLP: Mapped skill. Keyword='{matched_keyword}', BaseSkill='{skill_name_to_store}'")
+        # 2. Split input into clauses
+        clauses = re.split(r'[,]| and | then ', text_input, flags=re.IGNORECASE)
+        clauses = [clause.strip() for clause in clauses if clause.strip()]
         
+        if not clauses:
+            clauses = [text_input] 
+            
+        logger.info(f"NLP: Processing input. Split into {len(clauses)} clauses: {clauses}")
+
+        # 3. Classify Intent(s)
+        all_matched_actions: List[Tuple[Intent, str]] = []
+        for clause in clauses:
+            
+            # --- *** THIS IS THE FIX *** ---
+            # Use spaCy to check for a verb (VERB) or auxiliary (AUX).
+            # Clauses without them are almost always just targets.
+            # This handles "attack it" (VERB) and "I'm going" (AUX)
+            doc = self.nlp(clause)
+            pos_tags = [f"{token.text}({token.pos_})" for token in doc]
+            has_action_word = any(token.pos_ in ["VERB", "AUX"] for token in doc)
+            
+            if not has_action_word:
+                logger.info(f"NLP: Skipping clause with no VERB/AUX: '{clause}'. POS: {pos_tags}")
+                continue # Skip to the next clause
+            # --- *** END OF FIX *** ---
+
+            result = self.classify_intent(clause)
+            if result:
+                all_matched_actions.append(result)
+
+        # De-duplicate intents
+        final_intents: Dict[str, Tuple[Intent, str]] = {}
+        for intent, keyword in all_matched_actions:
+            if intent.name not in final_intents:
+                final_intents[intent.name] = (intent, keyword)
+                
+        matched_actions = list(final_intents.values())
+
+        # 4. Create ActionComponent for each matched intent
+        action_components: List[ActionComponent] = []
+        
+        for intent, keyword in matched_actions:
+            skill_name_to_store = None
+            if intent.name == "USE_SKILL" and keyword:
+                skill_name_to_store = self.skill_keyword_map.get(keyword, keyword)
+                logger.info(f"NLP: Mapped skill. Keyword='{keyword}', BaseSkill='{skill_name_to_store}'")
+            
+            action_components.append(
+                ActionComponent(
+                    intent=intent,
+                    keyword=keyword,
+                    skill_name=skill_name_to_store
+                )
+            )
+        
+        # 5. Handle "OTHER" intent as a fallback
+        other_intent = self.intents.get("OTHER")
+        if not action_components and other_intent:
+            logger.info("NLP: No specific intents found. Defaulting to OTHER.")
+            action_components.append(
+                ActionComponent(intent=other_intent, keyword="")
+            )
+
         return ProcessedInput(
             raw_text=text_input,
-            intent=intent,
-            targets=targets,
-            skill_name=skill_name_to_store
+            actions=action_components,
+            targets=targets
         )
 
     def generate_npc_response(self, npc_entity: Entity, player_input: ProcessedInput, game_state: Dict[str, Any]) -> str:
         """
         (Placeholder) Simulates an LLM call to generate an NPC response.
-        
-        This function is unchanged.
         """
         
-        # 1. Check for a direct "talk" intent
-        if player_input.intent.name == "DIALOGUE" and npc_entity in player_input.targets:
-            if npc_entity.quote:
-                return f"{npc_entity.name} says: \"{npc_entity.quote[0]}\""
-            else:
-                return f"{npc_entity.name} looks at you expectantly."
-        
-        # 2. Check if NPC was attacked
-        if player_input.intent.name == "ATTACK" and npc_entity in player_input.targets:
-            return f"{npc_entity.name} shouts: \"Aargh! You'll pay for that!\""
+        for action in player_input.actions:
+            if action.intent.name == "DIALOGUE" and npc_entity in player_input.targets:
+                if npc_entity.quote:
+                    return f"{npc_entity.name} says: \"{npc_entity.quote[0]}\""
+                else:
+                    return f"{npc_entity.name} looks at you expectantly."
             
-        # 3. Fallback
+            if action.intent.name == "ATTACK" and npc_entity in player_input.targets:
+                return f"{npc_entity.name} shouts: \"Aargh! You'll pay for that!\""
+            
         return None

@@ -23,22 +23,26 @@ map:
               [W,W,W,W,W,W,W] ]
 
         legend:
-          - { char: G, entity: ground }
-          - { char: T, entity: spike trap }
-          
-          - { char: W, entity: stone wall }
-          - { char: D, entity: dummy }
-          - { char: P, entity: Valerius, is_player: true }
-          - { char: w, entity: wolf }
+          - { char: G, entity: ground, color: "#888", map_name: "Ground" }
+          - { char: T, entity: spike trap, color: "#DC143C", map_name: "Spike Trap" }
+          - { char: W, entity: stone wall, color: "#333", map_name: "Stone Wall" }
+          - { char: D, entity: dummy, color: "#8B4513", map_name: "Dummy" }
+          - { char: P, entity: Valerius, is_player: true, color: "#007BFF", map_name: "Player" }
+          - { char: w, entity: wolf, color: "#A52A2A", map_name: "Wolf" }
+          - { char: x, color: "#505050", map_name: "Floor" } # Empty floor tile
           
           - char: C
             entity: chest
+            color: "#FFD700"
+            map_name: "Chest"
             inventory:
               - { item: "gold coin", quantity: 50 }
               - { item: "silver coin", quantity: 100 }
             
           - char: g
             entity: giant
+            color: "#2F4F4F"
+            map_name: "Giant"
             pattern: 
               - ['g', 'g']
               - ['g', 'g']

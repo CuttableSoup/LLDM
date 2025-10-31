@@ -37,6 +37,8 @@ class Quality:
     """The entity's height, (e.g., in inches)."""
     skin: str = ""
     """Description of the entity's skin color or texture."""
+    age: str = ""
+    """Description of the entity's age using keywords [ infant, child, juvenile, adult, mature, venerable, ancient ]."""
 
 @dataclass
 class Cost:
@@ -119,6 +121,9 @@ class Entity:
 
     exp: int = 0
     """Experience points held by the entity."""
+    
+    size: str = ""
+    """Size of the entity, described by keyword [ fine, diminutive, tiny, small, medium, large, huge, gargantuan, colossal ]."""
 
     weight: float = 0.0
     """The entity's weight, typically in kg or lbs."""
@@ -282,6 +287,8 @@ class RoomLegendItem:
     """Dataclass for items in the room's legend."""
     char: str = ""
     entity: str = ""
+    color: Optional[str] = None
+    map_name: Optional[str] = None # For map tooltips, etc.
     is_player: bool = False
     inventory: List[Dict[str, Any]] = field(default_factory=list)
     pattern: Optional[List[List[str]]] = None
@@ -437,6 +444,8 @@ class RulesetLoader:
                 parsed_legend = []
                 for item in legend_list_data:
                     if isinstance(item, dict):
+                        # This **item will now correctly parse
+                        # color and map_name if they exist
                         parsed_legend.append(RoomLegendItem(**item))
                 
                 room_data['legend'] = parsed_legend

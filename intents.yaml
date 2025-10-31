@@ -21,6 +21,7 @@ intents:
     keywords:
       - move
       - go
+      - go to  # <-- ADDED THIS KEYWORD
       - walk
       - run
       - head

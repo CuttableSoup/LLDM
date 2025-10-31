@@ -21,7 +21,7 @@ intents:
       - break
       - axe
       - polearm
-      - shield
+      # - shield # <-- REMOVED THIS (replaced by 'block')
       - block
       - brawling
       # --- Dexterity Skills ---
@@ -77,7 +77,6 @@ intents:
       - gather rumors
       - observation
       - observe
-      - look
       - search
       - spot
       - notice

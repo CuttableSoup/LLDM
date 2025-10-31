@@ -34,3 +34,5 @@ medievalfantasy types:
 
 - languages: [ human, elf, dwarf, orc ]
 - body: [ humanoid: self 10, hands 2, etc... ]
+
+MODEL_NAME = 'all-MiniLM-L6-v2' #'BAAI/bge-large-en-v1.5' 'all-MiniLM-L6-v2'

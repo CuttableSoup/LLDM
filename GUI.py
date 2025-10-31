@@ -34,6 +34,15 @@ except ImportError:
         characters = {}
         scenario = None
 
+# --- NEW: Import the action processor ---
+try:
+    from action_processor import process_player_actions
+except ImportError:
+    print("Warning: 'action_processor.py' not found. Player actions will not be processed.")
+    def process_player_actions(*args) -> List[Tuple[str, str]]:
+        return [("Error: 'action_processor.py' not found.", "Error")]
+# --- END NEW ---
+
 
 class GameController:
     """
@@ -173,6 +182,7 @@ class GameController:
         
         # 1. Run the NLP Pipeline
         # We pass all game_entities as the "known_entities" for the NER step
+        # processed_action is now a 'ProcessedInput' dataclass
         processed_action = self.nlp_processor.process_player_input(
             player_input, 
             self.game_entities
@@ -181,86 +191,34 @@ class GameController:
         if not processed_action:
             self.update_narrative_callback("Error: Could not process input.")
             return
-
-        intent_name = processed_action.intent.name
-        target_entities = processed_action.targets
         
-        print(f"NLP Result: Intent={intent_name}, Targets={[e.name for e in target_entities]}")
+        # --- REFACTORED LOGIC ---
 
-        # 2. Triage & Process Action (Placeholder Logic)
-        # This is where you would build your game logic for each intent
+        # 2. Triage & Process Action
+        # This function now lives in 'action_processor.py'
+        # It returns a list of (narrative_message, history_message) tuples
+        action_results = process_player_actions(
+            self.player_entity,
+            processed_action
+        )
+
+        # 3. Update GUI and History
+        targets_affected = set(processed_action.targets)
         
-        action_taken = False
-        narrative_msg = ""
-        
-        # Flaw, can only identify one intent.
-        # Processing input: I move up and attack the dummy
-        # NLP Result: Intent=ATTACK, Targets=['dummy']
-        # should be
-        # NLP Result: Intent=ATTACK and MOVE, Targets=['dummy']
-        # extract to other file. will be very lengthy otherwise
-        if intent_name == "ATTACK":
-            if target_entities:
-                target = target_entities[0] # Simple: just attack the first target
-                narrative_msg = f"You attack {target.name}!"
-                # (Placeholder) process_interaction(self.player_entity, "attack", target)
-                self.round_history.append(f"{self.player_entity.name} attacks {target.name}.")
-                action_taken = True
-            else:
-                narrative_msg = "You swing your weapon at the air."
-                action_taken = True
+        for narrative_msg, history_msg in action_results:
+            self.update_narrative_callback(narrative_msg)
+            self.round_history.append(history_msg)
 
-        elif intent_name == "MOVE":
-            if target_entities:
-                target = target_entities[0]
-                narrative_msg = f"You move towards {target.name}."
-            else:
-                narrative_msg = "You move to a new position."
-            # (Placeholder) process_movement(...)
-            action_taken = True
-
-        elif intent_name == "INTERACT":
-            if target_entities:
-                target = target_entities[0]
-                # Check if it's an "open" action or "talk" action
-                if "open" in player_input.lower() and target.supertype == "object":
-                    narrative_msg = f"You attempt to open {target.name}."
-                else:
-                    narrative_msg = f"You interact with {target.name}."
-            else:
-                narrative_msg = "You look around."
-            action_taken = True
-            
-        elif intent_name == "USE_SKILL":
-            skill_name = processed_action.skill_name
-            target = target_entities[0] if target_entities else None
-            
-            if skill_name:
-                # You now have everything you need to make a skill check!
-                # (Placeholder) self.process_skill_check(self.player_entity, skill_name, target)
-                
-                target_name = f" on {target.name}" if target else ""
-                narrative_msg = f"You attempt to use your {skill_name} skill{target_name}."
-                self.round_history.append(f"{self.player_entity.name} uses {skill_name}{target_name}.")
-                action_taken = True
-            else:
-                narrative_msg = "You try to... do something, but are unsure what skill to use."
-
-        # Fallback for OTHER or unhandled intents
-        if not action_taken:
-            narrative_msg = f"You say, \"{player_input}\""
-            self.round_history.append(f"{self.player_entity.name} says: \"{player_input}\"")
-
-        # 3. Update GUI
-        self.update_narrative_callback(narrative_msg)
-        if target_entities:
-            # Update any targets that were affected
-            for target in target_entities:
-                self.update_character_sheet_callback(target)
+        # 4. Update GUI
+        # Update any targets that were affected
+        for target in targets_affected:
+            self.update_character_sheet_callback(target)
         self.update_character_sheet_callback(self.player_entity)
         self.update_inventory_callback(self.player_entity)
         
-        # 4. Trigger NPC turns
+        # --- END REFACTORED LOGIC ---
+        
+        # 5. Trigger NPC turns
         # We pass the player's processed action to the NPCs
         # so they can react to it.
         self._run_npc_turns(processed_action)
@@ -271,6 +229,7 @@ class GameController:
         
         Args:
             player_action: The processed action the player just took.
+                           (This is the new ProcessedInput object)
         """
         print("Running NPC turns...")
         if not self.player_entity: return
@@ -291,7 +250,7 @@ class GameController:
             # 1. (LLM) Generate NPC Response/Reaction to player's action
             reaction_narrative = self.nlp_processor.generate_npc_response(
                 npc_entity=npc,
-                player_input=player_action,
+                player_input=player_action, # Pass the new ProcessedInput object
                 game_state=game_state_context
             )
             
@@ -450,27 +409,22 @@ class MapPanel(ttk.Frame):
             anchor="nw" # Anchor to top-left corner
         )
 
+        # --- NEW: Build TILE_INFO from room.legend ---
+        TILE_INFO = {}
+        DEFAULT_COLOR = "#FF00FF" # Magenta for unknown tiles
+        
+        if room.legend:
+            for item in room.legend:
+                if item.char and item.color:
+                    # Use map_name if available, else entity name, else '?'
+                    map_name = item.map_name or item.entity or "?"
+                    TILE_INFO[item.char] = (item.color, map_name)
+
         # --- Render Map Grid ---
         TILE_SIZE = 25 # Size of each map tile in pixels
         MAP_OFFSET_Y = 40 # Offset to leave space for title
-        
-        # Define tile properties (color, text)
-        TILE_INFO = {
-            'W': ("#333", "Wall"),  # Dark grey
-            'G': ("#888", "Ground"), # Lighter grey (from layer 0)
-            'D': ("#8B4513", "Dummy"), # Brown
-            'T': ("#DC143C", "Trap"),  # Crimson
-            'C': ("#FFD700", "Chest"), # Gold
-            'p': ("#708090", "Gate"),   # Slate grey (e.g. 'portcullis')
 
-            'P': ("#007BFF", "Player"), # Blue
-            'w': ("#A52A2A", "Wolf"),   # Brown (matches 'wolf')
-            'g': ("#2F4F4F", "Giant"),  # Dark Slate Grey (matches 'giant')
-            
-            # 'x' is used as empty space in the rooms.yaml example
-            'x': ("#505050", "Floor"),     # Mid-grey
-        }
-        DEFAULT_COLOR = "#FF00FF" # Magenta for unknown tiles
+        # --- REMOVED: Hardcoded TILE_INFO dictionary ---
 
         map_grid = room.map
         if not map_grid:
