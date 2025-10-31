@@ -1,9 +1,10 @@
 from __future__ import annotations
 from typing import List, Dict, Any, Optional, Callable
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox, simpledialog
 from tkinter.scrolledtext import ScrolledText
 from pathlib import Path
+import threading # Added for non-blocking model downloads
 
 try:
     from nlp_processor import NLPProcessor, ProcessedInput
@@ -41,29 +42,43 @@ except ImportError:
     print("Warning: 'action_processor.py' not found. Player actions will not be processed.")
     def process_player_actions(*args) -> List[Tuple[str, str]]:
         return [("Error: 'action_processor.py' not found.", "Error")]
-# --- END NEW ---
+
+# --- NEW: Import new manager classes for type hinting ---
+try:
+    from config_manager import ConfigManager
+    from llm_manager import LLMManager, OLLAMA_MODELS
+except ImportError:
+    class ConfigManager: pass
+    class LLMManager: pass
+    # --- MODIFIED: Updated fallback to a correct name ---
+    OLLAMA_MODELS = {"Gemma 3n 12B": "gemma3n:12b"} # Fallback
 
 
 class GameController:
     """
     Manages the game state, player input, and game loop logic.
-    
-    This class acts as the 'Controller' in an MVC pattern,
-    connecting the data (Models from classes.py) to the GUI (Views).
     """
 
-    def __init__(self, loader: RulesetLoader, ruleset_path: Path):
+    # --- MODIFIED: __init__ to accept LLMManager ---
+    def __init__(self, loader: RulesetLoader, ruleset_path: Path, llm_manager: LLMManager):
         """
         Initializes the game controller.
         
         Args:
             loader: A pre-initialized RulesetLoader instance.
+            ruleset_path: Path to the ruleset for the NLPProcessor.
+            llm_manager: The manager for handling LLM API calls.
         """
         self.loader = loader
         """The data loader with all ruleset data."""
         
+        # This processor is still used for *intent classification*
         self.nlp_processor = NLPProcessor(ruleset_path)
         """The NLP system for processing commands."""
+        
+        # This manager is used for *generative responses*
+        self.llm_manager = llm_manager
+        """The manager for handling LLM API calls."""
         
         self.player_entity: Optional[Entity] = None
         """The main player character entity."""
@@ -83,6 +98,9 @@ class GameController:
         
         # (Placeholder) Game history for narrative summaries
         self.round_history: List[str] = []
+        
+        # This is the LLM's chat history
+        self.llm_chat_history: List[Dict[str, str]] = []
 
         self.update_narrative_callback: Callable[[str], None] = lambda text: None
         self.update_character_sheet_callback: Callable[[Entity], None] = lambda entity: None
@@ -90,6 +108,7 @@ class GameController:
         self.update_map_callback: Callable[[Optional[Room]], None] = lambda room: None
 
     def start_game(self, player: Entity):
+        # ... (This method is unchanged from the original file) ...
         """
         Initializes the game, loads the player, and starts the loop.
         
@@ -170,6 +189,7 @@ class GameController:
         
         print("GameController started.")
 
+
     def process_player_input(self, player_input: str):
         """
         Receives raw text input from the InputBar and processes it
@@ -180,14 +200,14 @@ class GameController:
 
         print(f"Processing input: {player_input}")
         
-        # 1. Run the NLP Pipeline
+        # 1. Run the NLP Pipeline (for intent classification)
         # We pass all game_entities as the "known_entities" for the NER step
         # processed_action is now a 'ProcessedInput' dataclass
         processed_action = self.nlp_processor.process_player_input(
             player_input, 
             self.game_entities
         )
-
+        
         if not processed_action:
             self.update_narrative_callback("Error: Could not process input.")
             return
@@ -204,11 +224,16 @@ class GameController:
 
         # 3. Update GUI and History
         targets_affected = set(processed_action.targets)
+        player_action_summary = ""
         
         for narrative_msg, history_msg in action_results:
             self.update_narrative_callback(narrative_msg)
             self.round_history.append(history_msg)
+            player_action_summary += history_msg + " "
 
+        # --- NEW: Add player's action to LLM history ---
+        self.llm_chat_history.append({"role": "user", "content": player_action_summary.strip()})
+        
         # 4. Update GUI
         # Update any targets that were affected
         for target in targets_affected:
@@ -219,25 +244,23 @@ class GameController:
         # --- END REFACTORED LOGIC ---
         
         # 5. Trigger NPC turns
-        # We pass the player's processed action to the NPCs
-        # so they can react to it.
-        self._run_npc_turns(processed_action)
+        # Pass the plain text summary of what the player did
+        self._run_npc_turns(player_action_summary)
 
-    def _run_npc_turns(self, player_action: ProcessedInput):
+    # --- MODIFIED: _run_npc_turns to use LLMManager ---
+    def _run_npc_turns(self, player_action_summary: str):
         """
         Runs the 'else' block of the loop for all non-player characters.
         
         Args:
-            player_action: The processed action the player just took.
-                           (This is the new ProcessedInput object)
+            player_action_summary: A simple text string of what the player did.
         """
         print("Running NPC turns...")
         if not self.player_entity: return
         
         all_actions_taken = False
         
-        # Get the current game state for the LLM
-        # (This is simplified for the placeholder)
+        # Get the current game state
         game_state_context = self._get_current_game_state(self.player_entity)
         
         for npc in self.initiative_order:
@@ -246,32 +269,43 @@ class GameController:
 
             if not ("intelligent" in npc.status or "animalistic" in npc.status or "robotic" in npc.status):
                 continue
-
+            
             # 1. (LLM) Generate NPC Response/Reaction to player's action
-            reaction_narrative = self.nlp_processor.generate_npc_response(
-                npc_entity=npc,
-                player_input=player_action, # Pass the new ProcessedInput object
-                game_state=game_state_context
+            #    We no longer use nlp_processor.generate_npc_response
+            
+            # --- NEW: Use LLMManager ---
+            # Create a prompt for the NPC
+            npc_prompt = (
+                f"You are {npc.name}. "
+                f"You are in a room with: {game_state_context['actors_present']}. "
+                f"The player, {self.player_entity.name}, just did this: '{player_action_summary}'. "
+                f"What is your reaction or next action? Respond in character, briefly."
             )
             
+            # Generate the response
+            # Note: We pass the *shared* chat history
+            reaction_narrative = self.llm_manager.generate_response(
+                prompt=npc_prompt,
+                history=self.llm_chat_history 
+            )
+            # --- END NEW ---
+            
             if reaction_narrative:
-                self.update_narrative_callback(reaction_narrative)
-                self.round_history.append(reaction_narrative)
+                # Add NPC response to GUI and history
+                # Check if LLM returned an error message
+                if reaction_narrative.startswith("Error:"):
+                    formatted_narrative = reaction_narrative
+                else:
+                    formatted_narrative = f"{npc.name}: \"{reaction_narrative}\""
+                
+                self.update_narrative_callback(formatted_narrative)
+                self.round_history.append(formatted_narrative)
+                # Add to LLM history so it knows what was said
+                self.llm_chat_history.append({"role": "assistant", "content": reaction_narrative})
             
-            # 2. (AI) Simulate NPC's own turn
-            # (This is where you'd call the LLM for the NPC's *own* action)
-            # For now, we'll keep the simple placeholder
-            print(f"Simulating turn for {npc.name}")
-            turn_narrative = f"{npc.name} takes its turn." 
-            # (Placeholder: old 'I took my turn' was too chatty)
-            
-            # (Example: A real call might look like this)
-            # npc_action = self.nlp_processor.generate_npc_action(npc, game_state_context)
-            # self.process_npc_action(npc, npc_action)
-            
-            self.update_narrative_callback(turn_narrative)
-            self.round_history.append(turn_narrative)
             all_actions_taken = True
+        
+        # (Rest of method is unchanged from the original file)
 
         # 5. (Placeholder) Process round updates (e.g., poison, regeneration)
         self._process_round_updates()
@@ -285,6 +319,7 @@ class GameController:
 
     def _get_current_game_state(self, actor: Entity) -> Dict[str, Any]:
         """(Helper) Gathers all context for an LLM prompt."""
+        # ... (This method is unchanged from the original file) ...
         
         actors_in_room = [e.name for e in self.initiative_order if e.name != actor.name]
         
@@ -731,22 +766,31 @@ class InputBar(ttk.Frame):
 class MainWindow:
     """
     The main application window that contains all other
-    GUI components (NarrativePanel, InfoMultipane, InputBar).
+    GUI components.
     """
     
-    def __init__(self, root_widget: tk.Tk, loader: RulesetLoader, ruleset_path: Path):
+    # --- MODIFIED: __init__ to accept new managers ---
+    def __init__(self, root_widget: tk.Tk, loader: RulesetLoader, ruleset_path: Path,
+                 config_manager: ConfigManager, llm_manager: LLMManager):
         """
         Initializes the main window and creates all child widgets.
         
         Args:
             root_widget: The root object of the GUI framework (tk.Tk()).
             loader: A RulesetLoader that has already run load_all().
+            ruleset_path: Path to the ruleset.
+            config_manager: The application's ConfigManager.
+            llm_manager: The application's LLMManager.
         """
         self.root = root_widget
-        self.root.title("AI Dungeon Master")
+        self.root.title("LLDM - AI Dungeon Master")
         self.root.geometry("1200x800")
         
         self.debug_window_instance = None # To hold a reference to the debug window
+        
+        # --- NEW: Store managers ---
+        self.config_manager = config_manager
+        self.llm_manager = llm_manager
         
         # Configure root grid
         self.root.grid_rowconfigure(0, weight=1)
@@ -754,12 +798,28 @@ class MainWindow:
         self.root.grid_columnconfigure(1, weight=1) # Right panel (multipane)
         self.root.grid_rowconfigure(1, weight=0) # Bottom input bar
         
-        # 1. Initialize the Game Controller
-        self.controller = GameController(loader=loader, ruleset_path=ruleset_path)
+        # 1. Initialize the Game Controller, passing the LLM manager
+        self.controller = GameController(
+            loader=loader, 
+            ruleset_path=ruleset_path,
+            llm_manager=self.llm_manager
+        )
         
+        # --- NEW: Setup Tkinter variables for menus ---
+        self.llm_mode_var = tk.StringVar(
+            value=self.config_manager.get('mode', 'offline')
+        )
+        
+        # --- MODIFIED: Set default model from the *new* list ---
+        default_model = list(OLLAMA_MODELS.values())[0] if OLLAMA_MODELS else "gemma3n:12b"
+        self.ollama_model_var = tk.StringVar(
+            value=self.config_manager.get('ollama_model', default_model)
+        )
+        
+        # 2. Create Menus (now includes LLM options)
         self._create_menu()
         
-        # 2. Create main layout frames
+        # 3. Create main layout frames
         main_frame = ttk.Frame(self.root)
         main_frame.grid(row=0, column=0, columnspan=2, sticky='nsew', padx=10, pady=(10, 0))
         main_frame.grid_rowconfigure(0, weight=1)
@@ -769,7 +829,7 @@ class MainWindow:
         bottom_frame = ttk.Frame(self.root)
         bottom_frame.grid(row=1, column=0, columnspan=2, sticky='nsew', padx=10, pady=10)
         
-        # 3. Initialize the GUI components
+        # 4. Initialize the GUI components
         
         # Left Panel
         self.narrative_panel = NarrativePanel(parent_widget=main_frame)
@@ -786,7 +846,7 @@ class MainWindow:
         )
         self.input_bar.pack(fill='x', expand=True)
 
-        # 4. Connect Controller callbacks to GUI update methods
+        # 5. Connect Controller callbacks to GUI update methods
         self.controller.update_narrative_callback = self.narrative_panel.add_narrative_text
         self.controller.update_character_sheet_callback = self.info_multipane.get_character_panel().update_character_sheet
         self.controller.update_inventory_callback = self.info_multipane.get_inventory_panel().update_inventory
@@ -794,6 +854,7 @@ class MainWindow:
         
         print("MainWindow created and all components wired up.")
 
+    # --- MODIFIED: _create_menu to add LLM options ---
     def _create_menu(self):
         """Creates the main application menu bar."""
         menubar = tk.Menu(self.root)
@@ -804,6 +865,50 @@ class MainWindow:
         menubar.add_cascade(label="File", menu=file_menu)
         file_menu.add_command(label="Exit", command=self.root.quit)
 
+        # --- NEW: LLM Menu ---
+        llm_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="LLM", menu=llm_menu)
+        
+        # LLM Mode (Offline/Online)
+        mode_menu = tk.Menu(llm_menu, tearoff=0)
+        llm_menu.add_cascade(label="Mode", menu=mode_menu)
+        mode_menu.add_radiobutton(
+            label="Offline (Ollama)", 
+            variable=self.llm_mode_var, 
+            value="offline",
+            command=self._on_select_mode
+        )
+        mode_menu.add_radiobutton(
+            label="Online (OpenRouter)", 
+            variable=self.llm_mode_var, 
+            value="online",
+            command=self._on_select_mode
+        )
+        
+        llm_menu.add_separator()
+
+        # Ollama Model Selection
+        model_menu = tk.Menu(llm_menu, tearoff=0)
+        llm_menu.add_cascade(label="Ollama Model", menu=model_menu)
+        
+        # Add models from the llm_manager mapping
+        for friendly_name, model_id in OLLAMA_MODELS.items():
+            model_menu.add_radiobutton(
+                label=friendly_name,
+                variable=self.ollama_model_var,
+                value=model_id,
+                command=self._on_select_model
+            )
+        
+        llm_menu.add_separator()
+        
+        # OpenRouter API Key
+        llm_menu.add_command(
+            label="Set OpenRouter API Key...",
+            command=self._on_set_api_key
+        )
+        # --- END NEW ---
+
         # Debug Menu
         debug_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Debug", menu=debug_menu)
@@ -811,6 +916,74 @@ class MainWindow:
             debug_menu.add_command(label="View Loaded Ruleset", command=self._open_debug_window)
         else:
             debug_menu.add_command(label="View Loaded Ruleset", state="disabled")
+
+    # --- NEW: Menu callback functions ---
+    
+    def _on_select_mode(self):
+        """Called when the user changes the LLM mode."""
+        mode = self.llm_mode_var.get()
+        self.config_manager.set('mode', mode)
+        self.narrative_panel.add_narrative_text(f"Switched to {mode} mode.")
+        print(f"Config: Set mode to {mode}")
+
+    def _on_select_model(self):
+        """Called when the user selects a new Ollama model."""
+        model_id = self.ollama_model_var.get()
+        self.config_manager.set('ollama_model', model_id)
+        self.narrative_panel.add_narrative_text(f"Set Ollama model to: {model_id}")
+        print(f"Config: Set ollama_model to {model_id}")
+        
+        # Check if model exists locally
+        # Run in a thread to avoid freezing the GUI
+        threading.Thread(
+            target=self._check_and_pull_model, 
+            args=(model_id,), 
+            daemon=True
+        ).start()
+
+    def _check_and_pull_model(self, model_id: str):
+        """(Worker Thread) Checks for a model and prompts to pull it."""
+        if not self.llm_manager.check_ollama_model(model_id):
+            print(f"Model {model_id} not found locally.")
+            # We must schedule the messagebox to run on the main thread
+            self.root.after(0, self._ask_to_pull_model, model_id)
+
+    def _ask_to_pull_model(self, model_id: str):
+        """(Main Thread) Shows the 'askyesno' dialog for downloading."""
+        if messagebox.askyesno(
+            "Download Model?",
+            f"The model '{model_id}' was not found on your system.\n\n"
+            "Would you like to download it now? This may take several minutes."
+        ):
+            self.narrative_panel.add_narrative_text(f"Starting download for {model_id}...")
+            # Run the actual download in another thread
+            threading.Thread(
+                target=self.llm_manager.pull_ollama_model,
+                args=(model_id, self._model_pull_callback),
+                daemon=True
+            ).start()
+
+    def _model_pull_callback(self, status_message: str):
+        """(Worker Thread) Receives status from llm_manager and passes to main thread."""
+        # Schedule the GUI update on the main thread
+        self.root.after(0, self.narrative_panel.add_narrative_text, status_message)
+
+    def _on_set_api_key(self):
+        """Called to open a dialog for the OpenRouter API key."""
+        current_key = self.config_manager.get('openrouter_key', '')
+        
+        new_key = simpledialog.askstring(
+            "OpenRouter API Key",
+            "Please enter your OpenRouter API key:",
+            initialvalue=current_key
+        )
+        
+        if new_key is not None: # User didn't press 'Cancel'
+            self.config_manager.set('openrouter_key', new_key)
+            self.narrative_panel.add_narrative_text("OpenRouter API Key saved.")
+            print("Config: OpenRouter key updated.")
+            
+    # --- END NEW ---
 
     def _open_debug_window(self):
         """
@@ -832,6 +1005,7 @@ class MainWindow:
                 loader=self.controller.loader
             )
 
+    # --- MODIFIED: run() is now a method of MainWindow ---
     def run(self, player: Entity):
         """
         Starts the game logic and the GUI main loop.
@@ -851,63 +1025,3 @@ class MainWindow:
         print("GUI Main Loop is running...")
         self.root.mainloop()
         pass
-
-if __name__ == "__main__":
-    """
-    Example of how to run the application.
-    """
-    
-    print("--- Initializing Application ---")
-    
-    # 1. Set the ruleset path
-    # Assumes 'rulesets' directory is in the same folder as GUI.py
-    RULESET_PATH = Path(__file__).parent / "rulesets" / "medievalfantasy"
-    
-    # 2. Initialize and run the loader
-    try:
-        loader = RulesetLoader(RULESET_PATH)
-        loader.load_all()
-    except FileNotFoundError as e:
-        print(f"Fatal Error: {e}")
-        print("Please ensure the 'rulesets/medievalfantasy' directory exists.")
-        exit(1)
-    except ImportError:
-        print("Fatal Error: 'PyYAML' library not found.")
-        print("Please install it using: pip install PyYAML")
-        exit(1)
-    except Exception as e:
-        print(f"An unexpected error occurred during loading: {e}")
-        exit(1)
-
-    # 3. Get the player character from the loader
-    # We assume a 'Valerius.yaml' file exists in 'characters/'
-    player_character = loader.get_character("Valerius")
-    
-    if not player_character:
-        print("Error: Default player 'Valerius' not found in ruleset.")
-        # As a fallback, create a minimal entity to avoid crashing
-        player_character = Entity(
-            name="Valerius (Fallback)",
-            cur_hp=1, max_hp=1, cur_mp=1, max_mp=1, cur_fp=1, max_fp=1
-        )
-    
-    # 4. Create the root tkinter window
-    root = tk.Tk()
-    
-    # Use a modern theme
-    style = ttk.Style(root)
-    try:
-        # 'clam' is a good, simple, cross-platform theme
-        style.theme_use('clam') 
-    except tk.TclError:
-        print("Ttk 'clam' theme not available, using default.")
-    
-    # 5. Create the main window, passing in the loaded data
-    app = MainWindow(
-        root_widget=root, 
-        loader=loader, 
-        ruleset_path=RULESET_PATH # Pass the path
-    )
-    
-    # 6. Start the app (which calls root.mainloop())
-    app.run(player=player_character)
