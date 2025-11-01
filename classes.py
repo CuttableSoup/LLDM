@@ -10,6 +10,104 @@ except ImportError:
     yaml = None
 
 @dataclass
+class GameTime:
+    """
+    Controls the game's calendar and time.
+    Uses a simple 24h/day, 30d/month, 12m/year calendar.
+    """
+    year: int = 1
+    month: int = 1  # 1-12
+    day: int = 1    # 1-30
+    hour: int = 0   # 0-23
+    minute: int = 0 # 0-60
+    second: int = 0 # 0-60
+
+    def advance_time(self, seconds: int = 1):
+        """Advances the game time by a number of seconds."""
+        self.second += seconds
+        
+        while self.second >= 60:
+            self.second -= 60
+            self.minute += 1
+        
+        while self.minute >= 60:
+            self.minute -= 60
+            self.hour += 1
+        
+        while self.hour >= 24:
+            self.hour -= 24
+            self.day += 1
+        
+        while self.day > 30:
+            self.day -= 30
+            self.month += 1
+        
+        while self.month > 12:
+            self.month -= 12
+            self.year += 1
+
+    def get_time_string(self) -> str:
+        """Returns a formatted string of the current time."""
+        return f"Year {self.year}, Month {self.month}, Day {self.day}, Hour {self.hour:02d}:00"
+
+    def copy(self) -> GameTime:
+        """Returns a copy of the current time object."""
+        return GameTime(self.year, self.month, self.day, self.hour)
+
+@dataclass
+class HistoryEvent:
+    """
+    Represents a single event in an entity's history.
+    """
+    timestamp: GameTime # A snapshot of the time when the event occurred
+    event_type: str     # e.g., "dialogue", "combat", "observed"
+    description: str    # "Player said: 'hello'" or "Took 5 damage from Player"
+    
+    # Optional: who else was involved
+    participants: List[str] = field(default_factory=list) 
+
+@dataclass
+class EntityHistory:
+    """
+    Manages the personal history for a single intelligent entity.
+    This includes events, dialogues, and observations.
+    """
+    entity_name: str
+    memory: List[HistoryEvent] = field(default_factory=list)
+
+    def add_event(self, event: HistoryEvent):
+        """Adds a new event to this entity's memory."""
+        self.memory.append(event)
+        # Optional: Prune memory if it gets too long
+        # if len(self.memory) > 100:
+        #     self.memory.pop(0)
+
+    def get_recent_history(self, count: int = 10) -> List[HistoryEvent]:
+        """Gets the last 'count' events."""
+        return self.memory[-count:]
+
+    def get_summary_for_llm(self) -> str:
+        """
+        Creates a condensed string summary of the history,
+        to be used in an LLM prompt.
+        """
+        summary_lines = [
+            f"--- Key Memories for {self.entity_name} ---"
+        ]
+        
+        # Limit summary to last 20 events to avoid huge prompts
+        recent_memory = self.get_recent_history(count=20)
+        
+        if not recent_memory:
+            return f"--- {self.entity_name} has no significant memories. ---"
+            
+        for event in recent_memory:
+            time_str = f"Y{event.timestamp.year}-M{event.timestamp.month}-D{event.timestamp.day}"
+            summary_lines.append(f"[{time_str}] ({event.event_type}): {event.description}")
+            
+        return "\n".join(summary_lines)
+
+@dataclass
 class Skill:
     """
     Holds data for a single skill, including its specializations.
@@ -520,8 +618,15 @@ class GameController:
         self.player_entity: Optional[Entity] = None
         """The main player character entity."""
         
+        # --- NEW: Add GameTime ---
+        self.game_time = GameTime(year=1, month=1, day=1, hour=8) # Start at 8am
+        
         self.game_entities: Dict[str, Entity] = {}
         """A dictionary of all entities in the scene, indexed by name."""
+
+        # --- NEW: Add EntityHistory management ---
+        self.entity_histories: Dict[str, EntityHistory] = {}
+        """A dictionary mapping entity names to their personal history."""
         
         self.current_room: Optional[Room] = None
         """The currently active room object."""
@@ -529,6 +634,12 @@ class GameController:
         # Load entities from the loader
         self.game_entities.update(self.loader.creatures)
         self.game_entities.update(self.loader.characters)
+
+        # --- Initialize histories for intelligent entities ---
+        for name, entity in self.game_entities.items():
+            if any(status in entity.status for status in ["intelligent", "animalistic", "robotic"]):
+                self.entity_histories[name] = EntityHistory(entity_name=name)
+                print(f"GameController: Initialized history for intelligent entity: {name}")
 
         # (Placeholder) List of all entities in the current encounter
         self.initiative_order: List[Entity] = []
@@ -555,6 +666,12 @@ class GameController:
         self.player_entity = player
         if player.name not in self.game_entities:
             self.game_entities[player.name] = player
+            
+        # --- Initialize player history if they are intelligent ---
+        if any(status in player.status for status in ["intelligent", "animalistic", "robotic"]):
+            if player.name not in self.entity_histories:
+                self.entity_histories[player.name] = EntityHistory(entity_name=player.name)
+                print(f"GameController: Initialized history for player: {player.name}")
             
         if self.loader.scenario and self.loader.scenario.environment.rooms:
             self.current_room = self.loader.scenario.environment.rooms[0]
@@ -619,8 +736,18 @@ class GameController:
             
         print(f"Starting game with {len(self.initiative_order)} entities in initiative.")
         
+        # --- Add a "game start" event to all histories ---
+        start_event = HistoryEvent(
+            timestamp=self.game_time.copy(), # Use current time
+            event_type="world",
+            description="The adventure begins.",
+            participants=[e.name for e in self.initiative_order]
+        )
+        for history in self.entity_histories.values():
+            history.add_event(start_event)
+        
         # Manually update GUI on start
-        self.update_narrative_callback(f"The adventure begins for {player.name}...")
+        self.update_narrative_callback(f"[{self.game_time.get_time_string()}] The adventure begins for {player.name}...")
         self.update_character_sheet_callback(self.player_entity)
         self.update_inventory_callback(self.player_entity)
         self.update_map_callback(self.current_room)
@@ -675,6 +802,25 @@ class GameController:
             self.round_history.append(history_msg)
             player_action_summary += history_msg + " "
 
+        # --- Log player's action to relevant entity histories ---
+        player_event = HistoryEvent(
+            timestamp=self.game_time.copy(),
+            event_type="player_action",
+            description=player_action_summary.strip(),
+            participants=[t.name for t in targets_affected]
+        )
+        
+        # Add this event to *every* intelligent entity that was targeted
+        for target_entity in targets_affected:
+            if target_entity.name in self.entity_histories:
+                self.entity_histories[target_entity.name].add_event(player_event)
+        
+        # Also add it to the player's own history
+        if self.player_entity.name in self.entity_histories:
+            self.entity_histories[self.player_entity.name].add_event(player_event)
+        # --- (end new) ---
+
+
         # --- NEW: Add player's action to LLM history ---
         self.llm_chat_history.append({"role": "user", "content": player_action_summary.strip()})
         
@@ -716,12 +862,20 @@ class GameController:
             # 1. (LLM) Generate NPC Response/Reaction to player's action
             #    We no longer use nlp_processor.generate_npc_response
             
+            # --- NEW: Get this specific NPC's history summary ---
+            npc_history_summary = ""
+            if npc.name in self.entity_histories:
+                npc_history_summary = self.entity_histories[npc.name].get_summary_for_llm()
+            
             # --- NEW: Use LLMManager ---
             # Create a prompt for the NPC
             npc_prompt = (
-                f"You are {npc.name}. "
-                f"You are in a room with: {game_state_context['actors_present']}. "
-                f"The player, {self.player_entity.name}, just did this: '{player_action_summary}'. "
+                f"--- Your Context ---\n"
+                f"You are {npc.name}. \n"
+                f"{npc_history_summary}\n" # Add the personal history
+                f"--- Current Situation ---\n"
+                f"You are in a room with: {game_state_context['actors_present']}. \n"
+                f"The player, {self.player_entity.name}, just did this: '{player_action_summary}'. \n"
                 f"What is your reaction or next action? Respond in character, briefly."
             )
             
@@ -732,6 +886,28 @@ class GameController:
                 history=self.llm_chat_history 
             )
             # --- END NEW ---
+            
+            if reaction_narrative and not reaction_narrative.startswith("Error:"):
+                # --- NEW: Log this dialogue to the NPC's history ---
+                dialogue_event = HistoryEvent(
+                    timestamp=self.game_time.copy(),
+                    event_type="dialogue_self",
+                    description=f"You said: \"{reaction_narrative}\"",
+                    participants=[self.player_entity.name] # Assumed target
+                )
+                if npc.name in self.entity_histories:
+                    self.entity_histories[npc.name].add_event(dialogue_event)
+                    
+                # Also log it to the player's history (if they are intelligent)
+                if self.player_entity.name in self.entity_histories:
+                    player_event = HistoryEvent(
+                        timestamp=self.game_time.copy(),
+                        event_type="dialogue_npc",
+                        description=f"{npc.name} said: \"{reaction_narrative}\"",
+                        participants=[npc.name]
+                    )
+                    self.entity_histories[self.player_entity.name].add_event(player_event)
+                # --- (end new) ---
             
             if reaction_narrative:
                 # Add NPC response to GUI and history
@@ -759,6 +935,13 @@ class GameController:
             summary = "The round ends." # Placeholder
             self.update_narrative_callback(f"\n--- Round Summary ---\n{summary}")
             self.round_history = [] # Clear history for next round
+            
+            # --- NEW: Advance time ---
+            # We will advance time by 1 hour at the end of a full round
+            # for demonstration purposes. A real game might advance by
+            # 1 minute or only advance on 'rest' actions.
+            self.game_time.advance_hours(1)
+            self.update_narrative_callback(f"(The clock advances. Time is now: {self.game_time.get_time_string()})")
 
     def _get_current_game_state(self, actor: Entity) -> Dict[str, Any]:
         """(Helper) Gathers all context for an LLM prompt."""
