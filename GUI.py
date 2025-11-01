@@ -16,7 +16,8 @@ except ImportError:
     class ProcessedInput: pass
 
 try:
-    from classes import Entity, InventoryItem, Skill, RulesetLoader, Room
+    # --- MODIFIED: Import GameController from classes ---
+    from classes import Entity, InventoryItem, Skill, RulesetLoader, Room, GameController
     from DebugWindow import DebugWindow
 except ImportError:
     print("Warning: 'classes.py' not found. Using placeholder classes.")
@@ -34,14 +35,17 @@ except ImportError:
         creatures = {}
         characters = {}
         scenario = None
+    # --- MODIFIED: Add GameController placeholder ---
+    class GameController:
+        def __init__(self, *args): pass
+        def process_player_input(self, *args): pass
+        def start_game(self, *args): pass
+        loader = None # Add a loader attribute for debug window fallback
+        update_narrative_callback = lambda text: None
+        update_character_sheet_callback = lambda entity: None
+        update_inventory_callback = lambda entity: None
+        update_map_callback = lambda room: None
 
-# --- NEW: Import the action processor ---
-try:
-    from action_processor import process_player_actions
-except ImportError:
-    print("Warning: 'action_processor.py' not found. Player actions will not be processed.")
-    def process_player_actions(*args) -> List[Tuple[str, str]]:
-        return [("Error: 'action_processor.py' not found.", "Error")]
 
 # --- NEW: Import new manager classes for type hinting ---
 try:
@@ -50,303 +54,8 @@ try:
 except ImportError:
     class ConfigManager: pass
     class LLMManager: pass
-    # --- MODIFIED: Updated fallback to a correct name ---
-    OLLAMA_MODELS = {"Gemma 3n 12B": "gemma3n:12b"} # Fallback
+    OLLAMA_MODELS = {"Gemma 3 12B": "gemma3:12b"} # Fallback
 
-
-class GameController:
-    """
-    Manages the game state, player input, and game loop logic.
-    """
-
-    # --- MODIFIED: __init__ to accept LLMManager ---
-    def __init__(self, loader: RulesetLoader, ruleset_path: Path, llm_manager: LLMManager):
-        """
-        Initializes the game controller.
-        
-        Args:
-            loader: A pre-initialized RulesetLoader instance.
-            ruleset_path: Path to the ruleset for the NLPProcessor.
-            llm_manager: The manager for handling LLM API calls.
-        """
-        self.loader = loader
-        """The data loader with all ruleset data."""
-        
-        # This processor is still used for *intent classification*
-        self.nlp_processor = NLPProcessor(ruleset_path)
-        """The NLP system for processing commands."""
-        
-        # This manager is used for *generative responses*
-        self.llm_manager = llm_manager
-        """The manager for handling LLM API calls."""
-        
-        self.player_entity: Optional[Entity] = None
-        """The main player character entity."""
-        
-        self.game_entities: Dict[str, Entity] = {}
-        """A dictionary of all entities in the scene, indexed by name."""
-        
-        self.current_room: Optional[Room] = None
-        """The currently active room object."""
-        
-        # Load entities from the loader
-        self.game_entities.update(self.loader.creatures)
-        self.game_entities.update(self.loader.characters)
-
-        # (Placeholder) List of all entities in the current encounter
-        self.initiative_order: List[Entity] = []
-        
-        # (Placeholder) Game history for narrative summaries
-        self.round_history: List[str] = []
-        
-        # This is the LLM's chat history
-        self.llm_chat_history: List[Dict[str, str]] = []
-
-        self.update_narrative_callback: Callable[[str], None] = lambda text: None
-        self.update_character_sheet_callback: Callable[[Entity], None] = lambda entity: None
-        self.update_inventory_callback: Callable[[Entity], None] = lambda entity: None
-        self.update_map_callback: Callable[[Optional[Room]], None] = lambda room: None
-
-    def start_game(self, player: Entity):
-        # ... (This method is unchanged from the original file) ...
-        """
-        Initializes the game, loads the player, and starts the loop.
-        
-        Args:
-            player: The pre-loaded player Entity object.
-        """
-        self.player_entity = player
-        if player.name not in self.game_entities:
-            self.game_entities[player.name] = player
-            
-        if self.loader.scenario and self.loader.scenario.environment.rooms:
-            self.current_room = self.loader.scenario.environment.rooms[0]
-            print(f"Loaded initial room: {self.current_room.name}")
-        else:
-            print("Warning: No scenario or rooms found in loader.")
-        
-        # Build the initiative order from the entities placed in the room
-        self.initiative_order = []
-        
-        if self.current_room and self.current_room.map:
-            # 1. Create a quick lookup map from char -> entity_name
-            legend_lookup: Dict[str, str] = {}
-            if self.current_room.legend:
-                for item in self.current_room.legend:
-                    legend_lookup[item.char] = item.entity
-
-            # 2. Find all unique entity characters on the map
-            placed_chars = set()
-            for y, row in enumerate(self.current_room.map):
-                for x, char_code in enumerate(row):
-                    # 'x' is empty floor, 'G' is ground layer
-                    if char_code != 'x' and char_code != 'G': 
-                        placed_chars.add(char_code)
-            
-            # 3. Get the Entity object for each placed character
-            print("--- Loading Entities for Initiative ---")
-            for char_code in placed_chars:
-                entity_name = legend_lookup.get(char_code)
-                if not entity_name:
-                    print(f"Warning: Character '{char_code}' on map but not in legend.")
-                    continue
-                
-                # Check for creature/player
-                entity_obj = self.game_entities.get(entity_name)
-                
-                if not entity_obj:
-                    # Check for environment entity (dummy, chest, wall, etc.)
-                    entity_obj = self.loader.environment_ents.get(entity_name)
-                    if entity_obj and entity_name not in self.game_entities:
-                        # Add to game_entities for tracking
-                        self.game_entities[entity_name] = entity_obj
-                
-                if entity_obj:
-                    if entity_obj not in self.initiative_order:
-                        self.initiative_order.append(entity_obj)
-                        print(f"Added '{entity_name}' (char: '{char_code}') to initiative.")
-                else:
-                    print(f"Warning: Entity '{entity_name}' (char: '{char_code}') not found in any loader.")
-
-        else:
-            # Fallback if no room is loaded
-            print("Warning: No room loaded, adding only player to initiative.")
-            if self.player_entity:
-                self.initiative_order = [self.player_entity]
-
-        # Ensure player is always in the list (if they weren't placed via 'P')
-        if self.player_entity and self.player_entity not in self.initiative_order:
-            print(f"Warning: Player '{self.player_entity.name}' not placed on map, adding to initiative.")
-            self.initiative_order.append(self.player_entity)
-            
-        print(f"Starting game with {len(self.initiative_order)} entities in initiative.")
-        
-        # Manually update GUI on start
-        self.update_narrative_callback(f"The adventure begins for {player.name}...")
-        self.update_character_sheet_callback(self.player_entity)
-        self.update_inventory_callback(self.player_entity)
-        self.update_map_callback(self.current_room)
-        
-        print("GameController started.")
-
-
-    def process_player_input(self, player_input: str):
-        """
-        Receives raw text input from the InputBar and processes it
-        using the hybrid parser model.
-        """
-        if not self.player_entity or not self.nlp_processor:
-            return
-
-        print(f"Processing input: {player_input}")
-        
-        # 1. Run the NLP Pipeline (for intent classification)
-        # We pass all game_entities as the "known_entities" for the NER step
-        # processed_action is now a 'ProcessedInput' dataclass
-        processed_action = self.nlp_processor.process_player_input(
-            player_input, 
-            self.game_entities
-        )
-        
-        if not processed_action:
-            self.update_narrative_callback("Error: Could not process input.")
-            return
-        
-        # --- REFACTORED LOGIC ---
-
-        # 2. Triage & Process Action
-        # This function now lives in 'action_processor.py'
-        # It returns a list of (narrative_message, history_message) tuples
-        action_results = process_player_actions(
-            self.player_entity,
-            processed_action
-        )
-
-        # 3. Update GUI and History
-        targets_affected = set(processed_action.targets)
-        player_action_summary = ""
-        
-        for narrative_msg, history_msg in action_results:
-            self.update_narrative_callback(narrative_msg)
-            self.round_history.append(history_msg)
-            player_action_summary += history_msg + " "
-
-        # --- NEW: Add player's action to LLM history ---
-        self.llm_chat_history.append({"role": "user", "content": player_action_summary.strip()})
-        
-        # 4. Update GUI
-        # Update any targets that were affected
-        for target in targets_affected:
-            self.update_character_sheet_callback(target)
-        self.update_character_sheet_callback(self.player_entity)
-        self.update_inventory_callback(self.player_entity)
-        
-        # --- END REFACTORED LOGIC ---
-        
-        # 5. Trigger NPC turns
-        # Pass the plain text summary of what the player did
-        self._run_npc_turns(player_action_summary)
-
-    # --- MODIFIED: _run_npc_turns to use LLMManager ---
-    def _run_npc_turns(self, player_action_summary: str):
-        """
-        Runs the 'else' block of the loop for all non-player characters.
-        
-        Args:
-            player_action_summary: A simple text string of what the player did.
-        """
-        print("Running NPC turns...")
-        if not self.player_entity: return
-        
-        all_actions_taken = False
-        
-        # Get the current game state
-        game_state_context = self._get_current_game_state(self.player_entity)
-        
-        for npc in self.initiative_order:
-            if npc == self.player_entity:
-                continue 
-
-            if not ("intelligent" in npc.status or "animalistic" in npc.status or "robotic" in npc.status):
-                continue
-            
-            # 1. (LLM) Generate NPC Response/Reaction to player's action
-            #    We no longer use nlp_processor.generate_npc_response
-            
-            # --- NEW: Use LLMManager ---
-            # Create a prompt for the NPC
-            npc_prompt = (
-                f"You are {npc.name}. "
-                f"You are in a room with: {game_state_context['actors_present']}. "
-                f"The player, {self.player_entity.name}, just did this: '{player_action_summary}'. "
-                f"What is your reaction or next action? Respond in character, briefly."
-            )
-            
-            # Generate the response
-            # Note: We pass the *shared* chat history
-            reaction_narrative = self.llm_manager.generate_response(
-                prompt=npc_prompt,
-                history=self.llm_chat_history 
-            )
-            # --- END NEW ---
-            
-            if reaction_narrative:
-                # Add NPC response to GUI and history
-                # Check if LLM returned an error message
-                if reaction_narrative.startswith("Error:"):
-                    formatted_narrative = reaction_narrative
-                else:
-                    formatted_narrative = f"{npc.name}: \"{reaction_narrative}\""
-                
-                self.update_narrative_callback(formatted_narrative)
-                self.round_history.append(formatted_narrative)
-                # Add to LLM history so it knows what was said
-                self.llm_chat_history.append({"role": "assistant", "content": reaction_narrative})
-            
-            all_actions_taken = True
-        
-        # (Rest of method is unchanged from the original file)
-
-        # 5. (Placeholder) Process round updates (e.g., poison, regeneration)
-        self._process_round_updates()
-        
-        # 6. (Placeholder) Generate narrative summary
-        if all_actions_taken:
-            # (Placeholder) summary = self.llm.get_narrative_summary("\n".join(self.round_history))
-            summary = "The round ends." # Placeholder
-            self.update_narrative_callback(f"\n--- Round Summary ---\n{summary}")
-            self.round_history = [] # Clear history for next round
-
-    def _get_current_game_state(self, actor: Entity) -> Dict[str, Any]:
-        """(Helper) Gathers all context for an LLM prompt."""
-        # ... (This method is unchanged from the original file) ...
-        
-        actors_in_room = [e.name for e in self.initiative_order if e.name != actor.name]
-        
-        # Format attitudes
-        attitudes_str = "none"
-        if actor.attitude:
-            try:
-                import json
-                attitudes_str = json.dumps(actor.attitude) # Simple serialization
-            except ImportError:
-                pass
-        
-        objects_in_room = []
-        # (Placeholder) This needs to be populated from the room/legend
-        # if self.current_room and self.current_room.objects:
-        #     objects_in_room = [obj.name for obj in self.current_room.objects]
-
-        return {
-            "actors_present": ", ".join(actors_in_room) if actors_in_room else "none",
-            "objects_present": ", ".join(objects_in_room) if objects_in_room else "none",
-            "attitudes": attitudes_str,
-            "game_history": "\n".join(self.round_history)
-        }
-
-    def _process_round_updates(self):
-        """(Placeholder) Processes end-of-round effects like poison, regen, etc."""
-        pass
 
 class NarrativePanel(ttk.Frame):
     """
@@ -459,59 +168,49 @@ class MapPanel(ttk.Frame):
         TILE_SIZE = 25 # Size of each map tile in pixels
         MAP_OFFSET_Y = 40 # Offset to leave space for title
 
-        # --- REMOVED: Hardcoded TILE_INFO dictionary ---
-
-        map_grid = room.map
-        if not map_grid:
-            print("MAP: Room has no .map property to draw.")
+        if not room.layers:
+            print("MAP: Room has no .layers property to draw.")
             return
             
-        if room.layers and room.layers[0]:
-            for y, row in enumerate(room.layers[0]):
+        # --- NEW: Render all layers from ground up ---
+        for layer_index, layer_grid in enumerate(room.layers):
+            for y, row in enumerate(layer_grid):
                 for x, tile_char in enumerate(row):
+                    
+                    # 'x' is an empty/transparent tile. Skip it.
+                    if tile_char == 'x':
+                        continue
+                    
                     color, text = TILE_INFO.get(tile_char, (DEFAULT_COLOR, "?"))
+                    
+                    # Calculate pixel coordinates
                     x0 = x * TILE_SIZE
                     y0 = (y * TILE_SIZE) + MAP_OFFSET_Y
                     x1 = x0 + TILE_SIZE
                     y1 = y0 + TILE_SIZE
+                    
+                    # Draw the tile rectangle
+                    # Ground layer (index 0) gets no outline, others do
+                    outline_color = "#222" # Dark outline for objects
+                    if layer_index == 0:
+                        outline_color = color # No outline for ground
+                    
                     self.map_canvas.create_rectangle(
                         x0, y0, x1, y1, 
                         fill=color, 
-                        outline=color # No outline for ground
+                        outline=outline_color
                     )
-
-        # --- Render Object/Actor Layer (room.map) ---
-        for y, row in enumerate(map_grid):
-            for x, tile_char in enumerate(row):
-                
-                # Skip ground tiles in this layer to see ground layer underneath
-                if tile_char == 'G':
-                    continue
-                
-                color, text = TILE_INFO.get(tile_char, (DEFAULT_COLOR, "?"))
-                
-                # Calculate pixel coordinates
-                x0 = x * TILE_SIZE
-                y0 = (y * TILE_SIZE) + MAP_OFFSET_Y
-                x1 = x0 + TILE_SIZE
-                y1 = y0 + TILE_SIZE
-                
-                # Draw the tile rectangle
-                self.map_canvas.create_rectangle(
-                    x0, y0, x1, y1, 
-                    fill=color, 
-                    outline="#222" # Dark outline
-                )
-                
-                # Draw the icon text (if not empty floor)
-                if tile_char != 'x':
-                    self.map_canvas.create_text(
-                        x0 + (TILE_SIZE / 2),
-                        y0 + (TILE_SIZE / 2),
-                        text=tile_char,
-                        font=("Arial", 12, "bold"),
-                        fill="white"
-                    )
+                    
+                    # Draw the icon text (if not empty floor)
+                    # We assume 'G' on layer 0 is the floor, so we don't label it.
+                    if not (layer_index == 0 and tile_char == 'G'):
+                        self.map_canvas.create_text(
+                            x0 + (TILE_SIZE / 2),
+                            y0 + (TILE_SIZE / 2),
+                            text=tile_char,
+                            font=("Arial", 12, "bold"),
+                            fill="white"
+                        )
         
         # (Placeholder for token rendering - currently handled by TILE_INFO)
         pass
@@ -661,9 +360,10 @@ class CharacterPanel(ttk.Frame):
             widget.destroy() # Clear old labels
             
         row = 0
-        for name, value in entity.attribute.items():
+        # --- MODIFIED: Handle new Attribute object ---
+        for name, attr_obj in entity.attribute.items():
             ttk.Label(self.attr_frame, text=f"{name.capitalize()}:").grid(row=row, column=0, sticky='w')
-            ttk.Label(self.attr_frame, text=str(value)).grid(row=row, column=1, sticky='e', padx=10)
+            ttk.Label(self.attr_frame, text=str(attr_obj.base)).grid(row=row, column=1, sticky='e', padx=10)
             row += 1
             
         # Update Skills
@@ -671,10 +371,20 @@ class CharacterPanel(ttk.Frame):
             widget.destroy() # Clear old labels
             
         row = 0
-        for name, skill_obj in entity.skill.items():
-            ttk.Label(self.skills_frame, text=f"{name.capitalize()}:").grid(row=row, column=0, sticky='w')
-            ttk.Label(self.skills_frame, text=str(skill_obj.base)).grid(row=row, column=1, sticky='e', padx=10)
+        # --- MODIFIED: Iterate through new Attribute skill structure ---
+        for attr_name, attr_obj in entity.attribute.items():
+            if not attr_obj.skill:
+                continue # Skip attributes with no skills
+                
+            # Add a header for the attribute
+            ttk.Label(self.skills_frame, text=f"--- {attr_name.capitalize()} ---", font=("Arial", 9, "bold")).grid(row=row, column=0, columnspan=2, sticky='w', pady=(5,0))
             row += 1
+            
+            # Add skills for that attribute
+            for skill_name, skill_obj in attr_obj.skill.items():
+                ttk.Label(self.skills_frame, text=f"  {skill_name.capitalize()}:").grid(row=row, column=0, sticky='w')
+                ttk.Label(self.skills_frame, text=str(skill_obj.base)).grid(row=row, column=1, sticky='e', padx=10)
+                row += 1
         pass
 
 class InfoMultipane(ttk.Notebook):
@@ -811,7 +521,7 @@ class MainWindow:
         )
         
         # --- MODIFIED: Set default model from the *new* list ---
-        default_model = list(OLLAMA_MODELS.values())[0] if OLLAMA_MODELS else "gemma3n:12b"
+        default_model = list(OLLAMA_MODELS.values())[0] if OLLAMA_MODELS else "gemma3:12b"
         self.ollama_model_var = tk.StringVar(
             value=self.config_manager.get('ollama_model', default_model)
         )
@@ -990,16 +700,13 @@ class MainWindow:
         Opens the debug inspector window. If one is already open,
         it brings it to the front.
         """
-        # (Requires DebugWindow class)
-        # print("DebugWindow class not implemented.") # <-- REMOVE THIS LINE
-
-        # --- ADD/UNCOMMENT THIS BLOCK ---
         if self.debug_window_instance and self.debug_window_instance.winfo_exists():
             # If window exists, bring to front
             self.debug_window_instance.lift()
             self.debug_window_instance.focus()
         else:
             # Otherwise, create a new one
+            # The loader is now in the controller
             self.debug_window_instance = DebugWindow(
                 parent=self.root, 
                 loader=self.controller.loader

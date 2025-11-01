@@ -20,6 +20,17 @@ class Skill:
     specialization: Dict[str, int] = field(default_factory=dict)
     """A dictionary of specializations under this skill, with their base values."""
 
+# --- NEW: Attribute Dataclass ---
+@dataclass
+class Attribute:
+    """
+    Holds data for a single attribute, including its nested skills.
+    """
+    base: int = 0
+    """The base value (in pips) for the attribute."""
+    skill: Dict[str, Skill] = field(default_factory=dict)
+    """A dictionary of skills governed by this attribute."""
+
 @dataclass
 class Quality:
     """
@@ -128,11 +139,12 @@ class Entity:
     weight: float = 0.0
     """The entity's weight, typically in kg or lbs."""
 
-    attribute: Dict[str, int] = field(default_factory=dict)
+    # --- MODIFIED: To use new Attribute dataclass ---
+    attribute: Dict[str, Attribute] = field(default_factory=dict)
     """A dictionary of the entity's primary attributes and their values."""
 
-    skill: Dict[str, Skill] = field(default_factory=dict)
-    """A dictionary of the entity's skills."""
+    # --- REMOVED: 'skill' field. It now lives inside 'attribute'. ---
+    # skill: Dict[str, Skill] = field(default_factory=dict)
 
     quality: Quality = field(default_factory=Quality)
     """An object holding the entity's physical descriptors."""
@@ -230,34 +242,38 @@ def create_entity_from_dict(data: Dict[str, Any]) -> Entity:
         data_copy['duration'] = [DurationComponent(**comp) for comp in data_copy['duration']]
         
     
-    final_attributes = {}
-    final_skills = {}
+    # --- MODIFIED: To build the hierarchical Attribute->Skill structure ---
+    final_attributes: Dict[str, Attribute] = {}
     
     if 'attribute' in data_copy:
         for attr_name, attr_data in data_copy['attribute'].items():
+            
+            new_attr = Attribute() # Create the new Attribute object
+            
             if isinstance(attr_data, dict):
-                final_attributes[attr_name] = attr_data.get('base', 0)
+                new_attr.base = attr_data.get('base', 0)
+                
+                # Check for nested skills
                 if 'skill' in attr_data:
                     for skill_name, skill_data in attr_data['skill'].items():
                         if isinstance(skill_data, dict):
-                            final_skills[skill_name] = Skill(**skill_data)
+                            new_attr.skill[skill_name] = Skill(**skill_data)
                         else:
-                            final_skills[skill_name] = Skill(base=skill_data)
+                            # Handle simple "skill_name: 3"
+                            new_attr.skill[skill_name] = Skill(base=skill_data)
             else:
-                final_attributes[attr_name] = attr_data
+                # Handle simple "attribute_name: 9"
+                new_attr.base = attr_data
+            
+            final_attributes[attr_name] = new_attr
         
         data_copy['attribute'] = final_attributes
+
+    # --- REMOVED: The old logic for a separate 'skill' dictionary ---
+    # (The logic for 'skill:' at the top level is removed, as it
+    # should all be nested under attributes per the YAML schema)
+    # ---
     
-    if 'skill' in data_copy:
-         for skill_name, skill_data in data_copy['skill'].items():
-            if isinstance(skill_data, dict):
-                final_skills[skill_name] = Skill(**skill_data)
-            else:
-                final_skills[skill_name] = Skill(base=skill_data)
-
-    if final_skills:
-        data_copy['skill'] = final_skills
-
     def _create_inventory(items_list: List[Dict]) -> List[InventoryItem]:
         """Helper to recursively build InventoryItem objects."""
         output = []
@@ -302,20 +318,8 @@ class Room:
     layers: List[List[List[str]]] = field(default_factory=list)
     legend: List[RoomLegendItem] = field(default_factory=list)
 
-    @property
-    def map(self) -> Optional[List[List[str]]]:
-        """
-        Returns the object/actor layer of the map.
-        GUI.py's MapPanel expects this.
-        In rooms.yaml, layer[0] is ground, layer[1] is objects/actors.
-        """
-        
-        # needs to be any number of layers
-        if len(self.layers) > 1:
-            return self.layers[1]
-        elif self.layers:
-            return self.layers[0]
-        return None
+    # --- REMOVED: The confusing '@property def map' ---
+    # The GUI will now iterate over 'layers' directly.
 
 @dataclass
 class Environment:
@@ -464,3 +468,324 @@ class RulesetLoader:
     def get_character(self, name: str) -> Optional[Entity]:
         """Retrieves a loaded character by name."""
         return self.characters.get(name)
+
+from typing import List, Dict, Any, Optional, Callable, Tuple
+from pathlib import Path
+
+try:
+    from nlp_processor import NLPProcessor, ProcessedInput
+    from action_processor import process_player_actions
+    from config_manager import ConfigManager
+    from llm_manager import LLMManager, OLLAMA_MODELS
+except ImportError as e:
+    print(f"GameController (in classes.py) Error: Failed to import modules: {e}")
+    # Define placeholder classes to prevent immediate crashes
+    class NLPProcessor:
+        def __init__(self, *args): pass
+        def process_player_input(self, *args): return None
+    class ProcessedInput: pass
+    class LLMManager: pass
+    def process_player_actions(*args) -> List[Tuple[str, str]]:
+        return [("Error: 'action_processor.py' not found.", "Error")]
+
+
+# --- NEW: GameController class added ---
+
+class GameController:
+    """
+    Manages the game state, player input, and game loop logic.
+    This class is separate from the GUI.
+    """
+
+    def __init__(self, loader: RulesetLoader, ruleset_path: Path, llm_manager: LLMManager):
+        """
+        Initializes the game controller.
+        
+        Args:
+            loader: A pre-initialized RulesetLoader instance.
+            ruleset_path: Path to the ruleset for the NLPProcessor.
+            llm_manager: The manager for handling LLM API calls.
+        """
+        self.loader = loader
+        """The data loader with all ruleset data."""
+        
+        # This processor is still used for *intent classification*
+        self.nlp_processor = NLPProcessor(ruleset_path)
+        """The NLP system for processing commands."""
+        
+        # This manager is used for *generative responses*
+        self.llm_manager = llm_manager
+        """The manager for handling LLM API calls."""
+        
+        self.player_entity: Optional[Entity] = None
+        """The main player character entity."""
+        
+        self.game_entities: Dict[str, Entity] = {}
+        """A dictionary of all entities in the scene, indexed by name."""
+        
+        self.current_room: Optional[Room] = None
+        """The currently active room object."""
+        
+        # Load entities from the loader
+        self.game_entities.update(self.loader.creatures)
+        self.game_entities.update(self.loader.characters)
+
+        # (Placeholder) List of all entities in the current encounter
+        self.initiative_order: List[Entity] = []
+        
+        # (Placeholder) Game history for narrative summaries
+        self.round_history: List[str] = []
+        
+        # This is the LLM's chat history
+        self.llm_chat_history: List[Dict[str, str]] = []
+
+        # Callbacks to update the GUI
+        self.update_narrative_callback: Callable[[str], None] = lambda text: None
+        self.update_character_sheet_callback: Callable[[Entity], None] = lambda entity: None
+        self.update_inventory_callback: Callable[[Entity], None] = lambda entity: None
+        self.update_map_callback: Callable[[Optional[Room]], None] = lambda room: None
+
+    def start_game(self, player: Entity):
+        """
+        Initializes the game, loads the player, and starts the loop.
+        
+        Args:
+            player: The pre-loaded player Entity object.
+        """
+        self.player_entity = player
+        if player.name not in self.game_entities:
+            self.game_entities[player.name] = player
+            
+        if self.loader.scenario and self.loader.scenario.environment.rooms:
+            self.current_room = self.loader.scenario.environment.rooms[0]
+            print(f"Loaded initial room: {self.current_room.name}")
+        else:
+            print("Warning: No scenario or rooms found in loader.")
+        
+        # Build the initiative order from the entities placed in the room
+        self.initiative_order = []
+        
+        if self.current_room and self.current_room.layers:
+            # 1. Create a quick lookup map from char -> entity_name
+            legend_lookup: Dict[str, str] = {}
+            if self.current_room.legend:
+                for item in self.current_room.legend:
+                    legend_lookup[item.char] = item.entity
+
+            # 2. Find all unique entity characters on the map (all layers)
+            placed_chars = set()
+            for layer in self.current_room.layers: # <-- MODIFIED
+                for y, row in enumerate(layer):
+                    for x, char_code in enumerate(row):
+                        # 'x' is empty/transparent, skip it
+                        if char_code != 'x': # <-- SIMPLIFIED
+                            placed_chars.add(char_code)
+            
+            # 3. Get the Entity object for each placed character
+            print("--- Loading Entities for Initiative ---")
+            for char_code in placed_chars:
+                entity_name = legend_lookup.get(char_code)
+                if not entity_name:
+                    print(f"Warning: Character '{char_code}' on map but not in legend.")
+                    continue
+                
+                # Check for creature/player
+                entity_obj = self.game_entities.get(entity_name)
+                
+                if not entity_obj:
+                    # Check for environment entity (dummy, chest, wall, etc.)
+                    entity_obj = self.loader.environment_ents.get(entity_name)
+                    if entity_obj and entity_name not in self.game_entities:
+                        # Add to game_entities for tracking
+                        self.game_entities[entity_name] = entity_obj
+                
+                if entity_obj:
+                    if entity_obj not in self.initiative_order:
+                        self.initiative_order.append(entity_obj)
+                        print(f"Added '{entity_name}' (char: '{char_code}') to initiative.")
+                else:
+                    print(f"Warning: Entity '{entity_name}' (char: '{char_code}') not found in any loader.")
+
+        else:
+            # Fallback if no room is loaded
+            print("Warning: No room loaded, adding only player to initiative.")
+            if self.player_entity:
+                self.initiative_order = [self.player_entity]
+
+        # Ensure player is always in the list (if they weren't placed via 'P')
+        if self.player_entity and self.player_entity not in self.initiative_order:
+            print(f"Warning: Player '{self.player_entity.name}' not placed on map, adding to initiative.")
+            self.initiative_order.append(self.player_entity)
+            
+        print(f"Starting game with {len(self.initiative_order)} entities in initiative.")
+        
+        # Manually update GUI on start
+        self.update_narrative_callback(f"The adventure begins for {player.name}...")
+        self.update_character_sheet_callback(self.player_entity)
+        self.update_inventory_callback(self.player_entity)
+        self.update_map_callback(self.current_room)
+        
+        print("GameController started.")
+
+
+    def process_player_input(self, player_input: str):
+        """
+        Receives raw text input from the InputBar and processes it
+        using the hybrid parser model.
+        """
+        if not self.player_entity or not self.nlp_processor:
+            return
+
+        print(f"Processing input: {player_input}")
+        
+        # 1. Run the NLP Pipeline (for intent classification)
+        # We pass all game_entities as the "known_entities" for the NER step
+        # processed_action is now a 'ProcessedInput' dataclass
+        processed_action = self.nlp_processor.process_player_input(
+            player_input, 
+            self.game_entities
+        )
+        
+        if not processed_action:
+            self.update_narrative_callback("Error: Could not process input.")
+            return
+        
+        # --- REFACTORED LOGIC ---
+
+        # 2. Triage & Process Action
+        # This function now lives in 'action_processor.py'
+        # It returns a list of (narrative_message, history_message) tuples
+        action_results = process_player_actions(
+            self.player_entity,
+            processed_action,
+            self.game_entities # Pass game entities for action logic
+        )
+
+        # 3. Update GUI and History
+        
+        # --- FIX: Do not use set() on unhashable Entity objects ---
+        # The target list from NLP is already unique.
+        targets_affected = processed_action.targets
+        # --- END FIX ---
+
+        player_action_summary = ""
+        
+        for narrative_msg, history_msg in action_results:
+            self.update_narrative_callback(narrative_msg)
+            self.round_history.append(history_msg)
+            player_action_summary += history_msg + " "
+
+        # --- NEW: Add player's action to LLM history ---
+        self.llm_chat_history.append({"role": "user", "content": player_action_summary.strip()})
+        
+        # 4. Update GUI
+        # Update any targets that were affected
+        for target in targets_affected: # Iterating over the list is fine
+            self.update_character_sheet_callback(target)
+        self.update_character_sheet_callback(self.player_entity)
+        self.update_inventory_callback(self.player_entity)
+        
+        # --- END REFACTORED LOGIC ---
+        
+        # 5. Trigger NPC turns
+        # Pass the plain text summary of what the player did
+        self._run_npc_turns(player_action_summary)
+
+    def _run_npc_turns(self, player_action_summary: str):
+        """
+        Runs the 'else' block of the loop for all non-player characters.
+        
+        Args:
+            player_action_summary: A simple text string of what the player did.
+        """
+        print("Running NPC turns...")
+        if not self.player_entity: return
+        
+        all_actions_taken = False
+        
+        # Get the current game state
+        game_state_context = self._get_current_game_state(self.player_entity)
+        
+        for npc in self.initiative_order:
+            if npc == self.player_entity:
+                continue 
+
+            if not ("intelligent" in npc.status or "animalistic" in npc.status or "robotic" in npc.status):
+                continue
+            
+            # 1. (LLM) Generate NPC Response/Reaction to player's action
+            #    We no longer use nlp_processor.generate_npc_response
+            
+            # --- NEW: Use LLMManager ---
+            # Create a prompt for the NPC
+            npc_prompt = (
+                f"You are {npc.name}. "
+                f"You are in a room with: {game_state_context['actors_present']}. "
+                f"The player, {self.player_entity.name}, just did this: '{player_action_summary}'. "
+                f"What is your reaction or next action? Respond in character, briefly."
+            )
+            
+            # Generate the response
+            # Note: We pass the *shared* chat history
+            reaction_narrative = self.llm_manager.generate_response(
+                prompt=npc_prompt,
+                history=self.llm_chat_history 
+            )
+            # --- END NEW ---
+            
+            if reaction_narrative:
+                # Add NPC response to GUI and history
+                # Check if LLM returned an error message
+                if reaction_narrative.startswith("Error:"):
+                    formatted_narrative = reaction_narrative
+                else:
+                    formatted_narrative = f"{npc.name}: \"{reaction_narrative}\""
+                
+                self.update_narrative_callback(formatted_narrative)
+                self.round_history.append(formatted_narrative)
+                # Add to LLM history so it knows what was said
+                self.llm_chat_history.append({"role": "assistant", "content": reaction_narrative})
+            
+            all_actions_taken = True
+        
+        # (Rest of method is unchanged from the original file)
+
+        # 5. (Placeholder) Process round updates (e.g., poison, regeneration)
+        self._process_round_updates()
+        
+        # 6. (Placeholder) Generate narrative summary
+        if all_actions_taken:
+            # (Placeholder) summary = self.llm.get_narrative_summary("\n".join(self.round_history))
+            summary = "The round ends." # Placeholder
+            self.update_narrative_callback(f"\n--- Round Summary ---\n{summary}")
+            self.round_history = [] # Clear history for next round
+
+    def _get_current_game_state(self, actor: Entity) -> Dict[str, Any]:
+        """(Helper) Gathers all context for an LLM prompt."""
+        
+        actors_in_room = [e.name for e in self.initiative_order if e.name != actor.name]
+        
+        # Format attitudes
+        attitudes_str = "none"
+        if actor.attitude:
+            try:
+                import json
+                attitudes_str = json.dumps(actor.attitude) # Simple serialization
+            except ImportError:
+                pass
+        
+        objects_in_room = []
+        # (Placeholder) This needs to be populated from the room/legend
+        # if self.current_room and self.current_room.objects:
+        #     objects_in_room = [obj.name for obj in self.current_room.objects]
+
+        return {
+            "actors_present": ", ".join(actors_in_room) if actors_in_room else "none",
+            "objects_present": ", ".join(objects_in_room) if objects_in_room else "none",
+            "attitudes": attitudes_str,
+            "game_history": "\n".join(self.round_history)
+        }
+
+    def _process_round_updates(self):
+        """(Placeholder) Processes end-of-round effects like poison, regen, etc."""
+        pass

@@ -39,12 +39,15 @@ except ImportError:
 
 # Import your data classes
 try:
-    from classes import Entity
+    # --- MODIFIED: Import new Attribute class ---
+    from classes import Entity, Attribute, Skill
 except ImportError:
     print("Warning: 'classes.py' not found. Using placeholder Entity.")
     class Entity:
         name: str = ""
         quote: List[str] = []
+    class Attribute: pass
+    class Skill: pass
 
 # Get the same logger used by the test script
 logger = logging.getLogger("NLPTestLogger")
@@ -320,24 +323,28 @@ class NLPProcessor:
 
         # 3. Classify Intent(s)
         all_matched_actions: List[Tuple[Intent, str]] = []
+        
+        # --- MODIFIED: New Heuristic Logic ---
+        is_first_clause = True # Flag for the first clause
         for clause in clauses:
             
-            # --- *** THIS IS THE FIX *** ---
-            # Use spaCy to check for a verb (VERB) or auxiliary (AUX).
-            # Clauses without them are almost always just targets.
-            # This handles "attack it" (VERB) and "I'm going" (AUX)
             doc = self.nlp(clause)
-            pos_tags = [f"{token.text}({token.pos_})" for token in doc]
             has_action_word = any(token.pos_ in ["VERB", "AUX"] for token in doc)
             
-            if not has_action_word:
-                logger.info(f"NLP: Skipping clause with no VERB/AUX: '{clause}'. POS: {pos_tags}")
-                continue # Skip to the next clause
-            # --- *** END OF FIX *** ---
+            # HEURISTIC: Process a clause if it's the first one (for commands
+            # like "Fireball!") OR if it contains a verb.
+            if is_first_clause or has_action_word:
+                logger.info(f"NLP: Processing clause: '{clause}' (First Clause: {is_first_clause}, Has Verb: {has_action_word})")
+                result = self.classify_intent(clause)
+                if result:
+                    all_matched_actions.append(result)
+            else:
+                # This clause is likely just a list of targets, e.g., "...and the chest"
+                pos_tags = [f"{token.text}({token.pos_})" for token in doc]
+                logger.info(f"NLP: Skipping clause (not first, no VERB/AUX): '{clause}'. POS: {pos_tags}")
 
-            result = self.classify_intent(clause)
-            if result:
-                all_matched_actions.append(result)
+            is_first_clause = False # Set flag to false after the first loop
+        # --- END MODIFICATION ---
 
         # De-duplicate intents
         final_intents: Dict[str, Tuple[Intent, str]] = {}

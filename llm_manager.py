@@ -3,20 +3,17 @@ import json
 import sys
 from tkinter import messagebox
 
-# Try to import ConfigManager for type hinting
 try:
     from config_manager import ConfigManager
 except ImportError:
-    class ConfigManager: pass # Placeholder
+    class ConfigManager: pass
 
-# --- MODIFIED: Use the correct 'gemma3n' model names ---
 OLLAMA_MODELS = {
     # Friendly Name: Ollama Model ID
-    "Gemma 3 4B": "gemma3:4b",   # NOTE: This is a guess, please verify in Ollama
-    "Gemma 3 12B": "gemma3:12b", # Based on your feedback
-    "Gemma 3 27B": "gemma3:27b", # NOTE: This is a guess, please verify in Ollama
+    "Gemma 3 4B": "gemma3:4b",
+    "Gemma 3 12B": "gemma3:12b",
+    "Gemma 3 27B": "gemma3:27b",
 }
-# --- END MODIFICATION ---
 
 OLLAMA_API_URL = "http://127.0.0.1:11434"
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
@@ -48,34 +45,30 @@ class LLMManager:
         mode = self.config.get('mode', 'offline')
         
         if mode == 'offline':
-            # Use the first model as a fallback if nothing is set
             default_model = list(OLLAMA_MODELS.values())[0]
             model = self.config.get('ollama_model', default_model)
             return self._generate_ollama(prompt, history, model)
         else:
-            # For OpenRouter, you'd map your friendly name to its model name
-            # e.g., "Gemma 3n 12B" -> "google/gemma-3n-12b-it" (Example)
-            model = "google/gemma-2-9b-it" # Example OpenRouter model
+            model = "google/gemma-2-9b-it"
             return self._generate_openrouter(prompt, history, model)
 
     def _generate_ollama(self, prompt: str, history: list[dict], model: str) -> str:
         """Generates a response from the local Ollama service."""
         print(f"Sending request to Ollama (Model: {model})")
         
-        # Format messages for Ollama's /api/chat
         messages = history + [{"role": "user", "content": prompt}]
         
         payload = {
             "model": model,
             "messages": messages,
-            "stream": False # We want the full response, not streaming
+            "stream": False
         }
         
         try:
             response = self.session.post(
                 f"{OLLAMA_API_URL}/api/chat",
                 json=payload,
-                timeout=60 # 60-second timeout
+                timeout=60
             )
             response.raise_for_status() # Raise an error for 4xx/5xx responses
             
@@ -164,7 +157,6 @@ class LLMManager:
         """
         print(f"Starting download for model: {model_name}")
         
-        # --- NEW: Add a variable to track progress ---
         last_reported_percent = -1 # Start at -1 to ensure 0% update (if any)
         
         try:
@@ -204,7 +196,6 @@ class LLMManager:
                                 # It's a non-percentage update (e.g., "pulling manifest"), always show
                                 print(status_msg)
                                 callback(status_msg)
-                            # --- END MODIFICATION ---
 
                         if "error" in data:
                             error_msg = f"Error: {data['error']}"

@@ -20,6 +20,7 @@ import webbrowser
 # --- Import Project Modules ---
 try:
     from classes import RulesetLoader, Entity
+    # --- MODIFIED: Import GameController instead of MainWindow ---
     from GUI import MainWindow
     from config_manager import ConfigManager
     from ollama_manager import OllamaManager
@@ -50,11 +51,18 @@ def main():
     if not ollama_manager.find_ollama():
         print("Ollama executable not found in system PATH or default AppData location.")
         
-        if messagebox.askyesno(
+        # --- Create and hide a temporary root for the message box ---
+        temp_root = tk.Tk()
+        temp_root.withdraw()
+        show_install_prompt = messagebox.askyesno(
             "Ollama Not Found",
             "Ollama is required for offline mode but was not found.\n\n"
             "Would you like to download and install it now?"
-        ):
+        )
+        temp_root.destroy()
+        # ---
+
+        if show_install_prompt:
             print("Starting Ollama installation...")
             # Create and hide the root window *before* the installer
             root = tk.Tk()
@@ -86,17 +94,30 @@ def main():
     try:
         if not ollama_manager.start():
             print("Failed to start Ollama service.", file=sys.stderr)
+            
+            # --- Create temp root for message box ---
+            temp_root = tk.Tk()
+            temp_root.withdraw()
             messagebox.showwarning(
                 "Ollama Warning",
                 "Could not start the Ollama service.\n\n"
                 "If you can't use offline mode, please check your system processes."
             )
+            temp_root.destroy()
+            # ---
+            
         else:
             print("Ollama service is ready.")
             
     except Exception as e:
         print(f"An unexpected error occurred while starting Ollama: {e}", file=sys.stderr)
+        
+        # --- Create temp root for message box ---
+        temp_root = tk.Tk()
+        temp_root.withdraw()
         messagebox.showerror("Ollama Error", f"An error occurred while starting Ollama: {e}")
+        temp_root.destroy()
+        # ---
         return
 
     # 4. Load Game Data
@@ -106,13 +127,20 @@ def main():
         loader.load_all()
     except Exception as e:
         print(f"Fatal Error during ruleset loading: {e}", file=sys.stderr)
+        
+        # --- Create temp root for message box ---
+        temp_root = tk.Tk()
+        temp_root.withdraw()
         messagebox.showerror("Ruleset Load Error", f"Failed to load ruleset: {e}")
+        temp_root.destroy()
+        # ---
         return
 
     # 5. Get the player character
     player_character = loader.get_character(PLAYER_NAME)
     if not player_character:
         print(f"Error: Default player '{PLAYER_NAME}' not found in ruleset.", file=sys.stderr)
+        # --- MODIFIED: Create a fallback entity with the new Attribute structure ---
         player_character = Entity(
             name=f"{PLAYER_NAME} (Fallback)",
             cur_hp=1, max_hp=1, cur_mp=1, max_mp=1, cur_fp=1, max_fp=1
