@@ -929,19 +929,42 @@ class GameController:
         # 5. (Placeholder) Process round updates (e.g., poison, regeneration)
         self._process_round_updates()
         
-        # 6. (Placeholder) Generate narrative summary
+        # 6. Generate narrative summary
         if all_actions_taken:
-            # (Placeholder) summary = self.llm.get_narrative_summary("\n".join(self.round_history))
-            summary = "The round ends." # Placeholder
-            self.update_narrative_callback(f"\n--- Round Summary ---\n{summary}")
-            self.round_history = [] # Clear history for next round
+            # Combine all events from the round into a single log
+            action_log = "\n".join(self.round_history)
             
-            # --- NEW: Advance time ---
-            # We will advance time by 1 hour at the end of a full round
-            # for demonstration purposes. A real game might advance by
-            # 1 minute or only advance on 'rest' actions.
-            self.game_time.advance_hours(1)
-            self.update_narrative_callback(f"(The clock advances. Time is now: {self.game_time.get_time_string()})")
+            # Create the narrator prompt
+            narrator_prompt = (
+                f"You are the narrator. The following is a log of all actions and dialogue "
+                f"that just occurred in a single round. Summarize these events into an "
+                f"engaging, brief narrative summary for the player. Do not act as an NPC.\n"
+                f"--- ACTION LOG ---\n"
+                f"{action_log}\n"
+                f"--- END LOG ---\n"
+                f"Narrate the summary:"
+            )
+            
+            # Call the LLM to get the summary
+            # We pass the main chat history so the narrator has full context
+            summary = self.llm_manager.generate_response(
+                prompt=narrator_prompt,
+                history=self.llm_chat_history
+            )
+            
+            if summary.startswith("Error:"):
+                # Fallback in case of LLM error
+                self.update_narrative_callback(f"\n--- {summary} ---")
+            else:
+                # Add the summary to the GUI
+                self.update_narrative_callback(f"\n--- {summary} ---")
+                
+                # IMPORTANT: Add the summary to the LLM's long-term memory
+                # This way, the NPC prompts in the *next* turn will know
+                # what the narrative outcome was.
+                self.llm_chat_history.append({"role": "assistant", "content": summary})
+            
+            self.round_history = [] # Clear history for next round
 
     def _get_current_game_state(self, actor: Entity) -> Dict[str, Any]:
         """(Helper) Gathers all context for an LLM prompt."""
