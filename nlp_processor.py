@@ -100,7 +100,6 @@ class NLPProcessor:
         root_path = ruleset_path.parent.parent
         core_intents_path = root_path / "intents.yaml"
         ruleset_intents_path = ruleset_path / "intents.yaml"
-        skill_map_path = ruleset_path / "skll_map.yaml"
 
         # Load intents from the core and ruleset-specific files.
         print(f"NLP: Loading core intents from {core_intents_path.name}...")
@@ -119,8 +118,6 @@ class NLPProcessor:
             print(f"NLP: No ruleset intents file found at {ruleset_intents_path.name}.")
             
         print(f"NLP: Loaded a total of {len(self.intents)} intents.")
-
-        self.load_skill_map(skill_map_path)
 
         # Load the sentence-transformer model.
         print(f"NLP: Loading sentence transformer model '{self.MODEL_NAME}'...")
@@ -154,33 +151,6 @@ class NLPProcessor:
             raise
             
         print("NLP: Initialization complete.")
-
-
-    def load_skill_map(self, filepath: Path):
-        """Loads the skill keyword map from a YAML file."""
-        if not filepath.exists():
-            if filepath.name == "skill_map.yaml":
-                filepath = filepath.with_name("skll_map.yaml")
-                if filepath.exists():
-                    print(f"NLP: Found 'skll_map.yaml' instead of 'skill_map.yaml'. Loading...")
-                else:
-                    print(f"NLP: No skill map file found at {filepath.name}. Using keywords as-is.")
-                    return
-            else:
-                print(f"NLP: No skill map file found at {filepath.name}. Using keywords as-is.")
-                return
-            
-        try:
-            with open(filepath, 'r', encoding='utf-8') as f:
-                data = yaml.safe_load(f)
-            
-            if data and 'skill_map' in data and isinstance(data['skill_map'], dict):
-                self.skill_keyword_map = data['skill_map']
-                print(f"NLP: Loaded {len(self.skill_keyword_map)} skill keyword mappings.")
-            else:
-                print(f"Warning: '{filepath.name}' is invalid or empty.")
-        except Exception as e:
-            print(f"Error loading skill map file {filepath}: {e}")
 
     def load_intents_from_file(self, filepath: Path) -> Dict[str, Intent]:
         """Loads intents from a YAML file."""
