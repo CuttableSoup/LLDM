@@ -29,40 +29,24 @@ except ImportError:
 
 
 class EntityDebugTab(ttk.Frame):
-    """
-    A tab for the DebugWindow that shows a list of all entities
-    and an editor panel to view/modify their data as YAML.
-    """
-    
     def __init__(self, parent: ttk.Notebook, loader: RulesetLoader):
-        """
-        Initializes the Entity Debug Tab.
-        
-        Args:
-            parent: The parent ttk.Notebook widget.
-            loader: The main RulesetLoader instance containing all game data.
-        """
         super().__init__(parent, padding=10)
         self.loader = loader
         
-        # This will hold the currently selected entity's name
         self.selected_entity_name: str | None = None
         
-        # This will hold a combined map of all entities for easy lookup
         self.all_entities: Dict[str, Entity] = {}
 
         if not yaml:
-            ttk.Label(self, text="Error: PyYAML library is not installed.\n"
+            ttk.Label(self, text="Error: PyYAML library is not installed.\n" 
                                 "Please run: pip install PyYAML",
                                 font=("Arial", 14, "bold"), foreground="red"
             ).pack(expand=True, fill='both')
             return
 
-        # --- Main Layout ---
         self.paned_window = ttk.PanedWindow(self, orient='horizontal')
         self.paned_window.pack(expand=True, fill='both')
 
-        # --- Left Panel: Entity List ---
         left_frame = ttk.Frame(self.paned_window, padding=5)
         left_frame.grid_rowconfigure(0, weight=1)
         left_frame.grid_columnconfigure(0, weight=1)
@@ -74,10 +58,8 @@ class EntityDebugTab(ttk.Frame):
         scrollbar.grid(row=0, column=1, sticky='ns')
         self.entity_listbox.config(yscrollcommand=scrollbar.set)
         
-        # Add the left frame to the paned window
-        self.paned_window.add(left_frame, weight=1) # Give it 1/3 of the space
+        self.paned_window.add(left_frame, weight=1)
 
-        # --- Right Panel: Entity Editor ---
         right_frame = ttk.Frame(self.paned_window, padding=5)
         right_frame.grid_rowconfigure(0, weight=1)
         right_frame.grid_columnconfigure(0, weight=1)
@@ -97,24 +79,16 @@ class EntityDebugTab(ttk.Frame):
         )
         save_button.grid(row=1, column=0, columnspan=2, sticky='ew', pady=(5, 0))
 
-        # Add the right frame to the paned window
-        self.paned_window.add(right_frame, weight=2) # Give it 2/3 of the space
+        self.paned_window.add(right_frame, weight=2)
 
-        # --- Final Steps ---
-        # Populate the listbox with entity names
         self._populate_entity_list()
         
-        # Bind the listbox selection event
         self.entity_listbox.bind("<<ListboxSelect>>", self._on_entity_select)
 
     def _populate_entity_list(self):
-        """
-        Gathers all entities from the loader and populates the listbox.
-        """
         self.entity_listbox.delete(0, tk.END)
         self.all_entities.clear()
         
-        # Combine all entity dictionaries into one
         self.all_entities.update(self.loader.characters)
         self.all_entities.update(self.loader.creatures)
         self.all_entities.update(self.loader.items)
@@ -122,15 +96,10 @@ class EntityDebugTab(ttk.Frame):
         self.all_entities.update(self.loader.conditions)
         self.all_entities.update(self.loader.environment_ents)
         
-        # Populate the listbox
         for entity_name in sorted(self.all_entities.keys()):
             self.entity_listbox.insert(tk.END, entity_name)
             
     def _on_entity_select(self, event: Any = None):
-        """
-        Called when an entity is selected in the listbox.
-        Displays the entity's data as YAML in the text editor.
-        """
         selected_indices = self.entity_listbox.curselection()
         if not selected_indices:
             return
@@ -166,10 +135,6 @@ class EntityDebugTab(ttk.Frame):
             self.text_editor.config(state='disabled')
 
     def _on_save_changes(self):
-        """
-        Called when the 'Save Changes' button is pressed.
-        Parses the YAML and updates the entity in the RulesetLoader.
-        """
         if not self.selected_entity_name:
             messagebox.showerror("Save Error", "No entity is selected.")
             return
@@ -177,7 +142,6 @@ class EntityDebugTab(ttk.Frame):
         text_content = self.text_editor.get('1.0', tk.END)
         
         try:
-            # 1. Parse the YAML text from the editor
             new_data_dict = yaml.safe_load(text_content)
             if not isinstance(new_data_dict, dict):
                 raise ValueError("Edited text is not a valid YAML dictionary.")
@@ -187,15 +151,12 @@ class EntityDebugTab(ttk.Frame):
             return
 
         try:
-            # 2. Use create_entity_from_dict to create a new Entity object
-            # This function is designed to handle nested dicts for skills, etc.
             new_entity = create_entity_from_dict(new_data_dict)
             if not new_entity:
                 raise ValueError("create_entity_from_dict returned None.")
 
-            new_entity.name = self.selected_entity_name # Ensure name consistency
+            new_entity.name = self.selected_entity_name
             
-            # 3. Find the original entity and replace it in the loader
             if self.selected_entity_name in self.loader.characters:
                 self.loader.characters[self.selected_entity_name] = new_entity
             elif self.selected_entity_name in self.loader.creatures:
@@ -209,7 +170,6 @@ class EntityDebugTab(ttk.Frame):
             elif self.selected_entity_name in self.loader.environment_ents:
                 self.loader.environment_ents[self.selected_entity_name] = new_entity
             
-            # 4. Update our internal all_entities map
             self.all_entities[self.selected_entity_name] = new_entity
             
             messagebox.showinfo("Save Successful", 
@@ -221,52 +181,27 @@ class EntityDebugTab(ttk.Frame):
 
 
 class DebugWindow(tk.Toplevel):
-    """
-    A separate top-level window for debugging the game state,
-    inspecting loaded data, and modifying entities.
-    """
-    
     def __init__(self, parent: tk.Tk, loader: RulesetLoader):
-        """
-        Initializes the debug window.
-        
-        Args:
-            parent: The root tk.Tk() application window.
-            loader: The main RulesetLoader instance.
-        """
         super().__init__(parent)
         self.title("LLDM Debug Inspector")
         self.geometry("900x600")
         
         self.loader = loader
         
-        # Create the main tabbed notebook
         self.notebook = ttk.Notebook(self)
         
-        # --- Entities Tab ---
         self.entity_tab = EntityDebugTab(self.notebook, self.loader)
         self.notebook.add(self.entity_tab, text="Entities")
-        
-        # --- (Future Tabs) ---
-        # You can add more tabs here later
-        # e.g., ruleset_tab = ttk.Frame(self.notebook)
-        # self.notebook.add(ruleset_tab, text="Rulesets")
         
         self.notebook.pack(expand=True, fill='both')
 
 if __name__ == "__main__":
-    """
-    Example of how to run the DebugWindow for testing.
-    This requires 'classes.py' and a valid ruleset path.
-    """
     from pathlib import Path
     
     print("--- Initializing DebugWindow Test ---")
     
-    # 1. Set the ruleset path
     RULESET_PATH = Path(__file__).parent / "rulesets" / "medievalfantasy"
     
-    # 2. Initialize and run the loader
     try:
         loader = RulesetLoader(RULESET_PATH)
         loader.load_all()
@@ -278,16 +213,13 @@ if __name__ == "__main__":
     if not loader.characters:
         print("Warning: No characters were loaded.")
         
-    # 4. Create the root tkinter window
     root = tk.Tk()
     root.title("Main App (Test)")
     root.geometry("400x200")
     
-    # 5. Create the main debug window
     app = DebugWindow(root_widget=root, loader=loader)
     
     ttk.Label(root, text="This is the main app window.\nThe Debug Window is separate.").pack(pady=20)
     
-    # 6. Start the app
     print("GUI Main Loop is running...")
     root.mainloop()

@@ -1,14 +1,3 @@
-#!/usr/bin/env python
-
-"""
-Validates the entity YAML files in a CuttableSoup-LLDM ruleset.
-
-This script checks for:
-1. Valid type hierarchies (supertype, type, subtype) based on types.yaml.
-2. Valid attributes, skills, and specializations based on attributes.yaml.
-3. Existence of all entities referenced in the rooms.yaml legend.
-"""
-
 import sys
 from pathlib import Path
 from typing import Dict, Any, List
@@ -20,47 +9,23 @@ except ImportError:
     print("Please install it: pip install PyYAML", file=sys.stderr)
     sys.exit(1)
 
-# --- CONFIGURATION ---
-
-# Define the path to your ruleset.
-# This assumes the script is placed in the root of the
-# 'CuttableSoup-LLDM-d025dd1c9827ae1c7b73061993222f2926922050' directory.
 DEFAULT_RULESET_PATH = Path(__file__).parent / "rulesets" / "medievalfantasy"
 
-# Files to be treated as schemas, not as files containing entities.
 SCHEMA_FILES = {"types.yaml", "attributes.yaml", "rooms.yaml"}
 
-# --- UTILITY FUNCTIONS ---
-
 def load_yaml_docs(filepath: Path) -> List[Any]:
-    """Loads all documents from a single YAML file."""
     if not filepath.exists():
         print(f"Warning: File not found, skipping: {filepath.name}", file=sys.stderr)
         return []
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
             docs = list(yaml.safe_load_all(f))
-            return [doc for doc in docs if doc]  # Filter out empty docs
+            return [doc for doc in docs if doc]
     except Exception as e:
         print(f"Error parsing YAML file {filepath.name}: {e}", file=sys.stderr)
         return []
 
-# --- SCHEMA LOADING FUNCTIONS ---
-
 def load_types_schema(filepath: Path) -> Dict[str, Any]:
-    """
-    Parses types.yaml into a nested dictionary for validation.
-    
-    Example structure:
-    {
-        "creature": {
-            "types": {
-                "humanoid": {"subtypes": {"human": {}, "orc": {}}},
-                "quadruped": {"subtypes": {"wolf": {}}}
-            }
-        }, ...
-    }
-    """
     schema = {}
     docs = load_yaml_docs(filepath)
     for doc in docs:
@@ -80,17 +45,6 @@ def load_types_schema(filepath: Path) -> Dict[str, Any]:
     return schema
 
 def load_attributes_schema(filepath: Path) -> Dict[str, Any]:
-    """
-    Parses attributes.yaml into a nested dictionary for validation.
-
-    Example structure:
-    {
-        "physique": {
-            "skills": {"athletic": {}, "blade": {"specialization": {"longsword": {}}}, ...}
-        },
-        "dexterity": { ... }, ...
-    }
-    """
     schema = {}
     docs = load_yaml_docs(filepath)
     for doc in docs:
@@ -106,11 +60,10 @@ def load_attributes_schema(filepath: Path) -> Dict[str, Any]:
                 schema[attr_name]["skills"][skill_name] = {"specialization": {}}
                 if skill_data and 'specialization' in skill_data:
                     for spec_name in skill_data['specialization']:
-                         schema[attr_name]["skills"][skill_name]["specialization"][spec_name] = {}
+                        schema[attr_name]["skills"][skill_name]["specialization"][spec_name] = {}
     return schema
 
 def load_all_entities(ruleset_path: Path) -> Dict[str, Any]:
-    """Loads all 'entity:' definitions from YAML files in the directory."""
     entities = {}
     for yaml_file in ruleset_path.glob("**/*.yaml"):
         if yaml_file.name in SCHEMA_FILES:
@@ -128,19 +81,16 @@ def load_all_entities(ruleset_path: Path) -> Dict[str, Any]:
                     
                 if name in entities:
                     print(f"Warning: Duplicate entity name '{name}' found in {yaml_file.name}. "
-                          f"Original was in {entities[name]['file']}", file=sys.stderr)
+                        f"Original was in {entities[name]['file']}", file=sys.stderr)
                 
                 entities[name] = {"data": entity_data, "file": yaml_file.name}
                 
     return entities
 
-# --- VALIDATION FUNCTIONS ---
-
 def _validate_attr_skill_block(block: Dict, attr_schema: Dict, e_name: str, f_name: str, context: str) -> List[str]:
-    """Helper to validate any block containing attributes/skills."""
     errors = []
     if not isinstance(block, dict):
-        return errors # e.g., 'status: [hidden, armed]' is valid
+        return errors
         
     for attr_name, attr_data in block.items():
         if attr_name not in attr_schema:
@@ -152,7 +102,7 @@ def _validate_attr_skill_block(block: Dict, attr_schema: Dict, e_name: str, f_na
             for skill_name, skill_data in attr_data['skill'].items():
                 if skill_name not in valid_skills:
                     errors.append(f"[{f_name}] Entity '{e_name}': Invalid skill '{skill_name}' "
-                                  f"for attribute '{attr_name}' in '{context}'")
+                                f"for attribute '{attr_name}' in '{context}'")
                     continue
                 
                 if isinstance(skill_data, dict) and 'specialization' in skill_data:
@@ -160,59 +110,52 @@ def _validate_attr_skill_block(block: Dict, attr_schema: Dict, e_name: str, f_na
                     for spec_name in skill_data['specialization']:
                         if spec_name not in valid_specs:
                             errors.append(f"[{f_name}] Entity '{e_name}': Invalid specialization '{spec_name}' "
-                                          f"for skill '{skill_name}' in '{context}'")
+                                        f"for skill '{skill_name}' in '{context}'")
     return errors
 
 def validate_entities(all_entities: Dict, types_schema: Dict, attr_schema: Dict) -> List[str]:
-    """Validates all loaded entities against the schemas."""
     errors = []
     
     for name, entity_info in all_entities.items():
         data = entity_info['data']
         filename = entity_info['file']
         
-        # 1. Validate Type Hierarchy
         supertype = data.get('supertype')
         type_ = data.get('type')
         subtype = data.get('subtype')
         
         if supertype and supertype not in types_schema:
             errors.append(f"[{filename}] Entity '{name}': Invalid supertype '{supertype}'")
-            continue # Can't validate type/subtype if supertype is wrong
+            continue
             
         type_node = types_schema.get(supertype, {}).get('types', {})
         if type_ and type_ not in type_node:
             errors.append(f"[{filename}] Entity '{name}': Invalid type '{type_}' for supertype '{supertype}'")
-            continue # Can't validate subtype
+            continue
         
         subtype_node = type_node.get(type_, {}).get('subtypes', {})
         if subtype and subtype not in subtype_node:
-             errors.append(f"[{filename}] Entity '{name}': Invalid subtype '{subtype}' for type '{type_}'")
+            errors.append(f"[{filename}] Entity '{name}': Invalid subtype '{subtype}' for type '{type_}'")
 
-        # 2. Validate Attribute/Skill Blocks
-        # Check 'attribute:' block (e.g., Valerius.yaml)
         if 'attribute' in data:
             errors.extend(_validate_attr_skill_block(
                 data['attribute'], attr_schema, name, filename, "attribute"
             ))
             
-        # Check 'requirement:' block (e.g., fireball in spells.yaml)
         if 'requirement' in data:
-             errors.extend(_validate_attr_skill_block(
+            errors.extend(_validate_attr_skill_block(
                 data['requirement'], attr_schema, name, filename, "requirement"
             ))
             
-        # Check 'status:' block (e.g., longsword in items.yaml)
         if 'status' in data:
             if isinstance(data['status'], dict) and 'attribute' in data['status']:
-                 errors.extend(_validate_attr_skill_block(
+                errors.extend(_validate_attr_skill_block(
                     data['status']['attribute'], attr_schema, name, filename, "status.attribute"
                 ))
 
     return errors
 
 def validate_rooms(filepath: Path, all_entities: Dict) -> List[str]:
-    """Validates the rooms.yaml legend against the list of all entities."""
     errors = []
     docs = load_yaml_docs(filepath)
     if not docs:
@@ -229,18 +172,14 @@ def validate_rooms(filepath: Path, all_entities: Dict) -> List[str]:
             entity_name = item.get('entity')
             if entity_name and entity_name not in all_entities:
                 errors.append(f"[{filepath.name}] Room '{room_name}': "
-                              f"Legend entity '{entity_name}' not found in any loaded entity files.")
+                    f"Legend entity '{entity_name}' not found in any loaded entity files.")
     return errors
 
-# --- MAIN EXECUTION ---
-
 def main():
-    """Runs the full validation process."""
     print(f"Starting validation for ruleset: {DEFAULT_RULESET_PATH}\n")
     
     all_errors = []
     
-    # 1. Load Schemas
     types_schema_path = DEFAULT_RULESET_PATH / "types.yaml"
     attr_schema_path = DEFAULT_RULESET_PATH / "attributes.yaml"
     rooms_path = DEFAULT_RULESET_PATH / "rooms.yaml"
@@ -258,7 +197,6 @@ def main():
     print(f"Successfully loaded {len(types_schema)} supertypes from types.yaml.")
     print(f"Successfully loaded {len(attr_schema)} attributes from attributes.yaml.")
     
-    # 2. Load All Entities
     all_entities = load_all_entities(DEFAULT_RULESET_PATH)
     if not all_entities:
         print("Error: No entities were loaded. Check paths and file contents.", file=sys.stderr)
@@ -267,13 +205,10 @@ def main():
     print(f"Successfully loaded {len(all_entities)} total entities.\n")
     print("--- Running Validation ---")
     
-    # 3. Validate Entities
     all_errors.extend(validate_entities(all_entities, types_schema, attr_schema))
     
-    # 4. Validate Rooms
     all_errors.extend(validate_rooms(rooms_path, all_entities))
     
-    # 5. Print Results
     if not all_errors:
         print("\n--- Validation Complete ---")
         print("✅ All files are valid. No errors found.")
@@ -282,7 +217,7 @@ def main():
         print(f"❌ Found {len(all_errors)} error(s):\n")
         for error in all_errors:
             print(f"  - {error}")
-        sys.exit(1) # Exit with an error code
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
