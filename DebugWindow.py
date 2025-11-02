@@ -1,3 +1,9 @@
+"""
+This module provides a debug window for inspecting and editing game data.
+
+It uses Tkinter to create a GUI that allows developers to view and modify
+entities loaded from the ruleset files.
+"""
 from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -11,12 +17,14 @@ except ImportError:
     print("DebugWindow Error: PyYAML not found. Please install: pip install PyYAML")
     yaml = None
 
+# Type checking to avoid circular imports
 try:
     if TYPE_CHECKING:
         from classes import RulesetLoader, Entity
     from classes import create_entity_from_dict, Entity, RulesetLoader
 except ImportError:
     print("DebugWindow Error: 'classes.py' not found.")
+    # Placeholder classes for when classes.py is not available
     class RulesetLoader:
         characters: Dict[str, Any] = {}
         creatures: Dict[str, Any] = {}
@@ -29,7 +37,15 @@ except ImportError:
 
 
 class EntityDebugTab(ttk.Frame):
+    """A tab in the debug window for inspecting and editing entities."""
     def __init__(self, parent: ttk.Notebook, loader: RulesetLoader):
+        """
+        Initializes the EntityDebugTab.
+
+        Args:
+            parent: The parent notebook widget.
+            loader: The RulesetLoader instance containing the game data.
+        """
         super().__init__(parent, padding=10)
         self.loader = loader
         
@@ -37,6 +53,7 @@ class EntityDebugTab(ttk.Frame):
         
         self.all_entities: Dict[str, Entity] = {}
 
+        # Display an error if PyYAML is not installed
         if not yaml:
             ttk.Label(self, text="Error: PyYAML library is not installed.\n" 
                                 "Please run: pip install PyYAML",
@@ -44,9 +61,11 @@ class EntityDebugTab(ttk.Frame):
             ).pack(expand=True, fill='both')
             return
 
+        # Main layout with a paned window for resizable sections
         self.paned_window = ttk.PanedWindow(self, orient='horizontal')
         self.paned_window.pack(expand=True, fill='both')
 
+        # Left frame for the entity list
         left_frame = ttk.Frame(self.paned_window, padding=5)
         left_frame.grid_rowconfigure(0, weight=1)
         left_frame.grid_columnconfigure(0, weight=1)
@@ -60,6 +79,7 @@ class EntityDebugTab(ttk.Frame):
         
         self.paned_window.add(left_frame, weight=1)
 
+        # Right frame for the entity data editor
         right_frame = ttk.Frame(self.paned_window, padding=5)
         right_frame.grid_rowconfigure(0, weight=1)
         right_frame.grid_columnconfigure(0, weight=1)
@@ -86,9 +106,11 @@ class EntityDebugTab(ttk.Frame):
         self.entity_listbox.bind("<<ListboxSelect>>", self._on_entity_select)
 
     def _populate_entity_list(self):
+        """Populates the listbox with all available entities."""
         self.entity_listbox.delete(0, tk.END)
         self.all_entities.clear()
         
+        # Consolidate all entities from the loader into one dictionary
         self.all_entities.update(self.loader.characters)
         self.all_entities.update(self.loader.creatures)
         self.all_entities.update(self.loader.items)
@@ -100,6 +122,7 @@ class EntityDebugTab(ttk.Frame):
             self.entity_listbox.insert(tk.END, entity_name)
             
     def _on_entity_select(self, event: Any = None):
+        """Handles the selection of an entity in the listbox."""
         selected_indices = self.entity_listbox.curselection()
         if not selected_indices:
             return
@@ -115,6 +138,7 @@ class EntityDebugTab(ttk.Frame):
             return
 
         try:
+            # Convert the entity object to a dictionary and then to YAML for display
             entity_dict = dataclasses.asdict(entity_obj)
             
             entity_yaml = yaml.dump(
@@ -135,6 +159,7 @@ class EntityDebugTab(ttk.Frame):
             self.text_editor.config(state='disabled')
 
     def _on_save_changes(self):
+        """Saves the changes made in the text editor to the entity object."""
         if not self.selected_entity_name:
             messagebox.showerror("Save Error", "No entity is selected.")
             return
@@ -142,6 +167,7 @@ class EntityDebugTab(ttk.Frame):
         text_content = self.text_editor.get('1.0', tk.END)
         
         try:
+            # Parse the edited YAML back into a dictionary
             new_data_dict = yaml.safe_load(text_content)
             if not isinstance(new_data_dict, dict):
                 raise ValueError("Edited text is not a valid YAML dictionary.")
@@ -151,12 +177,14 @@ class EntityDebugTab(ttk.Frame):
             return
 
         try:
+            # Create a new entity object from the modified data
             new_entity = create_entity_from_dict(new_data_dict)
             if not new_entity:
                 raise ValueError("create_entity_from_dict returned None.")
 
             new_entity.name = self.selected_entity_name
             
+            # Update the entity in the appropriate dictionary in the loader
             if self.selected_entity_name in self.loader.characters:
                 self.loader.characters[self.selected_entity_name] = new_entity
             elif self.selected_entity_name in self.loader.creatures:
@@ -181,7 +209,15 @@ class EntityDebugTab(ttk.Frame):
 
 
 class DebugWindow(tk.Toplevel):
+    """The main debug window that contains the different debug tabs."""
     def __init__(self, parent: tk.Tk, loader: RulesetLoader):
+        """
+        Initializes the DebugWindow.
+
+        Args:
+            parent: The parent Tkinter window.
+            loader: The RulesetLoader instance.
+        """
         super().__init__(parent)
         self.title("LLDM Debug Inspector")
         self.geometry("900x600")
@@ -196,13 +232,16 @@ class DebugWindow(tk.Toplevel):
         self.notebook.pack(expand=True, fill='both')
 
 if __name__ == "__main__":
+    # This block allows the debug window to be run as a standalone script for testing.
     from pathlib import Path
     
     print("--- Initializing DebugWindow Test ---")
     
+    # Define the path to the ruleset for testing
     RULESET_PATH = Path(__file__).parent / "rulesets" / "medievalfantasy"
     
     try:
+        # Load the ruleset data
         loader = RulesetLoader(RULESET_PATH)
         loader.load_all()
         print(f"Loader finished. Loaded {len(loader.characters)} characters.")
@@ -213,11 +252,12 @@ if __name__ == "__main__":
     if not loader.characters:
         print("Warning: No characters were loaded.")
         
+    # Create the main Tkinter window and the debug window
     root = tk.Tk()
     root.title("Main App (Test)")
     root.geometry("400x200")
     
-    app = DebugWindow(root_widget=root, loader=loader)
+    app = DebugWindow(parent=root, loader=loader)
     
     ttk.Label(root, text="This is the main app window.\nThe Debug Window is separate.").pack(pady=20)
     

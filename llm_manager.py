@@ -1,27 +1,54 @@
+"""
+This module manages interactions with Large Language Models (LLMs).
+
+It provides a unified interface for generating text responses from different LLM backends,
+currently supporting local models via Ollama and online models via OpenRouter.
+"""
 import requests
 import json
 import sys
+from typing import List, Dict, Callable
 
 try:
     from config_manager import ConfigManager
 except ImportError:
+    # Placeholder class if ConfigManager is not available
     class ConfigManager: pass
 
+# A dictionary of friendly names and their corresponding model IDs for Ollama.
 OLLAMA_MODELS = {
     "Gemma 3 4B": "gemma3:4b",
     "Gemma 3 12B": "gemma3:12b",
     "Gemma 3 27B": "gemma3:27b",
 }
 
+# API endpoints for the LLM services.
 OLLAMA_API_URL = "http://127.0.0.1:11434"
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 class LLMManager:
+    """Manages all interactions with the LLM services."""
     def __init__(self, config_manager: ConfigManager):
+        """
+        Initializes the LLMManager.
+
+        Args:
+            config_manager: The application's configuration manager.
+        """
         self.config = config_manager
         self.session = requests.Session()
 
-    def generate_response(self, prompt: str, history: list[dict]) -> str:
+    def generate_response(self, prompt: str, history: List[Dict]) -> str:
+        """
+        Generates a response from the appropriate LLM based on the current mode.
+
+        Args:
+            prompt: The user's prompt.
+            history: The chat history.
+
+        Returns:
+            The generated response from the LLM.
+        """
         mode = self.config.get('mode', 'offline')
         
         if mode == 'offline':
@@ -29,10 +56,11 @@ class LLMManager:
             model = self.config.get('ollama_model', default_model)
             return self._generate_ollama(prompt, history, model)
         else:
-            model = "google/gemma-2-9b-it"
+            model = "google/gemma-2-9b-it" # Default online model
             return self._generate_openrouter(prompt, history, model)
 
-    def _generate_ollama(self, prompt: str, history: list[dict], model: str) -> str:
+    def _generate_ollama(self, prompt: str, history: List[Dict], model: str) -> str:
+        """Generates a response from a local Ollama model."""
         print(f"Sending request to Ollama (Model: {model})")
         
         messages = history + [{"role": "user", "content": prompt}]
@@ -67,7 +95,8 @@ class LLMManager:
             print(f"An unknown error occurred with Ollama: {e}", file=sys.stderr)
             return f"Error: {e}"
 
-    def _generate_openrouter(self, prompt: str, history: list[dict], model: str) -> str:
+    def _generate_openrouter(self, prompt: str, history: List[Dict], model: str) -> str:
+        """Generates a response from the OpenRouter API."""
         api_key = self.config.get('openrouter_key')
         if not api_key:
             return "Error: OpenRouter API key not set. Please set it in the LLM menu."
@@ -108,6 +137,15 @@ class LLMManager:
             return f"Error: {e}"
 
     def check_ollama_model(self, model_name: str) -> bool:
+        """
+        Checks if a specific Ollama model is available locally.
+
+        Args:
+            model_name: The name of the model to check.
+
+        Returns:
+            True if the model is available, False otherwise.
+        """
         print(f"Checking for Ollama model: {model_name}...")
         try:
             response = self.session.post(
@@ -123,7 +161,14 @@ class LLMManager:
             print(f"Error checking model: {e}", file=sys.stderr)
             return False
 
-    def pull_ollama_model(self, model_name: str, callback: callable):
+    def pull_ollama_model(self, model_name: str, callback: Callable[[str], None]):
+        """
+        Downloads an Ollama model from the registry.
+
+        Args:
+            model_name: The name of the model to download.
+            callback: A function to call with status updates during the download.
+        """
         print(f"Starting download for model: {model_name}")
         
         last_reported_percent = -1
@@ -133,7 +178,7 @@ class LLMManager:
                 f"{OLLAMA_API_URL}/api/pull",
                 json={"name": model_name},
                 stream=True,
-                timeout=3600
+                timeout=3600 # 1 hour timeout for large models
             ) as response:
                 response.raise_for_status()
                 for line in response.iter_lines():
@@ -154,6 +199,7 @@ class LLMManager:
                             else:
                                 status_msg = status
                             
+                            # Report progress in 10% increments to avoid flooding the UI.
                             if current_percent > last_reported_percent:
                                 print(status_msg)
                                 callback(status_msg)

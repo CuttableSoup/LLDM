@@ -1,3 +1,10 @@
+"""
+This module handles Natural Language Processing (NLP) for the LLDM application.
+
+It uses sentence-transformers for intent classification and spaCy for named entity
+recognition (NER). The processor loads intents from YAML files, classifies player
+input, and extracts relevant entities from the text.
+"""
 from __future__ import annotations
 from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
@@ -5,6 +12,7 @@ from dataclasses import dataclass, field
 import re
 import logging
 
+# Attempt to import necessary libraries, with warnings for missing dependencies.
 try:
     import yaml
 except ImportError:
@@ -47,30 +55,36 @@ logger = logging.getLogger("NLPTestLogger")
 
 @dataclass
 class Intent:
+    """Represents a player's intent, loaded from a YAML file."""
     name: str
     description: str
     keywords: List[str]
 
 @dataclass
 class ActionComponent:
+    """Represents a single action component identified in the player's input."""
     intent: Intent
     keyword: str
     skill_name: Optional[str] = None
 
 @dataclass
 class ProcessedInput:
+    """Represents the processed output of the NLP pipeline."""
     raw_text: str
     actions: List[ActionComponent] = field(default_factory=list)
     targets: List[Entity] = field(default_factory=list)
     
 class NLPProcessor:
-    MODEL_NAME = 'all-MiniLM-L6-v2'
-    SIMILARITY_THRESHOLD = 0.4 
-    SPACY_MODEL_NAME = 'en_core_web_sm'
+    """Processes player input to understand intent and extract entities."""
+    MODEL_NAME = 'all-MiniLM-L6-v2'  # The sentence-transformer model to use.
+    SIMILARITY_THRESHOLD = 0.4       # The minimum similarity score for intent classification.
+    SPACY_MODEL_NAME = 'en_core_web_sm' # The spaCy model for NER.
 
     def __init__(self, ruleset_path: Path):
+        """Initializes the NLPProcessor."""
         self.intents: Dict[str, Intent] = {}
         
+        # Ensure all required libraries are available.
         if not yaml:
             raise ImportError("PyYAML is required to load intents.")
         if not SentenceTransformer or not util:
@@ -82,11 +96,13 @@ class NLPProcessor:
         
         self.skill_keyword_map: Dict[str, str] = {}
         
+        # Define paths to the intent and skill map files.
         root_path = ruleset_path.parent.parent
         core_intents_path = root_path / "intents.yaml"
         ruleset_intents_path = ruleset_path / "intents.yaml"
         skill_map_path = ruleset_path / "skll_map.yaml"
 
+        # Load intents from the core and ruleset-specific files.
         print(f"NLP: Loading core intents from {core_intents_path.name}...")
         core_intents = self.load_intents_from_file(core_intents_path)
         self.intents.update(core_intents)
@@ -106,12 +122,14 @@ class NLPProcessor:
 
         self.load_skill_map(skill_map_path)
 
+        # Load the sentence-transformer model.
         print(f"NLP: Loading sentence transformer model '{self.MODEL_NAME}'...")
         self.model = SentenceTransformer(self.MODEL_NAME)
         
         self.all_intent_keywords: List[Tuple[str, Intent]] = []
         keyword_corpus: List[str] = []
 
+        # Create a corpus of all intent keywords.
         for intent_name, intent_obj in self.intents.items():
             if intent_name == "OTHER":
                 continue 
@@ -119,12 +137,14 @@ class NLPProcessor:
                 self.all_intent_keywords.append((keyword, intent_obj))
                 keyword_corpus.append(keyword)
                 
+        # Pre-compute embeddings for all keywords for faster similarity search.
         print(f"NLP: Pre-computing embeddings for {len(keyword_corpus)} intent keywords...")
         self.keyword_embeddings = self.model.encode(
             keyword_corpus, 
             convert_to_tensor=True
         )
         
+        # Load the spaCy model.
         print(f"NLP: Loading spaCy model '{self.SPACY_MODEL_NAME}'...")
         try:
             self.nlp: Language = spacy.load(self.SPACY_MODEL_NAME)
@@ -137,6 +157,7 @@ class NLPProcessor:
 
 
     def load_skill_map(self, filepath: Path):
+        """Loads the skill keyword map from a YAML file."""
         if not filepath.exists():
             if filepath.name == "skill_map.yaml":
                 filepath = filepath.with_name("skll_map.yaml")
@@ -162,6 +183,7 @@ class NLPProcessor:
             print(f"Error loading skill map file {filepath}: {e}")
 
     def load_intents_from_file(self, filepath: Path) -> Dict[str, Intent]:
+        """Loads intents from a YAML file."""
         loaded_intents: Dict[str, Intent] = {}
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
@@ -187,10 +209,20 @@ class NLPProcessor:
             return loaded_intents
 
     def classify_intent(self, text_input: str) -> Optional[Tuple[Intent, str]]:
+        """
+        Classifies the intent of a given text input.
+
+        Args:
+            text_input: The text to classify.
+
+        Returns:
+            A tuple containing the matched Intent and the keyword that matched, or None.
+        """
         if not text_input or not self.all_intent_keywords:
             return None
 
         try:
+            # Encode the input text and compare its similarity to the keyword embeddings.
             input_embedding = self.model.encode(
                 text_input, 
                 convert_to_tensor=True
@@ -217,7 +249,16 @@ class NLPProcessor:
             return None
 
     def extract_entities(self, text_input: str, known_entities: Dict[str, Entity]) -> List[Entity]:
-        
+        """
+        Extracts known entities from the text input using spaCy's Matcher.
+
+        Args:
+            text_input: The text to extract entities from.
+            known_entities: A dictionary of known entities in the game.
+
+        Returns:
+            A list of Entity objects found in the text.
+        """
         logger.info(f"NLP_NER: extract_entities called for text: '{text_input}'")
         logger.info(f"NLP_NER: Received {len(known_entities)} known_entities. Names: {list(known_entities.keys())}")
         
@@ -227,6 +268,7 @@ class NLPProcessor:
             logger.warning("NLP_NER: NLP model or known_entities list is empty. Aborting NER.")
             return []
 
+        # Create patterns for the spaCy Matcher from the known entity names.
         known_entities_lower_map = {name.lower(): obj for name, obj in known_entities.items()}
         patterns = []
         sorted_names = sorted(known_entities.keys(), key=len, reverse=True)
@@ -248,6 +290,7 @@ class NLPProcessor:
         found_entities = []
         found_entity_names = set() 
 
+        # Process the matches and retrieve the corresponding Entity objects.
         for match_id, start, end in matches:
             span = doc[start:end]
             span_text_lower = span.text.lower()
@@ -266,9 +309,22 @@ class NLPProcessor:
         return found_entities
 
     def process_player_input(self, text_input: str, known_entities: Dict[str, Entity]) -> ProcessedInput:
-        
+        """
+        Processes the full player input string.
+
+        This method splits the input into clauses, classifies the intent of each clause,
+        and extracts entities from the original text.
+
+        Args:
+            text_input: The raw player input string.
+            known_entities: A dictionary of known entities in the game.
+
+        Returns:
+            A ProcessedInput object containing the results of the NLP pipeline.
+        """
         targets = self.extract_entities(text_input, known_entities)
         
+        # Split the input into clauses based on conjunctions.
         clauses = re.split(r'[,]| and | then ', text_input, flags=re.IGNORECASE)
         clauses = [clause.strip() for clause in clauses if clause.strip()]
         
@@ -285,6 +341,7 @@ class NLPProcessor:
             doc = self.nlp(clause)
             has_action_word = any(token.pos_ in ["VERB", "AUX"] for token in doc)
             
+            # Only classify intent if it's the first clause or contains a verb.
             if is_first_clause or has_action_word:
                 logger.info(f"NLP: Processing clause: '{clause}' (First Clause: {is_first_clause}, Has Verb: {has_action_word})")
                 result = self.classify_intent(clause)
@@ -296,6 +353,7 @@ class NLPProcessor:
 
             is_first_clause = False
 
+        # Consolidate the matched intents, keeping only one of each type.
         final_intents: Dict[str, Tuple[Intent, str]] = {}
         for intent, keyword in all_matched_actions:
             if intent.name not in final_intents:
@@ -319,6 +377,7 @@ class NLPProcessor:
                 )
             )
         
+        # If no specific intents are found, default to the "OTHER" intent.
         other_intent = self.intents.get("OTHER")
         if not action_components and other_intent:
             logger.info("NLP: No specific intents found. Defaulting to OTHER.")
@@ -333,7 +392,19 @@ class NLPProcessor:
         )
 
     def generate_npc_response(self, npc_entity: Entity, player_input: ProcessedInput, game_state: Dict[str, Any]) -> str:
-        
+        """
+        Generates a simple, rule-based response for an NPC.
+
+        This is a placeholder for more complex LLM-based NPC logic.
+
+        Args:
+            npc_entity: The NPC entity.
+            player_input: The processed player input.
+            game_state: The current state of the game.
+
+        Returns:
+            A string representing the NPC's response, or None.
+        """
         for action in player_input.actions:
             if action.intent.name == "DIALOGUE" and npc_entity in player_input.targets:
                 if npc_entity.quote:

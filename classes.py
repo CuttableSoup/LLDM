@@ -1,6 +1,13 @@
+"""
+This module defines the core data classes used throughout the game.
+
+It includes classes for game time, history events, entities (like players, creatures, items),
+and game world components like rooms and environments. It also includes a `RulesetLoader`
+for loading game data from YAML files and a `GameController` to manage the main game loop.
+"""
 from __future__ import annotations
 from dataclasses import dataclass, field, fields
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Callable, Tuple
 from pathlib import Path
 
 try:
@@ -11,6 +18,7 @@ except ImportError:
 
 @dataclass
 class GameTime:
+    """Represents the in-game time."""
     year: int = 1
     month: int = 1
     day: int = 1
@@ -19,6 +27,7 @@ class GameTime:
     second: int = 0
 
     def advance_time(self, seconds: int = 1):
+        """Advances the game time by a specified number of seconds."""
         self.second += seconds
         
         while self.second >= 60:
@@ -33,6 +42,7 @@ class GameTime:
             self.hour -= 24
             self.day += 1
         
+        # Assuming 30 days in a month for simplicity.
         while self.day > 30:
             self.day -= 30
             self.month += 1
@@ -42,31 +52,37 @@ class GameTime:
             self.year += 1
 
     def get_time_string(self) -> str:
+        """Returns a formatted string representation of the current time."""
         return f"Year {self.year}, Month {self.month}, Day {self.day}, Hour {self.hour:02d}:00"
 
     def copy(self) -> GameTime:
-        return GameTime(self.year, self.month, self.day, self.hour)
+        """Creates a copy of the current GameTime object."""
+        return GameTime(self.year, self.month, self.day, self.hour, self.minute, self.second)
 
 @dataclass
 class HistoryEvent:
+    """Represents a single event that occurred in the game world."""
     timestamp: GameTime
     event_type: str
     description: str
-    
-    participants: List[str] = field(default_factory=list) 
+    participants: List[str] = field(default_factory=list)
 
 @dataclass
 class EntityHistory:
+    """Stores the history of events for a specific entity."""
     entity_name: str
     memory: List[HistoryEvent] = field(default_factory=list)
 
     def add_event(self, event: HistoryEvent):
+        """Adds a new event to the entity's memory."""
         self.memory.append(event)
 
     def get_recent_history(self, count: int = 10) -> List[HistoryEvent]:
+        """Returns a list of the most recent historical events."""
         return self.memory[-count:]
 
     def get_summary_for_llm(self) -> str:
+        """Generates a concise summary of the entity's recent history for the LLM."""
         summary_lines = [
             f"--- Key Memories for {self.entity_name} ---"
         ]
@@ -84,16 +100,19 @@ class EntityHistory:
 
 @dataclass
 class Skill:
+    """Represents a skill with a base value and specializations."""
     base: int = 0
     specialization: Dict[str, int] = field(default_factory=dict)
 
 @dataclass
 class Attribute:
+    """Represents an attribute that can have associated skills."""
     base: int = 0
     skill: Dict[str, Skill] = field(default_factory=dict)
 
 @dataclass
 class Quality:
+    """Represents the physical qualities of an entity."""
     body: str = ""
     eye: str = ""
     gender: str = ""
@@ -104,16 +123,19 @@ class Quality:
 
 @dataclass
 class Cost:
+    """Represents the cost to use a skill or item."""
     initial: List[Dict[str, Any]] = field(default_factory=list)
     ongoing: List[Dict[str, Any]] = field(default_factory=list)
 
 @dataclass
 class DurationComponent:
+    """Represents the duration of an effect."""
     frequency: str = ""
     length: int = 0
 
 @dataclass
 class InventoryItem:
+    """Represents an item in an entity's inventory."""
     item: str = ""
     quantity: int = 0
     equipped: bool = False
@@ -122,8 +144,9 @@ class InventoryItem:
 
 @dataclass
 class Entity:
+    """A generic representation of any object or character in the game world."""
     name: str = ""
-    supertype: str = ""
+    supertype: str = ""  # e.g., creature, object, supernatural
     type: str = ""
     subtype: str = ""
     body: str = ""
@@ -159,8 +182,21 @@ class Entity:
     quote: List[str] = field(default_factory=list)
 
 def create_entity_from_dict(data: Dict[str, Any]) -> Entity:
+    """
+    Creates an Entity object from a dictionary.
+
+    This function handles the nested structure of the entity data, converting
+    dictionaries into their corresponding dataclass objects.
+
+    Args:
+        data: The dictionary containing the entity data.
+
+    Returns:
+        An Entity object.
+    """
     data_copy = data.copy()
 
+    # Recursively create nested dataclass objects.
     if 'quality' in data_copy:
         data_copy['quality'] = Quality(**data_copy['quality'])
         
@@ -194,6 +230,7 @@ def create_entity_from_dict(data: Dict[str, Any]) -> Entity:
         data_copy['attribute'] = final_attributes
 
     def _create_inventory(items_list: List[Dict]) -> List[InventoryItem]:
+        """Helper function to recursively create inventory items."""
         output = []
         for item_data in items_list:
             nested_inv_data = item_data.pop('inventory', [])
@@ -204,9 +241,11 @@ def create_entity_from_dict(data: Dict[str, Any]) -> Entity:
     if 'inventory' in data_copy:
         data_copy['inventory'] = _create_inventory(data_copy['inventory'])
 
+    # Filter out any keys from the dictionary that are not fields in the Entity dataclass.
     entity_field_names = {f.name for f in fields(Entity)}
     filtered_data = {k: v for k, v in data_copy.items() if k in entity_field_names}
     
+    # Set current HP/MP/FP to max if not specified.
     if 'max_hp' in filtered_data and 'cur_hp' not in filtered_data:
         filtered_data['cur_hp'] = filtered_data['max_hp']
     if 'max_mp' in filtered_data and 'cur_mp' not in filtered_data:
@@ -218,8 +257,9 @@ def create_entity_from_dict(data: Dict[str, Any]) -> Entity:
 
 @dataclass
 class RoomLegendItem:
-    char: str = ""
-    entity: str = ""
+    """Represents an item in the legend of a room map."""
+    char: str = ""  # The character symbol on the map.
+    entity: str = ""  # The name of the entity this symbol represents.
     color: Optional[str] = None
     map_name: Optional[str] = None
     is_player: bool = False
@@ -228,23 +268,27 @@ class RoomLegendItem:
 
 @dataclass
 class Room:
+    """Represents a single room or area in the game world."""
     name: str = ""
     description: str = ""
     scale: int = 1
-    layers: List[List[List[str]]] = field(default_factory=list)
+    layers: List[List[List[str]]] = field(default_factory=list)  # The map layout.
     legend: List[RoomLegendItem] = field(default_factory=list)
 
 @dataclass
 class Environment:
+    """Represents the game environment, containing all the rooms."""
     rooms: List[Room] = field(default_factory=list)
 
 @dataclass
 class Scenario:
+    """Represents a game scenario, including the environment."""
     scenario_name: str = ""
     environment: Environment = field(default_factory=Environment)
 
 
 class RulesetLoader:
+    """Loads game data from YAML files in a specified ruleset directory."""
     def __init__(self, ruleset_path: Path):
         if not yaml:
             raise ImportError("PyYAML is required to load rulesets.")
@@ -262,6 +306,7 @@ class RulesetLoader:
         print(f"RulesetLoader initialized for path: {self.ruleset_path}")
 
     def load_all(self):
+        """Loads all YAML files from the ruleset directory."""
         if not self.ruleset_path.is_dir():
             print(f"Error: Ruleset path not found: {self.ruleset_path}")
             return
@@ -269,6 +314,7 @@ class RulesetLoader:
         for yaml_file in self.ruleset_path.glob("**/*.yaml"):
             print(f"Processing file: {yaml_file.name}")
             
+            # Special handling for specific file names.
             if yaml_file.name == "rooms.yaml":
                 self._load_scenario(yaml_file)
                 continue
@@ -295,6 +341,7 @@ class RulesetLoader:
                 
                 entity_obj = create_entity_from_dict(data)
                 
+                # Determine the entity type based on the parent directory or supertype.
                 parent_dir = yaml_file.parent.name
                 
                 if parent_dir == "characters":
@@ -310,6 +357,7 @@ class RulesetLoader:
                 elif parent_dir == "medievalfantasy" and yaml_file.name == "environment.yaml":
                     self.environment_ents[entity_obj.name] = entity_obj
                 else:
+                    # Fallback to supertype if directory is not specific.
                     if entity_obj.supertype == "creature" and data.get("is_player", False):
                         self.characters[entity_obj.name] = entity_obj
                     elif entity_obj.supertype == "creature":
@@ -323,6 +371,7 @@ class RulesetLoader:
 
 
     def _load_generic_yaml_all(self, file_path: Path) -> List[Any]:
+        """Loads all documents from a generic YAML file."""
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 return list(yaml.safe_load_all(f))
@@ -331,6 +380,7 @@ class RulesetLoader:
             return []
 
     def _load_scenario(self, file_path: Path):
+        """Loads a scenario from a rooms.yaml file."""
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 data = yaml.safe_load(f)
@@ -368,11 +418,10 @@ class RulesetLoader:
             print(f"Error loading scenario file {file_path}: {e}")
 
     def get_character(self, name: str) -> Optional[Entity]:
+        """Retrieves a character entity by name."""
         return self.characters.get(name)
 
-from typing import List, Dict, Any, Optional, Callable, Tuple
-from pathlib import Path
-
+# Placeholder imports for GameController if modules are missing.
 try:
     from nlp_processor import NLPProcessor, ProcessedInput
     from action_processor import process_player_actions
@@ -390,6 +439,7 @@ except ImportError as e:
 
 
 class GameController:
+    """Manages the main game loop, player input, and NPC actions."""
     def __init__(self, loader: RulesetLoader, ruleset_path: Path, llm_manager: LLMManager):
         self.loader = loader
         self.nlp_processor = NLPProcessor(ruleset_path)
@@ -400,9 +450,11 @@ class GameController:
         self.entity_histories: Dict[str, EntityHistory] = {}
         self.current_room: Optional[Room] = None
         
+        # Load creatures and characters from the ruleset loader.
         self.game_entities.update(self.loader.creatures)
         self.game_entities.update(self.loader.characters)
 
+        # Initialize histories for intelligent entities.
         for name, entity in self.game_entities.items():
             if any(status in entity.status for status in ["intelligent", "animalistic", "robotic"]):
                 self.entity_histories[name] = EntityHistory(entity_name=name)
@@ -412,21 +464,25 @@ class GameController:
         self.round_history: List[str] = []
         self.llm_chat_history: List[Dict[str, str]] = []
 
+        # Callbacks for updating the GUI.
         self.update_narrative_callback: Callable[[str], None] = lambda text: None
         self.update_character_sheet_callback: Callable[[Entity], None] = lambda entity: None
         self.update_inventory_callback: Callable[[Entity], None] = lambda entity: None
         self.update_map_callback: Callable[[Optional[Room]], None] = lambda room: None
 
     def start_game(self, player: Entity):
+        """Starts the game with the given player entity."""
         self.player_entity = player
         if player.name not in self.game_entities:
             self.game_entities[player.name] = player
             
+        # Initialize history for the player if they are intelligent.
         if any(status in player.status for status in ["intelligent", "animalistic", "robotic"]):
             if player.name not in self.entity_histories:
                 self.entity_histories[player.name] = EntityHistory(entity_name=player.name)
                 print(f"GameController: Initialized history for player: {player.name}")
             
+        # Load the initial room from the scenario.
         if self.loader.scenario and self.loader.scenario.environment.rooms:
             self.current_room = self.loader.scenario.environment.rooms[0]
             print(f"Loaded initial room: {self.current_room.name}")
@@ -435,6 +491,7 @@ class GameController:
         
         self.initiative_order = []
         
+        # Populate the initiative order based on entities present in the current room.
         if self.current_room and self.current_room.layers:
             legend_lookup: Dict[str, str] = {}
             if self.current_room.legend:
@@ -474,12 +531,14 @@ class GameController:
             if self.player_entity:
                 self.initiative_order = [self.player_entity]
 
+        # Ensure the player is in the initiative order.
         if self.player_entity and self.player_entity not in self.initiative_order:
             print(f"Warning: Player '{self.player_entity.name}' not placed on map, adding to initiative.")
             self.initiative_order.append(self.player_entity)
             
         print(f"Starting game with {len(self.initiative_order)} entities in initiative.")
         
+        # Create a starting event for the history.
         start_event = HistoryEvent(
             timestamp=self.game_time.copy(),
             event_type="world",
@@ -489,6 +548,7 @@ class GameController:
         for history in self.entity_histories.values():
             history.add_event(start_event)
         
+        # Update the GUI with the initial game state.
         self.update_narrative_callback(f"[{self.game_time.get_time_string()}] The adventure begins for {player.name}...")
         self.update_character_sheet_callback(self.player_entity)
         self.update_inventory_callback(self.player_entity)
@@ -498,11 +558,13 @@ class GameController:
 
 
     def process_player_input(self, player_input: str):
+        """Processes the player's text input."""
         if not self.player_entity or not self.nlp_processor:
             return
 
         print(f"Processing input: {player_input}")
         
+        # Use the NLP processor to understand the player's intent.
         processed_action = self.nlp_processor.process_player_input(
             player_input, 
             self.game_entities
@@ -512,6 +574,7 @@ class GameController:
             self.update_narrative_callback("Error: Could not process input.")
             return
         
+        # Process the identified actions.
         action_results = process_player_actions(
             self.player_entity,
             processed_action,
@@ -522,11 +585,13 @@ class GameController:
 
         player_action_summary = ""
         
+        # Update narrative and round history with the results of the player's actions.
         for narrative_msg, history_msg in action_results:
             self.update_narrative_callback(narrative_msg)
             self.round_history.append(history_msg)
             player_action_summary += history_msg + " "
 
+        # Create a history event for the player's action.
         player_event = HistoryEvent(
             timestamp=self.game_time.copy(),
             event_type="player_action",
@@ -534,6 +599,7 @@ class GameController:
             participants=[t.name for t in targets_affected]
         )
         
+        # Add the event to the history of affected entities.
         for target_entity in targets_affected:
             if target_entity.name in self.entity_histories:
                 self.entity_histories[target_entity.name].add_event(player_event)
@@ -541,17 +607,20 @@ class GameController:
         if self.player_entity.name in self.entity_histories:
             self.entity_histories[self.player_entity.name].add_event(player_event)
 
-
+        # Add the player's action to the LLM chat history.
         self.llm_chat_history.append({"role": "user", "content": player_action_summary.strip()})
         
+        # Update character sheets for affected entities.
         for target in targets_affected:
             self.update_character_sheet_callback(target)
         self.update_character_sheet_callback(self.player_entity)
         self.update_inventory_callback(self.player_entity)
         
+        # Run NPC turns after the player's turn.
         self._run_npc_turns(player_action_summary)
 
     def _run_npc_turns(self, player_action_summary: str):
+        """Runs the turns for all non-player characters (NPCs)."""
         print("Running NPC turns...")
         if not self.player_entity: return
         
@@ -559,10 +628,12 @@ class GameController:
         
         game_state_context = self._get_current_game_state(self.player_entity)
         
+        # Iterate through NPCs in the initiative order.
         for npc in self.initiative_order:
             if npc == self.player_entity:
                 continue 
 
+            # Only run turns for intelligent NPCs.
             if not ("intelligent" in npc.status or "animalistic" in npc.status or "robotic" in npc.status):
                 continue
             
@@ -570,6 +641,7 @@ class GameController:
             if npc.name in self.entity_histories:
                 npc_history_summary = self.entity_histories[npc.name].get_summary_for_llm()
             
+            # Create a prompt for the LLM to generate the NPC's action.
             npc_prompt = (
                 f"--- Your Context ---\n"
                 f"You are {npc.name}. \n"
@@ -580,11 +652,13 @@ class GameController:
                 f"What is your reaction or next action? Respond in character, briefly."
             )
             
+            # Generate the NPC's response using the LLM.
             reaction_narrative = self.llm_manager.generate_response(
                 prompt=npc_prompt,
                 history=self.llm_chat_history 
             )
             
+            # Create history events for the NPC's action.
             if reaction_narrative and not reaction_narrative.startswith("Error:"):
                 dialogue_event = HistoryEvent(
                     timestamp=self.game_time.copy(),
@@ -604,6 +678,7 @@ class GameController:
                     )
                     self.entity_histories[self.player_entity.name].add_event(player_event)
             
+            # Update the narrative with the NPC's action.
             if reaction_narrative:
                 if reaction_narrative.startswith("Error:"):
                     formatted_narrative = reaction_narrative
@@ -618,9 +693,11 @@ class GameController:
         
         self._process_round_updates()
         
+        # If any NPC took an action, generate a summary of the round.
         if all_actions_taken:
             action_log = "\n".join(self.round_history)
             
+            # Create a prompt for the LLM to narrate a summary of the round.
             narrator_prompt = (
                 f"You are the narrator. The following is a log of all actions and dialogue "
                 f"that just occurred in a single round. Summarize these events into an "
@@ -636,6 +713,7 @@ class GameController:
                 history=self.llm_chat_history
             )
             
+            # Update the narrative with the summary.
             if summary.startswith("Error:"):
                 self.update_narrative_callback(f"\n--- {summary} ---")
             else:
@@ -646,6 +724,7 @@ class GameController:
             self.round_history = []
 
     def _get_current_game_state(self, actor: Entity) -> Dict[str, Any]:
+        """Gets the current game state from the perspective of a given actor."""
         
         actors_in_room = [e.name for e in self.initiative_order if e.name != actor.name]
         
@@ -667,4 +746,6 @@ class GameController:
         }
 
     def _process_round_updates(self):
+        """Processes any updates that should occur at the end of a round."""
+        # This is a placeholder for future functionality, such as status effect updates.
         pass

@@ -1,3 +1,9 @@
+"""
+This module manages the Ollama service.
+
+It includes functionality for finding the Ollama executable, starting and stopping the
+service, and handling the installation of Ollama on Windows.
+"""
 import subprocess
 import shutil
 import sys
@@ -8,20 +14,34 @@ import atexit
 import tempfile
 import requests
 
+# The API endpoint for the Ollama service.
 OLLAMA_API_URL = "http://127.0.0.1:11434"
+# The download URL for the Ollama installer on Windows.
 OLLAMA_WINDOWS_DOWNLOAD_URL = "https://ollama.com/download/OllamaSetup.exe"
 
 class OllamaManager:
+    """Manages the Ollama service process."""
     def __init__(self):
+        """Initializes the OllamaManager."""
         self.process: subprocess.Popen | None = None
         self.ollama_path: str | None = None
 
     def find_ollama(self) -> bool:
+        """
+        Finds the Ollama executable.
+
+        It first checks the system's PATH, and if not found, checks the default
+        installation location on Windows.
+
+        Returns:
+            True if Ollama is found, False otherwise.
+        """
         self.ollama_path = shutil.which("ollama")
         if self.ollama_path:
             print(f"Ollama found in PATH: {self.ollama_path}")
             return True
             
+        # On Windows, check the default installation path in LocalAppData.
         if sys.platform == "win32":
             try:
                 local_app_data = os.getenv('LOCALAPPDATA')
@@ -39,6 +59,12 @@ class OllamaManager:
         return False
 
     def is_service_running(self) -> bool:
+        """
+        Checks if the Ollama service is currently running.
+
+        Returns:
+            True if the service is running, False otherwise.
+        """
         try:
             response = requests.get(OLLAMA_API_URL, timeout=1)
             return True
@@ -48,6 +74,14 @@ class OllamaManager:
             return False
 
     def start(self) -> bool:
+        """
+        Starts the Ollama service.
+
+        If the service is not already running, it starts it as a background process.
+
+        Returns:
+            True if the service is started successfully, False otherwise.
+        """
         if self.is_service_running():
             print("Ollama service is already running.")
             return True
@@ -60,6 +94,7 @@ class OllamaManager:
         try:
             creationflags = 0
             if sys.platform == "win32":
+                # Prevents the console window from appearing on Windows.
                 creationflags = subprocess.CREATE_NO_WINDOW
                 
             temp_process = subprocess.Popen(
@@ -69,6 +104,7 @@ class OllamaManager:
                 creationflags=creationflags
             )
             
+            # Wait for the service to become available.
             start_time = time.time()
             timeout_seconds = 10
             
@@ -77,6 +113,7 @@ class OllamaManager:
                     print("Ollama service started successfully.")
                     if temp_process.poll() is None:
                         self.process = temp_process
+                        # Register the stop method to be called on exit.
                         atexit.register(self.stop)
                         print(f"Ollama service process (PID: {self.process.pid}) is being managed.")
                     else:
@@ -101,6 +138,7 @@ class OllamaManager:
             return False
 
     def stop(self):
+        """Stops the Ollama service process if it was started by this manager."""
         if self.process:
             print(f"Stopping Ollama service (PID: {self.process.pid})...")
             try:
@@ -117,6 +155,12 @@ class OllamaManager:
             self.process = None
 
     def install_ollama_windows(self) -> bool:
+        """
+        Downloads and runs the Ollama installer for Windows.
+
+        Returns:
+            True if the installation is successful, False otherwise.
+        """
         if sys.platform != "win32":
             print("Installer is only for Windows.", file=sys.stderr)
             return False
@@ -125,6 +169,7 @@ class OllamaManager:
         installer_path = Path(temp_dir) / "OllamaSetup.exe"
 
         try:
+            # Download the installer.
             print(f"Downloading Ollama installer from: {OLLAMA_WINDOWS_DOWNLOAD_URL}")
             print(f"Saving to: {installer_path}")
             
@@ -135,6 +180,7 @@ class OllamaManager:
                         f.write(chunk)
             print("Download complete.")
 
+            # Run the installer.
             print("Running Ollama installer...")
             print("Please follow the on-screen instructions from the installer.")
             
@@ -154,6 +200,7 @@ class OllamaManager:
             print(f"Error running installer: {e}", file=sys.stderr)
             return False
         finally:
+            # Clean up the installer file.
             if installer_path.exists():
                 try:
                     os.remove(installer_path)

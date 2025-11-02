@@ -1,3 +1,9 @@
+"""
+This module contains unit tests for the NLPProcessor class.
+
+It uses the unittest framework to test various scenarios of player input, including
+different combinations of actions and targets, skill mapping, and edge cases.
+"""
 import unittest
 import logging
 from pathlib import Path
@@ -6,11 +12,14 @@ from typing import List, Dict
 from nlp_processor import NLPProcessor
 from classes import Entity
 
+# Define the path to the ruleset for testing.
 RULESET_PATH = Path(__file__).parent / "rulesets" / "medievalfantasy"
 
+# Define the log file for the test results.
 LOG_FILE = "test_nlp_results.log"
 
 class TestNLPProcessor(unittest.TestCase):
+    """Test suite for the NLPProcessor."""
     processor: NLPProcessor
     dummy: Entity
     chest: Entity
@@ -20,7 +29,9 @@ class TestNLPProcessor(unittest.TestCase):
     
     @classmethod
     def setUpClass(cls):
+        """Sets up the test class before any tests are run."""
         
+        # Configure the logger to write test results to a file.
         cls.logger = logging.getLogger("NLPTestLogger")
         cls.logger.setLevel(logging.INFO)
         
@@ -37,6 +48,7 @@ class TestNLPProcessor(unittest.TestCase):
         
         cls.logger.info("--- STARTING NLP PROCESSOR TEST RUN ---")
         
+        # Load the NLP processor.
         cls.logger.info("Loading NLP Model for testing (this may take a moment)...")
         print("--- Loading NLP Model for testing (this may take a moment) ---")
         try:
@@ -52,6 +64,7 @@ class TestNLPProcessor(unittest.TestCase):
             cls.logger.critical("Please ensure the spaCy model is downloaded: python -m spacy download en_core_web_sm")
             raise
 
+        # Create mock entities for testing.
         cls.dummy = Entity(name="dummy")
         cls.chest = Entity(name="chest")
         cls.wolf = Entity(name="wolf")
@@ -67,9 +80,18 @@ class TestNLPProcessor(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
+        """Tears down the test class after all tests have been run."""
         cls.logger.info("--- NLP PROCESSOR TEST RUN COMPLETE ---")
 
     def assert_intent_targets(self, text: str, expected_intent_names: List[str], expected_target_entities: List[Entity]):
+        """
+        Helper method to assert the intent and targets for a given text.
+
+        Args:
+            text: The input text to process.
+            expected_intent_names: A list of expected intent names.
+            expected_target_entities: A list of expected target entities.
+        """
         result = self.processor.process_player_input(text, self.known_entities)
         
         found_intent_names = sorted([a.intent.name for a in result.actions])
@@ -105,6 +127,7 @@ class TestNLPProcessor(unittest.TestCase):
 
     
     def test_one_action_one_target(self):
+        """Tests a simple input with one action and one target."""
         self.assert_intent_targets(
             text="attack the dummy",
             expected_intent_names=['ATTACK'],
@@ -112,6 +135,7 @@ class TestNLPProcessor(unittest.TestCase):
         )
 
     def test_one_action_one_target_natural(self):
+        """Tests a more natural language input with one action and one target."""
         self.assert_intent_targets(
             text="I want to hit the dummy",
             expected_intent_names=['ATTACK'],
@@ -119,6 +143,7 @@ class TestNLPProcessor(unittest.TestCase):
         )
 
     def test_one_action_two_targets(self):
+        """Tests an input with one action and two targets."""
         self.assert_intent_targets(
             text="look at the dummy and the chest",
             expected_intent_names=['INTERACT'],
@@ -126,6 +151,7 @@ class TestNLPProcessor(unittest.TestCase):
         )
         
     def test_one_action_three_targets(self):
+        """Tests an input with one action and three targets."""
         self.assert_intent_targets(
             text="examine the dummy, the chest, and the wolf",
             expected_intent_names=['INTERACT'],
@@ -133,6 +159,7 @@ class TestNLPProcessor(unittest.TestCase):
         )
 
     def test_two_actions_one_target(self):
+        """Tests an input with two actions and one target."""
         self.assert_intent_targets(
             text="move to and attack the dummy",
             expected_intent_names=['MOVE', 'ATTACK'],
@@ -140,6 +167,7 @@ class TestNLPProcessor(unittest.TestCase):
         )
 
     def test_two_actions_one_target_natural(self):
+        """Tests a natural language input with two actions and one target."""
         self.assert_intent_targets(
             text="I'm going to run at the wolf and attack it",
             expected_intent_names=['MOVE', 'ATTACK'],
@@ -147,6 +175,7 @@ class TestNLPProcessor(unittest.TestCase):
         )
         
     def test_two_actions_two_targets(self):
+        """Tests an input with two actions and two targets."""
         self.assert_intent_targets(
             text="go to the chest and look at the dummy",
             expected_intent_names=['MOVE', 'INTERACT'],
@@ -154,6 +183,7 @@ class TestNLPProcessor(unittest.TestCase):
         )
         
     def test_two_actions_three_targets(self):
+        """Tests an input with two actions and three targets."""
         self.assert_intent_targets(
             text="go to the chest and attack the dummy and the wolf",
             expected_intent_names=['MOVE', 'ATTACK'],
@@ -161,6 +191,7 @@ class TestNLPProcessor(unittest.TestCase):
         )
         
     def test_three_actions_one_target(self):
+        """Tests an input with three actions and one target."""
         self.assert_intent_targets(
             text="move to the dummy, attack it, and then inspect it",
             expected_intent_names=['MOVE', 'ATTACK', 'INTERACT'],
@@ -168,6 +199,7 @@ class TestNLPProcessor(unittest.TestCase):
         )
         
     def test_three_actions_two_targets(self):
+        """Tests an input with three actions and two targets."""
         self.assert_intent_targets(
             text="move to the chest, open it, and talk to the dummy",
             expected_intent_names=['MOVE', 'INTERACT', 'DIALOGUE'],
@@ -175,6 +207,7 @@ class TestNLPProcessor(unittest.TestCase):
         )
         
     def test_three_actions_three_targets(self):
+        """Tests an input with three actions and three targets."""
         self.assert_intent_targets(
             text="move to the dummy, attack the wolf, and open the chest",
             expected_intent_names=['MOVE', 'ATTACK', 'INTERACT'],
@@ -182,6 +215,7 @@ class TestNLPProcessor(unittest.TestCase):
         )
         
     def test_skill_intent_mapping(self):
+        """Tests that a skill keyword is correctly mapped to the USE_SKILL intent."""
         text = "pick lock on the chest"
         expected_intent = 'USE_SKILL'
         expected_skill = 'trickery'
@@ -212,6 +246,7 @@ class TestNLPProcessor(unittest.TestCase):
             self.logger.info("-" * 20)
 
     def test_no_intent_no_target(self):
+        """Tests an input with no clear intent or target, which should default to the OTHER intent."""
         text = "what a nice day"
         expected_intent = 'OTHER'
         

@@ -1,3 +1,11 @@
+"""
+This script validates a ruleset for the LLDM application.
+
+It checks for consistency and correctness in the YAML data files, ensuring that:
+- All entities have valid types, attributes, and skills as defined in the schemas.
+- All entities referenced in room legends exist.
+- There are no duplicate entity names.
+"""
 import sys
 from pathlib import Path
 from typing import Dict, Any, List
@@ -9,23 +17,43 @@ except ImportError:
     print("Please install it: pip install PyYAML", file=sys.stderr)
     sys.exit(1)
 
+# Define the default path to the ruleset to be validated.
 DEFAULT_RULESET_PATH = Path(__file__).parent / "rulesets" / "medievalfantasy"
 
+# A set of schema file names that should not be treated as entity files.
 SCHEMA_FILES = {"types.yaml", "attributes.yaml", "rooms.yaml"}
 
 def load_yaml_docs(filepath: Path) -> List[Any]:
+    """
+    Loads all YAML documents from a file.
+
+    Args:
+        filepath: The path to the YAML file.
+
+    Returns:
+        A list of YAML documents.
+    """
     if not filepath.exists():
         print(f"Warning: File not found, skipping: {filepath.name}", file=sys.stderr)
         return []
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
             docs = list(yaml.safe_load_all(f))
-            return [doc for doc in docs if doc]
+            return [doc for doc in docs if doc] # Filter out empty documents
     except Exception as e:
         print(f"Error parsing YAML file {filepath.name}: {e}", file=sys.stderr)
         return []
 
 def load_types_schema(filepath: Path) -> Dict[str, Any]:
+    """
+    Loads the types schema from the types.yaml file.
+
+    Args:
+        filepath: The path to the types.yaml file.
+
+    Returns:
+        A dictionary representing the types schema.
+    """
     schema = {}
     docs = load_yaml_docs(filepath)
     for doc in docs:
@@ -45,6 +73,15 @@ def load_types_schema(filepath: Path) -> Dict[str, Any]:
     return schema
 
 def load_attributes_schema(filepath: Path) -> Dict[str, Any]:
+    """
+    Loads the attributes schema from the attributes.yaml file.
+
+    Args:
+        filepath: The path to the attributes.yaml file.
+
+    Returns:
+        A dictionary representing the attributes schema.
+    """
     schema = {}
     docs = load_yaml_docs(filepath)
     for doc in docs:
@@ -64,6 +101,15 @@ def load_attributes_schema(filepath: Path) -> Dict[str, Any]:
     return schema
 
 def load_all_entities(ruleset_path: Path) -> Dict[str, Any]:
+    """
+    Loads all entities from the YAML files in the ruleset directory.
+
+    Args:
+        ruleset_path: The path to the ruleset directory.
+
+    Returns:
+        A dictionary of all entities, keyed by entity name.
+    """
     entities = {}
     for yaml_file in ruleset_path.glob("**/*.yaml"):
         if yaml_file.name in SCHEMA_FILES:
@@ -88,6 +134,7 @@ def load_all_entities(ruleset_path: Path) -> Dict[str, Any]:
     return entities
 
 def _validate_attr_skill_block(block: Dict, attr_schema: Dict, e_name: str, f_name: str, context: str) -> List[str]:
+    """Helper function to validate an attribute/skill block within an entity."""
     errors = []
     if not isinstance(block, dict):
         return errors
@@ -114,12 +161,24 @@ def _validate_attr_skill_block(block: Dict, attr_schema: Dict, e_name: str, f_na
     return errors
 
 def validate_entities(all_entities: Dict, types_schema: Dict, attr_schema: Dict) -> List[str]:
+    """
+    Validates all loaded entities against the type and attribute schemas.
+
+    Args:
+        all_entities: A dictionary of all entities.
+        types_schema: The types schema.
+        attr_schema: The attributes schema.
+
+    Returns:
+        A list of error messages.
+    """
     errors = []
     
     for name, entity_info in all_entities.items():
         data = entity_info['data']
         filename = entity_info['file']
         
+        # Validate supertype, type, and subtype.
         supertype = data.get('supertype')
         type_ = data.get('type')
         subtype = data.get('subtype')
@@ -137,6 +196,7 @@ def validate_entities(all_entities: Dict, types_schema: Dict, attr_schema: Dict)
         if subtype and subtype not in subtype_node:
             errors.append(f"[{filename}] Entity '{name}': Invalid subtype '{subtype}' for type '{type_}'")
 
+        # Validate attribute and skill blocks.
         if 'attribute' in data:
             errors.extend(_validate_attr_skill_block(
                 data['attribute'], attr_schema, name, filename, "attribute"
@@ -156,6 +216,16 @@ def validate_entities(all_entities: Dict, types_schema: Dict, attr_schema: Dict)
     return errors
 
 def validate_rooms(filepath: Path, all_entities: Dict) -> List[str]:
+    """
+    Validates the rooms file, ensuring all legend entities exist.
+
+    Args:
+        filepath: The path to the rooms.yaml file.
+        all_entities: A dictionary of all entities.
+
+    Returns:
+        A list of error messages.
+    """
     errors = []
     docs = load_yaml_docs(filepath)
     if not docs:
@@ -176,14 +246,17 @@ def validate_rooms(filepath: Path, all_entities: Dict) -> List[str]:
     return errors
 
 def main():
+    """The main function for the validation script."""
     print(f"Starting validation for ruleset: {DEFAULT_RULESET_PATH}\n")
     
     all_errors = []
     
+    # Define paths to the schema files.
     types_schema_path = DEFAULT_RULESET_PATH / "types.yaml"
     attr_schema_path = DEFAULT_RULESET_PATH / "attributes.yaml"
     rooms_path = DEFAULT_RULESET_PATH / "rooms.yaml"
     
+    # Load the schemas.
     types_schema = load_types_schema(types_schema_path)
     if not types_schema:
         print(f"Error: Could not load types schema from {types_schema_path.name}", file=sys.stderr)
@@ -197,6 +270,7 @@ def main():
     print(f"Successfully loaded {len(types_schema)} supertypes from types.yaml.")
     print(f"Successfully loaded {len(attr_schema)} attributes from attributes.yaml.")
     
+    # Load all entities.
     all_entities = load_all_entities(DEFAULT_RULESET_PATH)
     if not all_entities:
         print("Error: No entities were loaded. Check paths and file contents.", file=sys.stderr)
@@ -205,10 +279,11 @@ def main():
     print(f"Successfully loaded {len(all_entities)} total entities.\n")
     print("--- Running Validation ---")
     
+    # Run the validation checks.
     all_errors.extend(validate_entities(all_entities, types_schema, attr_schema))
-    
     all_errors.extend(validate_rooms(rooms_path, all_entities))
     
+    # Print the results.
     if not all_errors:
         print("\n--- Validation Complete ---")
         print("✅ All files are valid. No errors found.")
