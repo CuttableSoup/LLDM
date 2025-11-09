@@ -18,6 +18,8 @@ aptitude:
         description: Specialized training with shortswords and daggers.
       greatsword:
         description: Specialized training with large, two-handed swords.
+      dagger:
+        description: Specialized training with small, consealable knives.
     throwing:
       description: Skill with thrown weapons like javelins, daggers, and hand axes.
     fortitude:
@@ -62,6 +64,8 @@ aptitude:
       description: Feats of balance, tumbling, and graceful movement.
     finesse:
       description: Used to attack with light weapons. rapier, dagger, whip, etc.
+      dagger:
+        description: Specialized training with small, consealable knives.
     escape:
       description: Slipping bindings, escaping grapples, and freeing oneself from nets.
       opposes:

@@ -81,7 +81,7 @@ entity:
       damage(cur_hp): physique:strength
   range: 0
   proficiency:
-    observation:
+    user:attribute.wisdom.observation.roll():
       difficulty: 15
       pass:
         description: you sucessfuly spot the trap
@@ -89,7 +89,7 @@ entity:
           observed
       fail:
         description: none
-    trickery:
+    user:attribute.dexterity.trickery.roll():
       difficulty: 15
       pass:
         description: you sucessfuly disarmed the trap
@@ -119,7 +119,7 @@ entity:
   damage_mod:
     physical: -10
   proficiency:
-    strength:
+    user:attribute.physique.strength.roll():
       difficulty: 20
       pass:
         description: you sucessfuly lift the portcullis
@@ -128,7 +128,7 @@ entity:
           broken
       fail:
         description: the portcullis does not budge
-    trickery:
+    user:attribute.dexterity.trickery.roll():
       difficulty: 15
       pass:
         description: you sucessfuly unlock the portcullis

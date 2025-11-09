@@ -134,7 +134,7 @@ entity:
 ---
 
 entity:
-  name: glass vial
+  name: glass vial of healing
   description: glass vial
   supertype: object
   type: container
@@ -463,7 +463,7 @@ entity:
 ---
 
 entity:
-  name: glass vial
+  name: glass vial of poison
   description: glass vial
   supertype: object
   type: container

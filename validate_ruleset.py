@@ -157,7 +157,47 @@ def _validate_attr_skill_block(block: Dict, attr_schema: Dict, e_name: str, f_na
         return errors
         
     for key in block.keys():
-        parts = key.split('.')
+        
+        # --- NEW LOGIC: Handle 'choice' block ---
+        # If the key is 'choice', recursively validate the keys inside it
+        if key == 'choice':
+            inner_block = block[key]
+            if isinstance(inner_block, dict):
+                # Recursively call this function for the inner dictionary
+                errors.extend(_validate_attr_skill_block(
+                    inner_block, attr_schema, e_name, f_name, f"{context}.choice"
+                ))
+            else:
+                errors.append(f"[{f_name}] Entity '{e_name}': 'choice' block in '{context}' is not a valid dictionary.")
+            continue # Skip to the next key in the outer loop
+            
+        path_to_validate = key
+        
+        # --- Step 1: Strip prefixes ---
+        prefixes_to_strip = [
+            "user:attribute.", 
+            "target:attribute.", 
+            "self:attribute."
+        ]
+        
+        for prefix in prefixes_to_strip:
+            if path_to_validate.startswith(prefix):
+                path_to_validate = path_to_validate[len(prefix):]
+                break
+        
+        # --- Step 2: Strip suffixes ---
+        suffixes_to_strip = [
+            ".roll()",
+            ".roll",
+            ".exists()"
+        ]
+        
+        for suffix in suffixes_to_strip:
+            if path_to_validate.endswith(suffix):
+                path_to_validate = path_to_validate[:-len(suffix)]
+                break
+        
+        parts = path_to_validate.split('.')
         
         # 1. Validate Attribute
         attr_name = parts[0]
@@ -172,7 +212,7 @@ def _validate_attr_skill_block(block: Dict, attr_schema: Dict, e_name: str, f_na
             skill_name = parts[1]
             if skill_name not in valid_skills:
                 errors.append(f"[{f_name}] Entity '{e_name}': Invalid skill '{skill_name}' from key '{key}' for attribute '{attr_name}' in '{context}'")
-                continue
+                continue # Path is invalid, stop checking this key
             
             valid_specs = valid_skills.get(skill_name, {}).get('specialization', {})
             
@@ -181,9 +221,9 @@ def _validate_attr_skill_block(block: Dict, attr_schema: Dict, e_name: str, f_na
                 spec_name = parts[2]
                 if spec_name not in valid_specs:
                     errors.append(f"[{f_name}] Entity '{e_name}': Invalid specialization '{spec_name}' from key '{key}' for skill '{skill_name}' in '{context}'")
-                    continue
+                    continue # Path is invalid, stop checking this key
 
-            # 4. Check for extra parts (e.g., physique.blade.longsword.extra)
+            # 4. Check for extra parts
             if len(parts) > 3:
                 errors.append(f"[{f_name}] Entity '{e_name}': Key '{key}' in '{context}' has too many parts (max 3 allowed: attr.skill.spec).")
 
@@ -236,11 +276,24 @@ def validate_entities(all_entities: Dict, types_schema: Dict, attr_schema: Dict)
                 data['requirement'], attr_schema, name, filename, "requirement"
             ))
             
+        if 'proficiency' in data:
+             errors.extend(_validate_attr_skill_block(
+                data['proficiency'], attr_schema, name, filename, "proficiency"
+            ))
+
         if 'status' in data:
-            if isinstance(data['status'], dict) and 'attribute' in data['status']:
-                errors.extend(_validate_attr_skill_block(
-                    data['status']['attribute'], attr_schema, name, filename, "status.attribute"
-                ))
+            # Handle status blocks that might contain an attribute sub-dictionary
+            if isinstance(data['status'], list):
+                for item in data['status']:
+                    if isinstance(item, dict) and 'attribute' in item:
+                        errors.extend(_validate_attr_skill_block(
+                            item['attribute'], attr_schema, name, filename, "status.attribute"
+                        ))
+            elif isinstance(data['status'], dict):
+                 if 'attribute' in data['status']:
+                    errors.extend(_validate_attr_skill_block(
+                        data['status']['attribute'], attr_schema, name, filename, "status.attribute"
+                    ))
 
     return errors
 
@@ -268,10 +321,12 @@ def validate_rooms(filepath: Path, all_entities: Dict) -> List[str]:
         room_name = room.get('name', 'Unnamed Room')
         legend = room.get('legend', [])
         for item in legend:
-            entity_name = item.get('entity')
-            if entity_name and entity_name not in all_entities:
-                errors.append(f"[{filepath.name}] Room '{room_name}': "
-                    f"Legend entity '{entity_name}' not found in any loaded entity files.")
+            # Handle both dict and potential str legend items
+            if isinstance(item, dict):
+                entity_name = item.get('entity')
+                if entity_name and entity_name not in all_entities:
+                    errors.append(f"[{filepath.name}] Room '{room_name}': "
+                        f"Legend entity '{entity_name}' not found in any loaded entity files.")
     return errors
 
 def main():
