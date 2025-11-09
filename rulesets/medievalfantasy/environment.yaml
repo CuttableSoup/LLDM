@@ -56,7 +56,7 @@ entity:
 entity:
   supertype: object
   type: container
-  subtype: chest
+  subtype: wood
   name: chest
   description: a wooden dummy
   max_hp: 20

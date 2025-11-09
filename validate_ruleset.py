@@ -86,18 +86,35 @@ def load_attributes_schema(filepath: Path) -> Dict[str, Any]:
     docs = load_yaml_docs(filepath)
     for doc in docs:
         if 'aptitude' in doc:
-            apt_data = doc['aptitude']
-            attr_name = apt_data.get('attribute')
-            if not attr_name:
+            aptitude_block = doc.get('aptitude', {})
+            if not isinstance(aptitude_block, dict):
                 continue
-            
-            schema[attr_name] = {"skills": {}}
-            
-            for skill_name, skill_data in apt_data.get('skill', {}).items():
-                schema[attr_name]["skills"][skill_name] = {"specialization": {}}
-                if skill_data and 'specialization' in skill_data:
-                    for spec_name in skill_data['specialization']:
-                        schema[attr_name]["skills"][skill_name]["specialization"][spec_name] = {}
+
+            # The attribute (e.g., 'physique') is now the key in the aptitude block
+            for attr_name, attr_data in aptitude_block.items():
+                if not isinstance(attr_data, dict):
+                    continue
+                
+                schema[attr_name] = {"skills": {}}
+                
+                # The skills (e.g., 'blade') are the keys within the attribute block
+                for skill_name, skill_data in attr_data.items():
+                    # Filter out non-skill keys like 'description', 'opposes'
+                    if not isinstance(skill_data, dict):
+                        continue
+
+                    schema[attr_name]["skills"][skill_name] = {"specialization": {}}
+                    
+                    # The specializations (e.g., 'longsword') are the keys within the skill block
+                    if skill_data:
+                        for spec_name, spec_data in skill_data.items():
+                            # Filter out non-spec keys like 'description', 'opposes'
+                            if not isinstance(spec_data, dict):
+                                continue
+                            
+                            # Only add if it's a specialization (represented as a dict)
+                            schema[attr_name]["skills"][skill_name]["specialization"][spec_name] = {}
+                            
     return schema
 
 def load_all_entities(ruleset_path: Path) -> Dict[str, Any]:
@@ -134,30 +151,42 @@ def load_all_entities(ruleset_path: Path) -> Dict[str, Any]:
     return entities
 
 def _validate_attr_skill_block(block: Dict, attr_schema: Dict, e_name: str, f_name: str, context: str) -> List[str]:
-    """Helper function to validate an attribute/skill block within an entity."""
+    """Helper function to validate an attribute/skill block (with dot.notation) within an entity."""
     errors = []
     if not isinstance(block, dict):
         return errors
         
-    for attr_name, attr_data in block.items():
+    for key in block.keys():
+        parts = key.split('.')
+        
+        # 1. Validate Attribute
+        attr_name = parts[0]
         if attr_name not in attr_schema:
-            errors.append(f"[{f_name}] Entity '{e_name}': Invalid attribute '{attr_name}' in '{context}'")
+            errors.append(f"[{f_name}] Entity '{e_name}': Invalid attribute '{attr_name}' from key '{key}' in '{context}'")
             continue
         
-        if isinstance(attr_data, dict) and 'skill' in attr_data:
-            valid_skills = attr_schema[attr_name].get('skills', {})
-            for skill_name, skill_data in attr_data['skill'].items():
-                if skill_name not in valid_skills:
-                    errors.append(f"[{f_name}] Entity '{e_name}': Invalid skill '{skill_name}' "
-                                f"for attribute '{attr_name}' in '{context}'")
+        valid_skills = attr_schema[attr_name].get('skills', {})
+        
+        # 2. Validate Skill (if present)
+        if len(parts) > 1:
+            skill_name = parts[1]
+            if skill_name not in valid_skills:
+                errors.append(f"[{f_name}] Entity '{e_name}': Invalid skill '{skill_name}' from key '{key}' for attribute '{attr_name}' in '{context}'")
+                continue
+            
+            valid_specs = valid_skills.get(skill_name, {}).get('specialization', {})
+            
+            # 3. Validate Specialization (if present)
+            if len(parts) > 2:
+                spec_name = parts[2]
+                if spec_name not in valid_specs:
+                    errors.append(f"[{f_name}] Entity '{e_name}': Invalid specialization '{spec_name}' from key '{key}' for skill '{skill_name}' in '{context}'")
                     continue
-                
-                if isinstance(skill_data, dict) and 'specialization' in skill_data:
-                    valid_specs = valid_skills.get(skill_name, {}).get('specialization', {})
-                    for spec_name in skill_data['specialization']:
-                        if spec_name not in valid_specs:
-                            errors.append(f"[{f_name}] Entity '{e_name}': Invalid specialization '{spec_name}' "
-                                        f"for skill '{skill_name}' in '{context}'")
+
+            # 4. Check for extra parts (e.g., physique.blade.longsword.extra)
+            if len(parts) > 3:
+                errors.append(f"[{f_name}] Entity '{e_name}': Key '{key}' in '{context}' has too many parts (max 3 allowed: attr.skill.spec).")
+
     return errors
 
 def validate_entities(all_entities: Dict, types_schema: Dict, attr_schema: Dict) -> List[str]:

@@ -38,11 +38,3 @@ map:
             inventory:
               - { item: "gold coin", quantity: 50 }
               - { item: "silver coin", quantity: 100 }
-            
-          - char: g
-            entity: giant
-            color: "#2F4F4F"
-            map_name: "Giant"
-            pattern: 
-              - ['g', 'g']
-              - ['g', 'g']

@@ -2,6 +2,9 @@ category:
   supertype: creature
   description:
   types:
+    undead:
+      subtypes:
+        specter:
     humanoid:
       description:
       slot:
@@ -53,6 +56,12 @@ category:
     water: 1
     air: 1
   types:
+    weapon:
+      subtypes:
+        blade:
+    liquid:
+      subtypes:
+        potion:
     test:
       subtypes:
         test:
@@ -83,7 +92,9 @@ category:
         dummy:
     container:
       subtypes:
-        chest:
+        leather:
+        glass:
+        wood:
     treasure:
       subtypes:
         gold:
@@ -119,6 +130,9 @@ category:
 category:
   supertype: supernatural
   types:
+    condition:
+      subtypes:
+        enchantment:
     arcane:
       subtypes:
         evocation:
@@ -139,5 +153,11 @@ category:
         psychometabolic:
         psychoportative:
         telepathy:
+    CONDITION:
+      subtypes:
+        enchantment:
+    curse:
+      subtypes:
+        curse:
 
 ...
