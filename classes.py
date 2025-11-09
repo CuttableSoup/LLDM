@@ -177,6 +177,7 @@ class Entity:
     value: int = 0
     slot: Optional[str] = None
     inventory: List[InventoryItem] = field(default_factory=list)
+    inventory_rules: List[Dict[str, Any]] = field(default_factory=list) # --- NEW ---
     supernatural: List[str] = field(default_factory=list)
     memory: List[str] = field(default_factory=list)
     quote: List[str] = field(default_factory=list)
@@ -208,38 +209,69 @@ def create_entity_from_dict(data: Dict[str, Any]) -> Entity:
         
     final_attributes: Dict[str, Attribute] = {}
     
+    # --- MODIFIED ---
+    # This block now creates the flat attribute map (e.g., 'physique.blade')
+    # required by the InteractionProcessor.
     if 'attribute' in data_copy:
-        for attr_name, attr_data in data_copy['attribute'].items():
-            
-            new_attr = Attribute()
-            
-            if isinstance(attr_data, dict):
-                new_attr.base = attr_data.get('base', 0)
+        raw_attributes = data_copy['attribute']
+        
+        # This function will recursively add attributes
+        def process_attr(attr_map: Dict, path_prefix=""):
+            for key, value in attr_map.items():
                 
-                if 'skill' in attr_data:
-                    for skill_name, skill_data in attr_data['skill'].items():
-                        if isinstance(skill_data, dict):
-                            new_attr.skill[skill_name] = Skill(**skill_data)
-                        else:
-                            new_attr.skill[skill_name] = Skill(base=skill_data)
-            else:
-                new_attr.base = attr_data
-            
-            final_attributes[attr_name] = new_attr
+                # 'choice' blocks are for requirements/apply, not base stats
+                if key == 'choice':
+                    continue
+                    
+                current_path = f"{path_prefix}{key}"
+                
+                # Check if it's a flat attribute (e.g., 'physique: 9' or 'physique.strength: 3')
+                if isinstance(value, (int, float)):
+                    final_attributes[current_path] = Attribute(base=value)
+                
+                # Check if it's a nested attribute block (e.g., 'physique: { base: 9, skill: ...}')
+                elif isinstance(value, dict):
+                    base_val = value.get('base', 0)
+                    final_attributes[current_path] = Attribute(base=base_val)
+                    
+                    # Recurse for nested skills/specializations
+                    # (e.g., skill: { blade: ... })
+                    if 'skill' in value and isinstance(value['skill'], dict):
+                        process_attr(value['skill'], path_prefix=f"{current_path}.")
+                    if 'specialization' in value and isinstance(value['specialization'], dict):
+                         process_attr(value['specialization'], path_prefix=f"{current_path}.")
+        
+        process_attr(raw_attributes)
         
         data_copy['attribute'] = final_attributes
+    # --- END MODIFICATION ---
 
+    # --- MODIFIED ---
     def _create_inventory(items_list: List[Dict]) -> List[InventoryItem]:
         """Helper function to recursively create inventory items."""
         output = []
         for item_data in items_list:
-            nested_inv_data = item_data.pop('inventory', [])
-            nested_inv = _create_inventory(nested_inv_data)
-            output.append(InventoryItem(**item_data, inventory=nested_inv))
+            # --- NEW LOGIC ---
+            # Only process this as an item if it has an 'item' key
+            # This skips the 'requirement' blocks
+            if 'item' in item_data:
+                nested_inv_data = item_data.pop('inventory', [])
+                nested_inv = _create_inventory(nested_inv_data)
+                output.append(InventoryItem(**item_data, inventory=nested_inv))
+            # --- END NEW LOGIC ---
         return output
 
     if 'inventory' in data_copy:
-        data_copy['inventory'] = _create_inventory(data_copy['inventory'])
+        all_inventory_entries = data_copy['inventory']
+        
+        # Filter for actual items
+        item_entries = [entry for entry in all_inventory_entries if 'item' in entry]
+        data_copy['inventory'] = _create_inventory(item_entries)
+        
+        # Filter for requirements
+        rule_entries = [entry['requirement'] for entry in all_inventory_entries if 'requirement' in entry]
+        data_copy['inventory_rules'] = rule_entries
+    # --- END MODIFICATION ---
 
     # Filter out any keys from the dictionary that are not fields in the Entity dataclass.
     entity_field_names = {f.name for f in fields(Entity)}
@@ -330,7 +362,9 @@ class RulesetLoader:
             
             for entity_data in entities_data:
                 if not isinstance(entity_data, dict) or 'entity' not in entity_data:
-                    print(f"Warning: Skipping document in {yaml_file.name} (missing 'entity:' tag).")
+                    # Allow files like 'templates.yaml' to be skipped silently
+                    if yaml_file.name not in ["templates.yaml"]:
+                        print(f"Warning: Skipping document in {yaml_file.name} (missing 'entity:' tag).")
                     continue
                 
                 data = entity_data['entity']
@@ -374,7 +408,8 @@ class RulesetLoader:
         """Loads all documents from a generic YAML file."""
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
-                return list(yaml.safe_load_all(f))
+                # Filter out 'None' documents that result from '---'
+                return [doc for doc in yaml.safe_load_all(f) if doc]
         except Exception as e:
             print(f"Error loading YAML file {file_path}: {e}")
             return []
@@ -450,9 +485,14 @@ class GameController:
         self.entity_histories: Dict[str, EntityHistory] = {}
         self.current_room: Optional[Room] = None
         
-        # Load creatures and characters from the ruleset loader.
-        self.game_entities.update(self.loader.creatures)
+        # Load all entities from the ruleset loader into one map
         self.game_entities.update(self.loader.characters)
+        self.game_entities.update(self.loader.creatures)
+        self.game_entities.update(self.loader.items)
+        self.game_entities.update(self.loader.spells)
+        self.game_entities.update(self.loader.conditions)
+        self.game_entities.update(self.loader.environment_ents)
+
 
         # Initialize histories for intelligent entities.
         for name, entity in self.game_entities.items():
@@ -512,12 +552,8 @@ class GameController:
                     print(f"Warning: Character '{char_code}' on map but not in legend.")
                     continue
                 
+                # Get entity from the master list
                 entity_obj = self.game_entities.get(entity_name)
-                
-                if not entity_obj:
-                    entity_obj = self.loader.environment_ents.get(entity_name)
-                    if entity_obj and entity_name not in self.game_entities:
-                        self.game_entities[entity_name] = entity_obj
                 
                 if entity_obj:
                     if entity_obj not in self.initiative_order:
@@ -574,12 +610,15 @@ class GameController:
             self.update_narrative_callback("Error: Could not process input.")
             return
         
+        # --- THIS IS THE MODIFIED PART ---
         # Process the identified actions.
         action_results = process_player_actions(
             self.player_entity,
             processed_action,
-            self.game_entities
+            self.game_entities,
+            self.loader.attributes  # <-- Pass the loaded attributes
         )
+        # --- END OF MODIFICATION ---
 
         targets_affected = processed_action.targets
 
