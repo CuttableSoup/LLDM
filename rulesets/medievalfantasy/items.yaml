@@ -1,4 +1,3 @@
-
 entity:
   name: longsword
   description: a metal blade
@@ -6,27 +5,24 @@ entity:
   type: blade
   subtype: sword
   target:
-    creature
-    object
+    - supertype: creature
+    - supertype: object
+    - not:
+      - subtype: specter
   slot:
-  - hand
+    - hand
   range: 1
   apply:
     choice:
       piercing:
-        damage(cur_hp): physique:strength
+        target:damage_cur_hp: (user:attribute.physique.strength+6).roll()
       slashing:
-        damage(cur_hp): physique:strength
-  status:
-    attribute:
-      physique:
-        base: 0
-        skill:
-          strength:
-            base: 6
+        target:damage_cur_hp: (user:attribute.physique.strength+6).roll()
   proficiency:
-    blade: opposed
+    user:attribute.physique.blade.longsword.roll():
+      difficulty: target:opposed.roll()
   weight: 5
+  bulk: 1
   value: 10
 
 ---
@@ -37,25 +33,24 @@ entity:
   supertype: object
   type: blade
   subtype: sword
+  target:
+    - supertype: creature
+    - supertype: object
+    - not:
+      - type: specter
   slot:
-  - hand
-  - hand
+    - hand
+    - hand
   range: 1
   apply:
     choice:
       piercing:
-        damage(cur_hp): physique:strength
+        target:damage_cur_hp: (user:attribute.physique.strength+10).roll()
       slashing:
-        damage(cur_hp): physique:strength
-  status:
-    attribute:
-      physique:
-        base: 0
-        skill:
-          strength:
-            base: 9
+        target:damage_cur_hp: (user:attribute.physique.strength+10).roll()
   proficiency:
-    blade: opposed
+    user:attribute.physique.blade.greatsword.roll():
+      difficulty: target:opposed.roll()
   weight: 5
   value: 10
 
@@ -68,11 +63,11 @@ entity:
   type: armor
   subtype: medium
   slot: 
-  - chest
-  status:
-    bludgeoning: -6
-    slashing: -6
-    piercing: -6
+    - chest
+  apply:
+    user:status.bludgeoning: -6
+    user:status.slashing: -6
+    user:status.piercing: -6
   weight: 10
   value: 20
 
@@ -84,14 +79,15 @@ entity:
   supertype: object
   type: shield
   subtype: heavy
+  target:
+    - not:
+      - subtype: specter
   slot:
-  - hand
-  status:
-    bludgeoning: -6
-    slashing: -6
-    piercing: -6
-  proficiency:
-    shield: opposed
+    - hand
+  apply:
+    user:status.bludgeoning: -6
+    user:status.slashing: -6
+    user:status.piercing: -6
   weight: 40
   value: 20
 
@@ -103,14 +99,15 @@ entity:
   supertype: object
   type: shield
   subtype: medium
+  target:
+    - not:
+      - subtype: specter
   slot:
-  - hand
-  status:
-    bludgeoning: -4
-    slashing: -4
-    piercing: -4
-  proficiency:
-    shield: opposed
+    - hand
+  apply:
+    user:status.bludgeoning: -4
+    user:status.slashing: -4
+    user:status.piercing: -4
   weight: 7
   value: 5
 
@@ -122,36 +119,79 @@ entity:
   supertype: object
   type: shield
   subtype: light
+  target:
+    - not:
+      - subtype: specter
   slot:
-  - hand
-  status:
-    bludgeoning: -2
-    slashing: -2
-    piercing: -2
-  proficiency:
-    shield: opposed
+    - hand
+  apply:
+    user:status.bludgeoning: -2
+    user:status.slashing: -2
+    user:status.piercing: -2
   weight: 3
   value: 2
 
 ---
 
 entity:
-  name: potion of healing
-  description: luminous vial of fluid
+  name: glass vial
+  description: glass vial
   supertype: object
-  type: consumable
+  type: container
+  subtype: glass
+
+  inventory:
+    - requirement:
+      type: liquid
+      quantity: 1
+    - item: potion of healing
+      quantity: 1
+
+---
+
+entity:
+  name: waterskin
+  description: leather waterskin
+  supertype: object
+  type: container
+  subtype: leather
+
+  inventory:
+    - requirement:
+      type: liquid
+      quantity: 8
+    - item: potion of healing
+      quantity: 8
+
+---
+
+entity:
+  name: backpack
+  description: leather backpack
+  supertype: object
+  type: container
+  subtype: leather
+
+  inventory:
+    - requirement:
+      bulk: 5
+      weight: 50
+
+---
+
+entity:
+  name: potion of healing
+  description: luminous fluid
+  supertype: object
+  type: liquid
   subtype: potion
+  target:
+    - supertype:creature
   slot:
-  - hand
+    - hand
   apply:
     heal:
-      heal(cur_hp): self:physique:strength
-  attribute:
-    physique:
-      base: 0
-      skill:
-        strength:
-          base: 6
+      target:heal_cur_hp: 5
   weight: 1
   value: 10
 
@@ -201,42 +241,254 @@ entity:
 
 ---
 
-
 entity:
   name: beer
   supertype: object
   type: drink
   subtype: alcohol
+  target:
+    - supertype:creature
   apply:
-  - alcohol: +1
+    alcohol: +1
     status:
     - buzzed:
-        requirement:
-          alcohol: 5
+      requirement:
+        user:status.alcohol: 5
     - drunk:
-        requirement:
-          alcohol: 10
-    - asleep:
-        requirement:
-          alcohol: 15
+      requirement:
+        user:status.alcohol: 10
+    - unconscious:
+      requirement:
+        user:status.alcohol: 15
   duration:
     - frequency: hour
       length: 8
 
 ---
 
+# --- CURSED AMULET ---
 entity:
-  name: blue whinnis
+  name: amulet of foolishness
+  description: A heavy gold amulet that feels cold to the touch.
+  supertype: object
+  type: accessory
+  subtype: amulet
+  slot:
+    - neck
+
+  apply:
+    curse:
+      user:status.entity.add(): "Cursed - Foolishness" # when it is placed in a slot, the user has the status "Cursed - Foolishness" added to them
+
+  action: # this is applied to an action
+    unequip: # the unequip action, alternatively the disarm action (am unequip action by someone other than the user)
+      requirement: # the unequip action requires the following
+        check(user:status."Cursed - Foolishness".exists()): false # for the status "Cursed - Foolishness" to not exist one the user, then it can be unequiped
+        fail:
+          description: "You try to remove the amulet, but it sears your hand and will not budge!"
+        pass:
+          description: "The amulet's magic fades, and it comes off easily."
+  weight: 1
+  value: 0
+
+
+# --- THE POISON ---
+# example of an entity with three 'states'
+# in the vial, yet to be useds
+# on the blade, ready to be applied
+# in the taget, applying the deleterious effects
+entity:
+  name: "giant centipede poison"
+  description: "A neurotoxin makes your limbs feel heavy and clumsy."
+  supertype: object
+  type: poison
+  subtype: injury
+  status:
+    difficulty: 13
+    duration: 4
+    frequency: round
+    effect: attribute.dexterity
+    potentcy: 1
+
+  # this can be repeated for each injury poison
+  slot:
+    - blade
+  target:
+    - supertype: creature
+    - not:
+      - type: undead
+  
+  apply:
+    poison:
+      target:status.entity.add(): self:name
+      target:status.(self:name).charges.add(): 2
+
+  status:
+    stack: 1
+    passes: 0
+
+  check: # run this every frequency
+    - frequency: self:status.frequency
+      user:status.entity.remove: self:name # it tries to remove itself every round
+      requirement:
+        or: # but can only remove it itself if the user has passed twice in two rounds, or length is zero
+          check(self:duration.length): 0
+          check(self:status.passes): ">= 2"
+      resist: # the user attempt to resist each round
+        user:attribute.physique.fortitude:
+          difficulty: "self:status.difficulty + (self:status.stack * 2)"
+          pass: # record the pass, subtract a length
+            modify(self:status.passes): +1
+            modify(self:status.duration): -1
+          fail: # reset the passes, remove a dex, subtract a length
+            set(self:status.passes): 0
+            modify(self:status.duration): -1
+            modify(user:(self:status.effect)): -self:status.potentcy
+
+# --- VAMPIRIC SWORD ---
+entity:
+  name: vampiric longsword
+  description: a dark blade that pulses with faint energy.
+  supertype: object
+  type: blade
+  subtype: sword
+
+  # on use, the entity must occupy the user's slot, be within the target's range, and the target's element must be listed or else the use fails, do not procede
+  target:
+    - supertype: creature
+    - supertype: object
+    - not:
+      - subtype: specter
+  slot:
+    - hand
+  range: 1
+
+  # on use, roll the proficiency.  if it is larger than the number specified, the use succeeds.
+  # if 'opposed' is specified, the target may choose the best option from the skill's list of opposed skills under the appropriate aptitude
+  proficiency:
+    user:attribute.physique.blade.longsword.roll():
+      difficulty: target:opposed.roll()
+
+  # on use, create a variable 'vampiric_strike_piercing/slashing' and roll the user's stength+6, subtract armor.  store it for the duration of the use
+  status:
+    vampiric_strike_piercing:
+      piercing:
+        target:damage_cur_hp: (user:attribute.physique.strength+6).roll()-target:opposed.roll()
+    vampiric_strike_slashing:
+      slashing:
+        target:damage_cur_hp: (user:attribute.physique.strength+6).roll()-target:opposed.roll()
+
+  # apply the following only once (this only happens is the proficiency check passed)
+  apply:
+    choice: # the user's choice is determined from vocabulary used, else random
+    - piercing: # label the element is known by and can be modified by other entities (armor opposes piercing, slashing, bludgeoning)
+        target:damage_cur_hp: self:status.vampiric_strike_piercing
+    - slashing:
+        target:damage_cur_hp: self:status.vampiric_strike_slashing
+
+    heal:
+      choice:
+      - user:heal_cur_hp: target:vampiric_strike_piercing * 0.5 # the user is healed for half the amount dealt to the target
+        requirement:
+          and: # but only if the target is a creature and not undead
+            target:supertype: creature
+            not:
+              target:type: undead
+      - user:heal_cur_hp: target:vampiric_strike_slashing * 0.5 # the user is healed for half the amount dealt to the target
+        requirement:
+          and: # but only if the target is a creature and not undead
+            target:supertype: creature
+            not:
+              target:type: undead
+
+  weight: 5
+  value: 150
+
+---
+
+# --- POISONED DAGGER ---
+entity:
+  name: dagger
+  description: "A serrated dagger coated in a paralytic poison."
+  supertype: object
+  type: weapon
+  subtype: blade
+  target:
+    - supertype: creature
+    - supertype: object
+    - not:
+      - subtype: specter
+  slot:
+    - hand
+  range: 1
+
+  status:
+    piercing:
+      value: user:strength+2
+    poison:
+      - name: "giant centipede poison"
+        charges: 6
+    enchantment:
+      frost:
+        value: 6
+
+  proficiency:
+    choice:
+      user:attribute.physique.blade.dagger.roll():
+        difficulty: target:opposed.roll()
+      user:attribute.dexterity.finesse.dagger.roll():
+        difficulty: target:opposed.roll()
+  weight: 1
+  value: 120
+
+  # this could be applied to all weapons
+  # every weapon applies bludgeoning, piercing, or slashing (exclusively)
+  # also applies any poison or enchantment
+  apply:
+    - choice:
+        target:damage_cur_hp: self:status.piercing.value.roll()
+        target:damage_cur_hp: self:status.slashing.value.roll()
+        target:damage_cur_hp: self:status.bludgeoning.value.roll()
+
+    - target:status.entity.add(): self:status.poison.name
+      modify(self:status.charges): -1
+      requirement:
+        and:
+        - check(target:damage_cur_hp): "> 0"
+        - check(self:status.charges): "> 0"
+        - target:supertype: creature
+
+    - target:damage_cur_hp: self:status.enchantment.value.roll()
+
+---
+
+entity:
+  name: glass vial
+  description: glass vial
+  supertype: object
+  type: container
+  subtype: glass
+
+  inventory:
+  - requirement:
+      item.type: liquid
+      quantity: 1
+  - item: giant centipede poison
+    quantity: 1
+
+
+---
+
+entity:
+  name: "the poison for kuzco" # kuzco's poison
   supertype: object
   type: consumable
-  subtype: poison
-  slot:
-  - blade
+  subtype: potion
+
   apply:
-    status:
-    - unconcious
-  duration:
-    - frequency: hour
-      length: 8
+    target:type: quadruped
+    target:subtype: llama # I'm a llama
+    requirement:
+      user:supertype: creature
 
 ...

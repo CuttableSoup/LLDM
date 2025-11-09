@@ -5,6 +5,7 @@ category:
     humanoid:
       description:
       slot:
+        mind: 10
         self: 10
         hand: 2
         ring: 2

@@ -6,53 +6,30 @@ entity:
   max_hp: 30 # maximum hit points
   max_fp: 15 # maximum fatigue points
   max_mp: 20 # maximum mental points
-  exp: 50 # expecience to be expended
+  xp: 50 # expecience to be expended
+  total_xp: 500
   weight: 180
   size: medium
   is_player: true
 
   attribute:
-    physique:
-      base: 9
-      skill:
-        strength:
-          base: 3
-        blade:
-          base: 3
-    dexterity:
-      base: 9
-      skill:
-        dodge:
-          base: 3
-        missile:
-          base: 3
-    intelligence:
-      base: 9
-      skill:
-        arcane:
-          base: 3
-          specialization:
-            evocation: 3
-    wisdom:
-      base: 9
-      skill:
-        observation:
-          base: 3
-        willpower:
-          base: 3
-        miracle:
-          base: 3
-          specialization:
-            conjuration:
-              base: 3
-    presence:
-      base: 9
-      skill:
-        psionic:
-          base: 3
-          specialization:
-            psychometabolic:
-              base: 3
+    physique: 9
+    physique.strength: 3
+    physique.blade: 3
+    dexterity: 9
+    dexterity.dodge: 3
+    dexterity.missile: 3
+    intelligence: 9
+    intelligence.arcane: 3
+    intelligence.arcane.evocation: 3
+    wisdom: 9
+    wisdom.observation: 3
+    wisdom.willpower: 3
+    wisdom.miracle: 3
+    wisdom.miracle.conjuration: 3
+    presence: 9
+    presence.psionic: 3
+    presence.psionic.psychometabolic: 3
 
   move:
     land: 10
@@ -61,22 +38,16 @@ entity:
 
   status:
   - intelligent
-  - fire: -10 # fire damage is reduced by 10
-  - frost: 2 # frost damage is doubled
+  - fire: user:damage_cur_hp-10 # fire damage is reduced by 10
+  - frost: user:damage_cur_hp*2 # frost damage is doubled
 
   ally: # list of entities considered allies
-    creature:
-      humanoid:
-        human:
-          name:
-          - Kael
+    creature.humanoid.human.name:
+    - Kael
 
   enemy: # list of entities considered allies
-    creature:
-      humanoid:
-        orc:
-          name:
-          - Grog
+    creature.humanoid.orc.name:
+      - Grog
 
   attitude: # list of attitudes by category, an array of five values, lower taking precedent
   # Disposition (Hostile ↔ Friendly)
@@ -85,16 +56,10 @@ entity:
   # Respect (Disdainful ↔ Admiring)
   # Obligation (Unfettered ↔ Indebted)
     default: 0,0,0,0,0 # base attitude applied to all before modified
-    creature:
-      humanoid:
-        human: 
-          default: 0.5,0.5,0,0,0 # likes and trusts humans
-          name:
-          - Kael: 0,1,0,1,0 # trusts and respects Kael
-        orc:
-          default: -0.5,-0.5,0,0,0 # hates and distrusts orcs
-          name:
-          - Grog: -1,-1,0,0,0 # will attack Grog on sight
+    type.humanoid.human: 0.5,0.5,0,0,0 # likes and trusts humans
+    type.humanoid.orc: -0.5,-0.5,0,0,0 # hates and distrusts orcs
+    name.Grog: -1,-1,0,0,0 # will attack Grog on sight
+    name.Kael: 0,1,0,1,0 # trusts and respects Kael
 
   language: # list of languages
   - human
@@ -110,6 +75,7 @@ entity:
     ongoing: []
   value:
   slot:
+  bulk:
 
   quality: # list of various character descriptions
     body: lightly scarred

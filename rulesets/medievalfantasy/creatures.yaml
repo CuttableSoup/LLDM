@@ -5,48 +5,61 @@ entity:
   subtype: canine
   max_hp: 30
   attribute:
-    physique:
-      base: 6
-    dexterity:
-      base: 6
+    physique: 6
+    dexterity: 6
   
   status:
-  - animalistic
+    - animalistic
   
   movement:
     land: 10
 
   inventory:
-  - item: bite
-    quantity: 1
-    equipped: true
+    - item: bite
+      quantity: 1
+      equipped: true
 
   unique_entity:
-  - name: bite
-    supertype: object
-    type: natural
-    subtype: fangs
-    description: sharp fangs
-    slot:
-    - mouth
-    apply:
-      piercing:
-        damage(cur_hp): physique:strength
-    range: 1
-    skill: brawling
+    - name: bite
+      supertype: object
+      type: natural
+      subtype: fangs
+      description: sharp fangs
+      slot:
+      - mouth
+      apply:
+        piercing:
+          damage_cur_hp: user:physique.strength+2
+      range: 1
+      skill: brawling
 
 ---
 
 entity:
-  name: giant
+  name: ghost
   supertype: creature
-  type: humanoid
-  subtype: giant
-  max_hp: 50
+  type: undead
+  subtype: specter
+  max_hp: 5
   attribute:
-    physique:
-      base: 21
+    dexterity: 6
+  status:
+    - intelligent
   movement:
-    land: 15
+    land: 10
+
+  unique_entity:
+    - name: touch
+      supertype: object
+      type: natural
+      subtype: hands
+      description: a cold, ghostly touch, draining life
+      slot:
+      - hand
+      apply:
+        drain:
+          modify(user:physique): -3
+      range: 1
+      skill: brawling
 
 ...

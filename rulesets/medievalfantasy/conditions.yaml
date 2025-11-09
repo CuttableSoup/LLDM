@@ -46,4 +46,38 @@ entity:
   - shock: +3
   - frost: +3
 
+---
+
+# --- THE CHARM CONDITION ---
+entity:
+  name: charmed
+  description: "This entity is magically charmed and regards the caster as their best friend."
+  supertype: supernatural
+  type: condition
+  subtype: enchantment
+
+  status:
+    difficulty: "13"
+    length: "21 - user:attribute.intelligence"
+    name: ""
+
+  apply:
+    user:attitude.name.add(): self:status.name
+    set(user:attitude.(self:status.name): "1.0,1.0,1.0,1.0,1.0"
+
+---
+
+# --- THE CURSE CONDITION ---
+entity:
+  name: "Cursed - Foolishness"
+  description: "The entity's mind is clouded by a powerful curse, reducing them to base intellect."
+  supertype: supernatural
+  type: curse
+  subtype: curse
+  
+  apply: # while they have this entity in their status,
+    set(user:attribute.intelligence): 3 # the user will have their intelligence set to 3
+
+  status: # if a spell wants to remove the curse, this is the difficulty
+    difficulty: 15
 ...

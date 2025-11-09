@@ -1,18 +1,23 @@
 aptitude:
-  attribute: physique
-  description: Represents the entity's physical power, health, and toughness.
-  skill:
+  physique:
+    description: Represents the entity's physical power, health, and toughness.
     athletic:
       description: Used for various feats of agility, climbing, swimming, and jumping.
     blade:
       description: Used to attack with blades and swords of varying length and styles. Dagger, Sword, Scimitar, etc.
-      specialization:
-        longsword:
-          description: Specialized training in the longsword.
-        shortsword:
-          description: Specialized training with shortswords and daggers.
-        greatsword:
-          description: Specialized training with large, two-handed swords.
+      opposes:
+      - blade
+      - axe
+      - polearm
+      - brawling
+      - missile
+      - throwing
+      longsword:
+        description: Specialized training in the longsword.
+      shortsword:
+        description: Specialized training with shortswords and daggers.
+      greatsword:
+        description: Specialized training with large, two-handed swords.
     throwing:
       description: Skill with thrown weapons like javelins, daggers, and hand axes.
     fortitude:
@@ -21,20 +26,6 @@ aptitude:
       description: Raw physical power, affecting lift capacity and melee damage.
     axe:
       description: Wielding battle axes, hand axes, and other chopping weapons.
-      specialization:
-        battle-axe:
-          description: Specialized training with one-handed battle axes.
-        great-axe:
-          description: Specialized training with large, two-handed axes.
-    polearm:
-      description: Using weapons on long shafts, like spears, halberds, and glaives.
-      specialization:
-        spear:
-          description: Specialized training with spears and javelins.
-        halberd:
-          description: Specialized training with heavy polearms like halberds and pikes.
-    shield:
-      description: Using a shield for active blocking and defense.
       opposes:
       - blade
       - axe
@@ -42,17 +33,35 @@ aptitude:
       - brawling
       - missile
       - throwing
+      battle-axe:
+        description: Specialized training with one-handed battle axes.
+      great-axe:
+        description: Specialized training with large, two-handed axes.
+    polearm:
+      description: Using weapons on long shafts, like spears, halberds, and glaives.
+      opposes:
+      - blade
+      - axe
+      - polearm
+      - brawling
+      - missile
+      - throwing
+      spear:
+        description: Specialized training with spears and javelins.
+      halberd:
+        description: Specialized training with heavy polearms like halberds and pikes.
     brawling:
       description: Unarmed combat, including punches, kicks, and grapples.
 
 ---
 
 aptitude:
-  attribute: dexterity
-  description: Represents agility, reflexes, fine motor control, and coordination.
-  skill:
+  dexterity:
+    description: Represents agility, reflexes, fine motor control, and coordination.
     acrobatics:
       description: Feats of balance, tumbling, and graceful movement.
+    finesse:
+      description: Used to attack with light weapons. rapier, dagger, whip, etc.
     escape:
       description: Slipping bindings, escaping grapples, and freeing oneself from nets.
       opposes:
@@ -76,50 +85,46 @@ aptitude:
       description: Reacting quickly to danger, such as magical traps or sudden spells.
     missile:
       description: Using ranged weapons like bows and crossbows.
-      specialization:
-        bow:
-          description: Specialized training with shortbows and longbows.
-        crossbow:
-          description: Specialized training with light and heavy crossbows.
+      bow:
+        description: Specialized training with shortbows and longbows.
+      crossbow:
+        description: Specialized training with light and heavy crossbows.
 
 ---
 
 aptitude:
-  attribute: intelligence
-  description: Represents reasoning, memory, and academic or arcane knowledge.
-  skill:
+  intelligence:
+    description: Represents reasoning, memory, and academic or arcane knowledge.
     appraise:
       description: Assessing the value, origin, and authenticity of items.
     linguistic:
       description: Understanding, speaking, and reading multiple languages.
     arcane:
       description: Casting arcane spells and identifying magical phenomena.
-      specialization:
-        conjuration:
-          description: Spells that create, summon, or transport matter or beings.
-        evocation:
-          description: Spells that channel raw elemental or magical energy to create effects.
-        divination:
-          description: Spells that reveal information about the past, present, or future.
-        transmutation:
-          description: Spells that alter the physical properties of creatures or objects.
-        enchantment:
-          description: Spells that affect the minds of others, compelling or controlling them.
-        abjuration:
-          description: Spells that protect, block, banish, or counter other magic.
-        illusion:
-          description: Spells that create false sensory perceptions or phantom images.
-        necromancy:
-          description: Spells that manipulate life, death, and life-force.
+      conjuration:
+        description: Spells that create, summon, or transport matter or beings.
+      evocation:
+        description: Spells that channel raw elemental or magical energy to create effects.
+      divination:
+        description: Spells that reveal information about the past, present, or future.
+      transmutation:
+        description: Spells that alter the physical properties of creatures or objects.
+      enchantment:
+        description: Spells that affect the minds of others, compelling or controlling them.
+      abjuration:
+        description: Spells that protect, block, banish, or counter other magic.
+      illusion:
+        description: Spells that create false sensory perceptions or phantom images.
+      necromancy:
+        description: Spells that manipulate life, death, and life-force.
     navigation:
       description: Plotting courses, reading maps, and finding paths by land or sea.
 
 ---
 
 aptitude:
-  attribute: wisdom
-  description: Represents willpower, intuition, common sense, and awareness.
-  skill:
+  wisdom:
+    description: Represents willpower, intuition, common sense, and awareness.
     medicine:
       description: Treating wounds, diagnosing illnesses, and neutralizing poisons.
     survival:
@@ -132,23 +137,22 @@ aptitude:
       - deception
     miracle:
       description: Casting divine spells and calling upon a higher power.
-      specialization:
-        conjuration:
-          description: Miracles that create holy water, summon celestial aid, or heal.
-        evocation:
-          description: Miracles that channel divine wrath as holy fire or smiting bolts.
-        divination:
-          description: Receiving omens, guidance, or prophecies from a divine source.
-        transmutation:
-          description: Miracles that alter the body, like blessing water or cursing food.
-        enchantment:
-          description: Miracles that inspire awe, instill divine fear, or bless allies.
-        abjuration:
-          description: Divine wards, blessings of protection, and banishing unholy entities.
-        illusion:
-          description: Creating holy symbols of light or cloaking allies in divine shadow.
-        necromancy:
-          description: Miracles related to death, speaking with the dead, or destroying undead.
+      conjuration:
+        description: Miracles that create holy water, summon celestial aid, or heal.
+      evocation:
+        description: Miracles that channel divine wrath as holy fire or smiting bolts.
+      divination:
+        description: Receiving omens, guidance, or prophecies from a divine source.
+      transmutation:
+        description: Miracles that alter the body, like blessing water or cursing food.
+      enchantment:
+        description: Miracles that inspire awe, instill divine fear, or bless allies.
+      abjuration:
+        description: Divine wards, blessings of protection, and banishing unholy entities.
+      illusion:
+        description: Creating holy symbols of light or cloaking allies in divine shadow.
+      necromancy:
+        description: Miracles related to death, speaking with the dead, or destroying undead.
     artistry:
       description: Skill in creating art, from painting to music or sculpture.
     forgery:
@@ -170,9 +174,8 @@ aptitude:
 ---
 
 aptitude:
-  attribute: presence
-  description: Represents force of personality, social influence, and inner power.
-  skill:
+  presence:
+    description: Represents force of personality, social influence, and inner power.
     charisma:
       description: Influencing others through charm, negotiation, and diplomacy.
     deception:
@@ -185,16 +188,15 @@ aptitude:
       description: Influencing others through threats and force of will.
     psionic:
       description: Manifesting psionic powers and resisting mental intrusion.
-      specialization:
-        clairsentience:
-          description: Powers that expand the senses, like seeing the future or remote viewing.
-        psychokinetic:
-          description: Powers that move objects or create energy with the mind.
-        psychometabolic:
-          description: Powers that alter the manifester's own body.
-        psychoportative:
-          description: Powers that move the manifester or objects through space.
-        telepathy:
-          description: Powers that read or project thoughts and emotions.
+      clairsentience:
+        description: Powers that expand the senses, like seeing the future or remote viewing.
+      psychokinetic:
+        description: Powers that move objects or create energy with the mind.
+      psychometabolic:
+        description: Powers that alter the manifester's own body.
+      psychoportative:
+        description: Powers that move the manifester or objects through space.
+      telepathy:
+        description: Powers that read or project thoughts and emotions.
 
 ...

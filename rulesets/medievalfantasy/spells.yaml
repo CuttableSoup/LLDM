@@ -5,42 +5,32 @@ entity:
   type: arcane
   subtype: evocation
   target:
-    creature
-    object
-    environment
-  range: arcane:base
-  duration: []
+    - creature
+    - object
+    - environment
+  range: user:intelligence.arcane
   slot:
-  - hand
-  - mouth
+    - mind
   apply:
     fire:
-      damage(cur_hp): arcane:evocation/2
+      target:damage_cur_hp: (user:attribute.intelligence.arcane.evocation/2).roll()
   resist:
-    reflex:
-      pass: arcane:base
+    target:dexterity.reflex.roll(): user:attribute.intelligence.arcane
   proficiency:
-    evocation:
+    user:attribute.intelligence.arcane.roll():
       difficulty: 15
       pass:
         description:
       fail:
         description:
   requirement:
-    intelligence:
-      base: 3
-      skill:
-        arcane:
-          base: 3
-          specialization:
-            evocation:
-              base: 3
+    user:attribute.intelligence.arcane.evocation: 3
   cost:
     initial:
-      - cur_fp: -3
-      - hand: points a finger at the target
-      - mouth: shouts 'Burn!'
-      - item: bat guano
+      - user:cur_fp: -3
+      - user:slot.hand: points a finger at the target
+      - user:slot.mouth: shouts 'Burn!'
+      - user:inventory.item: bat guano
 
 ---
 
@@ -50,41 +40,31 @@ entity:
   type: miracle
   subtype: healing
   target:
-    creature
+    - creature
   range: 1
-  duration: []
   slot:
-  - hand
-  - mouth
+    - mind
   apply:
-    heal: 
-      heal(cur_hp): miracle:conjuration/2
+    heal:
+      target:heal_cur_hp: (user:attribute.wisdom.miracle.conjuration/2).roll()
   resist:
-    fortitude:
-      pass: miracle:conjuration
+    target:attribute.physique.fortitude.roll(): user:attribute.wisdom.miracle.roll()
   proficiency:
-    conjuration:
+    user:attribute.wisdom.miracle.conjuration.roll():
       difficulty: 15
       pass:
         description:
       fail:
         description:
-    brawling: opposed
+    user:attribute.physique.brawling: target:opposed.roll()
   requirement:
-    wisdom:
-      base:
-      skill:
-        miracle:
-          base: 3
-          specialization:
-            conjuration:
-              base: 3
+    user:attribute.wisdom.miracle.conjuration: 3
   cost:
     initial:
-      - cur_fp: -3
-      - hand: lays hands over the wound
-      - mouth: whispers 'let the light flow through you'
-      - focus: holy symbol
+      - user:cur_fp: -3
+      - user:slot.hand: lays hands over the wound
+      - user:slot.mouth: whispers 'let the light flow through you'
+      - user:slot.item.exists: holy symbol
 
 ---
 
@@ -94,40 +74,122 @@ entity:
   type: psionic
   subtype: psychometabolic
   target:
-    self
+    - self
   range: 0
-  duration:
-    - frequency: round
-      length: 10
+  slot:
+    - mind
   apply:
-    enhance:
-      choice:
-        attribute:
-          physique: psionic:psychometabolic/2
-          dexterity: psionic:psychometabolic/2
+    target:status.entity.add(): "adrenaline control"
+    choice:
+      modify(user:physique): (user:attribute.presence.psionic/2).roll()
+      modify(user:dexteriy): (user:attribute.presence.psionic/2).roll()
   proficiency:
-    presence:
-      base: 3
-      skill:
-        psychometabolic:
-          difficulty: 15
-          pass:
-            description:
-          fail:
-            description:
+    user:attribute.presence.psionic.psychometabolic.roll():
+      difficulty: 15
+      pass:
+        description: "your muscles sugrge with power"
+      fail:
+        description: "you fail to manifest your power"
   requirement:
-    presence:
-      base:
-      skill:
-        psionic:
-          base: 3
-          specialization:
-            psychometabolic:
-              base: 3
+    user:attribute.presence.psionic.psychometabolic: 3
   cost:
     initial: []
     ongoing:
       - frequency: round
-        cur_fp: -1
+        user:cur_fp: -1
+  action:
+    dismiss:
+      user:status.entity.remove(): "adrenaline control"
+
+---
+
+# --- CHARM PERSON SPELL ---
+entity:
+  name: charm person
+  description: Magically charms a humanoid to regard you as a friend.
+  supertype: supernatural
+  type: arcane
+  subtype: enchantment
+  target:
+    - creature
+  range: 10
+  slot:
+    - mind
+
+  apply:
+    charm:
+      target:status.entity.add(): charmed
+      target:status.charmed.name.add(): user:name
+
+  resist:
+    target:attribute.wisdom.willpower.roll():
+      difficulty: user:attribute.intelligence.arcane.enchantment.roll()
+
+  proficiency:
+    user:attribute.intelligence.arcane.enchantment.roll():
+      difficulty: 15
+  requirement:
+    user:attribute.intelligence.arcane.enchantment: 3
+  cost:
+    initial:
+      - user:cur_mp: -8
+      - user:slot.hand: "gestures hypnotically"
+      - user:slot.mouth: "speaks a sibilant phrase"
+
+---
+
+entity:
+  name: remove curse
+  supertype: supernatural
+  type: miracle
+  subtype: healing
+  target:
+    - creature
+  range: 1
+  slot:
+    - mind
+  apply:
+    target:status.entity.remove(): type.curse # remove all entities in the target's status with the type curse
+    requirement:
+      wisdom.miracle.conjuration.roll(): # the difficulty corresponds to the target's curse entity's difficulty status, if multiple, use highest
+        difficulty: target:status.type.curse.status.difficulty
+  proficiency: # no proficiency needed, difficulty comes from the curse to be removed
+  resist: # no resist needed, is purely beneficial
+  requirement:
+    wisdom.miracle.conjuration: 3 # to be used, the user must have a conjuration specialization of at least 3
+  cost:
+    initial:
+      - user:cur_fp: -3
+      - user:slot.hand: lays hands over the wound
+      - user:slot.mouth: whispers 'remove this curse'
+      - user:slot.item.exists(): holy symbol
+
+---
+
+entity:
+  name: remove poison
+  supertype: supernatural
+  type: miracle
+  subtype: healing
+  target:
+    - creature
+  range: 1
+  slot:
+    - mind
+  apply:
+    - target:status.remove(): type.poison # remove all entities in the target's status with the type poison
+      requirement:
+        wisdom.miracle.conjuration.roll(): # the difficulty corresponds to the target's poison entity's difficulty status, if multiple, use highest
+          difficulty: target:status.type.poison.status.difficulty + (target:status.type.poison.status.stack * 2)
+  resist: # no resist needed, is purely beneficial
+  proficiency: # no proficiency needed, difficulty comes from the poison to be removed
+  requirement:
+    user:attribute.wisdom.miracle.conjuration: 3
+  cost:
+    initial:
+      - user:cur_fp: -3
+      - user:slot.hand: lays hands over the wound
+      - user:slot.mouth: whispers 'remove this poison'
+      - user:slot.item.exists(): holy symbol
 
 ...
