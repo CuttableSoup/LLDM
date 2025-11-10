@@ -27,6 +27,7 @@ except ImportError:
         raw_text: str = ""
         actions: List = []
         targets: List = []
+        interaction_entities: List = [] # Added for placeholder
     class ActionComponent: pass
     class Skill: pass
     class Attribute: pass
@@ -214,39 +215,25 @@ def process_player_actions(player: Entity, processed_input: ProcessedInput,
 
         # --- MODIFIED: Handle the "CAST" intent ---
         elif intent_name == "CAST":
-            # 1. Try to find the spell name.
-            spell_name = None
-            
-            # First, check player's known supernatural abilities
-            for spell in player.supernatural:
-                if spell in processed_input.raw_text.lower():
-                    spell_name = spell
-                    break
-            
-            # If not found, do a general keyword search of all entities
-            if not spell_name:
-                for entity_name in game_entities.keys():
-                    # Check for whole word match
-                    if re.search(r'\b' + re.escape(entity_name) + r'\b', processed_input.raw_text.lower()):
-                        spell_name = entity_name
-                        break
-            
-            if not spell_name:
+            # --- NEW LOGIC ---
+            # The NLP processor already found the spell entity for us.
+            if not processed_input.interaction_entities:
                 narrative_msg = "You try to cast a spell, but aren't sure which one."
                 history_msg = f"{player.name} fumbles a spell."
                 narrative_results.append((narrative_msg, history_msg))
                 continue
-
-            # 2. Get the spell Entity from all game entities
-            spell_entity = game_entities.get(spell_name)
             
-            if spell_entity and spell_entity.supertype == "supernatural":
-                # 3. Use InteractionProcessor
+            # Just grab the first spell mentioned.
+            spell_entity = processed_input.interaction_entities[0]
+            
+            if spell_entity:
                 print(f"Processing CAST with {spell_entity.name} on {target_name}")
                 processor = InteractionProcessor(player, target, spell_entity, loader_attributes)
                 narrative_msg, history_msg = processor.process_interaction()
+            # --- END NEW LOGIC ---
             else:
-                narrative_msg = f"You try to cast '{spell_name}' but don't know it (or it isn't a spell)."
+                # This case should not be hit if the logic above is correct
+                narrative_msg = f"You try to cast a spell, but something went wrong."
                 history_msg = f"{player.name} fumbles a spell."
                 
             narrative_results.append((narrative_msg, history_msg))

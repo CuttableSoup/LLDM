@@ -6,6 +6,7 @@ It checks for consistency and correctness in the YAML data files, ensuring that:
 - All entities referenced in room legends exist.
 - There are no duplicate entity names.
 """
+import re
 import sys
 from pathlib import Path
 from typing import Dict, Any, List
@@ -22,6 +23,9 @@ DEFAULT_RULESET_PATH = Path(__file__).parent / "rulesets" / "medievalfantasy"
 
 # A set of schema file names that should not be treated as entity files.
 SCHEMA_FILES = {"types.yaml", "attributes.yaml", "rooms.yaml"}
+
+# Regex to find paths like 'user:attribute.physique.strength' in strings
+PATH_REGEX = re.compile(r'(user|target|self):attribute\.([a-zA-Z0-9_\.]+)')
 
 def load_yaml_docs(filepath: Path) -> List[Any]:
     """
@@ -229,6 +233,56 @@ def _validate_attr_skill_block(block: Dict, attr_schema: Dict, e_name: str, f_na
 
     return errors
 
+# --- NEW FUNCTION ---
+def _validate_string_values(block: Any, attr_schema: Dict, e_name: str, f_name: str, context: str) -> List[str]:
+    """Helper to recursively scan string values for valid attribute paths."""
+    errors = []
+    
+    if isinstance(block, dict):
+        for key, value in block.items():
+            errors.extend(_validate_string_values(value, attr_schema, e_name, f_name, f"{context}.{key}"))
+    elif isinstance(block, list):
+        for i, item in enumerate(block):
+            errors.extend(_validate_string_values(item, attr_schema, e_name, f_name, f"{context}[{i}]"))
+    elif isinstance(block, str):
+        # This is the core logic!
+        for match in PATH_REGEX.finditer(block):
+            path_to_validate = match.group(2) # e.g., "physique.strength"
+            
+            parts = path_to_validate.split('.')
+            
+            # 1. Validate Attribute
+            attr_name = parts[0]
+            if attr_name not in attr_schema:
+                errors.append(f"[{f_name}] Entity '{e_name}': Invalid attribute '{attr_name}' found in string '{block}' in '{context}'")
+                continue
+            
+            valid_skills = attr_schema[attr_name].get('skills', {})
+            
+            # 2. Validate Skill (if present)
+            if len(parts) > 1:
+                skill_name = parts[1]
+                if skill_name not in valid_skills:
+                    errors.append(f"[{f_name}] Entity '{e_name}': Invalid skill '{skill_name}' in string '{block}' for attr '{attr_name}' in '{context}'")
+                    continue
+                
+                valid_specs = valid_skills.get(skill_name, {}).get('specialization', {})
+                
+                # 3. Validate Specialization (if present)
+                if len(parts) > 2:
+                    spec_name = parts[2]
+                    if spec_name not in valid_specs:
+                        errors.append(f"[{f_name}] Entity '{e_name}': Invalid spec '{spec_name}' in string '{block}' for skill '{skill_name}' in '{context}'")
+                        continue
+
+                # 4. Check for extra parts
+                if len(parts) > 3:
+                    errors.append(f"[{f_name}] Entity '{e_name}': Path in string '{block}' has too many parts in '{context}'.")
+    
+    return errors
+# --- END NEW FUNCTION ---
+
+
 def validate_entities(all_entities: Dict, types_schema: Dict, attr_schema: Dict) -> List[str]:
     """
     Validates all loaded entities against the type and attribute schemas.
@@ -280,6 +334,13 @@ def validate_entities(all_entities: Dict, types_schema: Dict, attr_schema: Dict)
              errors.extend(_validate_attr_skill_block(
                 data['proficiency'], attr_schema, name, filename, "proficiency"
             ))
+
+        # --- NEW ---
+        if 'apply' in data:
+            errors.extend(_validate_string_values(
+                data['apply'], attr_schema, name, filename, "apply"
+            ))
+        # --- END NEW ---
 
         if 'status' in data:
             # Handle status blocks that might contain an attribute sub-dictionary

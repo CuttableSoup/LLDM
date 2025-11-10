@@ -3,8 +3,15 @@ aptitude:
     description: Represents the entity's physical power, health, and toughness.
     athletic:
       description: Used for various feats of agility, climbing, swimming, and jumping.
+      keywords:
+      - athletic
+      - climb
+      - swim
+      - jump
     blade:
       description: Used to attack with blades and swords of varying length and styles. Dagger, Sword, Scimitar, etc.
+      keywords:
+      - blade
       opposes:
       - blade
       - axe
@@ -22,12 +29,25 @@ aptitude:
         description: Specialized training with small, consealable knives.
     throwing:
       description: Skill with thrown weapons like javelins, daggers, and hand axes.
+      keywords:
+      - throwing
+      - throw
     fortitude:
       description: Resisting poison, disease, and physical exhaustion or hardship.
+      keywords:
+      - fortitude
+      - resist
     strength:
       description: Raw physical power, affecting lift capacity and melee damage.
+      keywords:
+      - strength
+      - lift
+      - bend
+      - break
     axe:
       description: Wielding battle axes, hand axes, and other chopping weapons.
+      keywords:
+      - axe
       opposes:
       - blade
       - axe
@@ -41,6 +61,8 @@ aptitude:
         description: Specialized training with large, two-handed axes.
     polearm:
       description: Using weapons on long shafts, like spears, halberds, and glaives.
+      keywords:
+      - polearm
       opposes:
       - blade
       - axe
@@ -54,6 +76,9 @@ aptitude:
         description: Specialized training with heavy polearms like halberds and pikes.
     brawling:
       description: Unarmed combat, including punches, kicks, and grapples.
+      keywords:
+      - brawling
+      - punch
 
 ---
 
@@ -62,22 +87,45 @@ aptitude:
     description: Represents agility, reflexes, fine motor control, and coordination.
     acrobatics:
       description: Feats of balance, tumbling, and graceful movement.
+      keywords:
+      - acrobatics
+      - tumble
+      - balance
     finesse:
       description: Used to attack with light weapons. rapier, dagger, whip, etc.
       dagger:
         description: Specialized training with small, consealable knives.
     escape:
       description: Slipping bindings, escaping grapples, and freeing oneself from nets.
+      keywords:
+      - escape
+      - slip
       opposes:
       - brawling
     fly:
       description: Maneuvering while flying, through magic or natural means.
+      keywords:
+      - fly
     trickery:
       description: Sleight of hand, picking pockets, opening locks, and disabling traps.
+      keywords:
+      - trickery
+      - pick lock
+      - pick pocket
+      - disarm trap
+      - sleight of hand
     stealth:
       description: Moving silently and remaining unseen in shadows or cover.
+      keywords:
+      - stealth
+      - sneak
+      - hide
     dodge:
       description: Physically evading melee attacks, ranged fire, and area effects.
+      keywords:
+      - dodge
+      - duck
+      - avoid
       opposes:
       - blade
       - axe
@@ -87,8 +135,13 @@ aptitude:
       - throwing
     reflex:
       description: Reacting quickly to danger, such as magical traps or sudden spells.
+      keywords:
+      - reflex
     missile:
       description: Using ranged weapons like bows and crossbows.
+      keywords:
+      - missile
+      - shoot
       bow:
         description: Specialized training with shortbows and longbows.
       crossbow:
@@ -101,10 +154,19 @@ aptitude:
     description: Represents reasoning, memory, and academic or arcane knowledge.
     appraise:
       description: Assessing the value, origin, and authenticity of items.
+      keywords:
+      - appraise
+      - value
     linguistic:
       description: Understanding, speaking, and reading multiple languages.
+      keywords:
+      - linguistic
+      - translate
+      - decipher
     arcane:
       description: Casting arcane spells and identifying magical phenomena.
+      keywords:
+      - arcane
       conjuration:
         description: Spells that create, summon, or transport matter or beings.
       evocation:
@@ -123,6 +185,9 @@ aptitude:
         description: Spells that manipulate life, death, and life-force.
     navigation:
       description: Plotting courses, reading maps, and finding paths by land or sea.
+      keywords:
+      - navigation
+      - navigate
 
 ---
 
@@ -131,16 +196,32 @@ aptitude:
     description: Represents willpower, intuition, common sense, and awareness.
     medicine:
       description: Treating wounds, diagnosing illnesses, and neutralizing poisons.
+      keywords:
+      - medicine
+      - heal
+      - first aid
+      - treat
     survival:
       description: Foraging, hunting, tracking, and navigating in the wilderness.
+      keywords:
+      - survival
+      - track
+      - forage
+      - hunt
     willpower:
       description: Resisting mental domination, fear, and magical influence.
+      keywords:
+      - willpower
+      - resist
       opposes:
       - intimidation
       - charisma
       - deception
     miracle:
       description: Casting divine spells and calling upon a higher power.
+      keywords:
+      - miracle
+      - pray
       conjuration:
         description: Miracles that create holy water, summon celestial aid, or heal.
       evocation:
@@ -159,14 +240,34 @@ aptitude:
         description: Miracles related to death, speaking with the dead, or destroying undead.
     artistry:
       description: Skill in creating art, from painting to music or sculpture.
+      keywords:
+      - artistry
+      - draw
+      - sing
+      - perform
     forgery:
       description: Creating convincing false documents or imitating handwriting.
+      keywords:
+      - forgery
+      - forge document
     gambling:
       description: Skill and luck in games of chance, and spotting cheaters.
+      keywords:
+      - gambling
+      - gamble
     streetwise:
       description: Gathering information and navigating urban underworlds.
+      keywords:
+      - streetwise
+      - gather rumors
     observation:
       description: Noticing fine details, spotting hidden objects, or seeing through deceptions.
+      keywords:
+      - observation
+      - observe
+      - search
+      - spot
+      - notice
       opposes:
       - trickery
       - stealth
@@ -182,25 +283,51 @@ aptitude:
     description: Represents force of personality, social influence, and inner power.
     charisma:
       description: Influencing others through charm, negotiation, and diplomacy.
+      keywords:
+      - charisma
+      - persuade
+      - charm
+      - diplomacy
+      - negotiate
     deception:
       description: Lying convincingly and misleading others in conversation.
+      keywords:
+      - deception
+      - lie
+      - bluff
     disguise:
       description: Altering one's appearance and mannerisms to seem like someone else.
+      keywords:
+      - disguise
     husbandry:
       description: Training and handling animals, from horses to war dogs.
+      keywords:
+      - husbandry
+      - handle animal
     intimidation:
       description: Influencing others through threats and force of will.
+      keywords:
+      - intimidation
+      - intimidate
+      - threaten
     psionic:
       description: Manifesting psionic powers and resisting mental intrusion.
+      keywords:
+      - psionic
+      - manifest
       clairsentience:
         description: Powers that expand the senses, like seeing the future or remote viewing.
       psychokinetic:
         description: Powers that move objects or create energy with the mind.
+        keywords:
+        - psychokinetic
       psychometabolic:
         description: Powers that alter the manifester's own body.
       psychoportative:
         description: Powers that move the manifester or objects through space.
       telepathy:
         description: Powers that read or project thoughts and emotions.
+        keywords:
+        - telepathy
 
 ...

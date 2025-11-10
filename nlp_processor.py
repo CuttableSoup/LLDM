@@ -2,8 +2,9 @@
 This module handles Natural Language Processing (NLP) for the LLDM application.
 
 It uses sentence-transformers for intent classification and spaCy for named entity
-recognition (NER). The processor loads intents from YAML files, classifies player
-input, and extracts relevant entities from the text.
+recognition (NER). The processor hardcodes core game intents and dynamically
+builds a 'USE_SKILL' intent by loading keywords from 'aptitude' blocks
+in any ruleset YAML file.
 """
 from __future__ import annotations
 from typing import List, Dict, Any, Optional, Tuple
@@ -53,6 +54,94 @@ except ImportError:
 
 logger = logging.getLogger("NLPTestLogger")
 
+
+# --- Hardcoded base intents ---
+CORE_INTENTS_DATA = [
+  {
+    "name": "ATTACK",
+    "description": "To assault or strike at an entity.",
+    "keywords": [
+      "attack", "hit", "swing", "strike", "fight", "harm",
+      "punch", "kick", "stab", "slash"
+    ]
+  },
+  {
+    "name": "MOVE",
+    "description": "To change physical location.",
+    "keywords": [
+      "move", "go", "go to", "walk", "run", "head",
+      "travel", "approach", "leave", "exit", "enter", "flee"
+    ]
+  },
+  {
+    "name": "CHANGE_STANCE",
+    "description": "To change the creature's physical stance.",
+    "keywords": [
+      "stand", "stand up", "get up", "crouch", "duck", "hide",
+      "pronate", "lie down", "go prone", "get down"
+    ]
+  },
+  {
+    "name": "INTERACT",
+    "description": "To use, open, or manipulate an object or entity.",
+    "keywords": [
+      "open", "get", "take", "use", "pull", "push", "look",
+      "inspect", "examine", "touch", "read", "activate", "deactivate",
+      "equip", "unequip"
+    ]
+  },
+  {
+    "name": "GIVE",
+    "description": "To give an item to another entity.",
+    "keywords": ["give", "hand", "offer"]
+  },
+  {
+    "name": "DIALOGUE",
+    "description": "To engage in conversation with an entity.",
+    "keywords": [
+      "talk", "speak", "say", "ask", "tell", "shout",
+      "whisper", "dialogue", "question", "respond"
+    ]
+  },
+  {
+    "name": "TRADE",
+    "description": "To exchange items with another entity.",
+    "keywords": [
+      "trade", "buy", "sell", "barter", "purchase", "shop", "vendor"
+    ]
+  },
+  {
+    "name": "CAST",
+    "description": "To use a supernatural ability, spell, or miracle.",
+    "keywords": [
+      "cast", "conjure", "invoke", "manifest", "use", "chant", "pray"
+    ]
+  },
+  {
+    "name": "CRAFT",
+    "description": "To create or repair an item.",
+    "keywords": [
+      "craft", "build", "make", "forge", "brew", "create", "repair", "fix"
+    ]
+  },
+  {
+    "name": "MEMORIZE",
+    "description": "To study or commit something to memory.",
+    "keywords": ["memorize", "study", "learn", "read", "recall"]
+  },
+  {
+    "name": "USE_SKILL",
+    "description": "To explicitly use a character skill.",
+    "keywords": [] # This will be populated from aptitude blocks
+  },
+  {
+    "name": "OTHER",
+    "description": "General conversation or actions not covered.",
+    "keywords": [] # Fallback intent
+  }
+]
+
+
 @dataclass
 class Intent:
     """Represents a player's intent, loaded from a YAML file."""
@@ -73,6 +162,7 @@ class ProcessedInput:
     raw_text: str
     actions: List[ActionComponent] = field(default_factory=list)
     targets: List[Entity] = field(default_factory=list)
+    interaction_entities: List[Entity] = field(default_factory=list)
     
 class NLPProcessor:
     """Processes player input to understand intent and extract entities."""
@@ -96,50 +186,94 @@ class NLPProcessor:
         
         self.skill_keyword_map: Dict[str, str] = {}
         
-        # Define paths to the intent and skill map files.
-        root_path = ruleset_path.parent.parent
-        core_intents_path = root_path / "intents.yaml"
-        ruleset_intents_path = ruleset_path / "intents.yaml"
-
-        # Load intents from the core and ruleset-specific files.
-        print(f"NLP: Loading core intents from {core_intents_path.name}...")
-        core_intents = self.load_intents_from_file(core_intents_path)
-        self.intents.update(core_intents)
+        # --- Load hardcoded intents ---
+        print("NLP: Loading hardcoded core intents...")
+        for intent_data in CORE_INTENTS_DATA:
+            intent = Intent(
+                name=intent_data.get('name', 'UNKNOWN'),
+                description=intent_data.get('description', ''),
+                keywords=intent_data.get('keywords', [])
+            )
+            if intent.name != 'UNKNOWN':
+                self.intents[intent.name] = intent
         
-        if ruleset_intents_path.exists():
-            print(f"NLP: Loading ruleset intents from {ruleset_intents_path.name}...")
-            ruleset_intents = self.load_intents_from_file(ruleset_intents_path)
-            for name, intent_data in ruleset_intents.items():
-                if name in self.intents:
-                    self.intents[name].keywords.extend(intent_data.keywords)
-                else:
-                    self.intents[name] = intent_data
-        else:
-            print(f"NLP: No ruleset intents file found at {ruleset_intents_path.name}.")
+        print(f"NLP: Loaded {len(self.intents)} core intents.")
+
+        # --- Load attributes.yaml to find skill keywords ---
+        self.all_intent_keywords: List[Tuple[str, Intent]] = []
+        keyword_corpus: List[str] = []
+
+        # 1. Add keywords from all core intents
+        use_skill_intent = self.intents.get("USE_SKILL")
+        for intent_name, intent_obj in self.intents.items():
+            if intent_name == "OTHER" or intent_name == "USE_SKILL":
+                continue 
+            for keyword in intent_obj.keywords:
+                self.all_intent_keywords.append((keyword, intent_obj))
+                keyword_corpus.append(keyword)
+
+        # 2. Scan all YAML files for 'aptitude:' blocks and parse skill keywords
+        if use_skill_intent:
+            print(f"NLP: Scanning for skill keywords in {ruleset_path}...")
             
-        print(f"NLP: Loaded a total of {len(self.intents)} intents.")
+            for yaml_file in ruleset_path.glob("**/*.yaml"):
+                try:
+                    with open(yaml_file, 'r', encoding='utf-8') as f:
+                        attr_docs = [doc for doc in yaml.safe_load_all(f) if doc]
+                    
+                    for doc in attr_docs:
+                        if 'aptitude' not in doc or not isinstance(doc['aptitude'], dict):
+                            continue
+
+                        # Found an aptitude block, process it
+                        for attr_name, attr_data in doc.get('aptitude', {}).items():
+                            if not isinstance(attr_data, dict): continue
+                            
+                            # Loop through skills (e.g., 'blade', 'athletic')
+                            for skill_name, skill_data in attr_data.items():
+                                if not isinstance(skill_data, dict): continue
+
+                                # Add keywords from the skill
+                                skill_keywords = skill_data.get('keywords', [])
+                                for keyword in skill_keywords:
+                                    self.all_intent_keywords.append((keyword, use_skill_intent))
+                                    keyword_corpus.append(keyword)
+                                    # Map keyword to its skill name
+                                    self.skill_keyword_map[keyword] = skill_name
+                                
+                                # Loop through specializations (e.g., 'longsword', 'telepathy')
+                                for spec_name, spec_data in skill_data.items():
+                                    if not isinstance(spec_data, dict): continue
+                                    
+                                    # Add keywords from the specialization
+                                    spec_keywords = spec_data.get('keywords', [])
+                                    for keyword in spec_keywords:
+                                        self.all_intent_keywords.append((keyword, use_skill_intent))
+                                        keyword_corpus.append(keyword)
+                                        # Map specialization keyword to its own name
+                                        self.skill_keyword_map[keyword] = spec_name
+
+                except Exception as e:
+                    print(f"Warning: Error parsing {yaml_file.name} for aptitudes: {e}")
+        else:
+            print(f"NLP: USE_SKILL intent missing, skipping dynamic keyword loading.")
+        
+        print(f"NLP: Built skill map with {len(self.skill_keyword_map)} entries.")
 
         # Load the sentence-transformer model.
         print(f"NLP: Loading sentence transformer model '{self.MODEL_NAME}'...")
         self.model = SentenceTransformer(self.MODEL_NAME)
         
-        self.all_intent_keywords: List[Tuple[str, Intent]] = []
-        keyword_corpus: List[str] = []
-
-        # Create a corpus of all intent keywords.
-        for intent_name, intent_obj in self.intents.items():
-            if intent_name == "OTHER":
-                continue 
-            for keyword in intent_obj.keywords:
-                self.all_intent_keywords.append((keyword, intent_obj))
-                keyword_corpus.append(keyword)
-                
         # Pre-compute embeddings for all keywords for faster similarity search.
         print(f"NLP: Pre-computing embeddings for {len(keyword_corpus)} intent keywords...")
-        self.keyword_embeddings = self.model.encode(
-            keyword_corpus, 
-            convert_to_tensor=True
-        )
+        if not keyword_corpus:
+            print("NLP Warning: No keywords found. Intent classification will fail.")
+            self.keyword_embeddings = None
+        else:
+            self.keyword_embeddings = self.model.encode(
+                keyword_corpus, 
+                convert_to_tensor=True
+            )
         
         # Load the spaCy model.
         print(f"NLP: Loading spaCy model '{self.SPACY_MODEL_NAME}'...")
@@ -152,31 +286,6 @@ class NLPProcessor:
             
         print("NLP: Initialization complete.")
 
-    def load_intents_from_file(self, filepath: Path) -> Dict[str, Intent]:
-        """Loads intents from a YAML file."""
-        loaded_intents: Dict[str, Intent] = {}
-        try:
-            with open(filepath, 'r', encoding='utf-8') as f:
-                data = yaml.safe_load(f)
-            
-            if not data or 'intents' not in data:
-                print(f"Warning: 'intents:' key not found in {filepath.name}")
-                return loaded_intents
-                
-            for intent_data in data['intents']:
-                intent = Intent(
-                    name=intent_data.get('name', 'UNKNOWN'),
-                    description=intent_data.get('description', ''),
-                    keywords=intent_data.get('keywords', [])
-                )
-                if intent.name != 'UNKNOWN':
-                    loaded_intents[intent.name] = intent
-            
-            return loaded_intents
-
-        except Exception as e:
-            print(f"Error loading intents file {filepath}: {e}")
-            return loaded_intents
 
     def classify_intent(self, text_input: str) -> Optional[Tuple[Intent, str]]:
         """
@@ -188,7 +297,7 @@ class NLPProcessor:
         Returns:
             A tuple containing the matched Intent and the keyword that matched, or None.
         """
-        if not text_input or not self.all_intent_keywords:
+        if not text_input or not self.all_intent_keywords or self.keyword_embeddings is None:
             return None
 
         try:
@@ -292,7 +401,16 @@ class NLPProcessor:
         Returns:
             A ProcessedInput object containing the results of the NLP pipeline.
         """
-        targets = self.extract_entities(text_input, known_entities)
+        all_found_entities = self.extract_entities(text_input, known_entities)
+        
+        # Separate targets from interaction entities (spells, etc.)
+        targets = []
+        interaction_entities = []
+        for e in all_found_entities:
+            if e.supertype in ("creature", "object", "environment"):
+                targets.append(e)
+            elif e.supertype == "supernatural":
+                interaction_entities.append(e)
         
         # Split the input into clauses based on conjunctions.
         clauses = re.split(r'[,]| and | then ', text_input, flags=re.IGNORECASE)
@@ -358,7 +476,8 @@ class NLPProcessor:
         return ProcessedInput(
             raw_text=text_input,
             actions=action_components,
-            targets=targets
+            targets=targets,
+            interaction_entities=interaction_entities
         )
 
     def generate_npc_response(self, npc_entity: Entity, player_input: ProcessedInput, game_state: Dict[str, Any]) -> str:
