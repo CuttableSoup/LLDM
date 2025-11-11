@@ -1,5 +1,8 @@
 entity:
   name: buzzed
+  supertype: mundane
+  type: condition
+  subtype: alcohol
   description: the entity is intoxicated
   status:
   - attribute:
@@ -12,6 +15,9 @@ entity:
 
 entity:
   name: drunk
+  supertype: mundane
+  type: condition
+  subtype: alcohol
   description: the entity is inebriated
   status:
   - max_hp: +5
@@ -25,6 +31,9 @@ entity:
 
 entity:
   name: asleep
+  supertype: mundane
+  type: condition
+  subtype: sleep
   description: the entity is sleeping
   status:
   - unconcious
@@ -39,6 +48,9 @@ entity:
 
 entity:
   name: wet
+  supertype: mundane
+  type: condition
+  subtype: elemental
   description: you're all wet
   status:
   - fire: -3

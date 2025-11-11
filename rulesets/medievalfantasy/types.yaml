@@ -117,6 +117,7 @@ category:
     trap:
       subtypes:
         spike:
+        gate:
     tile:
       subtypes:
         wall:
@@ -153,11 +154,17 @@ category:
         psychometabolic:
         psychoportative:
         telepathy:
-    CONDITION:
-      subtypes:
-        enchantment:
     curse:
       subtypes:
         curse:
+
+---
+
+category:
+  supertype: mundane
+  types:
+    condition:
+      subtypes:
+        alcohol:
 
 ...

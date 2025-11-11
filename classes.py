@@ -585,6 +585,8 @@ class GameController:
                 
                 if entity_obj:
                     if entity_obj not in self.initiative_order:
+                        if not ("intelligent" in entity_obj.status or "animalistic" in entity_obj.status or "robotic" in entity_obj.status):
+                            continue
                         self.initiative_order.append(entity_obj)
                         print(f"Added '{entity_name}' (char: '{char_code}') to initiative.")
                 else:

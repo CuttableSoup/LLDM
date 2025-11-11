@@ -111,6 +111,9 @@ entity:
 
 entity:
   name: portcullis
+  supertype: environment
+  type: trap
+  subtype: gate
   description: a closed portcullis
   status:
     closed
