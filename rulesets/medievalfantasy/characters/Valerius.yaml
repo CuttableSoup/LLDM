@@ -36,6 +36,10 @@ entity:
     water: 5
     air: 0
 
+  passable:
+    land: 1
+    requirement: target:self:ally.name.exists()
+
   status:
   - intelligent
   - fire: user:damage_cur_hp-10 # fire damage is reduced by 10
