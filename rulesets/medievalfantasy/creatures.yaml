@@ -11,7 +11,7 @@ entity:
   status:
     - animalistic
   
-  movement:
+  move:
     land: 10
 
   inventory:
@@ -45,7 +45,7 @@ entity:
     dexterity: 6
   status:
     - intelligent
-  movement:
+  move:
     land: 10
 
   unique_entity:

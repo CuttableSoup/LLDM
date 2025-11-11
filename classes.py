@@ -177,7 +177,9 @@ class Entity:
     value: int = 0
     slot: Optional[str] = None
     inventory: List[InventoryItem] = field(default_factory=list)
-    inventory_rules: List[Dict[str, Any]] = field(default_factory=list) # --- NEW ---
+    inventory_rules: List[Dict[str, Any]] = field(default_factory=list) 
+    move: Dict[str, int] = field(default_factory=dict) # --- NEW ---
+    passable: Dict[str, int] = field(default_factory=dict) # --- NEW ---
     supernatural: List[str] = field(default_factory=list)
     memory: List[str] = field(default_factory=list)
     quote: List[str] = field(default_factory=list)
@@ -273,6 +275,17 @@ def create_entity_from_dict(data: Dict[str, Any]) -> Entity:
         rule_entries = [entry['requirement'] for entry in all_inventory_entries if 'requirement' in entry]
         data_copy['inventory_rules'] = rule_entries
     # --- END MODIFICATION ---
+
+    # --- NEW: Handle move, passable, and movement ---
+    # Note: This logic addresses inconsistencies in the YAML files.
+    
+    # 1. Handle 'move' (speed)
+    if 'move' in data_copy:
+        data_copy['move'] = data_copy.get('move', {})
+        
+    # 2. Handle 'passable' (cost)
+    if 'passable' in data_copy:
+        data_copy['passable'] = data_copy.get('passable', {})
 
     # Filter out any keys from the dictionary that are not fields in the Entity dataclass.
     entity_field_names = {f.name for f in fields(Entity)}

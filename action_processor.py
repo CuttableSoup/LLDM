@@ -23,6 +23,9 @@ except ImportError:
         attribute: Dict = {}
         inventory: List = []
         supernatural: List[str] = []
+        move: Dict[str, int] = {} # --- NEW ---
+        passable: Dict[str, int] = {} # --- NEW ---
+        requirement: Dict = {} # --- NEW ---
     class ProcessedInput:
         raw_text: str = ""
         actions: List = []
@@ -58,7 +61,12 @@ def _create_mock_fist() -> Entity:
     fist.apply = fist_data['apply']
     fist.proficiency = fist_data['proficiency']
     fist.requirement = fist_data['requirement']
-    fist.cost = fist_data['cost']
+    try:
+        from classes import Cost
+        fist.cost = Cost()
+    except ImportError:
+        fist.cost = {}
+        
     return fist
 
 
@@ -160,14 +168,47 @@ def process_player_actions(player: Entity, processed_input: ProcessedInput,
                 
             narrative_results.append((narrative_msg, history_msg))
 
-        # --- Handle the "MOVE" intent (Unchanged) ---
+        # --- MODIFIED: Handle the "MOVE" intent ---
         elif intent_name == "MOVE":
-            if target:
-                narrative_msg = f"You move towards {target_name}."
-                history_msg = f"{player.name} moves towards {target_name}."
+            if not target:
+                narrative_msg = "Move where?"
+                history_msg = f"{player.name} wonders where to move."
+                narrative_results.append((narrative_msg, history_msg))
+                continue # Skip to the next action
+
+            # 1. Check Requirements of the destination
+            # We use the InteractionProcessor to check the target's 'requirement' block.
+            # Context: User=player, Target=target(tile), Interaction=target(tile)
+            # This allows 'user:attribute...' and 'target:attribute...' to resolve correctly.
+            processor = InteractionProcessor(player, target, target, loader_attributes)
+            
+            # We call the private _check_requirements method directly to avoid
+            # the side effects of process_interaction() (like costs/apply).
+            if not processor._check_requirements(target.requirement):
+                narrative_msg = " ".join(processor.narrative) or f"You cannot move to {target_name}."
+                history_msg = f"{player.name} fails to move to {target_name}."
+                narrative_results.append((narrative_msg, history_msg))
+                continue
+                
+            # 2. Check Movement Cost vs. Speed
+            # For now, we assume "land" movement. This can be expanded later.
+            player_move_points = player.move.get("land", 0)
+            
+            # Default to 0 (impassable) if not specified, as per your request.
+            move_cost = target.passable.get("land", 0) 
+            
+            if move_cost == 0:
+                narrative_msg = f"You cannot pass through {target_name}."
+                history_msg = f"{player.name} cannot pass through {target_name}."
+            elif player_move_points < move_cost:
+                narrative_msg = f"You don't have enough movement to move to {target_name} (Need: {move_cost}, Have: {player_move_points})."
+                history_msg = f"{player.name} doesn't have enough movement to reach {target_name}."
             else:
-                narrative_msg = "You move to a new position."
-                history_msg = f"{player.name} moves to a new position."
+                # Success!
+                # TODO: Deduct movement points from the player for the turn.
+                narrative_msg = f"You move to {target_name}."
+                history_msg = f"{player.name} moves to {target_name}."
+
             narrative_results.append((narrative_msg, history_msg))
 
         # --- Handle the "INTERACT" intent (Unchanged) ---
