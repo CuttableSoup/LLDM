@@ -254,7 +254,7 @@ class InteractionProcessor:
             if operation == 'add':
                 setattr(entity, path, max(0, min(max_val, current_val + value)))
             elif operation == 'subtract':
-                 setattr(entity, path, max(0, min(max_val, current_val - value)))
+                setattr(entity, path, max(0, min(max_val, current_val - value)))
             else: # set
                 setattr(entity, path, max(0, min(max_val, value)))
         

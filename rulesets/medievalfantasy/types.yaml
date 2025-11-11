@@ -121,10 +121,9 @@ category:
     tile:
       subtypes:
         wall:
-          description: a stone wall
         floor:
-          movement:
-            land: 1
+        air:
+        water:
 
 ---
 

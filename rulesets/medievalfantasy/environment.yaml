@@ -3,6 +3,10 @@ entity:
   supertype: environment
   type: tile
   subtype: wall
+  passable:
+    land: 0
+    water: 0
+    air: 0
   max_hp: 500
   status:
     physical: -50
@@ -14,6 +18,25 @@ entity:
   supertype: environment
   type: tile
   subtype: floor
+  passable:
+    land: 1
+    water: 0
+    air: 1
+  max_hp: 100
+  status:
+    physical: -5
+
+---
+
+entity:
+  name: air
+  supertype: environment
+  type: tile
+  subtype: air
+  passable:
+    land: 1
+    water: 0
+    air: 1
   max_hp: 100
   status:
     physical: -5
@@ -24,6 +47,11 @@ entity:
   name: water
   supertype: environment
   type: tile
+  subtype: water
+  passable:
+    land: 0
+    water: 1
+    air: 1
   subtype: floor
   range: 0
   apply:
