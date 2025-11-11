@@ -241,7 +241,8 @@ def create_entity_from_dict(data: Dict[str, Any]) -> Entity:
                     if 'specialization' in value and isinstance(value['specialization'], dict):
                          process_attr(value['specialization'], path_prefix=f"{current_path}.")
         
-        process_attr(raw_attributes)
+        if isinstance(raw_attributes, dict):
+            process_attr(raw_attributes)
         
         data_copy['attribute'] = final_attributes
     # --- END MODIFICATION ---
@@ -262,7 +263,7 @@ def create_entity_from_dict(data: Dict[str, Any]) -> Entity:
         return output
 
     if 'inventory' in data_copy:
-        all_inventory_entries = data_copy['inventory']
+        all_inventory_entries = data_copy.get('inventory', [])
         
         # Filter for actual items
         item_entries = [entry for entry in all_inventory_entries if 'item' in entry]
@@ -325,84 +326,108 @@ class RulesetLoader:
         if not yaml:
             raise ImportError("PyYAML is required to load rulesets.")
         self.ruleset_path = ruleset_path
-        self.characters: Dict[str, Entity] = {}
-        self.creatures: Dict[str, Entity] = {}
-        self.items: Dict[str, Entity] = {}
-        self.spells: Dict[str, Entity] = {}
-        self.conditions: Dict[str, Entity] = {}
-        self.environment_ents: Dict[str, Entity] = {}
-        self.scenario: Optional[Scenario] = None
         
+        # Special storage for player/named characters
+        self.characters: Dict[str, Entity] = {} 
+        # Main dynamic storage, keyed by supertype
+        self.entities_by_supertype: Dict[str, Dict[str, Entity]] = {}
+        
+        self.scenario: Optional[Scenario] = None
         self.attributes: List[Any] = []
         self.types: List[Any] = []
+        
         print(f"RulesetLoader initialized for path: {self.ruleset_path}")
 
+    # --- MODIFIED: True two-pass dynamic loading ---
     def load_all(self):
         """Loads all YAML files from the ruleset directory."""
         if not self.ruleset_path.is_dir():
             print(f"Error: Ruleset path not found: {self.ruleset_path}")
             return
-
-        for yaml_file in self.ruleset_path.glob("**/*.yaml"):
-            print(f"Processing file: {yaml_file.name}")
             
-            # Special handling for specific file names.
-            if yaml_file.name == "rooms.yaml":
-                self._load_scenario(yaml_file)
+        all_yaml_files = list(self.ruleset_path.glob("**/*.yaml"))
+        schema_files_paths = set() # To track files we process in Pass 1
+
+        # --- PASS 1: Load Schemas and Build Dynamic Maps ---
+        print("--- RulesetLoader: Pass 1 (Schemas) ---")
+        for yaml_file in all_yaml_files:
+            docs = self._load_generic_yaml_all(yaml_file)
+            if not docs:
                 continue
+                
+            is_schema_file = False
+            for doc in docs:
+                if not isinstance(doc, dict):
+                    continue
+                
+                # Identify schema files by their unique top-level keys
+                if 'aptitude' in doc:
+                    self.attributes.append(doc)
+                    is_schema_file = True
+                elif 'category' in doc:
+                    self.types.append(doc)
+                    is_schema_file = True
+                elif 'map' in doc:
+                    # This file contains scenario data
+                    self._load_scenario_from_data(doc, yaml_file.name)
+                    is_schema_file = True
             
-            if yaml_file.name == "attributes.yaml":
-                self.attributes = self._load_generic_yaml_all(yaml_file)
-                continue
-            if yaml_file.name == "types.yaml":
-                self.types = self._load_generic_yaml_all(yaml_file)
+            if is_schema_file:
+                print(f"Identified schema data in: {yaml_file.name}")
+                schema_files_paths.add(yaml_file)
+
+        # Now, dynamically initialize storage based on found supertypes
+        dynamic_supertypes = set()
+        for doc in self.types: # self.types is a list of docs
+            category = doc.get('category', {})
+            if isinstance(category, dict):
+                supertype = category.get('supertype')
+                if supertype:
+                    dynamic_supertypes.add(supertype)
+        
+        for supertype in dynamic_supertypes:
+            self.entities_by_supertype[supertype] = {}
+            
+        print(f"Dynamically initialized storage for supertypes: {dynamic_supertypes}")
+
+        # --- PASS 2: Load All Entities ---
+        print("--- RulesetLoader: Pass 2 (Entities) ---")
+        for yaml_file in all_yaml_files:
+            # Skip the schema files we already processed
+            if yaml_file in schema_files_paths:
                 continue
 
+            print(f"Processing entity file: {yaml_file.name}")
             entities_data = self._load_generic_yaml_all(yaml_file)
             
             for entity_data in entities_data:
-                if not isinstance(entity_data, dict) or 'entity' not in entity_data:
-                    # Allow files like 'templates.yaml' to be skipped silently
-                    if yaml_file.name not in ["templates.yaml"]:
-                        print(f"Warning: Skipping document in {yaml_file.name} (missing 'entity:' tag).")
-                    continue
-                
-                data = entity_data['entity']
-                
-                if 'name' not in data:
-                    print(f"Warning: Skipping entity in {yaml_file.name} (missing 'name').")
-                    continue
-                
-                entity_obj = create_entity_from_dict(data)
-                
-                # Determine the entity type based on the parent directory or supertype.
-                parent_dir = yaml_file.parent.name
-                
-                if parent_dir == "characters":
-                    self.characters[entity_obj.name] = entity_obj
-                elif parent_dir == "creatures":
-                    self.creatures[entity_obj.name] = entity_obj
-                elif parent_dir == "items":
-                    self.items[entity_obj.name] = entity_obj
-                elif parent_dir == "spells":
-                    self.spells[entity_obj.name] = entity_obj
-                elif parent_dir == "conditions":
-                    self.conditions[entity_obj.name] = entity_obj
-                elif parent_dir == "medievalfantasy" and yaml_file.name == "environment.yaml":
-                    self.environment_ents[entity_obj.name] = entity_obj
-                else:
-                    # Fallback to supertype if directory is not specific.
-                    if entity_obj.supertype == "creature" and data.get("is_player", False):
+                # This doc might be an entity
+                if isinstance(entity_data, dict) and 'entity' in entity_data:
+                    data = entity_data['entity']
+                    
+                    if 'name' not in data:
+                        print(f"Warning: Skipping entity in {yaml_file.name} (missing 'name').")
+                        continue
+                    
+                    entity_obj = create_entity_from_dict(data)
+                    
+                    # --- DYNAMIC SORTING LOGIC ---
+                    # 1. Player/Character Check (Highest Priority)
+                    if data.get("is_player", False):
                         self.characters[entity_obj.name] = entity_obj
-                    elif entity_obj.supertype == "creature":
-                        self.creatures[entity_obj.name] = entity_obj
-                    elif entity_obj.supertype == "object":
-                        self.items[entity_obj.name] = entity_obj
-                    elif entity_obj.supertype == "supernatural":
-                        self.spells[entity_obj.name] = entity_obj
-                    elif entity_obj.supertype == "environment":
-                        self.environment_ents[entity_obj.name] = entity_obj
-
+                    
+                    # 2. Supertype-Based Check (Data-driven)
+                    elif entity_obj.supertype and entity_obj.supertype in self.entities_by_supertype:
+                        self.entities_by_supertype[entity_obj.supertype][entity_obj.name] = entity_obj
+                        
+                    # 3. Log Unsorted
+                    else:
+                        print(f"Warning: Could not categorize entity '{entity_obj.name}' in {yaml_file.name}. "
+                              f"Supertype '{entity_obj.supertype}' is not in the dynamic list from types data. "
+                              "It will not be loaded into a category.")
+                
+                # Other docs without 'entity' (like templates.yaml) are skipped silently
+    # --- END MODIFICATION ---
 
     def _load_generic_yaml_all(self, file_path: Path) -> List[Any]:
         """Loads all documents from a generic YAML file."""
@@ -414,18 +439,16 @@ class RulesetLoader:
             print(f"Error loading YAML file {file_path}: {e}")
             return []
 
-    def _load_scenario(self, file_path: Path):
-        """Loads a scenario from a rooms.yaml file."""
+    # --- MODIFIED: Renamed and logic updated to accept data ---
+    def _load_scenario_from_data(self, data: Dict, file_name: str):
+        """Loads a scenario from an already-loaded YAML document."""
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                data = yaml.safe_load(f)
-            
             if not data:
                 return
 
             map_data = data.get('map', {})
             if not map_data:
-                print(f"Warning: 'map:' key not found in {file_path.name}. Skipping scenario load.")
+                print(f"Warning: 'map:' key not found in {file_name}. Skipping scenario load.")
                 return
 
             env_data = map_data.get('environment', {})
@@ -447,10 +470,11 @@ class RulesetLoader:
                 scenario_name=map_data.get('name', 'Unnamed Scenario'),
                 environment=parsed_env
             )
-            print(f"Successfully loaded scenario: {self.scenario.scenario_name}")
+            print(f"Successfully loaded scenario: {self.scenario.scenario_name} (from {file_name})")
 
         except Exception as e:
-            print(f"Error loading scenario file {file_path}: {e}")
+            print(f"Error loading scenario data from {file_name}: {e}")
+    # --- END MODIFICATION ---
 
     def get_character(self, name: str) -> Optional[Entity]:
         """Retrieves a character entity by name."""
@@ -485,13 +509,17 @@ class GameController:
         self.entity_histories: Dict[str, EntityHistory] = {}
         self.current_room: Optional[Room] = None
         
+        # --- Load entities from dynamic storage ---
+        print("GameController: Loading all entities...")
         # Load all entities from the ruleset loader into one map
         self.game_entities.update(self.loader.characters)
-        self.game_entities.update(self.loader.creatures)
-        self.game_entities.update(self.loader.items)
-        self.game_entities.update(self.loader.spells)
-        self.game_entities.update(self.loader.conditions)
-        self.game_entities.update(self.loader.environment_ents)
+        print(f"GameController: Loaded {len(self.loader.characters)} characters.")
+        
+        # Dynamically load from all discovered supertypes
+        for supertype_name, entity_dict in self.loader.entities_by_supertype.items():
+            print(f"GameController: Loading {len(entity_dict)} entities from supertype '{supertype_name}'...")
+            self.game_entities.update(entity_dict)
+        # --- END ---
 
 
         # Initialize histories for intelligent entities.
