@@ -75,7 +75,7 @@ entity:
 
   apply:
     user:attitude.name.add(): self:status.name
-    set(user:attitude.(self:status.name): "1.0,1.0,1.0,1.0,1.0"
+    user:attitude.name.(self:status.name).set(): "1.0,1.0,1.0,1.0,1.0"
 
 ---
 
@@ -88,7 +88,7 @@ entity:
   subtype: curse
   
   apply: # while they have this entity in their status,
-    set(user:attribute.intelligence): 3 # the user will have their intelligence set to 3
+    user:attribute.intelligence.set(): 3 # the user will have their intelligence set to 3
 
   status: # if a spell wants to remove the curse, this is the difficulty
     difficulty: 15

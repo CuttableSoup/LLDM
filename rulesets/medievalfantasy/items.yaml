@@ -278,16 +278,16 @@ entity:
 
   apply:
     curse:
-      user:status.entity.add(): "Cursed - Foolishness" # when it is placed in a slot, the user has the status "Cursed - Foolishness" added to them
+      user:status.add(): "Cursed - Foolishness" # when it is placed in a slot, the user has the status "Cursed - Foolishness" added to them
 
   action: # this is applied to an action
     unequip: # the unequip action, alternatively the disarm action (am unequip action by someone other than the user)
-      requirement: # the unequip action requires the following
-        check(user:status."Cursed - Foolishness".exists()): false # for the status "Cursed - Foolishness" to not exist one the user, then it can be unequiped
-        fail:
-          description: "You try to remove the amulet, but it sears your hand and will not budge!"
-        pass:
-          description: "The amulet's magic fades, and it comes off easily."
+    requirement: # the unequip action requires the following
+      user:status."Cursed - Foolishness".exists(): false # for the status "Cursed - Foolishness" to not exist one the user, then it can be unequiped
+      fail:
+        description: "You try to remove the amulet, but it sears your hand and will not budge!"
+      pass:
+        description: "The amulet's magic fades, and it comes off easily."
   weight: 1
   value: 0
 
@@ -320,30 +320,30 @@ entity:
   
   apply:
     poison:
-      target:status.entity.add(): self:name
-      target:status.(self:name).charges.add(): 2
+      target:status.add(): self:name
+      target:status.(self:name).charges.modify(): 2
 
   status:
     stack: 1
     passes: 0
 
-  check: # run this every frequency
+  test: # run this every frequency
     - frequency: self:status.frequency
       user:status.entity.remove: self:name # it tries to remove itself every round
       requirement:
         or: # but can only remove it itself if the user has passed twice in two rounds, or length is zero
-          check(self:duration.length): 0
-          check(self:status.passes): ">= 2"
+          self:duration.length.check(): 0
+          self:status.passes.check(): ">= 2"
       resist: # the user attempt to resist each round
         user:attribute.physique.fortitude:
           difficulty: "self:status.difficulty + (self:status.stack * 2)"
           pass: # record the pass, subtract a length
-            modify(self:status.passes): +1
-            modify(self:status.duration): -1
+            self:status.passes.modify(): +1
+            self:status.duration.modify(): -1
           fail: # reset the passes, remove a dex, subtract a length
-            set(self:status.passes): 0
-            modify(self:status.duration): -1
-            modify(user:(self:status.effect)): -self:status.potentcy
+            self:status.passes.set(): 0
+            self:status.duration.modify(): -1
+            user:(self:status.effect.modify()): -self:status.potentcy
 
 # --- VAMPIRIC SWORD ---
 entity:
@@ -389,17 +389,15 @@ entity:
     heal:
       choice:
       - user:heal_cur_hp: target:vampiric_strike_piercing * 0.5 # the user is healed for half the amount dealt to the target
-        requirement:
-          and: # but only if the target is a creature and not undead
-            target:supertype: creature
-            not:
-              target:type: undead
+        requirement: # but only if the target is a creature and not undead
+          target:supertype: creature
+          not:
+            target:type: undead
       - user:heal_cur_hp: target:vampiric_strike_slashing * 0.5 # the user is healed for half the amount dealt to the target
-        requirement:
-          and: # but only if the target is a creature and not undead
-            target:supertype: creature
-            not:
-              target:type: undead
+        requirement: # but only if the target is a creature and not undead
+          target:supertype: creature
+          not:
+            target:type: undead
 
   weight: 5
   value: 150
@@ -424,7 +422,7 @@ entity:
 
   status:
     piercing:
-      value: user:strength+2
+      value: user:attribute.strength+2
     poison:
       - name: "giant centipede poison"
         charges: 6
@@ -433,11 +431,12 @@ entity:
         value: 6
 
   proficiency:
-    choice:
-      user:attribute.physique.blade.dagger.roll():
-        difficulty: target:opposed.roll()
-      user:attribute.dexterity.finesse.dagger.roll():
-        difficulty: target:opposed.roll()
+    piercing:
+      choice:
+        user:attribute.physique.blade.dagger.roll():
+          difficulty: target:opposed.roll()
+        user:attribute.dexterity.finesse.dagger.roll():
+          difficulty: target:opposed.roll()
   weight: 1
   value: 120
 
@@ -450,13 +449,12 @@ entity:
         target:damage_cur_hp: self:status.slashing.value.roll()
         target:damage_cur_hp: self:status.bludgeoning.value.roll()
 
-    - target:status.entity.add(): self:status.poison.name
-      modify(self:status.charges): -1
+    - target:status.add(): self:status.poison.name
+      self:status.charges.modify(): -1
       requirement:
-        and:
-        - check(target:damage_cur_hp): "> 0"
-        - check(self:status.charges): "> 0"
-        - target:supertype: creature
+        target:damage_cur_hp.check(): "> 0"
+        self:status.charges.check(): "> 0"
+        target:supertype.set(): creature
 
     - target:damage_cur_hp: self:status.enchantment.value.roll()
 

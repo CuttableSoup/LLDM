@@ -110,7 +110,7 @@ entity:
       quantity: 1
       note: contains a treasure map
 
-  supernatural: # list of supernatural abilities
+  unique: # an entity that cannot be removed and considered equipped
   - cure light wounds
   - fireball
   - adrenaline control

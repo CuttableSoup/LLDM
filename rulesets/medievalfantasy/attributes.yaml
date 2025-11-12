@@ -100,8 +100,6 @@ aptitude:
       keywords:
       - escape
       - slip
-      opposes:
-      - brawling
     fly:
       description: Maneuvering while flying, through magic or natural means.
       keywords:

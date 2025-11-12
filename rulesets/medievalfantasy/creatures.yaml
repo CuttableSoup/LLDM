@@ -9,7 +9,7 @@ entity:
     dexterity: 6
   
   status:
-    - animalistic
+    - basic
   
   move:
     land: 10
@@ -19,14 +19,12 @@ entity:
       quantity: 1
       equipped: true
 
-  unique_entity:
+  unique:
     - name: bite
       supertype: object
       type: natural
       subtype: fangs
       description: sharp fangs
-      slot:
-      - mouth
       apply:
         piercing:
           damage_cur_hp: user:physique.strength+2
@@ -58,7 +56,7 @@ entity:
       - hand
       apply:
         drain:
-          modify(user:physique): -3
+          user:physiquemodify(): -3
       range: 1
       skill: brawling
 

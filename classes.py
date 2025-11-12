@@ -149,7 +149,6 @@ class Entity:
     supertype: str = ""  # e.g., creature, object, supernatural
     type: str = ""
     subtype: str = ""
-    body: str = ""
     max_hp: int = 0
     cur_hp: int = 0
     max_fp: int = 0
@@ -157,6 +156,7 @@ class Entity:
     max_mp: int = 0
     cur_mp: int = 0
     exp: int = 0
+    total_exp: int = 0
     size: str = ""
     weight: float = 0.0
     attribute: Dict[str, Attribute] = field(default_factory=dict)
@@ -175,12 +175,12 @@ class Entity:
     cost: Cost = field(default_factory=Cost)
     duration: List[DurationComponent] = field(default_factory=list)
     value: int = 0
-    slot: Optional[str] = None
+    slot: List[str] = field(default_factory=list)
     inventory: List[InventoryItem] = field(default_factory=list)
     inventory_rules: List[Dict[str, Any]] = field(default_factory=list) 
-    move: Dict[str, int] = field(default_factory=dict) # --- NEW ---
-    passable: Dict[str, int] = field(default_factory=dict) # --- NEW ---
-    supernatural: List[str] = field(default_factory=list)
+    move: Dict[str, int] = field(default_factory=dict)
+    passable: Dict[str, int] = field(default_factory=dict)
+    unique: List[InventoryItem] = field(default_factory=list)
     memory: List[str] = field(default_factory=list)
     quote: List[str] = field(default_factory=list)
 
@@ -537,7 +537,7 @@ class GameController:
 
         # Initialize histories for intelligent entities.
         for name, entity in self.game_entities.items():
-            if any(status in entity.status for status in ["intelligent", "animalistic", "robotic"]):
+            if any(status in entity.status for status in ["intelligent", "basic"]):
                 self.entity_histories[name] = EntityHistory(entity_name=name)
                 print(f"GameController: Initialized history for intelligent entity: {name}")
 
@@ -558,7 +558,7 @@ class GameController:
             self.game_entities[player.name] = player
             
         # Initialize history for the player if they are intelligent.
-        if any(status in player.status for status in ["intelligent", "animalistic", "robotic"]):
+        if any(status in player.status for status in ["intelligent", "basic"]):
             if player.name not in self.entity_histories:
                 self.entity_histories[player.name] = EntityHistory(entity_name=player.name)
                 print(f"GameController: Initialized history for player: {player.name}")
@@ -598,7 +598,7 @@ class GameController:
                 
                 if entity_obj:
                     if entity_obj not in self.initiative_order:
-                        if not ("intelligent" in entity_obj.status or "animalistic" in entity_obj.status or "robotic" in entity_obj.status):
+                        if not ("intelligent" in entity_obj.status or "basic" in entity_obj.status):
                             continue
                         self.initiative_order.append(entity_obj)
                         print(f"Added '{entity_name}' (char: '{char_code}') to initiative.")
@@ -716,7 +716,7 @@ class GameController:
                 continue 
 
             # Only run turns for intelligent NPCs.
-            if not ("intelligent" in npc.status or "animalistic" in npc.status or "robotic" in npc.status):
+            if not ("intelligent" in npc.status or "basic" in npc.status):
                 continue
             
             npc_history_summary = ""

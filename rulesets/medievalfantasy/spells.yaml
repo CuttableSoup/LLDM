@@ -79,7 +79,7 @@ entity:
   slot:
     - mind
   apply:
-    target:status.entity.add(): "adrenaline control"
+    target:status.add(): "adrenaline control"
     choice:
       modify(user:physique): (user:attribute.presence.psionic/2).roll()
       modify(user:dexteriy): (user:attribute.presence.psionic/2).roll()
@@ -118,7 +118,7 @@ entity:
 
   apply:
     charm:
-      target:status.entity.add(): charmed
+      target:status.add(): charmed
       target:status.charmed.name.add(): user:name
 
   resist:

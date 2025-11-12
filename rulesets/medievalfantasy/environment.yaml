@@ -121,13 +121,10 @@ entity:
       difficulty: 15
       pass:
         description: you sucessfuly disarmed the trap
-        status:
-          disarm
+        self:status.remove(): armed
       fail:
         description: you triggered the trap
-        status:
-          trigger
-          disarm
+        self:status.remove(): armed
   attribute:
     physique:
       base: 9
@@ -143,10 +140,21 @@ entity:
   type: trap
   subtype: gate
   description: a closed portcullis
+  passable:
+    land: 0
+    water: 0
+    air: 0
   status:
-    closed
     locked
   max_hp: 100
+  apply:
+    choice:
+      open:
+        self:passable.land.set(): 1
+        self:passable.air.set(): 1
+      close:
+        self:passable.land.set(): 0
+        self:passable.air.set(): 0
   damage_mod:
     physical: -10
   proficiency:
@@ -154,20 +162,18 @@ entity:
       difficulty: 20
       pass:
         description: you sucessfuly lift the portcullis
-        status:
-          open
-          broken
+        self:passable.land.set(): 1
+        self:passable.air.set(): 1
+        self:status.add(): broken
       fail:
         description: the portcullis does not budge
     user:attribute.dexterity.trickery.roll():
       difficulty: 15
       pass:
         description: you sucessfuly unlock the portcullis
-        status:
-          open
+        self:status.remove(): locked
       fail:
         description: the lock to the portcullis jams
-        status:
-          broken
+        self:status.add(): broken
 
 ...
