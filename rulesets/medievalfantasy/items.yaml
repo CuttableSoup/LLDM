@@ -431,7 +431,6 @@ entity:
         value: 6
 
   proficiency:
-    piercing:
       choice:
         user:attribute.physique.blade.dagger.roll():
           difficulty: target:opposed.roll()
