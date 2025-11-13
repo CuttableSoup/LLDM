@@ -499,6 +499,7 @@ try:
     from action_processor import process_player_actions
     from config_manager import ConfigManager
     from llm_manager import LLMManager, OLLAMA_MODELS
+    from prompts import prompts
 except ImportError as e:
     print(f"GameController (in classes.py) Error: Failed to import modules: {e}")
     class NLPProcessor:
@@ -724,14 +725,12 @@ class GameController:
                 npc_history_summary = self.entity_histories[npc.name].get_summary_for_llm()
             
             # Create a prompt for the LLM to generate the NPC's action.
-            npc_prompt = (
-                f"--- Your Context ---\n"
-                f"You are {npc.name}. \n"
-                f"{npc_history_summary}\n"
-                f"--- Current Situation ---\n"
-                f"You are in a room with: {game_state_context['actors_present']}. \n"
-                f"The player, {self.player_entity.name}, just did this: '{player_action_summary}'. \n"
-                f"What is your reaction or next action? Respond in character, briefly."
+            npc_prompt = prompts['npc_action'].format(
+                npc_name=npc.name,
+                npc_history=npc_history_summary,
+                actors_present=game_state_context['actors_present'],
+                player_name=self.player_entity.name,
+                player_action=player_action_summary
             )
             
             # Generate the NPC's response using the LLM.
@@ -780,15 +779,7 @@ class GameController:
             action_log = "\n".join(self.round_history)
             
             # Create a prompt for the LLM to narrate a summary of the round.
-            narrator_prompt = (
-                f"You are the narrator. The following is a log of all actions and dialogue "
-                f"that just occurred in a single round. Summarize these events into an "
-                f"engaging, brief narrative summary for the player. Do not act as an NPC.\n"
-                f"--- ACTION LOG --- "
-                f"{action_log}\n"
-                f"--- END LOG --- "
-                f"Narrate the summary:"
-            )
+            narrator_prompt = prompts['narrator_summary'].format(action_log=action_log)
             
             summary = self.llm_manager.generate_response(
                 prompt=narrator_prompt,
@@ -831,3 +822,25 @@ class GameController:
         """Processes any updates that should occur at the end of a round."""
         # This is a placeholder for future functionality, such as status effect updates.
         pass
+
+    def answer_player_question(self, question: str):
+        """Answers a player's out-of-character question using the ADaM assistant."""
+        if not self.player_entity:
+            return
+
+        game_state = self._get_current_game_state(self.player_entity)
+        
+        prompt = prompts['adam_assistant'].format(
+            question=question,
+            game_state=game_state
+        )
+
+        answer = self.llm_manager.generate_response(
+            prompt=prompt,
+            history=self.llm_chat_history
+        )
+
+        if answer.startswith("Error:"):
+            self.update_narrative_callback(f"\n--- {answer} ---")
+        else:
+            self.update_narrative_callback(f"\n--- ADaM: {answer} ---")
