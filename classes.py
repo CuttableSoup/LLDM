@@ -175,12 +175,12 @@ class Entity:
     cost: Cost = field(default_factory=Cost)
     duration: List[DurationComponent] = field(default_factory=list)
     value: int = 0
-    slot: List[str] = field(default_factory=list)
+    slot: Optional[str] = None
     inventory: List[InventoryItem] = field(default_factory=list)
     inventory_rules: List[Dict[str, Any]] = field(default_factory=list) 
     move: Dict[str, int] = field(default_factory=dict)
     passable: Dict[str, int] = field(default_factory=dict)
-    unique: List[InventoryItem] = field(default_factory=list)
+    unique_entity: List['Entity'] = field(default_factory=list)
     memory: List[str] = field(default_factory=list)
     quote: List[str] = field(default_factory=list)
 
