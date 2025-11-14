@@ -117,7 +117,7 @@ class Quality:
     eye: str = ""
     gender: str = ""
     hair: str = ""
-    height: int = 0
+    height: str = ""
     skin: str = ""
     age: str = ""
 
@@ -175,7 +175,7 @@ class Entity:
     cost: Cost = field(default_factory=Cost)
     duration: List[DurationComponent] = field(default_factory=list)
     value: int = 0
-    slot: Optional[str] = None
+    slot: List[str] = field(default_factory=list)
     inventory: List[InventoryItem] = field(default_factory=list)
     inventory_rules: List[Dict[str, Any]] = field(default_factory=list) 
     move: Dict[str, int] = field(default_factory=dict)

@@ -59,6 +59,7 @@ entity:
   # Confidence (Fearful ↔ Confident)
   # Respect (Disdainful ↔ Admiring)
   # Obligation (Unfettered ↔ Indebted)
+  # Intimacy (Disgusted ↔ Captivated)
     default: 0,0,0,0,0 # base attitude applied to all before modified
     type.humanoid.human: 0.5,0.5,0,0,0 # likes and trusts humans
     type.humanoid.orc: -0.5,-0.5,0,0,0 # hates and distrusts orcs
@@ -86,7 +87,7 @@ entity:
     eye: brown
     gender: male
     hair: brown
-    height: 72
+    height: tall
     skin: tan
     age: adult
 
