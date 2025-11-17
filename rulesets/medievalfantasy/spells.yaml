@@ -13,7 +13,7 @@ entity:
     - mind
   apply:
     fire:
-      target:damage_cur_hp: (user:attribute.intelligence.arcane.evocation/2).roll()
+      target:damage_cur_hp: user:attribute.intelligence.arcane.evocation/2.roll()
   resist:
     target:dexterity.reflex.roll(): user:attribute.intelligence.arcane
   proficiency:
@@ -46,7 +46,7 @@ entity:
     - mind
   apply:
     heal:
-      target:heal_cur_hp: (user:attribute.wisdom.miracle.conjuration/2).roll()
+      target:heal_cur_hp: user:attribute.wisdom.miracle.conjuration/2.roll()
   resist:
     target:attribute.physique.fortitude.roll(): user:attribute.wisdom.miracle.roll()
   proficiency:
@@ -81,8 +81,8 @@ entity:
   apply:
     target:status.add(): "adrenaline control"
     choice:
-      modify(user:physique): (user:attribute.presence.psionic/2).roll()
-      modify(user:dexteriy): (user:attribute.presence.psionic/2).roll()
+      modify(user:physique): user:attribute.presence.psionic/2.roll()
+      modify(user:dexteriy): user:attribute.presence.psionic/2.roll()
   proficiency:
     user:attribute.presence.psionic.psychometabolic.roll():
       difficulty: 15

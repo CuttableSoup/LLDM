@@ -1,0 +1,162 @@
+entity:
+  name: gem
+  description: precious gem
+  supertype: object
+  type: treasure
+  subtype: gem
+  weight: 0.1
+  value: 50
+
+---
+
+entity:
+  name: gold coin
+  description: minted coin
+  supertype: object
+  type: treasure
+  subtype: gold
+  weight: 0.01
+  value: 1
+
+---
+
+entity:
+  name: silver coin
+  description: minted coin
+  supertype: object
+  type: treasure
+  subtype: silver
+  weight: 0.01
+  value: 0.1
+
+---
+
+entity:
+  name: copper coin
+  description: minted coin
+  supertype: object
+  type: treasure
+  subtype: copper
+  weight: 0.01
+  value: 0.01
+
+---
+
+entity:
+  name: beer
+  supertype: object
+  type: drink
+  subtype: alcohol
+  target:
+    - supertype:creature
+  apply:
+    alcohol: +1
+    status:
+    - buzzed:
+      requirement:
+        user:status.alcohol: 5
+    - drunk:
+      requirement:
+        user:status.alcohol: 10
+    - unconscious:
+      requirement:
+        user:status.alcohol: 15
+  duration:
+    - frequency: hour
+      length: 8
+
+---
+
+entity:
+  name: waterskin
+  description: leather waterskin
+  supertype: object
+  type: container
+  subtype: leather
+
+  inventory:
+    - requirement:
+      type: liquid
+      quantity: 8
+    - item: potion of healing
+      quantity: 8
+
+---
+
+entity:
+  name: glass vial of poison
+  description: glass vial
+  supertype: object
+  type: container
+  subtype: glass
+
+  inventory:
+  - requirement:
+      item.type: liquid
+      quantity: 1
+  - item: giant centipede poison
+    quantity: 1
+
+---
+
+entity:
+  name: "the poison for kuzco" # kuzco's poison
+  supertype: object
+  type: consumable
+  subtype: potion
+
+  apply:
+    target:type: quadruped
+    target:subtype: llama # I'm a llama
+    requirement:
+      user:supertype: creature
+
+---
+
+entity:
+  name: backpack
+  description: leather backpack
+  supertype: object
+  type: container
+  subtype: leather
+
+  inventory:
+    - requirement:
+      bulk: 5
+      weight: 50
+
+---
+
+entity:
+  name: potion of healing
+  description: luminous fluid
+  supertype: object
+  type: liquid
+  subtype: potion
+  target:
+    - supertype:creature
+  slot:
+    - hand
+  apply:
+    heal:
+      target:heal_cur_hp: 5
+  weight: 1
+  value: 10
+
+---
+
+entity:
+  name: glass vial of healing
+  description: glass vial
+  supertype: object
+  type: container
+  subtype: glass
+
+  inventory:
+    - requirement:
+      type: liquid
+      quantity: 1
+    - item: potion of healing
+      quantity: 1
+
+...

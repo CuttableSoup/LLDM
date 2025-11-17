@@ -1,4 +1,10 @@
 entity:
+  name: intelligence
+  
+
+---
+
+entity:
   name: buzzed
   supertype: mundane
   type: condition
@@ -92,4 +98,81 @@ entity:
 
   status: # if a spell wants to remove the curse, this is the difficulty
     difficulty: 15
+
+---
+
+enitiy:
+  name: bleeding
+  supertype: mundane
+  type: condition
+  status:
+    difficulty: 13
+    duration: 4
+    frequency: round
+  auto: # run this every frequency
+    - frequency: self:status.frequency
+      user:status.entity.remove(): self:name # it tries to remove itself every round
+      self:status.duration.modify(): -1
+      user:damage_cur_hp.roll(): 6
+      requirement:
+        - self:duration.length.check(): ">0"
+        - supertype: creature
+        - not:
+          - subtype: specter
+
+---
+
+# --- THE POISON ---
+# example of an entity with three 'states'
+# in the vial, yet to be used
+# on the blade, ready to be applied
+# in the taget, applying the deleterious effects
+entity:
+  name: "giant centipede poison"
+  description: "A neurotoxin makes your limbs feel heavy and clumsy."
+  supertype: object
+  type: poison
+  subtype: injury
+  status:
+    difficulty: 13
+    duration: 4
+    frequency: round
+    effect: attribute.dexterity
+    potentcy: 1
+
+  # this can be repeated for each injury poison
+  slot:
+    - blade
+  target:
+    - supertype: creature
+    - not:
+      - type: undead
+  
+  apply:
+    - name: poison
+      target:status.add(): self:name
+      target:status.(self:name).charges.modify(): 2
+
+  status:
+    stack: 1
+    passes: 0
+
+  auto: # run this every frequency
+    - frequency: self:status.frequency
+      user:status.entity.remove: self:name # it tries to remove itself every round
+      requirement:
+        or: # but can only remove it itself if the user has passed twice in two rounds, or length is zero
+          self:duration.length.check(): 0
+          self:status.passes.check(): ">= 2"
+      resist: # the user attempt to resist each round
+        user:attribute.physique.fortitude:
+          difficulty: "self:status.difficulty + (self:status.stack * 2)"
+          pass: # record the pass, subtract a length
+            self:status.passes.modify(): +1
+            self:status.duration.modify(): -1
+          fail: # reset the passes, remove a dex, subtract a length
+            self:status.passes.set(): 0
+            self:status.duration.modify(): -1
+            user:(self:status.effect.modify()): -self:status.potentcy
+
 ...

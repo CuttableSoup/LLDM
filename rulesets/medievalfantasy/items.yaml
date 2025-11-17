@@ -15,9 +15,9 @@ entity:
   apply:
     choice:
       piercing:
-        target:damage_cur_hp: (user:attribute.physique.strength+6).roll()
+        target:damage_cur_hp: user:attribute.physique.strength+6.roll()
       slashing:
-        target:damage_cur_hp: (user:attribute.physique.strength+6).roll()
+        target:damage_cur_hp: user:attribute.physique.strength+6.roll()
   proficiency:
     user:attribute.physique.blade.longsword.roll():
       difficulty: target:opposed.roll()
@@ -45,9 +45,9 @@ entity:
   apply:
     choice:
       piercing:
-        target:damage_cur_hp: (user:attribute.physique.strength+10).roll()
+        target:damage_cur_hp: user:attribute.physique.strength+10.roll()
       slashing:
-        target:damage_cur_hp: (user:attribute.physique.strength+10).roll()
+        target:damage_cur_hp: user:attribute.physique.strength+10.roll()
   proficiency:
     user:attribute.physique.blade.greatsword.roll():
       difficulty: target:opposed.roll()
@@ -133,139 +133,6 @@ entity:
 
 ---
 
-entity:
-  name: glass vial of healing
-  description: glass vial
-  supertype: object
-  type: container
-  subtype: glass
-
-  inventory:
-    - requirement:
-      type: liquid
-      quantity: 1
-    - item: potion of healing
-      quantity: 1
-
----
-
-entity:
-  name: waterskin
-  description: leather waterskin
-  supertype: object
-  type: container
-  subtype: leather
-
-  inventory:
-    - requirement:
-      type: liquid
-      quantity: 8
-    - item: potion of healing
-      quantity: 8
-
----
-
-entity:
-  name: backpack
-  description: leather backpack
-  supertype: object
-  type: container
-  subtype: leather
-
-  inventory:
-    - requirement:
-      bulk: 5
-      weight: 50
-
----
-
-entity:
-  name: potion of healing
-  description: luminous fluid
-  supertype: object
-  type: liquid
-  subtype: potion
-  target:
-    - supertype:creature
-  slot:
-    - hand
-  apply:
-    heal:
-      target:heal_cur_hp: 5
-  weight: 1
-  value: 10
-
----
-
-entity:
-  name: gem
-  description: precious gem
-  supertype: object
-  type: treasure
-  subtype: gem
-  weight: 0.1
-  value: 50
-
----
-
-entity:
-  name: gold coin
-  description: minted coin
-  supertype: object
-  type: treasure
-  subtype: gold
-  weight: 0.01
-  value: 1
-
----
-
-entity:
-  name: silver coin
-  description: minted coin
-  supertype: object
-  type: treasure
-  subtype: silver
-  weight: 0.01
-  value: 0.1
-
----
-
-entity:
-  name: copper coin
-  description: minted coin
-  supertype: object
-  type: treasure
-  subtype: copper
-  weight: 0.01
-  value: 0.01
-
----
-
-entity:
-  name: beer
-  supertype: object
-  type: drink
-  subtype: alcohol
-  target:
-    - supertype:creature
-  apply:
-    alcohol: +1
-    status:
-    - buzzed:
-      requirement:
-        user:status.alcohol: 5
-    - drunk:
-      requirement:
-        user:status.alcohol: 10
-    - unconscious:
-      requirement:
-        user:status.alcohol: 15
-  duration:
-    - frequency: hour
-      length: 8
-
----
-
 # --- CURSED AMULET ---
 entity:
   name: amulet of foolishness
@@ -291,59 +158,7 @@ entity:
   weight: 1
   value: 0
 
-
-# --- THE POISON ---
-# example of an entity with three 'states'
-# in the vial, yet to be useds
-# on the blade, ready to be applied
-# in the taget, applying the deleterious effects
-entity:
-  name: "giant centipede poison"
-  description: "A neurotoxin makes your limbs feel heavy and clumsy."
-  supertype: object
-  type: poison
-  subtype: injury
-  status:
-    difficulty: 13
-    duration: 4
-    frequency: round
-    effect: attribute.dexterity
-    potentcy: 1
-
-  # this can be repeated for each injury poison
-  slot:
-    - blade
-  target:
-    - supertype: creature
-    - not:
-      - type: undead
-  
-  apply:
-    poison:
-      target:status.add(): self:name
-      target:status.(self:name).charges.modify(): 2
-
-  status:
-    stack: 1
-    passes: 0
-
-  test: # run this every frequency
-    - frequency: self:status.frequency
-      user:status.entity.remove: self:name # it tries to remove itself every round
-      requirement:
-        or: # but can only remove it itself if the user has passed twice in two rounds, or length is zero
-          self:duration.length.check(): 0
-          self:status.passes.check(): ">= 2"
-      resist: # the user attempt to resist each round
-        user:attribute.physique.fortitude:
-          difficulty: "self:status.difficulty + (self:status.stack * 2)"
-          pass: # record the pass, subtract a length
-            self:status.passes.modify(): +1
-            self:status.duration.modify(): -1
-          fail: # reset the passes, remove a dex, subtract a length
-            self:status.passes.set(): 0
-            self:status.duration.modify(): -1
-            user:(self:status.effect.modify()): -self:status.potentcy
+---
 
 # --- VAMPIRIC SWORD ---
 entity:
@@ -373,10 +188,10 @@ entity:
   status:
     vampiric_strike_piercing:
       piercing:
-        target:damage_cur_hp: (user:attribute.physique.strength+6).roll()-target:opposed.roll()
+        target:damage_cur_hp: user:attribute.physique.strength+6.roll()-target:opposed.roll()
     vampiric_strike_slashing:
       slashing:
-        target:damage_cur_hp: (user:attribute.physique.strength+6).roll()-target:opposed.roll()
+        target:damage_cur_hp: user:attribute.physique.strength+6.roll()-target:opposed.roll()
 
   # apply the following only once (this only happens is the proficiency check passed)
   apply:
@@ -421,8 +236,6 @@ entity:
   range: 1
 
   status:
-    piercing:
-      value: user:attribute.strength+2
     poison:
       - name: "giant centipede poison"
         charges: 6
@@ -457,35 +270,5 @@ entity:
 
     - target:damage_cur_hp: self:status.enchantment.value.roll()
 
----
-
-entity:
-  name: glass vial of poison
-  description: glass vial
-  supertype: object
-  type: container
-  subtype: glass
-
-  inventory:
-  - requirement:
-      item.type: liquid
-      quantity: 1
-  - item: giant centipede poison
-    quantity: 1
-
-
----
-
-entity:
-  name: "the poison for kuzco" # kuzco's poison
-  supertype: object
-  type: consumable
-  subtype: potion
-
-  apply:
-    target:type: quadruped
-    target:subtype: llama # I'm a llama
-    requirement:
-      user:supertype: creature
 
 ...
