@@ -81,8 +81,8 @@ entity:
   apply:
     target:status.add(): "adrenaline control"
     choice:
-      modify(user:physique): user:attribute.presence.psionic/2.roll()
-      modify(user:dexteriy): user:attribute.presence.psionic/2.roll()
+      user:physique.modify(): user:attribute.presence.psionic/2.roll()
+      user:dexteriy.modify(): user:attribute.presence.psionic/2.roll()
   proficiency:
     user:attribute.presence.psionic.psychometabolic.roll():
       difficulty: 15
