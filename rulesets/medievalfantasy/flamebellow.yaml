@@ -1,0 +1,165 @@
+# This schema is a generic template for creating entities in the LLDM game.
+# It is based on the Entity class in classes.py and provides a structured way
+# to define all aspects of a game entity, from its basic stats to its
+# interactions and narrative elements.
+entity:
+  # --- Core Identification ---
+  # The name of the entity, which should be unique.
+  name: "Flamebellow"
+  # The broad category of the entity (e.g., creature, item, spell).
+  supertype: "object"
+  # The specific type of the entity (e.g., humanoid, weapon, illusion).
+  type: "blade"
+  # A more specific subtype (e.g., human, sword, charm).
+  subtype: "sword"
+
+  # --- Vitals ---
+  # The maximum hit points of the entity.
+  max_hp: 10
+  # The current hit points of the entity.
+  cur_hp: 10
+  # The maximum mana or magic points.
+  max_mp: 10
+  # The current mana or magic points.
+  cur_mp: 10
+  # The maximum fatigue or stamina points.
+  max_fp: 10
+  # The current fatigue or stamina points.
+  cur_fp: 10
+
+  # --- Physicality & Stats ---
+  # The size category of the entity (e.g., fine, diminutive, tiny, small, medium, large, huge, gargantuan, colossal).
+  size: "small"
+  # The weight of the entity.
+  weight: 5.0
+  # The experience points yet to be expended for improving this entity (players only).
+  exp: 100
+  # The total accumulated experience points of the entity.
+  total_exp: 200
+  # The monetary value of the entity.
+  value: 1000
+
+  # --- Movement ---
+  # A dictionary defining the entity's movement speeds for different terrain (e.g., land, water, air).
+  move:
+    land: 0
+    water: 0
+    air: 0
+  # A dictionary defining the types of terrain entities can pass through this entity for what cost.
+  passable:
+    land: 1
+    water: 1
+    air: 1
+
+  # --- Attributes & Qualities ---
+  # A dictionary of the entity's attributes, skills, and specializations (e.g., physique, dexterity, intelligence).
+  attribute:
+    physique: 10
+    physique.fortitude: 6
+    intelligence: 10
+    intelligence.arcane: 6
+    intelligence.arcane.evocation: 6
+  # A dictionary of strings defining the physical qualities of the entity.
+  quality:
+    age: "ancient"
+    gender: "male"
+
+  # --- Social & Status ---
+  # Define allies by grouping them under their identifier type
+  ally:
+    subtype:
+      - human
+      - elf
+    name:
+      - Valerius
+
+  # Define enemies similarly
+  enemy:
+    subtype:
+      - orc
+    supertype:
+      - undead
+  # A dictionary representing the entity's attitude towards others. Default, racial, personal, etc...
+    # Disposition (Hostile ↔ Friendly)
+    # Trust (Suspicious ↔ Trusting)
+    # Confidence (Fearful ↔ Confident)
+    # Respect (Disdainful ↔ Admiring)
+    # Obligation (Unfettered ↔ Indebted)
+    # Intimacy (Disgusted ↔ Enamored)
+  attitude:
+    default: [0, 0, 0, 0, 0, 0]
+    subtype:
+      orc: [-100, -100, 100, -100, -100, -100]
+      human: [50, 50, 50, 50, 50, 0]
+    name:
+      Valerius: [100, 100, 100, 100, 100, 0]
+
+  # A list of languages the entity can understand or speak.
+  language:
+    - "common"
+
+  target:
+    - supertype: creature
+    - supertype: object
+  
+  # --- Interaction & Combat Rules ---
+  action:
+    # Reference a standard action defined elsewhere (e.g. in spells.yaml)
+    - type: use
+      entity: fireball
+      cost:
+        cur_mp: 5
+      requirements:
+        user.name: Valerius
+
+    # Reference a standard mechanic (attack) but customize parameters
+    - type: attack
+      name: slashing
+      damage_cur_hp: user.physique.strength.roll()+3
+      cost: { cur_fp: 1 }
+      range: 1
+      # Add a unique effect on top of the standard attack
+      on_hit:
+        - apply_entity: bleeding
+          duration: { frequency: round, length: 3 }
+      target:
+        - supertype: creature
+        - supertype: object
+        - not:
+          - subtype: specter
+      parameters:
+        magnitude: 3 
+
+  # The duration of an applied effect.
+  duration: []
+
+  # --- Inventory & Abilities ---
+  # A list of equipment slots this entity occupies if it is an item.
+  slot:
+  - hand
+  # The bulkiness of the entity.
+  bulk: 2
+  # A list of entities contained within this entity's inventory.
+  inventory:
+    inventory_rules:
+      slots_only: true
+      quantity_allowed:
+      type_allowed:
+      - type: miracle
+      - type: arcane
+    list:
+    - name: fireball
+      quantity: 10
+      equipped: true
+
+  # --- Narrative ---
+  # A list of memories or knowledge the entity possesses.
+  memory: []
+  # A list of quotes or phrases the entity might say.
+  quote:
+    - "Hello, world."
+
+  # --- Other ---
+  # A list of unique entities that are part of this entity and cannot normally be interacted with.
+  entity:
+  - name: material

@@ -120,6 +120,7 @@ class Quality:
     height: str = ""
     skin: str = ""
     age: str = ""
+    material: str = ""
 
 @dataclass
 class Cost:
@@ -132,6 +133,7 @@ class DurationComponent:
     """Represents the duration of an effect."""
     frequency: str = ""
     length: int = 0
+    timestamp: int = 0
 
 @dataclass
 class InventoryItem:

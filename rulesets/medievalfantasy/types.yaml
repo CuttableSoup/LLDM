@@ -108,6 +108,11 @@ category:
       subtypes:
         potion:
         poison:
+    arcane:
+      subtypes:
+        scroll:
+          slot:
+            mind: 1
 
 ---
 

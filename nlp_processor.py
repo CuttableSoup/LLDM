@@ -62,7 +62,17 @@ CORE_INTENTS_DATA = [
     "description": "To assault or strike at an entity.",
     "keywords": [
         "attack", "hit", "swing", "strike", "fight", "harm",
-        "punch", "kick", "stab", "slash"
+        "punch", "kick", "stab", "slash",
+        "cast", "conjure", "invoke", "manifest", "use", "chant", "pray"
+        ]
+    },
+    {
+    "name": "USE",
+    "description": "To use, open, or manipulate an object or entity.",
+    "keywords": [
+        "open", "get", "take", "use", "pull", "push", "look",
+        "inspect", "examine", "touch", "read", "activate", "deactivate",
+        "equip", "unequip"
         ]
     },
     {
@@ -74,20 +84,10 @@ CORE_INTENTS_DATA = [
         ]
     },
     {
-    "name": "CHANGE_STANCE",
-    "description": "To change the creature's physical stance.",
-    "keywords": [
-        "stand", "stand up", "get up", "crouch", "duck", "hide",
-        "pronate", "lie down", "go prone", "get down"
-        ]
-    },
-    {
-    "name": "INTERACT",
+    "name": "TAKE",
     "description": "To use, open, or manipulate an object or entity.",
     "keywords": [
-        "open", "get", "take", "use", "pull", "push", "look",
-        "inspect", "examine", "touch", "read", "activate", "deactivate",
-        "equip", "unequip"
+        "take"
         ]
     },
     {
@@ -110,13 +110,6 @@ CORE_INTENTS_DATA = [
     "description": "To exchange items with another entity.",
     "keywords": [
         "trade", "buy", "sell", "barter", "purchase", "shop", "vendor"
-        ]
-    },
-    {
-    "name": "CAST",
-    "description": "To use a supernatural ability, spell, or miracle.",
-    "keywords": [
-        "cast", "conjure", "invoke", "manifest", "use", "chant", "pray"
         ]
     },
     {
@@ -148,9 +141,9 @@ CORE_INTENTS_DATA = [
         ]
     },
     {
-    "name": "OTHER",
-    "description": "General conversation or actions not covered.",
-    "keywords": [ # Fallback intent
+        "name": "OTHER",
+        "description": "General conversation or actions not covered.",
+        "keywords": [ # Fallback intent
         ]
     }
 ]
