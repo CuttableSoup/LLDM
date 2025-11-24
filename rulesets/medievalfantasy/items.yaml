@@ -4,26 +4,38 @@ entity:
   supertype: object
   type: blade
   subtype: sword
-  target:
-    - supertype: creature
-    - supertype: object
-    - not:
-      - subtype: specter
   slot:
     - hand
-  range: 1
-  apply:
-    choice:
-      piercing:
-        target:damage_cur_hp: user:attribute.physique.strength+6.roll()
-      slashing:
-        target:damage_cur_hp: user:attribute.physique.strength+6.roll()
-  proficiency:
-    user:attribute.physique.blade.longsword.roll():
-      difficulty: target:opposed.roll()
   weight: 5
   bulk: 1
   value: 10
+  interaction:
+    - type: attack
+      range: 1
+      target:
+        effect:
+          - name: slashing
+            magnitude:
+              source: user
+              stat: strength
+              modifier: 6
+              type: roll
+        requirement:
+          - or:
+              supertype: creature
+              supertype: object
+          - not:
+              subtype: specter
+      user:
+        requirement:
+          - test:
+              source: user
+              stat: physique.blade.longsword
+              type: roll
+            difficulty:
+              source: target
+              stat: opposed
+              type: roll
 
 ---
 
@@ -33,26 +45,38 @@ entity:
   supertype: object
   type: blade
   subtype: sword
-  target:
-    - supertype: creature
-    - supertype: object
-    - not:
-      - type: specter
   slot:
     - hand
     - hand
-  range: 1
-  apply:
-    choice:
-      piercing:
-        target:damage_cur_hp: user:attribute.physique.strength+10.roll()
-      slashing:
-        target:damage_cur_hp: user:attribute.physique.strength+10.roll()
-  proficiency:
-    user:attribute.physique.blade.greatsword.roll():
-      difficulty: target:opposed.roll()
   weight: 5
   value: 10
+  interaction:
+    - type: attack
+      range: 1
+      target:
+        effect:
+          - name: slashing
+            magnitude:
+              source: user
+              stat: strength
+              modifier: 10
+              type: roll
+        requirement:
+          - or:
+              supertype: creature
+              supertype: object
+          - not:
+              type: specter
+      user:
+        requirement:
+          - test:
+              source: user
+              stat: physique.blade.greatsword
+              type: roll
+            difficulty:
+              source: target
+              stat: opposed
+              type: roll
 
 ---
 
@@ -64,12 +88,12 @@ entity:
   subtype: medium
   slot: 
     - chest
-  apply:
-    user:status.bludgeoning: -6
-    user:status.slashing: -6
-    user:status.piercing: -6
   weight: 10
   value: 20
+  resist:
+    bludgeoning: -6
+    slashing: -6
+    piercing: -6
 
 ---
 
@@ -79,17 +103,14 @@ entity:
   supertype: object
   type: shield
   subtype: heavy
-  target:
-    - not:
-      - subtype: specter
   slot:
     - hand
-  apply:
-    user:status.bludgeoning: -6
-    user:status.slashing: -6
-    user:status.piercing: -6
   weight: 40
   value: 20
+  resist:
+    bludgeoning: -6
+    slashing: -6
+    piercing: -6
 
 ---
 
@@ -99,17 +120,14 @@ entity:
   supertype: object
   type: shield
   subtype: medium
-  target:
-    - not:
-      - subtype: specter
   slot:
     - hand
-  apply:
-    user:status.bludgeoning: -4
-    user:status.slashing: -4
-    user:status.piercing: -4
   weight: 7
   value: 5
+  resist:
+    bludgeoning: -4
+    slashing: -4
+    piercing: -4
 
 ---
 
@@ -119,21 +137,17 @@ entity:
   supertype: object
   type: shield
   subtype: light
-  target:
-    - not:
-      - subtype: specter
   slot:
     - hand
-  apply:
-    user:status.bludgeoning: -2
-    user:status.slashing: -2
-    user:status.piercing: -2
   weight: 3
   value: 2
+  resist:
+    bludgeoning: -2
+    slashing: -2
+    piercing: -2
 
 ---
 
-# --- CURSED AMULET ---
 entity:
   name: amulet of foolishness
   description: A heavy gold amulet that feels cold to the touch.
@@ -142,133 +156,124 @@ entity:
   subtype: amulet
   slot:
     - neck
-
-  apply:
-    curse:
-      user:status.add(): "Cursed - Foolishness" # when it is placed in a slot, the user has the status "Cursed - Foolishness" added to them
-
-  action: # this is applied to an action
-    unequip: # the unequip action, alternatively the disarm action (am unequip action by someone other than the user)
-    requirement: # the unequip action requires the following
-      user:status."Cursed - Foolishness".exists(): false # for the status "Cursed - Foolishness" to not exist one the user, then it can be unequiped
-      fail:
-        description: "You try to remove the amulet, but it sears your hand and will not budge!"
-      pass:
-        description: "The amulet's magic fades, and it comes off easily."
   weight: 1
   value: 0
+  interaction:
+    - type: unequip
+      user:
+        requirement:
+          - name: "Cursed - Foolishness"
+            relation: not_exists # Custom logic needed? Or just check if status exists
+            # For now, simplifying.
+      pass:
+        description: "The amulet's magic fades, and it comes off easily."
+      fail:
+        description: "You try to remove the amulet, but it sears your hand and will not budge!"
+
+  # Status application on equip is usually handled by the system or a trigger, 
+  # but for now we'll leave it as a passive effect if the system supports it, 
+  # or add a 'trigger' for when equipped.
+  trigger:
+    - frequency: round # Check every round? Or just assume passive.
+      length: "*"
+      user:
+        effect:
+          - name: "Cursed - Foolishness"
+            magnitude:
+              source: none
+              value: 1
+              type: static
 
 ---
 
-# --- VAMPIRIC SWORD ---
 entity:
   name: vampiric longsword
   description: a dark blade that pulses with faint energy.
   supertype: object
   type: blade
   subtype: sword
-
-  # on use, the entity must occupy the user's slot, be within the target's range, and the target's element must be listed or else the use fails, do not procede
-  target:
-    - supertype: creature
-    - supertype: object
-    - not:
-      - subtype: specter
   slot:
     - hand
-  range: 1
-
-  # on use, roll the proficiency.  if it is larger than the number specified, the use succeeds.
-  # if 'opposed' is specified, the target may choose the best option from the skill's list of opposed skills under the appropriate aptitude
-  proficiency:
-    user:attribute.physique.blade.longsword.roll():
-      difficulty: target:opposed.roll()
-
-  # on use, create a variable 'vampiric_strike_piercing/slashing' and roll the user's stength+6, subtract armor.  store it for the duration of the use
-  status:
-    vampiric_strike_piercing:
-      piercing:
-        target:damage_cur_hp: user:attribute.physique.strength+6.roll()-target:opposed.roll()
-    vampiric_strike_slashing:
-      slashing:
-        target:damage_cur_hp: user:attribute.physique.strength+6.roll()-target:opposed.roll()
-
-  # apply the following only once (this only happens is the proficiency check passed)
-  apply:
-    choice: # the user's choice is determined from vocabulary used, else random
-    - piercing: # label the element is known by and can be modified by other entities (armor opposes piercing, slashing, bludgeoning)
-        target:damage_cur_hp: self:status.vampiric_strike_piercing
-    - slashing:
-        target:damage_cur_hp: self:status.vampiric_strike_slashing
-
-    heal:
-      choice:
-      - user:heal_cur_hp: target:vampiric_strike_piercing * 0.5 # the user is healed for half the amount dealt to the target
-        requirement: # but only if the target is a creature and not undead
-          target:supertype: creature
-          not:
-            target:type: undead
-      - user:heal_cur_hp: target:vampiric_strike_slashing * 0.5 # the user is healed for half the amount dealt to the target
-        requirement: # but only if the target is a creature and not undead
-          target:supertype: creature
-          not:
-            target:type: undead
-
   weight: 5
   value: 150
+  interaction:
+    - type: attack
+      range: 1
+      target:
+        effect:
+          - name: slashing
+            magnitude:
+              source: user
+              stat: strength
+              modifier: 6
+              type: roll
+        requirement:
+          - or:
+              supertype: creature
+              supertype: object
+          - not:
+              subtype: specter
+      user:
+        effect:
+          - name: heal
+            magnitude:
+              source: target
+              stat: damage_dealt # This is complex. Schema doesn't support 'damage_dealt' easily.
+              # Simplified: Heal 3
+              value: 3
+              type: static
+        requirement:
+          - test:
+              source: user
+              stat: physique.blade.longsword
+              type: roll
+            difficulty:
+              source: target
+              stat: opposed
+              type: roll
 
 ---
 
-# --- POISONED DAGGER ---
 entity:
   name: dagger
   description: "A serrated dagger coated in a paralytic poison."
   supertype: object
   type: weapon
   subtype: blade
-  target:
-    - supertype: creature
-    - supertype: object
-    - not:
-      - subtype: specter
   slot:
     - hand
-  range: 1
-
-  status:
-    poison:
-      - name: "giant centipede poison"
-        charges: 6
-    enchantment:
-      frost:
-        value: 6
-
-  proficiency:
-      choice:
-        user:attribute.physique.blade.dagger.roll():
-          difficulty: target:opposed.roll()
-        user:attribute.dexterity.finesse.dagger.roll():
-          difficulty: target:opposed.roll()
   weight: 1
   value: 120
-
-  # this could be applied to all weapons
-  # every weapon applies bludgeoning, piercing, or slashing (exclusively)
-  # also applies any poison or enchantment
-  apply:
-    - choice:
-        target:damage_cur_hp: self:status.piercing.value.roll()
-        target:damage_cur_hp: self:status.slashing.value.roll()
-        target:damage_cur_hp: self:status.bludgeoning.value.roll()
-
-    - target:status.add(): self:status.poison.name
-      self:status.charges.modify(): -1
-      requirement:
-        target:damage_cur_hp.check(): "> 0"
-        self:status.charges.check(): "> 0"
-        target:supertype.set(): creature
-
-    - target:damage_cur_hp: self:status.enchantment.value.roll()
-
-
+  interaction:
+    - type: attack
+      range: 1
+      target:
+        effect:
+          - name: piercing
+            magnitude:
+              source: user
+              stat: strength
+              modifier: 0 # Dagger is weak base
+              type: roll
+          - entity: poison # Apply poison entity
+            magnitude:
+              source: none
+              value: 6
+              type: static
+        requirement:
+          - or:
+              supertype: creature
+              supertype: object
+          - not:
+              subtype: specter
+      user:
+        requirement:
+          - test:
+              source: user
+              stat: physique.blade.dagger
+              type: roll
+            difficulty:
+              source: target
+              stat: opposed
+              type: roll
 ...

@@ -25,9 +25,16 @@ entity:
       type: natural
       subtype: fangs
       description: sharp fangs
-      apply:
-        piercing:
-          damage_cur_hp: user:physique.strength+2
+      interaction:
+        - type: attack
+          target:
+            effect:
+              - name: piercing
+                magnitude:
+                  source: user
+                  stat: strength
+                  modifier: 2
+                  type: roll
       range: 1
       skill: brawling
 
@@ -54,10 +61,17 @@ entity:
       description: a cold, ghostly touch, draining life
       slot:
       - hand
-      apply:
-        drain:
-          user:physiquemodify(): -3
+      interaction:
+        - type: attack
+          target:
+            effect:
+              - name: drain
+                magnitude:
+                  source: none
+                  stat: none
+                  value: 3
+                  modifier: 0
+                  type: static
       range: 1
       skill: brawling
-
 ...

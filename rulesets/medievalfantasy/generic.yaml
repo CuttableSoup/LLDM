@@ -1,0 +1,381 @@
+# This schema is a generic template for creating entities in the LLDM game.
+# It is based on the Entity class in classes.py and provides a structured way
+# to define all aspects of a game entity, from its basic stats to its
+# interactions and narrative elements.
+entity:
+  # --- Core Identification ---
+  # The name of the entity, which should be unique.
+  name: flamebellow
+  # The broad category of the entity (e.g., creature, item, spell).
+  supertype: object
+  # The specific type of the entity (e.g., humanoid, weapon, illusion).
+  type: blade
+  # A more specific subtype (e.g., human, sword, charm).
+  subtype: longsword
+
+  description: a sentient longsword on a quest to incinerate all undead.  has found an ally in Valerius
+
+  # --- Vitals ---
+  # The maximum hit points of the entity.
+  max_hp: 10
+  # The current hit points of the entity.
+  cur_hp: 10
+  # The maximum mana or magic points.
+  max_mp: 10
+  # The current mana or magic points.
+  cur_mp: 10
+  # The maximum fatigue or stamina points.
+  max_fp: 10
+  # The current fatigue or stamina points.
+  cur_fp: 10
+
+  # --- Physicality & Stats ---
+  # The size category of the entity, one of the following: [ fine, diminutive, tiny, small, medium, large, huge, gargantuan, colossal ].
+  size: small
+  # The weight of the entity.
+  weight: 5.0
+  # The experience points yet to be expended for improving this entity (players only).
+  exp: 100
+  # The total accumulated experience points of the entity.
+  total_exp: 200
+  # The monetary value of the entity.
+  value: 1000
+
+  # --- Movement ---
+  # A dictionary defining the entity's movement speeds for different terrain (e.g., land, water, air).
+  move:
+    land: 0
+    water: 0
+    air: 1  # can fly slowly
+  # A dictionary defining the types of terrain entities can pass through this entity for what cost, zero is impassible. Accepts requirement
+  passable:
+    requirement:
+      - ally:
+          name: "*"        # Any ally can pass through
+    land: 1
+    water: 0
+    air: 0
+
+  # --- Attributes & Qualities ---
+  # A dictionary of the entity's attributes, skills, and specializations in dot notation (e.g., physique, dexterity, intelligence).
+  attribute:
+    physique: 1
+    intelligence: 10
+
+  skill:
+    arcane: 6
+    fortitude: 10
+
+  specialization:
+    evocation: 6
+
+  # A dictionary of strings defining the physical qualities of the entity.
+  quality: # [ body, eye, gender, hair, height, skin, age, material ]
+    age: ancient
+    gender: male
+    material: magical steel
+
+  # --- Social & Status ---
+  # Define allies by grouping them under their identifier type
+  ally:
+    - name: Valerius
+
+  # Define enemies similarly
+  enemy:
+    - supertype: undead
+  # A dictionary representing the entity's attitude towards others. Default, racial, personal, etc...
+  attitude:
+    - default:
+      disposition: 0  # Hostile <-> Friendly
+      trust: 0        # Suspicious <-> Trusting
+      confidence: 0   # Fearful <-> Confident
+      respect: 0      # Disdainful <-> Admiring
+      obligation: 0   # Unfettered <-> Indebted
+      intimacy: 0     # Disgusted <-> Enamored
+    - quality:
+        gender: female
+        modifier: { respect: -10} # yeah, he's sexist
+    - supertype: undead
+      modifier: { disposition: -100, intimacy: -100 } # Hostile and Disgusted towords undead
+    - name: Valerius
+      modifier: { disposition: 100, trust: 100, obligation: 100 } # Valerius is a trusted friend
+
+  # A list of languages the entity can understand or speak.
+  language:
+    - common
+    - telepathy
+  
+  # --- Interaction & Combat Rules --- [ interaction, ability, and trigger ]
+  interaction: # defines active use of the entity
+    - type: use                 # corresponds to the core intents
+      description: cast fireball
+      target:                   # the reference this is applied to, one of the following: [ user, target, self ]
+        effect:
+          - name: fireball
+        requirement:
+          - name: none
+      user:                     # multiple references are allowed for one action
+        effect:
+          - name: none
+        requirement:
+          - ally:
+              name: Valerius          # will only cast fireball for Valerius
+          - test:
+              source: user
+              stat: arcane
+              modifier: 0
+              value: 0
+              type: roll
+            difficulty:
+              source: none
+              stat: none
+              value: 15
+              modifier: 0
+              type: static
+            pass:
+              description: ""
+            fail:
+              description: ""
+              cur_hp: -1
+      self:
+        effect:
+          - name: none
+        requirement:                   # if any requirement is not met, the action fails
+          - cur_mp: -5
+      range: 10
+    
+    - type: use                 # corresponds to the core intents
+      description: cast flameblade
+      self:                   # the reference this is applied to, one of the following: [ user, target, self ]
+        effect:
+          - name: flameblade
+            duration:
+              frequency: round
+              length:
+                source: none
+                stat: none
+                value: 6
+                modifier: 0
+                type: static
+            magnitude:
+              source: none
+              stat: none
+              value: 3
+              modifier: 0
+              type: static
+        requirement:
+          - name: none
+      self:
+        effect:
+          - name: none
+        requirement:                   # if any requirement is not met, the action fails
+          - cur_mp: -5
+      range: 10
+
+    # Reference a standard mechanic (attack) but customize parameters
+    - type: attack
+      target:
+        effect:
+          - name: slashing                                    # name indicates how this can be referenced by other entities (Ex: armor will reduce damage from bludgeoning, slashing, piercing sources), works as a 'base definition' for entities
+            magnitude:
+              source: user
+              stat: strength
+              value: 0
+              modifier: 3
+              type: roll
+          - entity: bleeding                                  # entity indicates this recerence a oreviously defined entity
+            duration:
+              frequency: round
+              length:
+                source: none
+                stat: none
+                value: 3
+                modifier: 0
+                type: roll
+            magnitude:
+              source: none
+              stat: none
+              value: 3
+              modifier: 0
+              type: static
+        requirement:
+          - or:                                               # can satify either of the following conditions
+              supertype: creature
+              supertype: object
+          - not:                                              # the following condition cannot be met
+              subtype: specter                                # can't hit ghosts
+      user:
+        effect:
+          - name: none
+        requirement:
+        requirement:
+          - test:
+              source: user
+              stat: longsword
+              type: roll
+              value: 0
+              modifier: 0
+            difficulty:
+              source: target
+              stat: opposed
+              type: roll
+              value: 0
+              modifier: 0
+            pass:
+              description: ""
+            fail:
+              description: ""
+          - cur_fp: -1
+      self:
+        requirement:
+          - name: none
+        requirement:
+          - name: none
+      range: 1                    # distance in squares from user to target
+
+  ability:
+    - type: attack
+      target:
+        effect:
+          - name: slashing                                    # name indicates how this can be referenced by other entities (Ex: armor will reduce damage from bludgeoning, slashing, piercing sources), works as a 'base definition' for entities
+            magnitude:
+              source: self
+              stat: magnitude
+              value: 0
+              modifier: 0
+              type: value
+          - entity: bleeding                                  # entity indicates this recerence a oreviously defined entity
+            duration:
+              frequency: round
+              length:
+                source: none
+                stat: none
+                value: 3
+                modifier: 0
+                type: roll
+            magnitude:
+              source: none
+              stat: none
+              value: 3
+              modifier: 0
+              type: static
+        requirement:
+          - or:                                               # can satify either of the following conditions
+              supertype: creature
+              supertype: object
+          - not:                                              # the following condition cannot be met
+              subtype: specter                                # can't hit ghosts
+      self:
+        effect:
+          - name: none
+        requirement:
+        requirement:
+          - test:
+              source: self
+              stat: longsword
+              type: roll
+              value: 0
+              modifier: 0
+            difficulty:
+              source: target
+              stat: opposed
+              type: roll
+              value: 0
+              modifier: 0
+            pass:
+              description: ""
+            fail:
+              description: ""
+          - cur_fp: -1
+      user:
+        requirement:
+          - name: none
+        requirement:
+          - name: none
+      range: 1                    # distance in squares from user to target
+
+  trigger:                        # this will happen automatically, at a frequency specified during the entity's turn
+    - frequency: day              # Duration Component
+      length: "*"                 # this is indefinite
+      timestamp:                  # the last time this was triggered.  updated when processed
+      target:
+        effect:
+          - name: none
+        requirement:
+          - name: none
+      user:
+        effect:
+          - name: none
+        requirement:
+          - name: none
+      self:
+        effect:
+          - name: restore
+            inventory:
+              list:
+                - name: fireball
+                  quantity: 10 
+        requirement:
+          - name: none
+    - frequency: hour             # Duration Component
+      length: "*"                 # this is indefinite
+      timestamp:
+      target:
+        effect:
+          - name: none
+        requirement:
+          - name: none
+      user:
+        effect:
+          - name: none
+        requirement:
+          - name: none
+      self:
+        effect:
+          - name: restore
+            heal_cur_mp: 5
+        requirement:
+
+  magnitude:
+    source: none
+    stat: none
+    value: 3
+    modifier: 0
+    type: static
+
+  # --- Inventory & Abilities ---
+  # A list of equipment slots this entity occupies if it is an item.
+  slot:
+  - hand
+
+  # The bulkiness of the entity.
+  bulk: 2
+
+  # A list of entities contained within this entity's inventory.
+  inventory:
+    inventory_rules:
+      slots_only: true
+      quantity_allowed: "*"
+      type_allowed:
+      - type: miracle
+      - type: arcane
+    list:
+    - name: fireball
+      quantity: 10
+      equipped: true
+
+  # --- Narrative ---
+  # A list of memories or knowledge the entity possesses.
+  memory:
+    - the undead killed his creator when he was new created
+  # A list of quotes or phrases the entity might say.
+  quote:
+    - Hello, world.
+
+  # --- Other ---
+  # A list of unique entities that are part of this entity and cannot normally be interacted with.
+  condition:
+  - name: intelligence          # the only hard-coded entity. indicates how the entity's turn is handled, can be one of the following: [ none, basic, advanced ]
+    parameter:
+      level: advanced
+  - name: steel

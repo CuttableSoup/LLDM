@@ -1,12 +1,12 @@
 entity:
-  name: Valerius # character name
+  name: Valerius
   supertype: creature
   type: humanoid
   subtype: human
-  max_hp: 30 # maximum hit points
-  max_fp: 15 # maximum fatigue points
-  max_mp: 20 # maximum mental points
-  xp: 50 # expecience to be expended
+  max_hp: 30
+  max_fp: 15
+  max_mp: 20
+  xp: 50
   total_xp: 500
   weight: 180
   size: medium
@@ -38,51 +38,34 @@ entity:
 
   passable:
     land: 1
-    requirement: target:self:ally.name.exists()
+    requirement:
+      - ally:
+          name: "*"
 
   status:
   - intelligent
-  - fire: user:damage_cur_hp-10 # fire damage is reduced by 10
-  - frost: user:damage_cur_hp*2 # frost damage is doubled
+  - fire: user:damage_cur_hp-10
+  - frost: user:damage_cur_hp*2
 
-  ally: # list of entities considered allies
-    creature.humanoid.human.name:
-    - Kael
+  ally:
+    - name: Kael
+      type: human
 
-  enemy: # list of entities considered allies
-    creature.humanoid.orc.name:
-      - Grog
+  enemy:
+    - name: Grog
+      type: orc
 
-  attitude: # list of attitudes by category, an array of five values, lower taking precedent
-  # Disposition (Hostile ↔ Friendly)
-  # Trust (Suspicious ↔ Trusting)
-  # Confidence (Fearful ↔ Confident)
-  # Respect (Disdainful ↔ Admiring)
-  # Obligation (Unfettered ↔ Indebted)
-  # Intimacy (Disgusted ↔ Captivated)
-    default: 0,0,0,0,0 # base attitude applied to all before modified
-    type.humanoid.human: 0.5,0.5,0,0,0 # likes and trusts humans
-    type.humanoid.orc: -0.5,-0.5,0,0,0 # hates and distrusts orcs
-    name.Grog: -1,-1,0,0,0 # will attack Grog on sight
-    name.Kael: 0,1,0,1,0 # trusts and respects Kael
+  attitude:
+    default: 0,0,0,0,0
+    type.humanoid.human: 0.5,0.5,0,0,0
+    type.humanoid.orc: -0.5,-0.5,0,0,0
+    name.Grog: -1,-1,0,0,0
+    name.Kael: 0,1,0,1,0
 
-  language: # list of languages
+  language:
   - human
 
-  apply:
-  target:
-  resist:
-  range: 10
-  proficiency:
-  requirement:
-  cost:
-    initial: []
-    ongoing: []
-  value:
-  slot:
-  bulk:
-
-  quality: # list of various character descriptions
+  quality:
     body: lightly scarred
     eye: brown
     gender: male
@@ -91,10 +74,10 @@ entity:
     skin: tan
     age: adult
 
-  inventory: # list of predefined items
-  - item: longsword # name of item
-    quantity: 1 # number of that item
-    equipped: true # is it equipped
+  inventory:
+  - item: longsword
+    quantity: 1
+    equipped: true
   - item: chainmail
     quantity: 1
     equipped: true
@@ -111,15 +94,14 @@ entity:
       quantity: 1
       note: contains a treasure map
 
-  unique: # an entity that cannot be removed and considered equipped
+  unique:
   - cure light wounds
   - fireball
   - adrenaline control
 
-  memory: # list of memory description in natural language
+  memory:
   - home village destoryed by orcs, led by a one named Grog
 
-  quote: # list of quotes to affect the dialogue of the character
+  quote:
   - how's it goin'?
-
 ...

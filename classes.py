@@ -123,17 +123,56 @@ class Quality:
     material: str = ""
 
 @dataclass
-class Cost:
-    """Represents the cost to use a skill or item."""
-    initial: List[Dict[str, Any]] = field(default_factory=list)
-    ongoing: List[Dict[str, Any]] = field(default_factory=list)
+class ValueSource:
+    """Represents a source for a numeric value (test, difficulty, magnitude, duration)."""
+    source: str = "none"  # user, target, self, none
+    stat: str = "none"    # attribute name, skill name, 'value', 'opposed', 'none'
+    value: int = 0        # Raw value if type is static/value
+    modifier: int = 0     # Added to the result
+    type: str = "static"  # roll, static, value
 
 @dataclass
 class DurationComponent:
     """Represents the duration of an effect."""
     frequency: str = ""
-    length: int = 0
+    length: ValueSource = field(default_factory=ValueSource)
     timestamp: int = 0
+
+@dataclass
+class Effect:
+    """Represents an effect applied by an interaction."""
+    name: str = ""
+    magnitude: ValueSource = field(default_factory=ValueSource)
+    duration: Optional[DurationComponent] = None
+    entity: Optional[str] = None # For referencing other entities like 'bleeding'
+
+@dataclass
+class Requirement:
+    """Represents a requirement for an interaction."""
+    type: str = "test" # test, ally, or, not, etc.
+    # For tests:
+    test: Optional[ValueSource] = None
+    difficulty: Optional[ValueSource] = None
+    pass_effect: Optional[List[Effect]] = None # 'pass' is a keyword
+    fail_effect: Optional[List[Effect]] = None # 'fail' is a keyword
+    # For logic/other:
+    sub_requirements: List['Requirement'] = field(default_factory=list)
+    # For simple checks:
+    name: Optional[str] = None
+    relation: Optional[str] = None
+    
+@dataclass
+class Interaction:
+    """Represents an interaction or ability."""
+    type: str = "" # use, attack
+    description: str = ""
+    target_effect: List[Effect] = field(default_factory=list)
+    user_effect: List[Effect] = field(default_factory=list)
+    self_effect: List[Effect] = field(default_factory=list)
+    target_requirement: List[Requirement] = field(default_factory=list)
+    user_requirement: List[Requirement] = field(default_factory=list)
+    self_requirement: List[Requirement] = field(default_factory=list)
+    range: int = 0
 
 @dataclass
 class InventoryItem:
@@ -143,6 +182,14 @@ class InventoryItem:
     equipped: bool = False
     inventory: List[InventoryItem] = field(default_factory=list)
     note: Optional[str] = None
+
+@dataclass
+class Cost:
+    """Represents the cost of an action."""
+    mp: int = 0
+    fp: int = 0
+    hp: int = 0
+    item: List[Dict[str, Any]] = field(default_factory=list)
 
 @dataclass
 class Entity:
@@ -164,16 +211,16 @@ class Entity:
     attribute: Dict[str, Attribute] = field(default_factory=dict)
     quality: Quality = field(default_factory=Quality)
     status: List[Any] = field(default_factory=list)
-    ally: Dict[str, Any] = field(default_factory=dict)
-    enemy: Dict[str, Any] = field(default_factory=dict)
-    attitude: Dict[str, Any] = field(default_factory=dict)
+    ally: List[Dict[str, Any]] = field(default_factory=list)
+    enemy: List[Dict[str, Any]] = field(default_factory=list)
+    attitude: List[Dict[str, Any]] = field(default_factory=list)
     language: List[str] = field(default_factory=list)
     target: List[str] = field(default_factory=list)
     resist: Dict[str, Dict[str, str]] = field(default_factory=dict)
     range: int = 0
     proficiency: Dict[str, Any] = field(default_factory=dict)
-    apply: Dict[str, Any] = field(default_factory=dict)
-    requirement: Dict[str, Any] = field(default_factory=dict)
+    interaction: List[Interaction] = field(default_factory=list)
+    ability: List[Interaction] = field(default_factory=list)
     cost: Cost = field(default_factory=Cost)
     duration: List[DurationComponent] = field(default_factory=list)
     value: int = 0
@@ -209,13 +256,119 @@ def create_entity_from_dict(data: Dict[str, Any]) -> Entity:
         data_copy['cost'] = Cost(**data_copy['cost'])
         
     if 'duration' in data_copy:
-        data_copy['duration'] = [DurationComponent(**comp) for comp in data_copy['duration']]
+        # Handle new DurationComponent structure if present, otherwise fallback (though schema changed)
+        # For simplicity, assuming new structure or empty
+        new_durations = []
+        for comp in data_copy['duration']:
+            if isinstance(comp, dict):
+                 # Check if length is a dict (ValueSource) or int (Old)
+                 length_data = comp.get('length')
+                 if isinstance(length_data, dict):
+                     comp['length'] = ValueSource(**length_data)
+                 elif isinstance(length_data, (int, float)):
+                      # Backwards compat: convert int to static ValueSource
+                      comp['length'] = ValueSource(value=int(length_data), type="static")
+                 elif length_data == "*":
+                      # Infinite
+                      comp['length'] = ValueSource(type="infinite")
+                 
+                 new_durations.append(DurationComponent(**comp))
+        data_copy['duration'] = new_durations
+
+    # --- Helper to parse Effects ---
+    def _parse_effects(effect_list: List[Dict]) -> List[Effect]:
+        parsed = []
+        for eff in effect_list:
+            if 'magnitude' in eff and isinstance(eff['magnitude'], dict):
+                eff['magnitude'] = ValueSource(**eff['magnitude'])
+            elif 'magnitude' in eff and isinstance(eff['magnitude'], (int, float)):
+                 eff['magnitude'] = ValueSource(value=int(eff['magnitude']), type="static")
+            
+            if 'duration' in eff and isinstance(eff['duration'], dict):
+                 # Handle nested duration in effect
+                 dur = eff['duration']
+                 if isinstance(dur.get('length'), dict):
+                     dur['length'] = ValueSource(**dur['length'])
+                 elif isinstance(dur.get('length'), (int, float)):
+                     dur['length'] = ValueSource(value=int(dur['length']), type="static")
+                 eff['duration'] = DurationComponent(**dur)
+            
+            parsed.append(Effect(**eff))
+        return parsed
+
+    # --- Helper to parse Requirements ---
+    def _parse_requirements(req_list: List[Dict]) -> List[Requirement]:
+        parsed = []
+        for req in req_list:
+            # Handle 'test' requirement
+            if 'test' in req:
+                req_obj = Requirement(type='test')
+                if isinstance(req['test'], dict):
+                    req_obj.test = ValueSource(**req['test'])
+                
+                if 'difficulty' in req:
+                     if isinstance(req['difficulty'], dict):
+                         req_obj.difficulty = ValueSource(**req['difficulty'])
+                
+                # Handle pass/fail effects if needed (omitted for brevity, can be added)
+                parsed.append(req_obj)
+            # Handle 'ally' requirement
+            elif 'ally' in req:
+                 req_obj = Requirement(type='ally')
+                 # Nested name check?
+                 if isinstance(req['ally'], dict):
+                     req_obj.name = req['ally'].get('name')
+                 parsed.append(req_obj)
+            # Handle simple name check
+            elif 'name' in req:
+                parsed.append(Requirement(type='name', name=req['name']))
+            # Handle relation
+            elif 'relation' in req:
+                parsed.append(Requirement(type='relation', relation=req['relation']))
+            
+            # TODO: Handle 'or', 'not' recursively
+            
+        return parsed
+
+    # --- Helper to parse Interactions ---
+    def _parse_interactions(inter_list: List[Dict]) -> List[Interaction]:
+        parsed = []
+        for item in inter_list:
+            inter = Interaction(
+                type=item.get('type', ''),
+                description=item.get('description', ''),
+                range=item.get('range', 0)
+            )
+            
+            # Parse Effects
+            if 'target' in item and 'effect' in item['target']:
+                inter.target_effect = _parse_effects(item['target']['effect'])
+            if 'user' in item and 'effect' in item['user']:
+                inter.user_effect = _parse_effects(item['user']['effect'])
+            if 'self' in item and 'effect' in item['self']:
+                inter.self_effect = _parse_effects(item['self']['effect'])
+                
+            # Parse Requirements
+            if 'target' in item and 'requirement' in item['target']:
+                inter.target_requirement = _parse_requirements(item['target']['requirement'])
+            if 'user' in item and 'requirement' in item['user']:
+                inter.user_requirement = _parse_requirements(item['user']['requirement'])
+            if 'self' in item and 'requirement' in item['self']:
+                inter.self_requirement = _parse_requirements(item['self']['requirement'])
+            
+            parsed.append(inter)
+        return parsed
+
+    if 'interaction' in data_copy:
+        data_copy['interaction'] = _parse_interactions(data_copy['interaction'])
         
-    final_attributes: Dict[str, Attribute] = {}
+    if 'ability' in data_copy:
+        data_copy['ability'] = _parse_interactions(data_copy['ability'])
     
     # --- MODIFIED ---
     # This block now creates the flat attribute map (e.g., 'physique.blade')
     # required by the InteractionProcessor.
+    final_attributes: Dict[str, Attribute] = {}
     if 'attribute' in data_copy:
         raw_attributes = data_copy['attribute']
         

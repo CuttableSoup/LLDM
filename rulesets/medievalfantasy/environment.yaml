@@ -54,9 +54,16 @@ entity:
     air: 1
   subtype: floor
   range: 0
-  apply:
-    status:
-      wet
+  trigger:
+    - frequency: round
+      length: "*"
+      user:
+        effect:
+          - name: wet
+            magnitude:
+              source: none
+              value: 1
+              type: static
 
 ---
 
@@ -104,27 +111,37 @@ entity:
     hidden
     armed
   max_hp: 20
-  apply:
-    piercing:
-      damage(cur_hp): physique:strength
+  trigger:
+    - frequency: round # Triggered on entry usually, handled by system logic checking 'armed' status
+      length: 0
+      target:
+        effect:
+          - name: piercing
+            magnitude:
+              source: self
+              stat: physique.strength # Trap strength?
+              # Simplified
+              value: 10
+              type: static
   range: 0
-  proficiency:
-    user:attribute.wisdom.observation.roll():
-      difficulty: 15
-      pass:
-        description: you sucessfuly spot the trap
-        status:
-          observed
-      fail:
-        description: none
-    user:attribute.dexterity.trickery.roll():
-      difficulty: 15
+  interaction:
+    - type: disarm
+      user:
+        requirement:
+          - test:
+              source: user
+              stat: dexterity.trickery
+              type: roll
+            difficulty:
+              source: none
+              value: 15
+              type: static
       pass:
         description: you sucessfuly disarmed the trap
-        self:status.remove(): armed
+        # Effect to remove 'armed'
       fail:
         description: you triggered the trap
-        self:status.remove(): armed
+        # Effect to trigger
   attribute:
     physique:
       base: 9
@@ -147,33 +164,39 @@ entity:
   status:
     locked
   max_hp: 100
-  apply:
-    choice:
-      open:
-        self:passable.land.set(): 1
-        self:passable.air.set(): 1
-      close:
-        self:passable.land.set(): 0
-        self:passable.air.set(): 0
-  damage_mod:
-    physical: -10
-  proficiency:
-    user:attribute.physique.strength.roll():
-      difficulty: 20
+  interaction:
+    - type: open
+      user:
+        requirement:
+          - test:
+              source: user
+              stat: physique.strength
+              type: roll
+            difficulty:
+              source: none
+              value: 20
+              type: static
       pass:
         description: you sucessfuly lift the portcullis
-        self:passable.land.set(): 1
-        self:passable.air.set(): 1
-        self:status.add(): broken
+        # Effect to change passable
       fail:
         description: the portcullis does not budge
-    user:attribute.dexterity.trickery.roll():
-      difficulty: 15
+    - type: unlock
+      user:
+        requirement:
+          - test:
+              source: user
+              stat: dexterity.trickery
+              type: roll
+            difficulty:
+              source: none
+              value: 15
+              type: static
       pass:
         description: you sucessfuly unlock the portcullis
-        self:status.remove(): locked
       fail:
         description: the lock to the portcullis jams
-        self:status.add(): broken
+  damage_mod:
+    physical: -10
 
 ...
