@@ -226,7 +226,7 @@ entity:
               description: ""
           - cur_fp: -1
       self:
-        requirement:
+        effect:
           - name: none
         requirement:
           - name: none
@@ -268,7 +268,6 @@ entity:
         effect:
           - name: none
         requirement:
-        requirement:
           - test:
               source: self
               reference: specialization
@@ -287,7 +286,7 @@ entity:
               description: ""
           - cur_fp: -1
       user:
-        requirement:
+        effect:
           - name: none
         requirement:
           - name: none
