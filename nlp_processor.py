@@ -17,15 +17,17 @@ import logging
 try:
     import yaml
 except ImportError:
-    print("PyYAML not found. Please install: pip install PyYAML")
+    logger = logging.getLogger("NLP")
+    logger.warning("PyYAML not found. Please install: pip install PyYAML")
     yaml = None
 
 try:
     from sentence_transformers import SentenceTransformer, util
     import torch
 except ImportError:
-    print("Warning: 'sentence-transformers' not found. Intent classification will not function.")
-    print("Please install: pip install sentence-transformers")
+    logger = logging.getLogger("NLP")
+    logger.warning("Warning: 'sentence-transformers' not found. Intent classification will not function.")
+    logger.warning("Please install: pip install sentence-transformers")
     SentenceTransformer = None
     util = None
     torch = None
@@ -35,9 +37,10 @@ try:
     from spacy.language import Language
     from spacy.matcher import Matcher
 except ImportError:
-    print("Warning: 'spacy' not found. Named Entity Recognition will not function.")
-    print("Please install: pip install spacy")
-    print("And download the model: python -m spacy download en_core_web_sm")
+    logger = logging.getLogger("NLP")
+    logger.warning("Warning: 'spacy' not found. Named Entity Recognition will not function.")
+    logger.warning("Please install: pip install spacy")
+    logger.warning("And download the model: python -m spacy download en_core_web_sm")
     spacy = None
     Language = None
     Matcher = None
@@ -45,14 +48,15 @@ except ImportError:
 try:
     from classes import Entity, Attribute, Skill
 except ImportError:
-    print("Warning: 'classes.py' not found. Using placeholder Entity.")
+    logger = logging.getLogger("NLP")
+    logger.warning("Warning: 'classes.py' not found. Using placeholder Entity.")
     class Entity:
         name: str = ""
         quote: List[str] = []
     class Attribute: pass
     class Skill: pass
 
-logger = logging.getLogger("NLPTestLogger")
+logger = logging.getLogger("NLP")
 
 
 # --- Hardcoded base intents ---
@@ -185,16 +189,16 @@ class NLPProcessor:
         if not yaml:
             raise ImportError("PyYAML is required to load intents.")
         if not SentenceTransformer or not util:
-            print("CRITICAL: sentence-transformers library not found. Stopping.")
+            logger.critical("CRITICAL: sentence-transformers library not found. Stopping.")
             raise ImportError("sentence-transformers library is required.")
         if not spacy or not Matcher:
-            print("CRITICAL: spaCy library not found. Stopping.")
+            logger.critical("CRITICAL: spaCy library not found. Stopping.")
             raise ImportError("spaCy library is required.")
         
         self.skill_keyword_map: Dict[str, str] = {}
         
         # --- Load hardcoded intents ---
-        print("NLP: Loading hardcoded core intents...")
+        logger.info("NLP: Loading hardcoded core intents...")
         for intent_data in CORE_INTENTS_DATA:
             intent = Intent(
                 name=intent_data.get('name', 'UNKNOWN'),
@@ -204,7 +208,7 @@ class NLPProcessor:
             if intent.name != 'UNKNOWN':
                 self.intents[intent.name] = intent
         
-        print(f"NLP: Loaded {len(self.intents)} core intents.")
+        logger.info(f"NLP: Loaded {len(self.intents)} core intents.")
 
         # --- Load attributes.yaml to find skill keywords ---
         self.all_intent_keywords: List[Tuple[str, Intent]] = []
@@ -221,7 +225,7 @@ class NLPProcessor:
 
         # 2. Scan all YAML files for 'aptitude:' blocks and parse skill keywords
         if use_skill_intent:
-            print(f"NLP: Scanning for skill keywords in {ruleset_path}...")
+            logger.info(f"NLP: Scanning for skill keywords in {ruleset_path}...")
             
             for yaml_file in ruleset_path.glob("**/*.yaml"):
                 try:
@@ -261,20 +265,20 @@ class NLPProcessor:
                                         self.skill_keyword_map[keyword] = spec_name
 
                 except Exception as e:
-                    print(f"Warning: Error parsing {yaml_file.name} for aptitudes: {e}")
+                    logger.warning(f"Warning: Error parsing {yaml_file.name} for aptitudes: {e}")
         else:
-            print(f"NLP: USE_SKILL intent missing, skipping dynamic keyword loading.")
+            logger.warning(f"NLP: USE_SKILL intent missing, skipping dynamic keyword loading.")
         
-        print(f"NLP: Built skill map with {len(self.skill_keyword_map)} entries.")
+        logger.info(f"NLP: Built skill map with {len(self.skill_keyword_map)} entries.")
 
         # Load the sentence-transformer model.
-        print(f"NLP: Loading sentence transformer model '{self.MODEL_NAME}'...")
+        logger.info(f"NLP: Loading sentence transformer model '{self.MODEL_NAME}'...")
         self.model = SentenceTransformer(self.MODEL_NAME)
         
         # Pre-compute embeddings for all keywords for faster similarity search.
-        print(f"NLP: Pre-computing embeddings for {len(keyword_corpus)} intent keywords...")
+        logger.info(f"NLP: Pre-computing embeddings for {len(keyword_corpus)} intent keywords...")
         if not keyword_corpus:
-            print("NLP Warning: No keywords found. Intent classification will fail.")
+            logger.warning("NLP Warning: No keywords found. Intent classification will fail.")
             self.keyword_embeddings = None
         else:
             self.keyword_embeddings = self.model.encode(
@@ -283,15 +287,15 @@ class NLPProcessor:
             )
         
         # Load the spaCy model.
-        print(f"NLP: Loading spaCy model '{self.SPACY_MODEL_NAME}'...")
+        logger.info(f"NLP: Loading spaCy model '{self.SPACY_MODEL_NAME}'...")
         try:
             self.nlp: Language = spacy.load(self.SPACY_MODEL_NAME)
         except IOError:
-            print(f"FATAL: spaCy model '{self.SPACY_MODEL_NAME}' not found.")
-            print(f"Please run: python -m spacy download {self.SPACY_MODEL_NAME}")
+            logger.critical(f"FATAL: spaCy model '{self.SPACY_MODEL_NAME}' not found.")
+            logger.critical(f"Please run: python -m spacy download {self.SPACY_MODEL_NAME}")
             raise
             
-        print("NLP: Initialization complete.")
+        logger.info("NLP: Initialization complete.")
 
 
     def classify_intent(self, text_input: str) -> Optional[Tuple[Intent, str]]:

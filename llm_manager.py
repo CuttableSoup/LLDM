@@ -8,6 +8,9 @@ import requests
 import json
 import sys
 from typing import List, Dict, Callable
+import logging
+
+logger = logging.getLogger("LLMManager")
 
 try:
     from config_manager import ConfigManager
@@ -61,7 +64,7 @@ class LLMManager:
 
     def _generate_ollama(self, prompt: str, history: List[Dict], model: str) -> str:
         """Generates a response from a local Ollama model."""
-        print(f"Sending request to Ollama (Model: {model})")
+        logger.info(f"Sending request to Ollama (Model: {model})")
         
         messages = history + [{"role": "user", "content": prompt}]
         
@@ -83,16 +86,16 @@ class LLMManager:
             return response_data.get("message", {}).get("content", "Error: No content in response")
             
         except requests.exceptions.ConnectionError:
-            print("Ollama Connection Error. Is the service running?", file=sys.stderr)
+            logger.error("Ollama Connection Error. Is the service running?")
             return "Error: Could not connect to the Ollama service."
         except requests.exceptions.HTTPError as e:
-            print(f"Ollama HTTP Error: {e}", file=sys.stderr)
+            logger.error(f"Ollama HTTP Error: {e}")
             response_text = e.response.text.lower()
             if "model" in response_text and "not found" in response_text:
                 return f"Error: Model '{model}' not found. Please select and download it from the LLM menu."
             return f"Error: Ollama API returned an error: {e.response.status_code}"
         except Exception as e:
-            print(f"An unknown error occurred with Ollama: {e}", file=sys.stderr)
+            logger.exception(f"An unknown error occurred with Ollama: {e}")
             return f"Error: {e}"
 
     def _generate_openrouter(self, prompt: str, history: List[Dict], model: str) -> str:
@@ -101,7 +104,7 @@ class LLMManager:
         if not api_key:
             return "Error: OpenRouter API key not set. Please set it in the LLM menu."
             
-        print(f"Sending request to OpenRouter (Model: {model})")
+        logger.info(f"Sending request to OpenRouter (Model: {model})")
         
         messages = history + [{"role": "user", "content": prompt}]
         
@@ -128,12 +131,12 @@ class LLMManager:
             return response_data.get("choices", [{}])[0].get("message", {}).get("content", "Error: No content")
             
         except requests.exceptions.HTTPError as e:
-            print(f"OpenRouter HTTP Error: {e.response.status_code} - {e.response.text}", file=sys.stderr)
+            logger.error(f"OpenRouter HTTP Error: {e.response.status_code} - {e.response.text}")
             if e.response.status_code == 401:
                 return "Error: Invalid OpenRouter API Key."
             return f"Error: OpenRouter API returned an error: {e.response.status_code}"
         except Exception as e:
-            print(f"An unknown error occurred with OpenRouter: {e}", file=sys.stderr)
+            logger.exception(f"An unknown error occurred with OpenRouter: {e}")
             return f"Error: {e}"
 
     def check_ollama_model(self, model_name: str) -> bool:
@@ -146,7 +149,7 @@ class LLMManager:
         Returns:
             True if the model is available, False otherwise.
         """
-        print(f"Checking for Ollama model: {model_name}...")
+        logger.info(f"Checking for Ollama model: {model_name}...")
         try:
             response = self.session.post(
                 f"{OLLAMA_API_URL}/api/show",
@@ -155,10 +158,10 @@ class LLMManager:
             )
             return response.status_code == 200
         except requests.exceptions.ConnectionError:
-            print("Ollama not running, cannot check model.", file=sys.stderr)
+            logger.warning("Ollama not running, cannot check model.")
             return False
         except Exception as e:
-            print(f"Error checking model: {e}", file=sys.stderr)
+            logger.error(f"Error checking model: {e}")
             return False
 
     def pull_ollama_model(self, model_name: str, callback: Callable[[str], None]):
@@ -169,7 +172,7 @@ class LLMManager:
             model_name: The name of the model to download.
             callback: A function to call with status updates during the download.
         """
-        print(f"Starting download for model: {model_name}")
+        logger.info(f"Starting download for model: {model_name}")
         
         last_reported_percent = -1
         
@@ -201,16 +204,16 @@ class LLMManager:
                             
                             # Report progress in 10% increments to avoid flooding the UI.
                             if current_percent > last_reported_percent:
-                                print(status_msg)
+                                logger.info(status_msg)
                                 callback(status_msg)
                                 last_reported_percent = current_percent
                             elif current_percent == -1:
-                                print(status_msg)
+                                logger.info(status_msg)
                                 callback(status_msg)
 
                         if "error" in data:
                             error_msg = f"Error: {data['error']}"
-                            print(error_msg, file=sys.stderr)
+                            logger.error(error_msg)
                             callback(error_msg)
                             return
             
@@ -220,7 +223,7 @@ class LLMManager:
             callback("Error: Could not connect to Ollama to download model.")
         except requests.exceptions.HTTPError as e:
             error_msg = f"Error pulling model: {e.response.text}"
-            print(error_msg, file=sys.stderr)
+            logger.error(error_msg)
             callback(error_msg)
         except Exception as e:
             callback(f"Error during model download: {e}")

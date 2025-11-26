@@ -12,6 +12,9 @@ from tkinter import ttk, messagebox, simpledialog
 from tkinter.scrolledtext import ScrolledText
 from pathlib import Path
 import threading
+import logging
+
+logger = logging.getLogger("GUI")
 
 # Attempt to import necessary modules, with placeholder classes for graceful failure.
 try:
@@ -26,14 +29,14 @@ try:
     from classes import Entity, RulesetLoader, Room, GameController
     from DebugWindow import DebugWindow
 except ImportError:
-    print("Warning: 'classes.py' not found. Using placeholder classes.")
+    logger.warning("Warning: 'classes.py' not found. Using placeholder classes.")
     class Room: pass
     class Entity: pass
     class InventoryItem: pass
     class Skill: pass
     class RulesetLoader:
         def __init__(self, *args):
-            print("FATAL: classes.py missing RulesetLoader")
+            logger.critical("FATAL: classes.py missing RulesetLoader")
         def load_all(self): pass
         def get_character(self, name): return None
         creatures = {}
@@ -64,7 +67,7 @@ class NarrativePanel(ttk.Frame):
             font=("Arial", 10)
         )
         self.text_area.pack(expand=True, fill='both')
-        print("NarrativePanel created.")
+        logger.info("NarrativePanel created.")
         
     def add_narrative_text(self, text: str):
         """Adds text to the narrative display."""
@@ -72,7 +75,7 @@ class NarrativePanel(ttk.Frame):
         self.text_area.insert(tk.END, text + "\n\n")
         self.text_area.config(state='disabled')
         self.text_area.see(tk.END) # Auto-scroll to the end
-        print(f"NARRATIVE: {text}")
+        logger.debug(f"NARRATIVE: {text}")
 
 class MapPanel(ttk.Frame):
     """A panel for displaying the game map."""
@@ -89,11 +92,11 @@ class MapPanel(ttk.Frame):
             font=("Arial", 20, "italic"), 
             fill="white"
         )
-        print("MapPanel created.")
+        logger.info("MapPanel created.")
         
     def update_map(self, room: Optional[Room] = None, tokens: List[Entity] = []):
         """Updates the map display with the current room data."""
-        print("MAP: Refreshing map display.")
+        logger.debug("MAP: Refreshing map display.")
         self.map_canvas.delete("all")
 
         if not room:
@@ -127,7 +130,7 @@ class MapPanel(ttk.Frame):
         MAP_OFFSET_Y = 40
 
         if not room.layers:
-            print("MAP: Room has no .layers property to draw.")
+            logger.warning("MAP: Room has no .layers property to draw.")
             return
             
         # Draw each layer of the map.
@@ -181,7 +184,7 @@ class InventoryPanel(ttk.Frame):
         self.tree.column('equipped', width=70, anchor='center')
         
         self.tree.pack(expand=True, fill='both')
-        print("InventoryPanel created.")
+        logger.info("InventoryPanel created.")
         
     def update_inventory(self, entity: Entity):
         """Updates the inventory display for the given entity."""
@@ -191,7 +194,7 @@ class InventoryPanel(ttk.Frame):
         if not entity:
             return
             
-        print(f"INVENTORY: Refreshing for {entity.name}")
+        logger.debug(f"INVENTORY: Refreshing for {entity.name}")
         
         # Populate the treeview with inventory items.
         for item in entity.inventory:
@@ -247,14 +250,14 @@ class CharacterPanel(ttk.Frame):
         self.skills_frame = ttk.LabelFrame(self, text="Skills", padding=10)
         self.skills_frame.pack(fill='both', expand=True, pady=5)
         
-        print("CharacterPanel created.")
+        logger.info("CharacterPanel created.")
         
     def update_character_sheet(self, entity: Entity):
         """Updates the character sheet with the entity's data."""
         if not entity:
             return
             
-        print(f"CHAR SHEET: Refreshing for {entity.name}")
+        logger.debug(f"CHAR SHEET: Refreshing for {entity.name}")
         
         # Update vitals bars and labels.
         self.hp_bar['maximum'] = entity.max_hp if entity.max_hp > 0 else 1
@@ -310,7 +313,7 @@ class InfoMultipane(ttk.Notebook):
         self.add(self.inventory_panel, text='Inventory')
         self.add(self.map_panel, text='Map')
         
-        print("InfoMultipane (tab widget) created.")
+        logger.info("InfoMultipane (tab widget) created.")
         
     def get_character_panel(self) -> CharacterPanel:
         """Returns the CharacterPanel instance."""
@@ -341,7 +344,7 @@ class InputBar(ttk.Frame):
         
         self.entry.bind("<Return>", self._on_user_submit)
         
-        print("InputBar created.")
+        logger.info("InputBar created.")
         
     def _on_user_submit(self, event: Any = None):
         """Handles the submission of user input."""
@@ -418,7 +421,7 @@ class MainWindow:
         self.controller.update_inventory_callback = self.info_multipane.get_inventory_panel().update_inventory
         self.controller.update_map_callback = self.info_multipane.get_map_panel().update_map
         
-        print("MainWindow created and all components wired up.")
+        logger.info("MainWindow created and all components wired up.")
 
     def _create_menu(self):
         """Creates the main menu bar."""
@@ -483,14 +486,14 @@ class MainWindow:
         mode = self.llm_mode_var.get()
         self.config_manager.set('mode', mode)
         self.narrative_panel.add_narrative_text(f"Switched to {mode} mode.")
-        print(f"Config: Set mode to {mode}")
+        logger.info(f"Config: Set mode to {mode}")
 
     def _on_select_model(self):
         """Handles the selection of the Ollama model."""
         model_id = self.ollama_model_var.get()
         self.config_manager.set('ollama_model', model_id)
         self.narrative_panel.add_narrative_text(f"Set Ollama model to: {model_id}")
-        print(f"Config: Set ollama_model to {model_id}")
+        logger.info(f"Config: Set ollama_model to {model_id}")
         
         # Check if the model needs to be downloaded.
         threading.Thread(
@@ -502,7 +505,7 @@ class MainWindow:
     def _check_and_pull_model(self, model_id: str):
         """Checks if the selected Ollama model is available locally."""
         if not self.llm_manager.check_ollama_model(model_id):
-            print(f"Model {model_id} not found locally.")
+            logger.info(f"Model {model_id} not found locally.")
             self.root.after(0, self._ask_to_pull_model, model_id)
 
     def _ask_to_pull_model(self, model_id: str):
@@ -536,7 +539,7 @@ class MainWindow:
         if new_key is not None:
             self.config_manager.set('openrouter_key', new_key)
             self.narrative_panel.add_narrative_text("OpenRouter API Key saved.")
-            print("Config: OpenRouter key updated.")
+            logger.info("Config: OpenRouter key updated.")
             
 
     def _open_debug_window(self):
@@ -553,11 +556,11 @@ class MainWindow:
     def run(self, player: Entity):
         """Starts the main game loop."""
         if not player:
-            print("FATAL: No player entity provided to app.run()")
+            logger.critical("FATAL: No player entity provided to app.run()")
             self.narrative_panel.add_narrative_text("FATAL ERROR: No player entity could be loaded. See console for details.")
             return
 
         self.controller.start_game(player)
         
-        print("GUI Main Loop is running...")
+        logger.info("GUI Main Loop is running...")
         self.root.mainloop()

@@ -9,11 +9,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field, fields
 from typing import List, Dict, Any, Optional, Callable, Tuple
 from pathlib import Path
+import logging
+
+logger = logging.getLogger("Classes")
 
 try:
     import yaml
 except ImportError:
-    print("PyYAML not found. Please install: pip install PyYAML")
+    logger.warning("PyYAML not found. Please install: pip install PyYAML")
     yaml = None
 
 @dataclass
@@ -503,10 +506,10 @@ def resolve_entity_references(entity: Entity):
                         current = getattr(current, part)
                 return current
             except (AttributeError, KeyError):
-                print(f"Warning: Could not resolve reference '{match.group(0)}' in entity '{context_entity.name}'")
+                logger.warning(f"Could not resolve reference '{match.group(0)}' in entity '{context_entity.name}'")
                 return match.group(0)
         else:
-             print(f"Warning: Unsupported reference source '{source}' in '{match.group(0)}'")
+             logger.warning(f"Unsupported reference source '{source}' in '{match.group(0)}'")
              return match.group(0)
 
     def _resolve_value(value: Any, context_entity: Entity) -> Any:
@@ -598,20 +601,22 @@ class RulesetLoader:
         self.attributes: List[Any] = []
         self.types: List[Any] = []
         
-        print(f"RulesetLoader initialized for path: {self.ruleset_path}")
+        self.types: List[Any] = []
+        
+        logger.info(f"RulesetLoader initialized for path: {self.ruleset_path}")
 
     # --- MODIFIED: True two-pass dynamic loading ---
     def load_all(self):
         """Loads all YAML files from the ruleset directory."""
         if not self.ruleset_path.is_dir():
-            print(f"Error: Ruleset path not found: {self.ruleset_path}")
+            logger.error(f"Ruleset path not found: {self.ruleset_path}")
             return
             
         all_yaml_files = list(self.ruleset_path.glob("**/*.yaml"))
         schema_files_paths = set() # To track files we process in Pass 1
 
         # --- PASS 1: Load Schemas and Build Dynamic Maps ---
-        print("--- RulesetLoader: Pass 1 (Schemas) ---")
+        logger.info("--- RulesetLoader: Pass 1 (Schemas) ---")
         for yaml_file in all_yaml_files:
             docs = self._load_generic_yaml_all(yaml_file)
             if not docs:
@@ -635,7 +640,7 @@ class RulesetLoader:
                     is_schema_file = True
             
             if is_schema_file:
-                print(f"Identified schema data in: {yaml_file.name}")
+                logger.info(f"Identified schema data in: {yaml_file.name}")
                 schema_files_paths.add(yaml_file)
 
         # Now, dynamically initialize storage based on found supertypes
@@ -650,16 +655,16 @@ class RulesetLoader:
         for supertype in dynamic_supertypes:
             self.entities_by_supertype[supertype] = {}
             
-        print(f"Dynamically initialized storage for supertypes: {dynamic_supertypes}")
+        logger.info(f"Dynamically initialized storage for supertypes: {dynamic_supertypes}")
 
         # --- PASS 2: Load All Entities ---
-        print("--- RulesetLoader: Pass 2 (Entities) ---")
+        logger.info("--- RulesetLoader: Pass 2 (Entities) ---")
         for yaml_file in all_yaml_files:
             # Skip the schema files we already processed
             if yaml_file in schema_files_paths:
                 continue
 
-            print(f"Processing entity file: {yaml_file.name}")
+            logger.debug(f"Processing entity file: {yaml_file.name}")
             entities_data = self._load_generic_yaml_all(yaml_file)
             
             for entity_data in entities_data:
@@ -668,7 +673,7 @@ class RulesetLoader:
                     data = entity_data['entity']
                     
                     if 'name' not in data:
-                        print(f"Warning: Skipping entity in {yaml_file.name} (missing 'name').")
+                        logger.warning(f"Skipping entity in {yaml_file.name} (missing 'name').")
                         continue
                     
                     entity_obj = create_entity_from_dict(data)
@@ -684,7 +689,7 @@ class RulesetLoader:
                         
                     # 3. Log Unsorted
                     else:
-                        print(f"Warning: Could not categorize entity '{entity_obj.name}' in {yaml_file.name}. "
+                        logger.warning(f"Could not categorize entity '{entity_obj.name}' in {yaml_file.name}. "
                               f"Supertype '{entity_obj.supertype}' is not in the dynamic list from types data. "
                               "It will not be loaded into a category.")
                 
@@ -698,7 +703,7 @@ class RulesetLoader:
                 # Filter out 'None' documents that result from '---'
                 return [doc for doc in yaml.safe_load_all(f) if doc]
         except Exception as e:
-            print(f"Error loading YAML file {file_path}: {e}")
+            logger.error(f"Error loading YAML file {file_path}: {e}")
             return []
 
     # --- MODIFIED: Renamed and logic updated to accept data ---
@@ -710,7 +715,7 @@ class RulesetLoader:
 
             map_data = data.get('map', {})
             if not map_data:
-                print(f"Warning: 'map:' key not found in {file_name}. Skipping scenario load.")
+                logger.warning(f"'map:' key not found in {file_name}. Skipping scenario load.")
                 return
 
             env_data = map_data.get('environment', {})
@@ -732,10 +737,10 @@ class RulesetLoader:
                 scenario_name=map_data.get('name', 'Unnamed Scenario'),
                 environment=parsed_env
             )
-            print(f"Successfully loaded scenario: {self.scenario.scenario_name} (from {file_name})")
+            logger.info(f"Successfully loaded scenario: {self.scenario.scenario_name} (from {file_name})")
 
         except Exception as e:
-            print(f"Error loading scenario data from {file_name}: {e}")
+            logger.error(f"Error loading scenario data from {file_name}: {e}")
     # --- END MODIFICATION ---
 
     def get_character(self, name: str) -> Optional[Entity]:
@@ -749,7 +754,7 @@ try:
     from llm_manager import LLMManager, OLLAMA_MODELS
     from prompts import prompts
 except ImportError as e:
-    print(f"GameController (in classes.py) Error: Failed to import modules: {e}")
+    logger.error(f"GameController (in classes.py) Error: Failed to import modules: {e}")
     class NLPProcessor:
         def __init__(self, *args): pass
         def process_player_input(self, *args): return None
@@ -770,14 +775,14 @@ class GameController:
         self.current_room: Optional[Room] = None
         
         # --- Load entities from dynamic storage ---
-        print("GameController: Loading all entities...")
+        logger.info("GameController: Loading all entities...")
         # Load all entities from the ruleset loader into one map
         self.game_entities.update(self.loader.characters)
-        print(f"GameController: Loaded {len(self.loader.characters)} characters.")
+        logger.info(f"GameController: Loaded {len(self.loader.characters)} characters.")
         
         # Dynamically load from all discovered supertypes
         for supertype_name, entity_dict in self.loader.entities_by_supertype.items():
-            print(f"GameController: Loading {len(entity_dict)} entities from supertype '{supertype_name}'...")
+            logger.info(f"GameController: Loading {len(entity_dict)} entities from supertype '{supertype_name}'...")
             self.game_entities.update(entity_dict)
         # --- END ---
 
@@ -786,7 +791,7 @@ class GameController:
         for name, entity in self.game_entities.items():
             if any(status in entity.status for status in ["intelligent", "basic"]):
                 self.entity_histories[name] = EntityHistory(entity_name=name)
-                print(f"GameController: Initialized history for intelligent entity: {name}")
+                logger.info(f"GameController: Initialized history for intelligent entity: {name}")
 
         self.initiative_order: List[Entity] = []
         self.round_history: List[str] = []
