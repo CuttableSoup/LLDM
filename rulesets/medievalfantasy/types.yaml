@@ -2,14 +2,11 @@ category:
   supertype: creature
   description:
   types:
-    undead:
-      subtypes:
-        specter:
     humanoid:
       description:
       slot:
-        mind: 10
-        self: 10
+        mind: 1
+        self: 1
         hand: 2
         ring: 2
         head: 1
@@ -25,150 +22,20 @@ category:
       subtypes:
         human:
           description:
-        orc:
-          description:
-          attribute:
-            intelligence: -3
-            wisdom: -3
-            physique: +3
-          skills:
-            brawling: +3
-        giant:
-    quadruped:
-      slot:
-        self: 10
-        ring: 2
-        head: 1
-        eye: 1
-        mouth: 1
-        neck: 1
-        back: 1
-        feet: 2
-      subtypes:
-        canine:
 
 ---
 
 category:
   supertype: object
-  passable:
-    land: 1
-    water: 1
-    air: 1
-  types:
-    weapon:
-      subtypes:
-        blade:
-    liquid:
-      subtypes:
-        potion:
-    test:
-      subtypes:
-        test:
-    blade:
-      slot:
-        blade: 1
-        hilt: 1
-        grip: 1
-        pommel: 1
-      subtypes:
-        sword:
-    armor:
-      subtypes:
-        medium:
-    axe:
-    polearm: 
-    shield:
-      subtypes:
-        light:
-        medium:
-        heavy:
-    natural:
-    throwing:
-    currency:
-    accessory:
-    practice:
-      subtypes:
-        dummy:
-    container:
-      subtypes:
-        leather:
-        glass:
-        wood:
-    treasure:
-      subtypes:
-        gold:
-        silver:
-        copper:
-        gem:
-    drink:
-      subtypes:
-        alcohol:
-    consumable:
-      subtypes:
-        potion:
-        poison:
-    arcane:
-      subtypes:
-        scroll:
-          slot:
-            mind: 1
 
 ---
 
 category:
   supertype: environment
-  types:
-    trap:
-      subtypes:
-        spike:
-        gate:
-    tile:
-      subtypes:
-        wall:
-        floor:
-        air:
-        water:
 
 ---
 
 category:
   supertype: supernatural
-  types:
-    condition:
-      subtypes:
-        enchantment:
-    arcane:
-      subtypes:
-        evocation:
-        conjuration:
-        divination:
-        transmutation:
-        enchantment:
-        abjuration:
-        illusion:
-        necromancy:
-    miracle:
-      subtypes:
-        healing:
-    psionic:
-      subtypes:
-        clairsentience:
-        psychokinetic:
-        psychometabolic:
-        psychoportative:
-        telepathy:
-    curse:
-      subtypes:
-        curse:
-
----
-
-category:
-  supertype: mundane
-  types:
-    condition:
-      subtypes:
-        alcohol:
 
 ...

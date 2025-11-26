@@ -5,7 +5,7 @@
 entity:
   # --- Core Identification ---
   # The name of the entity, which should be unique.
-  name: flamebellow
+  name: reference(self:parameter.name)
   # The broad category of the entity (e.g., creature, item, spell).
   supertype: object
   # The specific type of the entity (e.g., humanoid, weapon, illusion).
@@ -94,11 +94,11 @@ entity:
       intimacy: 0     # Disgusted <-> Enamored
     - quality:
         gender: female
-        modifier: { respect: -10} # yeah, he's sexist
+        pre_mod: { respect: -10} # yeah, he's sexist
     - supertype: undead
-      modifier: { disposition: -100, intimacy: -100 } # Hostile and Disgusted towords undead
+      pre_mod: { disposition: -100, intimacy: -100 } # Hostile and Disgusted towords undead
     - name: Valerius
-      modifier: { disposition: 100, trust: 100, obligation: 100 } # Valerius is a trusted friend
+      pre_mod: { disposition: 100, trust: 100, obligation: 100 } # Valerius is a trusted friend
 
   # A list of languages the entity can understand or speak.
   language:
@@ -122,15 +122,15 @@ entity:
               name: Valerius          # will only cast fireball for Valerius
           - test:
               source: user
-              stat: arcane
-              modifier: 0
-              value: 0
+              reference: skill
+              value: arcane
+              pre_mod: 0
               type: roll
             difficulty:
               source: none
-              stat: none
+              reference: none
               value: 15
-              modifier: 0
+              pre_mod: 0
               type: static
             pass:
               description: ""
@@ -153,15 +153,15 @@ entity:
               frequency: round
               length:
                 source: none
-                stat: none
+                reference: none
+                pre_mod: 0
                 value: 6
-                modifier: 0
                 type: static
             magnitude:
               source: none
-              stat: none
+              reference: none
+              pre_mod: 0
               value: 3
-              modifier: 0
               type: static
         requirement:
           - name: none
@@ -179,48 +179,47 @@ entity:
           - name: slashing                                    # name indicates how this can be referenced by other entities (Ex: armor will reduce damage from bludgeoning, slashing, piercing sources), works as a 'base definition' for entities
             magnitude:
               source: user
-              stat: strength
-              value: 0
-              modifier: 3
+              reference: skill
+              value: strength
+              pre_mod: 3
               type: roll
           - entity: bleeding                                  # entity indicates this recerence a oreviously defined entity
             duration:
               frequency: round
               length:
                 source: none
-                stat: none
+                reference: none
                 value: 3
-                modifier: 0
+                pre_mod: 0
                 type: roll
             magnitude:
               source: none
-              stat: none
+              reference: none
               value: 3
-              modifier: 0
+              pre_mod: 0
               type: static
         requirement:
           - or:                                               # can satify either of the following conditions
-              supertype: creature
-              supertype: object
+            - supertype: creature
+            - supertype: object
           - not:                                              # the following condition cannot be met
-              subtype: specter                                # can't hit ghosts
+            - subtype: specter                                # can't hit ghosts
       user:
         effect:
           - name: none
         requirement:
-        requirement:
           - test:
               source: user
-              stat: longsword
+              reference: specialization
+              value: longsword
+              pre_mod: 0
               type: roll
-              value: 0
-              modifier: 0
             difficulty:
               source: target
-              stat: opposed
+              reference: opposed
+              value: longsword
               type: roll
-              value: 0
-              modifier: 0
+              pre_mod: 0
             pass:
               description: ""
             fail:
@@ -240,31 +239,31 @@ entity:
           - name: slashing                                    # name indicates how this can be referenced by other entities (Ex: armor will reduce damage from bludgeoning, slashing, piercing sources), works as a 'base definition' for entities
             magnitude:
               source: self
-              stat: magnitude
-              value: 0
-              modifier: 0
+              reference: none
+              value: magnitude
+              pre_mod: 0
               type: value
           - entity: bleeding                                  # entity indicates this recerence a oreviously defined entity
             duration:
               frequency: round
               length:
                 source: none
-                stat: none
+                reference: none
                 value: 3
-                modifier: 0
+                pre_mod: 0
                 type: roll
             magnitude:
               source: none
-              stat: none
+              reference: none
               value: 3
-              modifier: 0
+              pre_mod: 0
               type: static
         requirement:
           - or:                                               # can satify either of the following conditions
-              supertype: creature
-              supertype: object
+            - supertype: creature
+            - supertype: object
           - not:                                              # the following condition cannot be met
-              subtype: specter                                # can't hit ghosts
+            - subtype: specter                                # can't hit ghosts
       self:
         effect:
           - name: none
@@ -272,16 +271,16 @@ entity:
         requirement:
           - test:
               source: self
-              stat: longsword
+              reference: specialization
+              value: longsword
+              pre_mod: 0
               type: roll
-              value: 0
-              modifier: 0
             difficulty:
               source: target
-              stat: opposed
+              reference: opposed
+              value: longsword
+              pre_mod: 0
               type: roll
-              value: 0
-              modifier: 0
             pass:
               description: ""
             fail:
@@ -335,12 +334,15 @@ entity:
           - name: restore
             heal_cur_mp: 5
         requirement:
+  
+  parameter:
+    name: flamebellow
 
   magnitude:
     source: none
-    stat: none
+    reference: none
     value: 3
-    modifier: 0
+    pre_mod: 0
     type: static
 
   # --- Inventory & Abilities ---
@@ -374,7 +376,7 @@ entity:
 
   # --- Other ---
   # A list of unique entities that are part of this entity and cannot normally be interacted with.
-  condition:
+  status:
   - name: intelligence          # the only hard-coded entity. indicates how the entity's turn is handled, can be one of the following: [ none, basic, advanced ]
     parameter:
       level: advanced

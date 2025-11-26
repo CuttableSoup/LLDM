@@ -123,26 +123,17 @@ class Quality:
     material: str = ""
 
 @dataclass
-class ValueSource:
-    """Represents a source for a numeric value (test, difficulty, magnitude, duration)."""
-    source: str = "none"  # user, target, self, none
-    stat: str = "none"    # attribute name, skill name, 'value', 'opposed', 'none'
-    value: int = 0        # Raw value if type is static/value
-    modifier: int = 0     # Added to the result
-    type: str = "static"  # roll, static, value
-
-@dataclass
 class DurationComponent:
     """Represents the duration of an effect."""
     frequency: str = ""
-    length: ValueSource = field(default_factory=ValueSource)
+    length: Any = 0
     timestamp: int = 0
 
 @dataclass
 class Effect:
     """Represents an effect applied by an interaction."""
     name: str = ""
-    magnitude: ValueSource = field(default_factory=ValueSource)
+    magnitude: int = 0
     duration: Optional[DurationComponent] = None
     entity: Optional[str] = None # For referencing other entities like 'bleeding'
 
@@ -151,8 +142,8 @@ class Requirement:
     """Represents a requirement for an interaction."""
     type: str = "test" # test, ally, or, not, etc.
     # For tests:
-    test: Optional[ValueSource] = None
-    difficulty: Optional[ValueSource] = None
+    test: Optional[Any] = None
+    difficulty: Optional[int] = None
     pass_effect: Optional[List[Effect]] = None # 'pass' is a keyword
     fail_effect: Optional[List[Effect]] = None # 'fail' is a keyword
     # For logic/other:
@@ -216,8 +207,6 @@ class Entity:
     attitude: List[Dict[str, Any]] = field(default_factory=list)
     language: List[str] = field(default_factory=list)
     target: List[str] = field(default_factory=list)
-    resist: Dict[str, Dict[str, str]] = field(default_factory=dict)
-    range: int = 0
     proficiency: Dict[str, Any] = field(default_factory=dict)
     interaction: List[Interaction] = field(default_factory=list)
     ability: List[Interaction] = field(default_factory=list)
@@ -232,6 +221,7 @@ class Entity:
     unique_entity: List['Entity'] = field(default_factory=list)
     memory: List[str] = field(default_factory=list)
     quote: List[str] = field(default_factory=list)
+    parameter: Dict[str, Any] = field(default_factory=dict)
 
 def create_entity_from_dict(data: Dict[str, Any]) -> Entity:
     """
@@ -256,41 +246,25 @@ def create_entity_from_dict(data: Dict[str, Any]) -> Entity:
         data_copy['cost'] = Cost(**data_copy['cost'])
         
     if 'duration' in data_copy:
-        # Handle new DurationComponent structure if present, otherwise fallback (though schema changed)
-        # For simplicity, assuming new structure or empty
-        new_durations = []
-        for comp in data_copy['duration']:
-            if isinstance(comp, dict):
-                 # Check if length is a dict (ValueSource) or int (Old)
-                 length_data = comp.get('length')
-                 if isinstance(length_data, dict):
-                     comp['length'] = ValueSource(**length_data)
-                 elif isinstance(length_data, (int, float)):
-                      # Backwards compat: convert int to static ValueSource
-                      comp['length'] = ValueSource(value=int(length_data), type="static")
-                 elif length_data == "*":
-                      # Infinite
-                      comp['length'] = ValueSource(type="infinite")
-                 
-                 new_durations.append(DurationComponent(**comp))
-        data_copy['duration'] = new_durations
+        data_copy['duration'] = DurationComponent(**data_copy['duration'])
 
     # --- Helper to parse Effects ---
     def _parse_effects(effect_list: List[Dict]) -> List[Effect]:
         parsed = []
         for eff in effect_list:
             if 'magnitude' in eff and isinstance(eff['magnitude'], dict):
-                eff['magnitude'] = ValueSource(**eff['magnitude'])
+                # Simplified: just take the value if possible
+                eff['magnitude'] = eff['magnitude'].get('value', 0)
             elif 'magnitude' in eff and isinstance(eff['magnitude'], (int, float)):
-                 eff['magnitude'] = ValueSource(value=int(eff['magnitude']), type="static")
+                 eff['magnitude'] = int(eff['magnitude'])
             
             if 'duration' in eff and isinstance(eff['duration'], dict):
                  # Handle nested duration in effect
                  dur = eff['duration']
                  if isinstance(dur.get('length'), dict):
-                     dur['length'] = ValueSource(**dur['length'])
+                     dur['length'] = dur['length'].get('value', 0)
                  elif isinstance(dur.get('length'), (int, float)):
-                     dur['length'] = ValueSource(value=int(dur['length']), type="static")
+                     dur['length'] = int(dur['length'])
                  eff['duration'] = DurationComponent(**dur)
             
             parsed.append(Effect(**eff))
@@ -304,11 +278,13 @@ def create_entity_from_dict(data: Dict[str, Any]) -> Entity:
             if 'test' in req:
                 req_obj = Requirement(type='test')
                 if isinstance(req['test'], dict):
-                    req_obj.test = ValueSource(**req['test'])
+                    req_obj.test = req['test'] # Keep as dict
                 
                 if 'difficulty' in req:
                      if isinstance(req['difficulty'], dict):
-                         req_obj.difficulty = ValueSource(**req['difficulty'])
+                         req_obj.difficulty = req['difficulty'].get('value', 0)
+                     elif isinstance(req['difficulty'], (int, float)):
+                         req_obj.difficulty = int(req['difficulty'])
                 
                 # Handle pass/fail effects if needed (omitted for brevity, can be added)
                 parsed.append(req_obj)
@@ -326,8 +302,53 @@ def create_entity_from_dict(data: Dict[str, Any]) -> Entity:
             elif 'relation' in req:
                 parsed.append(Requirement(type='relation', relation=req['relation']))
             
-            # TODO: Handle 'or', 'not' recursively
+            # Handle 'or' recursively
+            elif 'or' in req:
+                req_obj = Requirement(type='or')
+                if isinstance(req['or'], list):
+                    # If it's a list, treat each item as a sub-requirement
+                    req_obj.sub_requirements = _parse_requirements(req['or'])
+                elif isinstance(req['or'], dict):
+                    # If it's a dict (like in the yaml example), treat keys as types? 
+                    # Actually, the yaml example:
+                    # - or:
+                    #     supertype: creature
+                    #     supertype: object 
+                    # This is invalid YAML (duplicate keys). 
+                    # Assuming the YAML parser returns a dict with one key if valid, or we need to handle it differently.
+                    # Wait, the YAML example in generic.yaml line 202:
+                    # - or:
+                    #     supertype: creature
+                    #     supertype: object
+                    # This is definitely duplicate keys. The parser might only keep the last one.
+                    # Let's assume the user meant a list of dicts or we handle the dict as best we can.
+                    # For now, let's just parse the dict items as requirements.
+                    sub_reqs = []
+                    for k, v in req['or'].items():
+                         # Construct a mini-dict to pass back to _parse_requirements
+                         sub_reqs.append({k: v})
+                    req_obj.sub_requirements = _parse_requirements(sub_reqs)
+                parsed.append(req_obj)
+
+            # Handle 'not' recursively
+            elif 'not' in req:
+                req_obj = Requirement(type='not')
+                if isinstance(req['not'], list):
+                    req_obj.sub_requirements = _parse_requirements(req['not'])
+                elif isinstance(req['not'], dict):
+                     sub_reqs = []
+                     for k, v in req['not'].items():
+                         sub_reqs.append({k: v})
+                     req_obj.sub_requirements = _parse_requirements(sub_reqs)
+                parsed.append(req_obj)
             
+            # Handle generic key-value requirements (supertype: creature, etc.)
+            else:
+                 # If it's not a special keyword, treat it as a property check
+                 for k, v in req.items():
+                     if k not in ['test', 'ally', 'name', 'relation', 'or', 'not']:
+                         parsed.append(Requirement(type='property', name=k, relation=v))
+
         return parsed
 
     # --- Helper to parse Interactions ---
@@ -454,7 +475,80 @@ def create_entity_from_dict(data: Dict[str, Any]) -> Entity:
     if 'max_fp' in filtered_data and 'cur_fp' not in filtered_data:
         filtered_data['cur_fp'] = filtered_data['max_fp']
 
-    return Entity(**filtered_data)
+    entity = Entity(**filtered_data)
+    resolve_entity_references(entity)
+    return entity
+
+def resolve_entity_references(entity: Entity):
+    """
+    Recursively resolves 'reference(source:path)' strings in the entity's fields.
+    """
+    import re
+    
+    # Regex to match reference(source:path)
+    # Captures: 1=source, 2=path
+    ref_pattern = re.compile(r"reference\(([^:]+):([^)]+)\)")
+
+    def _resolve_single_ref(match, context_entity: Entity) -> Any:
+        source = match.group(1)
+        path = match.group(2)
+        
+        if source == 'self':
+            current = context_entity
+            try:
+                for part in path.split('.'):
+                    if isinstance(current, dict):
+                        current = current.get(part)
+                    else:
+                        current = getattr(current, part)
+                return current
+            except (AttributeError, KeyError):
+                print(f"Warning: Could not resolve reference '{match.group(0)}' in entity '{context_entity.name}'")
+                return match.group(0)
+        else:
+             print(f"Warning: Unsupported reference source '{source}' in '{match.group(0)}'")
+             return match.group(0)
+
+    def _resolve_value(value: Any, context_entity: Entity) -> Any:
+        if isinstance(value, str):
+            # 1. Try exact match to preserve type (e.g. "reference(...)" -> int)
+            match = ref_pattern.fullmatch(value.strip())
+            if match:
+                return _resolve_single_ref(match, context_entity)
+            
+            # 2. Try substitution for embedded strings (e.g. "Name: reference(...)")
+            if "reference(" in value:
+                 return ref_pattern.sub(lambda m: str(_resolve_single_ref(m, context_entity)), value)
+            
+            return value
+        
+        elif isinstance(value, list):
+            return [_resolve_value(item, context_entity) for item in value]
+        
+        elif isinstance(value, dict):
+            return {k: _resolve_value(v, context_entity) for k, v in value.items()}
+        
+        elif dataclass_is_instance(value):
+             # Recursively process dataclass fields
+             for f in fields(value):
+                 current_val = getattr(value, f.name)
+                 new_val = _resolve_value(current_val, context_entity)
+                 setattr(value, f.name, new_val)
+             return value
+             
+        return value
+
+    def dataclass_is_instance(obj):
+        return hasattr(obj, '__dataclass_fields__')
+
+    # Start recursion on the entity itself
+    # We iterate over fields to avoid replacing the entity object itself
+    for f in fields(entity):
+        current_val = getattr(entity, f.name)
+        # We pass the entity as context
+        new_val = _resolve_value(current_val, entity)
+        setattr(entity, f.name, new_val)
+
 
 @dataclass
 class RoomLegendItem:
@@ -651,7 +745,6 @@ class RulesetLoader:
 # Placeholder imports for GameController if modules are missing.
 try:
     from nlp_processor import NLPProcessor, ProcessedInput
-    from action_processor import process_player_actions
     from config_manager import ConfigManager
     from llm_manager import LLMManager, OLLAMA_MODELS
     from prompts import prompts
@@ -662,8 +755,6 @@ except ImportError as e:
         def process_player_input(self, *args): return None
     class ProcessedInput: pass
     class LLMManager: pass
-    def process_player_actions(*args) -> List[Tuple[str, str]]:
-        return [("Error: 'action_processor.py' not found.", "Error")]
 
 
 class GameController:
