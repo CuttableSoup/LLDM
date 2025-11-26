@@ -94,11 +94,11 @@ entity:
       intimacy: 0     # Disgusted <-> Enamored
     - quality:
         gender: female
-        pre_mod: { respect: -10} # yeah, he's sexist
+        modifier: { respect: -10} # yeah, he's sexist
     - supertype: undead
-      pre_mod: { disposition: -100, intimacy: -100 } # Hostile and Disgusted towords undead
+      modifier: { disposition: -100, intimacy: -100 } # Hostile and Disgusted towords undead
     - name: Valerius
-      pre_mod: { disposition: 100, trust: 100, obligation: 100 } # Valerius is a trusted friend
+      modifier: { disposition: 100, trust: 100, obligation: 100 } # Valerius is a trusted friend
 
   # A list of languages the entity can understand or speak.
   language:
@@ -183,6 +183,7 @@ entity:
               value: strength
               pre_mod: 3
               type: roll
+            apply: damage_cur_hp
           - entity: bleeding                                  # entity indicates this recerence a oreviously defined entity
             duration:
               frequency: round
@@ -198,6 +199,7 @@ entity:
               value: 3
               pre_mod: 0
               type: static
+            apply: damage_cur_hp
         requirement:
           - or:                                               # can satify either of the following conditions
             - supertype: creature
@@ -243,6 +245,7 @@ entity:
               value: magnitude
               pre_mod: 0
               type: value
+            apply: damage_cur_hp
           - entity: bleeding                                  # entity indicates this recerence a oreviously defined entity
             duration:
               frequency: round

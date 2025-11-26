@@ -135,10 +135,11 @@ class DurationComponent:
 @dataclass
 class Effect:
     """Represents an effect applied by an interaction."""
-    name: str = ""
-    magnitude: int = 0
-    duration: Optional[DurationComponent] = None
+    name: str = ""  # The name of the effect, how other entities will reference it
+    magnitude: Optional[str] = None # If an entity is not defined, the value of the effect
+    duration: Optional[DurationComponent] = None # The duration of the effect
     entity: Optional[str] = None # For referencing other entities like 'bleeding'
+    apply: Optional[str] = None # If an entity is not defined, specify the stat change (e.g., `damage_cur_hp/damage_cur_mp/damage_cur_fp`)
 
 @dataclass
 class Requirement:
