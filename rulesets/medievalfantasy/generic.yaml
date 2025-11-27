@@ -312,10 +312,12 @@ entity:
       self:
         effect:
           - name: restore
+            apply: status.mind
             inventory:
+              operation: set
               list:
                 - name: fireball
-                  quantity: 10 
+                  quantity: 10
         requirement:
           - name: none
     - frequency: hour             # Duration Component

@@ -90,7 +90,8 @@ Events that happen automatically.
 - **`length`**: (String) Duration (e.g., `*` for indefinite).
 - **`timestamp`**: (Empty/String) Last triggered time.
 - **`target` / `user` / `self`**: (Dictionary) Similar to interaction, defines effects and requirements.
-  - Example effect: `{ name: restore, inventory: { list: [...] } }` or `{ name: restore, heal_cur_mp: 5 }`.
+  - Example effect: `{ name: restore, inventory: { operation: add, list: [...] } }` or `{ name: restore, heal_cur_mp: 5 }`.
+    - `operation`: (String) `add` (default), `set`, or `remove`.
 
 ## Inventory & Abilities
 - **`slot`**: (List) Equipment slots occupied (e.g., `hand`).

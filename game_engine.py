@@ -35,7 +35,8 @@ class GameController:
         self.llm_manager = llm_manager
         
         self.player_entity: Optional[Entity] = None
-        self.game_time = GameTime(year=1, month=1, day=1, hour=8)
+        self.game_time = GameTime()
+        self.game_time.set_time(year=2000, month=1, day=1, hour=8)
         self.game_entities: Dict[str, Entity] = {}
         self.entity_histories: Dict[str, EntityHistory] = {}
         self.current_room: Optional[Room] = None

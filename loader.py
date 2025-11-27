@@ -165,10 +165,26 @@ def create_entity_from_dict(data: Dict[str, Any]) -> Entity:
                      dur['length'] = dur['length'].get('value', 0)
                  eff['duration'] = DurationComponent(**dur)
             
-            parsed.append(Effect(**eff))
+            # Separate parameters
+            eff_args = {}
+            parameters = {}
+            known_fields = {'name', 'magnitude', 'duration', 'entity', 'apply', 'inventory'}
+            
+            for k, v in eff.items():
+                if k in known_fields:
+                    eff_args[k] = v
+                else:
+                    parameters[k] = v
+            
+            if parameters:
+                eff_args['parameters'] = parameters
+            
+            parsed.append(Effect(**eff_args))
         return parsed
 
     def _parse_requirements(req_list: List[Dict]) -> List[Requirement]:
+        if not req_list:
+            return []
         parsed = []
         for req in req_list:
             if 'test' in req:

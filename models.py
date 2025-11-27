@@ -10,38 +10,78 @@ from typing import List, Dict, Any, Optional, Union
 
 @dataclass
 class GameTime:
-    """Represents the in-game time."""
-    year: int = 1
-    month: int = 1
-    day: int = 1
-    hour: int = 0
-    minute: int = 0
-    second: int = 0
+    """Represents the in-game time. Year is stored separately to avoid overflow."""
+    year: int = 2001
+    total_seconds: int = 0  # Seconds since the beginning of the current year
+    
+    # Constants for time conversion
+    SECONDS_PER_MINUTE = 60
+    SECONDS_PER_HOUR = 3600
+    SECONDS_PER_DAY = 86400
+    SECONDS_PER_MONTH = 2592000  # 30 days
+    SECONDS_PER_YEAR = 31104000  # 12 months
+
+    def __init__(self, year: int = 1, month: int = 1, day: int = 1, hour: int = 0, minute: int = 0, second: int = 0, total_seconds: Optional[int] = None):
+        self.year = year
+        if total_seconds is not None:
+            self.total_seconds = total_seconds
+        else:
+            self.total_seconds = (
+                (month - 1) * self.SECONDS_PER_MONTH +
+                (day - 1) * self.SECONDS_PER_DAY +
+                hour * self.SECONDS_PER_HOUR +
+                minute * self.SECONDS_PER_MINUTE +
+                second
+            )
+        self._normalize()
+
+    def _normalize(self):
+        while self.total_seconds >= self.SECONDS_PER_YEAR:
+            self.total_seconds -= self.SECONDS_PER_YEAR
+            self.year += 1
+
+    @property
+    def month(self) -> int:
+        return (self.total_seconds // self.SECONDS_PER_MONTH) + 1
+
+    @property
+    def day(self) -> int:
+        return ((self.total_seconds % self.SECONDS_PER_MONTH) // self.SECONDS_PER_DAY) + 1
+
+    @property
+    def hour(self) -> int:
+        return ((self.total_seconds % self.SECONDS_PER_DAY) // self.SECONDS_PER_HOUR)
+
+    @property
+    def minute(self) -> int:
+        return ((self.total_seconds % self.SECONDS_PER_HOUR) // self.SECONDS_PER_MINUTE)
+
+    @property
+    def second(self) -> int:
+        return self.total_seconds % self.SECONDS_PER_MINUTE
 
     def advance_time(self, seconds: int = 1):
         """Advances the game time by a specified number of seconds."""
-        self.second += seconds
-        while self.second >= 60:
-            self.second -= 60
-            self.minute += 1
-        while self.minute >= 60:
-            self.minute -= 60
-            self.hour += 1
-        while self.hour >= 24:
-            self.hour -= 24
-            self.day += 1
-        while self.day > 30:
-            self.day -= 30
-            self.month += 1
-        while self.month > 12:
-            self.month -= 12
-            self.year += 1
+        self.total_seconds += seconds
+        self._normalize()
+
+    def set_time(self, year: int = 1, month: int = 1, day: int = 1, hour: int = 0, minute: int = 0, second: int = 0):
+        """Sets the game time to a specific date and time."""
+        self.year = year
+        self.total_seconds = (
+            (month - 1) * self.SECONDS_PER_MONTH +
+            (day - 1) * self.SECONDS_PER_DAY +
+            hour * self.SECONDS_PER_HOUR +
+            minute * self.SECONDS_PER_MINUTE +
+            second
+        )
+        self._normalize()
 
     def get_time_string(self) -> str:
         return f"Year {self.year}, Month {self.month}, Day {self.day}, Hour {self.hour:02d}:00"
 
     def copy(self) -> GameTime:
-        return GameTime(self.year, self.month, self.day, self.hour, self.minute, self.second)
+        return GameTime(year=self.year, total_seconds=self.total_seconds)
 
 @dataclass
 class HistoryEvent:
@@ -120,6 +160,8 @@ class Effect:
     duration: Optional[DurationComponent] = None
     entity: Optional[str] = None 
     apply: Optional[str] = None 
+    inventory: Optional[Dict[str, Any]] = None
+    parameters: Dict[str, Any] = field(default_factory=dict)
 
 @dataclass
 class Requirement:
