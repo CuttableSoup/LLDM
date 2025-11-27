@@ -46,13 +46,14 @@ except ImportError:
     Matcher = None
 
 try:
-    from classes import Entity, Attribute, Skill
+    from models import Entity, Attribute, Skill
 except ImportError:
     logger = logging.getLogger("NLP")
-    logger.warning("Warning: 'classes.py' not found. Using placeholder Entity.")
+    logger.warning("Warning: 'models.py' not found. Using placeholder Entity.")
     class Entity:
         name: str = ""
         quote: List[str] = []
+        supertype: str = ""
     class Attribute: pass
     class Skill: pass
 

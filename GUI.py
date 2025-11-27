@@ -26,17 +26,19 @@ except ImportError:
     OLLAMA_MODELS = {"Gemma 3 12B": "gemma3:12b"}
 
 try:
-    from classes import Entity, RulesetLoader, Room, GameController
+    from models import Entity, Room, InventoryItem, Skill
+    from loader import RulesetLoader
+    from game_engine import GameController
     from DebugWindow import DebugWindow
-except ImportError:
-    logger.warning("Warning: 'classes.py' not found. Using placeholder classes.")
+except ImportError as e:
+    logger.warning(f"Warning: Core module not found ({e}). Using placeholder classes.")
     class Room: pass
     class Entity: pass
     class InventoryItem: pass
     class Skill: pass
     class RulesetLoader:
         def __init__(self, *args):
-            logger.critical("FATAL: classes.py missing RulesetLoader")
+            logger.critical("FATAL: loader.py missing RulesetLoader")
         def load_all(self): pass
         def get_character(self, name): return None
         creatures = {}

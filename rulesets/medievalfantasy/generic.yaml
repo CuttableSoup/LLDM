@@ -356,17 +356,7 @@ entity:
   bulk: 2
 
   # A list of entities contained within this entity's inventory.
-  inventory:
-    inventory_rules:
-      slots_only: true
-      quantity_allowed: "*"
-      type_allowed:
-      - type: miracle
-      - type: arcane
-    list:
-    - name: fireball
-      quantity: 10
-      equipped: true
+  inventory: []
 
   # --- Narrative ---
   # A list of memories or knowledge the entity possesses.
@@ -383,3 +373,17 @@ entity:
     parameter:
       level: advanced
   - name: steel
+  - name: mind
+    quantity: 1
+    equipped: true
+    inventory:
+      inventory_rules:
+        slots_only: true
+        quantity_allowed: "*"
+        type_allowed:
+        - type: miracle
+        - type: arcane
+      list:
+      - name: fireball
+        quantity: 10
+        equipped: true

@@ -20,11 +20,13 @@ except ImportError:
 # Type checking to avoid circular imports
 try:
     if TYPE_CHECKING:
-        from classes import RulesetLoader, Entity
-    from classes import create_entity_from_dict, Entity, RulesetLoader
-except ImportError:
-    print("DebugWindow Error: 'classes.py' not found.")
-    # Placeholder classes for when classes.py is not available
+        from loader import RulesetLoader
+        from models import Entity
+    from models import Entity
+    from loader import RulesetLoader, create_entity_from_dict
+except ImportError as e:
+    print(f"DebugWindow Error: Core module not found ({e}).")
+    # Placeholder classes for when modules are not available
     class RulesetLoader:
         characters: Dict[str, Any] = {}
         creatures: Dict[str, Any] = {}
@@ -112,11 +114,10 @@ class EntityDebugTab(ttk.Frame):
         
         # Consolidate all entities from the loader into one dictionary
         self.all_entities.update(self.loader.characters)
-        self.all_entities.update(self.loader.creatures)
-        self.all_entities.update(self.loader.items)
-        self.all_entities.update(self.loader.spells)
-        self.all_entities.update(self.loader.conditions)
-        self.all_entities.update(self.loader.environment_ents)
+        # Note: loader.creatures, loader.items, etc. might not exist depending on RulesetLoader implementation.
+        # But entities_by_supertype does.
+        for st_dict in self.loader.entities_by_supertype.values():
+             self.all_entities.update(st_dict)
         
         for entity_name in sorted(self.all_entities.keys()):
             self.entity_listbox.insert(tk.END, entity_name)
@@ -184,19 +185,14 @@ class EntityDebugTab(ttk.Frame):
 
             new_entity.name = self.selected_entity_name
             
-            # Update the entity in the appropriate dictionary in the loader
+            # Update the entity in the loader (check characters first, then supertypes)
             if self.selected_entity_name in self.loader.characters:
                 self.loader.characters[self.selected_entity_name] = new_entity
-            elif self.selected_entity_name in self.loader.creatures:
-                self.loader.creatures[self.selected_entity_name] = new_entity
-            elif self.selected_entity_name in self.loader.items:
-                self.loader.items[self.selected_entity_name] = new_entity
-            elif self.selected_entity_name in self.loader.spells:
-                self.loader.spells[self.selected_entity_name] = new_entity
-            elif self.selected_entity_name in self.loader.conditions:
-                self.loader.conditions[self.selected_entity_name] = new_entity
-            elif self.selected_entity_name in self.loader.environment_ents:
-                self.loader.environment_ents[self.selected_entity_name] = new_entity
+            else:
+                for st_dict in self.loader.entities_by_supertype.values():
+                     if self.selected_entity_name in st_dict:
+                         st_dict[self.selected_entity_name] = new_entity
+                         break
             
             self.all_entities[self.selected_entity_name] = new_entity
             

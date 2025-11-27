@@ -13,7 +13,8 @@ from logger_config import setup_logging
 
 # Import all necessary modules from the project.
 try:
-    from classes import RulesetLoader, Entity
+    from models import Entity
+    from loader import RulesetLoader
     from GUI import MainWindow
     from config_manager import ConfigManager
     from ollama_manager import OllamaManager
@@ -22,7 +23,7 @@ except ImportError as e:
     # Display a fatal error if a required module is missing.
     # We can't use the logger yet if we fail here, so stderr is appropriate.
     print(f"Fatal Error: Failed to import a required project module: {e}", file=sys.stderr)
-    print("Please ensure all .py files (GUI.py, classes.py, etc.) are in the same directory.", file=sys.stderr)
+    print("Please ensure all .py files (GUI.py, models.py, loader.py, etc.) are in the same directory.", file=sys.stderr)
     sys.exit(1)
 
 # Define constants for the application.
