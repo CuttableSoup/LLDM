@@ -105,7 +105,7 @@ Events that happen automatically.
 - **`quote`**: (List) Strings representing quotes.
 
 ## Other
-- **`status`**: (List) Unique sub-entities or statuses.
+- **`status`**: (List) Unique sub-entities.
   - Example: `intelligence` (defines AI level like `basic`, `advanced`).
 - **`parameter`**: (Dictionary) Custom parameters (e.g., `name: flamebellow`).
 - **`magnitude`**: (Dictionary) Default magnitude definition if applicable.

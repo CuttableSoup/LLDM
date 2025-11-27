@@ -247,7 +247,7 @@ class Entity:
     # Complex Fields
     attribute: Dict[str, Attribute] = field(default_factory=dict)
     quality: Quality = field(default_factory=Quality)
-    status: List[Any] = field(default_factory=list)
+    status: List['Entity'] = field(default_factory=list)
     ally: List[Dict[str, Any]] = field(default_factory=list)
     enemy: List[Dict[str, Any]] = field(default_factory=list)
     attitude: List[Dict[str, Any]] = field(default_factory=list)
@@ -277,7 +277,6 @@ class Entity:
     quote: List[str] = field(default_factory=list)
     
     # Other
-    unique_entity: List['Entity'] = field(default_factory=list)
     parameter: Dict[str, Any] = field(default_factory=dict)
 
 # --- Map & Environment Classes ---
