@@ -1,0 +1,27 @@
+entity:
+  name: Training Dummy
+  supertype: object
+  type: construct
+  description: A straw dummy for target practice.
+  
+  max_hp: 50
+  cur_hp: 50
+  max_mp: 0
+  cur_mp: 0
+  max_fp: 0
+  cur_fp: 0
+  
+  size: medium
+  weight: 20.0
+  
+  attribute:
+    physique: 5
+    dexterity: 1
+    intelligence: 0
+    wisdom: 0
+    presence: 0
+    
+  interaction: []
+  ability: []
+  trigger: []
+  inventory: []

@@ -35,6 +35,8 @@ class RulesetLoader:
         self.attributes: List[Any] = []
         self.types: List[Any] = []
         
+        self.attribute_map: Dict[str, str] = {} # child -> parent
+        
         logger.info(f"RulesetLoader initialized for path: {self.ruleset_path}")
 
     def load_all(self):
@@ -69,6 +71,8 @@ class RulesetLoader:
             if is_schema:
                 schema_files_paths.add(yaml_file)
 
+        self._build_attribute_map()
+
         # Dynamic initialization of supertypes found in schema
         dynamic_supertypes = {
             doc.get('category', {}).get('supertype') 
@@ -89,7 +93,7 @@ class RulesetLoader:
                     if 'name' not in data:
                         continue
                     
-                    entity_obj = create_entity_from_dict(data)
+                    entity_obj = create_entity_from_dict(data, self.attribute_map)
                     
                     if data.get("is_player", False):
                         self.characters[entity_obj.name] = entity_obj
@@ -131,13 +135,36 @@ class RulesetLoader:
         except Exception as e:
             logger.error(f"Error loading scenario from {file_name}: {e}")
 
+    def _build_attribute_map(self):
+        """Builds a map of child -> parent for attributes, skills, and specializations."""
+        for attr_doc in self.attributes:
+            if 'aptitude' not in attr_doc: continue
+            
+            for attr_name, attr_data in attr_doc['aptitude'].items():
+                if not isinstance(attr_data, dict): continue
+                
+                for key, value in attr_data.items():
+                    if key in ['description', 'keywords', 'opposes']: continue
+                    
+                    # This is likely a skill
+                    skill_name = key
+                    self.attribute_map[skill_name] = attr_name
+                    
+                    if isinstance(value, dict):
+                        for sub_key, sub_value in value.items():
+                            if sub_key in ['description', 'keywords', 'opposes']: continue
+                            
+                            # This is likely a specialization
+                            spec_name = sub_key
+                            self.attribute_map[spec_name] = skill_name
+
     def get_character(self, name: str) -> Optional[Entity]:
         return self.characters.get(name)
 
 
 # --- Helper Functions ---
 
-def create_entity_from_dict(data: Dict[str, Any]) -> Entity:
+def create_entity_from_dict(data: Dict[str, Any], attribute_map: Dict[str, str] = None) -> Entity:
     """Creates an Entity object from a dictionary, handling nested structures."""
     data_copy = data.copy()
 
@@ -235,58 +262,29 @@ def create_entity_from_dict(data: Dict[str, Any]) -> Entity:
                 inter.target_requirement = _parse_requirements(item['target']['requirement'])
             if 'user' in item and 'requirement' in item['user']:
                 inter.user_requirement = _parse_requirements(item['user']['requirement'])
-            if 'self' in item and 'requirement' in item['self']:
-                inter.self_requirement = _parse_requirements(item['self']['requirement'])
-            parsed.append(inter)
-        return parsed
+                return final_attributes[name].base if name in final_attributes else 0
 
-    def _parse_triggers(trigger_list: List[Dict]) -> List[Trigger]:
-        parsed = []
-        for item in trigger_list:
-            trig = Trigger(
-                frequency=item.get('frequency', ''),
-                length=item.get('length', '*'),
-                timestamp=item.get('timestamp')
-            )
-            # Effects and Requirements logic is shared with Interaction
-            if 'target' in item:
-                if 'effect' in item['target']: trig.target_effect = _parse_effects(item['target']['effect'])
-                if 'requirement' in item['target']: trig.target_requirement = _parse_requirements(item['target']['requirement'])
-            if 'user' in item:
-                if 'effect' in item['user']: trig.user_effect = _parse_effects(item['user']['effect'])
-                if 'requirement' in item['user']: trig.user_requirement = _parse_requirements(item['user']['requirement'])
-            if 'self' in item:
-                if 'effect' in item['self']: trig.self_effect = _parse_effects(item['self']['effect'])
-                if 'requirement' in item['self']: trig.self_requirement = _parse_requirements(item['self']['requirement'])
-            parsed.append(trig)
-        return parsed
+            # 2. Process Skills
+            if 'skill' in data_copy and isinstance(data_copy['skill'], dict):
+                for skill_name, skill_val in data_copy['skill'].items():
+                    parent_attr = attribute_map.get(skill_name)
+                    base_attr_val = get_base(parent_attr) if parent_attr else 0
+                    total_val = base_attr_val + skill_val
+                    final_attributes[skill_name] = Attribute(base=total_val)
+            
+            # 3. Process Specializations
+            if 'specialization' in data_copy and isinstance(data_copy['specialization'], dict):
+                for spec_name, spec_val in data_copy['specialization'].items():
+                    parent_skill = attribute_map.get(spec_name)
+                    skill_total = get_base(parent_skill) if parent_skill else 0
+                    
+                    if skill_total == 0 and parent_skill:
+                         grandparent_attr = attribute_map.get(parent_skill)
+                         skill_total = get_base(grandparent_attr) if grandparent_attr else 0
 
-    if 'interaction' in data_copy:
-        data_copy['interaction'] = _parse_interactions(data_copy['interaction'])
-    if 'ability' in data_copy:
-        data_copy['ability'] = _parse_interactions(data_copy['ability'])
-    if 'trigger' in data_copy:
-        data_copy['trigger'] = _parse_triggers(data_copy['trigger'])
+                    total_val = skill_total + spec_val
+                    final_attributes[spec_name] = Attribute(base=total_val)
 
-    # Attribute flattening logic
-    final_attributes: Dict[str, Attribute] = {}
-    if 'attribute' in data_copy:
-        raw_attributes = data_copy['attribute']
-        def process_attr(attr_map: Dict, path_prefix=""):
-            for key, value in attr_map.items():
-                if key == 'choice': continue
-                current_path = f"{path_prefix}{key}"
-                if isinstance(value, (int, float)):
-                    final_attributes[current_path] = Attribute(base=value)
-                elif isinstance(value, dict):
-                    base_val = value.get('base', 0)
-                    final_attributes[current_path] = Attribute(base=base_val)
-                    if 'skill' in value and isinstance(value['skill'], dict):
-                        process_attr(value['skill'], path_prefix=f"{current_path}.")
-                    if 'specialization' in value and isinstance(value['specialization'], dict):
-                         process_attr(value['specialization'], path_prefix=f"{current_path}.")
-        if isinstance(raw_attributes, dict):
-            process_attr(raw_attributes)
         data_copy['attribute'] = final_attributes
 
     # Inventory flattening logic

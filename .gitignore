@@ -3,3 +3,4 @@ __pycache__
 config.json
 notes.txt
 /.gemini
+game_log.txt

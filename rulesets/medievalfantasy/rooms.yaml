@@ -16,7 +16,7 @@ map:
               
           - [ [W,W,W,W,W,W,W],
               [W,x,x,x,x,x,W],
-              [W,x,x,x,x,x,W],
+              [W,x,x,D,x,x,W],
               [W,x,x,x,x,x,W],
               [W,x,x,P,x,x,W],
               [W,x,x,x,x,x,W],
@@ -25,5 +25,6 @@ map:
         legend:
           - { char: G, entity: ground, color: "#888", map_name: "Ground" }
           - { char: W, entity: stone wall, color: "#333", map_name: "Stone Wall" }
-          - { char: P, entity: Valerius, is_player: true, color: "#007BFF" }
+          - { char: P, entity: Player, is_player: true, color: "#007BFF" }
+          - { char: D, entity: Training Dummy, color: "#8B4513", map_name: "Dummy" }
           - { char: x, color: "#505050", map_name: "Floor" }

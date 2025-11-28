@@ -365,8 +365,16 @@ class NLPProcessor:
         sorted_names = sorted(known_entities.keys(), key=len, reverse=True)
         
         for entity_name in sorted_names:
+            # Full name pattern
             pattern = [{"LOWER": word} for word in entity_name.lower().split()]
             patterns.append(pattern)
+            
+            # Partial name patterns (for multi-word names)
+            words = entity_name.lower().split()
+            if len(words) > 1:
+                for word in words:
+                    if len(word) > 3: # Avoid short words like "the", "of"
+                        patterns.append([{"LOWER": word}])
         
         if not patterns:
             logger.warning("NLP_NER: No patterns were generated for the matcher.")

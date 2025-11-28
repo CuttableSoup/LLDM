@@ -1,0 +1,51 @@
+entity:
+  name: Player
+  is_player: true
+  supertype: creature
+  type: human
+  description: A brave adventurer.
+  
+  max_hp: 100
+  cur_hp: 100
+  max_mp: 20
+  cur_mp: 20
+  max_fp: 20
+  cur_fp: 20
+  
+  size: medium
+  weight: 80.0
+  
+  attribute:
+    physique: 10
+    dexterity: 10
+    intelligence: 10
+    wisdom: 10
+    presence: 10
+    
+    skill:
+      blade: 6
+      
+    specialization:
+      longsword: 6
+
+  interaction:
+    - type: attack
+      description: swings their weapon
+      range: 1
+      target:
+        effect:
+          - name: damage
+            magnitude:
+              value: physique.blade.longsword
+              type: roll
+              source: user
+              reference: attribute
+      user:
+        requirement:
+          - type: test
+            test:
+              source: user
+              value: physique.blade.longsword
+            difficulty:
+              type: static
+              value: 10
