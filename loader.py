@@ -262,30 +262,46 @@ def create_entity_from_dict(data: Dict[str, Any], attribute_map: Dict[str, str] 
                 inter.target_requirement = _parse_requirements(item['target']['requirement'])
             if 'user' in item and 'requirement' in item['user']:
                 inter.user_requirement = _parse_requirements(item['user']['requirement'])
-                return final_attributes[name].base if name in final_attributes else 0
+            parsed.append(inter)
+        return parsed
 
-            # 2. Process Skills
-            if 'skill' in data_copy and isinstance(data_copy['skill'], dict):
-                for skill_name, skill_val in data_copy['skill'].items():
-                    parent_attr = attribute_map.get(skill_name)
-                    base_attr_val = get_base(parent_attr) if parent_attr else 0
-                    total_val = base_attr_val + skill_val
-                    final_attributes[skill_name] = Attribute(base=total_val)
+    # --- Attribute Processing ---
+    final_attributes: Dict[str, Attribute] = {}
+    
+    # 1. Process Base Attributes
+    if 'attribute' in data_copy and isinstance(data_copy['attribute'], dict):
+        for name, value in data_copy['attribute'].items():
+            if isinstance(value, int):
+                final_attributes[name] = Attribute(base=value)
+            elif isinstance(value, dict):
+                base_val = value.get('base', 0)
+                final_attributes[name] = Attribute(base=base_val)
+
+    def get_base(name: str) -> int:
+        return final_attributes[name].base if name in final_attributes else 0
+
+    # 2. Process Skills
+    if 'skill' in data_copy and isinstance(data_copy['skill'], dict):
+        for skill_name, skill_val in data_copy['skill'].items():
+            parent_attr = attribute_map.get(skill_name)
+            base_attr_val = get_base(parent_attr) if parent_attr else 0
+            total_val = base_attr_val + skill_val
+            final_attributes[skill_name] = Attribute(base=total_val)
+    
+    # 3. Process Specializations
+    if 'specialization' in data_copy and isinstance(data_copy['specialization'], dict):
+        for spec_name, spec_val in data_copy['specialization'].items():
+            parent_skill = attribute_map.get(spec_name)
+            skill_total = get_base(parent_skill) if parent_skill else 0
             
-            # 3. Process Specializations
-            if 'specialization' in data_copy and isinstance(data_copy['specialization'], dict):
-                for spec_name, spec_val in data_copy['specialization'].items():
-                    parent_skill = attribute_map.get(spec_name)
-                    skill_total = get_base(parent_skill) if parent_skill else 0
-                    
-                    if skill_total == 0 and parent_skill:
-                         grandparent_attr = attribute_map.get(parent_skill)
-                         skill_total = get_base(grandparent_attr) if grandparent_attr else 0
+            if skill_total == 0 and parent_skill:
+                 grandparent_attr = attribute_map.get(parent_skill)
+                 skill_total = get_base(grandparent_attr) if grandparent_attr else 0
 
-                    total_val = skill_total + spec_val
-                    final_attributes[spec_name] = Attribute(base=total_val)
+            total_val = skill_total + spec_val
+            final_attributes[spec_name] = Attribute(base=total_val)
 
-        data_copy['attribute'] = final_attributes
+    data_copy['attribute'] = final_attributes
 
     # Inventory flattening logic
     def _create_inventory(items_list: List[Dict]) -> List[InventoryItem]:
@@ -303,10 +319,9 @@ def create_entity_from_dict(data: Dict[str, Any], attribute_map: Dict[str, str] 
         data_copy['inventory'] = _create_inventory(item_entries)
         rule_entries = [entry['requirement'] for entry in all_inventory_entries if 'requirement' in entry]
         data_copy['inventory_rules'] = rule_entries
-
-    # Ensure Movement dictionaries exist
-    if 'move' in data_copy: data_copy['move'] = data_copy.get('move', {})
-    if 'passable' in data_copy: data_copy['passable'] = data_copy.get('passable', {})
+    
+    if 'interaction' in data_copy:
+        data_copy['interaction'] = _parse_interactions(data_copy['interaction'])
 
     # Create Entity
     entity_field_names = {f.name for f in fields(Entity)}

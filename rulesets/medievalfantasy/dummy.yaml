@@ -25,3 +25,34 @@ entity:
   ability: []
   trigger: []
   inventory: []
+
+---
+
+entity:
+  name: ground
+  supertype: object
+  type: construct
+  description: The ground
+  max_hp: 1000000000
+  cur_hp: 1000000000
+  max_mp: 0
+  cur_mp: 0
+  max_fp: 0
+  cur_fp: 0
+  size: medium
+  weight: 1000000000
+
+  passable:
+    land: 1
+    swim: 0
+    fly: 1
+  attribute:
+    physique: 10
+    dexterity: 0
+    intelligence: 0
+    wisdom: 0
+    presence: 0
+  interaction: []
+  ability: []
+  trigger: []
+  inventory: []

@@ -269,6 +269,8 @@ class Entity:
     inventory_rules: List[Dict[str, Any]] = field(default_factory=list) 
     
     # Movement & World
+    x: int = 0
+    y: int = 0
     move: Dict[str, int] = field(default_factory=dict)
     passable: Dict[str, int] = field(default_factory=dict)
     

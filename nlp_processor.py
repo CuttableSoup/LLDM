@@ -375,6 +375,10 @@ class NLPProcessor:
                 for word in words:
                     if len(word) > 3: # Avoid short words like "the", "of"
                         patterns.append([{"LOWER": word}])
+                        # Map the partial word to the entity if not already mapped
+                        # (Simple collision handling: first/last one wins, or we could be smarter)
+                        if word not in known_entities_lower_map:
+                            known_entities_lower_map[word] = known_entities[entity_name]
         
         if not patterns:
             logger.warning("NLP_NER: No patterns were generated for the matcher.")

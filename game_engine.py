@@ -238,7 +238,217 @@ class GameController:
             summary = self.llm_manager.generate_response(prompt=narrator_prompt, history=self.llm_chat_history)
             self.update_narrative(f"\n--- {summary} ---")
             self.llm_chat_history.append({"role": "assistant", "content": summary})
+            self.llm_chat_history.append({"role": "assistant", "content": summary})
             self.round_history = []
+            
+            self.advance_round()
+
+    def advance_round(self):
+        """Advances the game time by one round (6 seconds) and processes triggers."""
+        self.game_time.advance_time(6)
+        
+        # Process triggers for all entities in initiative
+        # (and maybe others in the room? For now, just initiative)
+        for entity in self.initiative_order:
+            msgs = self.interaction_manager.process_triggers(entity, self.game_time)
+            for msg in msgs:
+                self.update_narrative(msg)
+                self.round_history.append(msg)
+
+    def _get_current_game_state(self, actor: Entity) -> Dict[str, Any]:
+        actors_in_room = [e.name for e in self.initiative_order if e.name != actor.name]
+        return {
+            "actors_present": ", ".join(actors_in_room) if actors_in_room else "none",
+            "objects_present": "none",
+            "attitudes": "none",
+            "game_history": "\n".join(self.round_history)
+        }
+
+    def answer_player_question(self, question: str):
+        if not self.player_entity: 
+            return
+        game_state = self._get_current_game_state(self.player_entity)
+        prompt = prompts['adam_assistant'].format(question=question, game_state=game_state)
+        answer = self.llm_manager.generate_response(prompt=prompt, history=self.llm_chat_history)
+        self.update_narrative(f"\n--- ADaM: {answer} ---")
+
+    def move_entity(self, entity: Entity, target_x: int, target_y: int) -> bool:
+        """Moves an entity to a new position on the map."""
+        if not self.current_room: return False
+        
+        # Check bounds (assuming square map for now or check layers)
+        # Check collision (is 'x' or another entity there?)
+        # For now, just update coords and assume valid for the demo
+        
+        # Update Map Layers (Visuals)
+        # Find old char
+        old_char = None
+        for item in self.current_room.legend:
+            if item.entity == entity.name:
+                old_char = item.char
+                break
+        
+        if not old_char: return False # Should not happen if entity is on map
+
+        # Clear old pos
+        # We need to know which layer the entity is on. 
+        # For simplicity, we scan all layers and move the char.
+        moved = False
+        for layer in self.current_room.layers:
+            # Check if target is valid in this layer (bounds)
+            if target_y < len(layer) and target_x < len(layer[target_y]):
+                 # Check if target is passable (not wall 'W')
+                 # This is a very basic check.
+                 target_code = layer[target_y][target_x]
+                 if target_code == 'W': # Hardcoded wall check for now
+                     return False
+                 
+                 # Clear old
+                 if hasattr(entity, 'y') and hasattr(entity, 'x'):
+                     if entity.y < len(layer) and entity.x < len(layer[entity.y]):
+                         if layer[entity.y][entity.x] == old_char:
+                             layer[entity.y][entity.x] = 'x' # Restore floor?
+                 
+                 # Set new
+                 layer[target_y][target_x] = old_char
+                 moved = True
+        
+        if moved:
+            entity.x = target_x
+            entity.y = target_y
+            self.update_map_callback(self.current_room)
+            return True
+        
+        return False
+
+    def process_player_actions_logic(self, player: Entity, processed_input: ProcessedInput, game_entities: Dict[str, Entity]) -> List[Tuple[str, str]]:
+        """
+        Processes actions using the InteractionManager.
+        """
+        results = []
+        
+        for action in processed_input.actions:
+            # Handle MOVE intent
+            if action.intent.name == "MOVE":
+                if not processed_input.targets:
+                    results.append(("Move where?", "Player tried to move but didn't specify where."))
+                    continue
+                
+                target = processed_input.targets[0]
+                
+                # Simple "move to adjacent" logic
+                # 1. Get target position
+                if not hasattr(target, 'x') or not hasattr(target, 'y'):
+                     # If target isn't on map (maybe abstract?), we can't move to it physically
+                     results.append((f"You can't see {target.name} here.", f"Player tried to move to {target.name} but it's not on the map."))
+                     continue
+                
+                # 2. Calculate adjacent square
+                # Simple approach: Move to same Y, X-1 (left) or X+1 (right) depending on relative pos
+                dx = target.x - player.x
+                dy = target.y - player.y
+                
+                new_x, new_y = player.x, player.y
+                
+                if abs(dx) > abs(dy):
+                    # Move horizontally
+                    new_x = player.x + (1 if dx > 0 else -1)
+                    # Don't overlap target
+                    if new_x == target.x and new_y == target.y:
+                         new_x = player.x # Stay put if adjacent? Or stop 1 short.
+                else:
+                    # Move vertically
+                    new_y = player.y + (1 if dy > 0 else -1)
+                    if new_x == target.x and new_y == target.y:
+                         new_y = player.y
+
+                # Check if we are already adjacent
+                if abs(player.x - target.x) <= 1 and abs(player.y - target.y) <= 1:
+                     results.append((f"You are already close to {target.name}.", f"Player is already near {target.name}."))
+                     continue
+
+                # Execute Move
+                if self.move_entity(player, new_x, new_y):
+                    results.append((f"You move towards {target.name}.", f"{player.name} moved to ({new_x}, {new_y})."))
+                else:
+                    results.append(("Something blocks your way.", f"{player.name} failed to move."))
+                
+                continue
+
+            # Find the interaction object in the player's list
+            interaction_obj = None
+            
+            # 1. Search in interactions (active uses)
+            for inter in player.interaction:
+                if inter.type.lower() == action.keyword.lower():
+                    interaction_obj = inter
+                    break
+            
+            # 2. Search in abilities (inherent capabilities)
+            if not interaction_obj:
+                for abil in player.ability:
+                    if abil.type.lower() == action.keyword.lower():
+                        interaction_obj = abil
+                        break
+            
+            # Fallback for basic attacks if not explicitly defined but requested?
+            
+            npc_prompt = prompts['npc_action'].format(
+                npc_name=npc.name,
+                npc_history=npc_history_summary,
+                actors_present=game_state_context['actors_present'],
+                player_name=self.player_entity.name,
+                player_action=player_action_summary
+            )
+            
+            reaction_narrative = self.llm_manager.generate_response(prompt=npc_prompt, history=self.llm_chat_history)
+            
+            if reaction_narrative and not reaction_narrative.startswith("Error:"):
+                dialogue_event = HistoryEvent(
+                    timestamp=self.game_time.copy(),
+                    event_type="dialogue_self",
+                    description=f"You said: \"{reaction_narrative}\"",
+                    participants=[self.player_entity.name]
+                )
+                if npc.name in self.entity_histories:
+                    self.entity_histories[npc.name].add_event(dialogue_event)
+                if self.player_entity.name in self.entity_histories:
+                    player_event = HistoryEvent(
+                        timestamp=self.game_time.copy(),
+                        event_type="dialogue_npc",
+                        description=f"{npc.name} said: \"{reaction_narrative}\"",
+                        participants=[npc.name]
+                    )
+                    self.entity_histories[self.player_entity.name].add_event(player_event)
+            
+            if reaction_narrative:
+                fmt_narrative = reaction_narrative if reaction_narrative.startswith("Error:") else f"{npc.name}: \"{reaction_narrative}\""
+                self.update_narrative(fmt_narrative)
+                self.round_history.append(fmt_narrative)
+                self.llm_chat_history.append({"role": "assistant", "content": reaction_narrative})
+                all_actions_taken = True
+        
+        if all_actions_taken:
+            narrator_prompt = prompts['narrator_summary'].format(action_log="\n".join(self.round_history))
+            summary = self.llm_manager.generate_response(prompt=narrator_prompt, history=self.llm_chat_history)
+            self.update_narrative(f"\n--- {summary} ---")
+            self.llm_chat_history.append({"role": "assistant", "content": summary})
+            self.llm_chat_history.append({"role": "assistant", "content": summary})
+            self.round_history = []
+            
+            self.advance_round()
+
+    def advance_round(self):
+        """Advances the game time by one round (6 seconds) and processes triggers."""
+        self.game_time.advance_time(6)
+        
+        # Process triggers for all entities in initiative
+        # (and maybe others in the room? For now, just initiative)
+        for entity in self.initiative_order:
+            msgs = self.interaction_manager.process_triggers(entity, self.game_time)
+            for msg in msgs:
+                self.update_narrative(msg)
+                self.round_history.append(msg)
 
     def _get_current_game_state(self, actor: Entity) -> Dict[str, Any]:
         actors_in_room = [e.name for e in self.initiative_order if e.name != actor.name]
@@ -383,7 +593,7 @@ class GameController:
                  continue
 
             # Execute
-            success, narrative, log = self.interaction_manager.execute_interaction(player, interaction_obj, processed_input.targets)
+            success, narrative, log = self.interaction_manager.execute_interaction(player, interaction_obj, processed_input.targets, self.game_time, self.game_entities)
             results.append((narrative, log))
             
         return results

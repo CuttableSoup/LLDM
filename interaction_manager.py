@@ -77,7 +77,7 @@ class InteractionManager:
         
         return roll_total >= difficulty_val
 
-    def execute_interaction(self, user: Entity, interaction: Interaction, targets: List[Entity]) -> Tuple[bool, str, str]:
+    def execute_interaction(self, user: Entity, interaction: Interaction, targets: List[Entity], game_time: Any = None, game_entities: Dict[str, Entity] = None) -> Tuple[bool, str, str]:
         """
         Executes an interaction from a user to a list of targets.
         
@@ -100,17 +100,17 @@ class InteractionManager:
         
         # User Effects
         if interaction.user_effect:
-            results = self.apply_effects(user, interaction.user_effect, [user])
+            results = self.apply_effects(user, interaction.user_effect, [user], game_time, game_entities)
             narrative_parts.extend(results)
             
         # Target Effects
         if interaction.target_effect:
-            results = self.apply_effects(user, interaction.target_effect, targets)
+            results = self.apply_effects(user, interaction.target_effect, targets, game_time, game_entities)
             narrative_parts.extend(results)
             
         # Self Effects (distinct from user_effect? usually same, but schema has both)
         if interaction.self_effect:
-            results = self.apply_effects(user, interaction.self_effect, [user])
+            results = self.apply_effects(user, interaction.self_effect, [user], game_time, game_entities)
             narrative_parts.extend(results)
 
         # Construct final messages
@@ -125,13 +125,20 @@ class InteractionManager:
         
         # Range Check
         if interaction.range > 0:
-            # TODO: Real distance check using map. For now, assume valid if targets exist.
-            pass
+            for target in targets:
+                # Calculate distance (Chebyshev distance for grid)
+                if not hasattr(user, 'x') or not hasattr(user, 'y') or not hasattr(target, 'x') or not hasattr(target, 'y'):
+                    # If coordinates are missing, assume valid (or maybe invalid? defaulting to valid for abstract)
+                    continue
+                
+                dist = max(abs(user.x - target.x), abs(user.y - target.y))
+                if dist > interaction.range:
+                    return False, f"Target {target.name} is out of range ({dist} > {interaction.range})"
 
         # User Requirements
         for req in interaction.user_requirement:
             if not self._check_single_requirement(user, req, user):
-                return False, f"User requirement failed: {req.type}"
+                return False, f"User requirement failed: {req.type} {req.name if req.name else ''}"
 
         # Target Requirements
         for target in targets:
@@ -144,52 +151,84 @@ class InteractionManager:
     def _check_single_requirement(self, user: Entity, req: Requirement, target: Entity) -> bool:
         if req.type == "test":
             if req.test:
-                 # We need to merge the difficulty into the test params if it's separate in the Requirement object
-                 # The Requirement model has 'test' (dict) and 'difficulty' (int/dict)
                  test_params = req.test.copy()
                  if req.difficulty:
                      test_params['difficulty'] = req.difficulty
                  
                  return self.resolve_test(user, test_params, target)
             return True
-        elif req.type == "cur_mp":
-            # This is a bit tricky, the schema might define costs differently.
-            # Assuming 'test' or specific fields for costs.
-            # Checking if the requirement object has a resource check
-            pass
             
-        # Basic resource checks often come from 'cost' object in Entity, but Interaction has requirements.
-        # Let's look at how requirements are structured in loader.py:
-        # cur_mp/cur_fp might be in 'test' or as direct properties if the loader parses them that way.
-        # The loader puts unknown keys into 'property' type requirements.
-        
-        if req.type == "property":
-            # Example: {type: 'property', name: 'cur_mp', relation: -5} (meaning cost 5?)
-            # Or {type: 'property', name: 'cur_mp', relation: {'min': 10}}
-            pass
+        elif req.type == "property":
+            # Resource Checks and Costs
+            if req.name in ['cur_mp', 'cur_fp', 'cur_hp', 'cur_stamina']:
+                if isinstance(req.relation, (int, float)):
+                    current_val = getattr(target, req.name, 0)
+                    if req.relation < 0:
+                        # Cost: Must have enough to pay
+                        cost = abs(req.relation)
+                        if current_val < cost:
+                            return False
+                    else:
+                        # Prerequisite: Must have at least X
+                        if current_val < req.relation:
+                            return False
+                return True
+            
+            # General Property Check (e.g. "is_undead": True)
+            if hasattr(target, req.name):
+                val = getattr(target, req.name)
+                if req.relation is not None:
+                    # Simple equality check for now
+                    return val == req.relation
+                return bool(val)
             
         return True
 
     def _consume_costs(self, user: Entity, interaction: Interaction):
         """Deduct resources."""
-        # TODO: Implement cost deduction based on requirements or a specific cost field
-        pass
+        for req in interaction.user_requirement:
+            if req.type == "property" and req.name in ['cur_mp', 'cur_fp', 'cur_hp']:
+                if isinstance(req.relation, (int, float)) and req.relation < 0:
+                    current_val = getattr(user, req.name, 0)
+                    # We assume check_requirements passed, so just deduct
+                    setattr(user, req.name, current_val + req.relation) # relation is negative
 
-    def apply_effects(self, user: Entity, effects: List[Effect], targets: List[Entity]) -> List[str]:
+    def apply_effects(self, user: Entity, effects: List[Effect], targets: List[Entity], game_time: Any = None, game_entities: Dict[str, Entity] = None) -> List[str]:
         results = []
         for target in targets:
             for effect in effects:
-                msg = self._apply_single_effect(user, effect, target)
+                msg = self._apply_single_effect(user, effect, target, game_time, game_entities)
                 if msg:
                     results.append(msg)
         return results
 
-    def _apply_single_effect(self, user: Entity, effect: Effect, target: Entity) -> str:
+    def _apply_single_effect(self, user: Entity, effect: Effect, target: Entity, game_time: Any = None, game_entities: Dict[str, Entity] = None) -> str:
         # Resolve Magnitude
         value = 0
         if effect.magnitude:
             value = self.resolve_magnitude(effect.magnitude, user, target)
         
+        # Status Effect (Entity Application)
+        if effect.entity and game_entities:
+            # Look up the status entity
+            status_name = effect.entity
+            if status_name in game_entities:
+                # Clone it (shallow copy usually enough if we don't mutate deep structure, but be careful)
+                # We need a deep copy of the entity to track its own state (duration, etc)
+                import copy
+                status_entity = copy.deepcopy(game_entities[status_name])
+                
+                # Set Timestamp on duration components
+                if game_time:
+                    for dur in status_entity.duration:
+                        dur.timestamp = game_time.total_seconds
+                
+                # Add to target status
+                target.status.append(status_entity)
+                return f"{target.name} is now affected by {status_entity.name}."
+            else:
+                return f"Error: Status entity '{status_name}' not found."
+
         # Apply Logic
         if effect.name == "damage":
             target.cur_hp -= value
@@ -214,6 +253,61 @@ class InteractionManager:
                     # TODO: Check max
                     setattr(target, stat, current_val + value)
                     return f"{target.name}'s {stat} increases by {value}."
+        
+        elif effect.inventory:
+            # Inventory Operations
+            # effect.inventory is a dict, e.g. {'operation': 'add', 'list': [...]}
+            op = effect.inventory.get('operation', 'add')
+            items_data = effect.inventory.get('list', [])
+            
+            # We need to convert dict items to InventoryItem if they aren't already
+            # But wait, effect.inventory is a dict from the loader? 
+            # The loader parses 'inventory' in Effect as a dict.
+            # We need to handle the structure.
+            
+            # For now, let's assume items_data is a list of dicts describing items
+            count = 0
+            for item_dict in items_data:
+                item_name = item_dict.get('item')
+                quantity = item_dict.get('quantity', 1)
+                
+                if op == 'add':
+                    # Check if item exists to stack?
+                    found = False
+                    for inv_item in target.inventory:
+                        if inv_item.item == item_name:
+                            inv_item.quantity += quantity
+                            found = True
+                            break
+                    if not found:
+                        # We need to import InventoryItem? It's in models.
+                        # But we can't import inside method easily if not at top.
+                        # It is imported at top.
+                        from models import InventoryItem
+                        new_item = InventoryItem(item=item_name, quantity=quantity)
+                        target.inventory.append(new_item)
+                    count += 1
+                    
+                elif op == 'remove':
+                    # Remove items
+                    remaining_to_remove = quantity
+                    # Iterate backwards to safely remove
+                    for i in range(len(target.inventory) - 1, -1, -1):
+                        inv_item = target.inventory[i]
+                        if inv_item.item == item_name:
+                            if inv_item.quantity > remaining_to_remove:
+                                inv_item.quantity -= remaining_to_remove
+                                remaining_to_remove = 0
+                                break
+                            else:
+                                remaining_to_remove -= inv_item.quantity
+                                target.inventory.pop(i)
+                                if remaining_to_remove <= 0:
+                                    break
+                    count += 1
+
+            if count > 0:
+                return f"{target.name}'s inventory was updated ({op})."
         
         return ""
 
@@ -265,3 +359,83 @@ class InteractionManager:
         total = base_value + magnitude.pre_mod
         
         return int(total)
+
+    def process_triggers(self, entity: Entity, game_time: Any) -> List[str]:
+        """
+        Checks and executes triggers for an entity's statuses.
+        Also handles expiration of statuses.
+        """
+        results = []
+        
+        # We need to iterate over a copy because we might remove statuses
+        for status in list(entity.status):
+            # 1. Check Expiration
+            # Status entities might have a 'duration' component in their 'duration' list
+            # or directly as a field if the schema allows. 
+            # The schema says 'duration' is a list of DurationComponent.
+            
+            expired = False
+            for dur in status.duration:
+                if dur.length != "*": # '*' means indefinite
+                    # Check if time passed > length
+                    # We assume dur.timestamp is the start time (in seconds)
+                    # If it's 0, we might need to set it when applying? 
+                    # For now, let's assume it's set correctly.
+                    
+                    start_time = dur.timestamp
+                    current_seconds = game_time.total_seconds
+                    
+                    # If timestamp is 0, it might mean "just created". 
+                    # But if we don't set it, it will never expire properly if 0 is valid time.
+                    # However, game starts at year 2000, so total_seconds is huge. 0 is definitely in the past.
+                    # Wait, if timestamp is 0 (default), then (current - 0) > length is likely true immediately.
+                    # So we MUST ensure timestamp is set when effect is applied.
+                    
+                    if (current_seconds - start_time) >= dur.length:
+                        expired = True
+                        break
+            
+            if expired:
+                entity.status.remove(status)
+                results.append(f"{status.name} has expired.")
+                continue
+            
+            # 2. Check Triggers
+            for trigger in status.trigger:
+                # Check frequency
+                # frequency: "round", "minute", "hour", "day"
+                # We need to store last trigger time. 'timestamp' in Trigger.
+                
+                should_trigger = False
+                current_seconds = game_time.total_seconds
+                last_trigger = trigger.timestamp if trigger.timestamp is not None else 0
+                
+                interval = 0
+                if trigger.frequency == "round":
+                    interval = 6
+                elif trigger.frequency == "minute":
+                    interval = 60
+                elif trigger.frequency == "hour":
+                    interval = 3600
+                elif trigger.frequency == "day":
+                    interval = 86400
+                
+                if interval > 0:
+                    if (current_seconds - last_trigger) >= interval:
+                        should_trigger = True
+                
+                if should_trigger:
+                    # Execute Effects
+                    # Triggers have target/user/self effects.
+                    # Who is target? Usually the entity having the status.
+                    # Who is user? The status itself?
+                    
+                    # Apply Self Effects (to the entity holding the status)
+                    if trigger.self_effect:
+                        msgs = self.apply_effects(entity, trigger.self_effect, [entity])
+                        results.extend(msgs)
+                    
+                    # Update timestamp
+                    trigger.timestamp = current_seconds
+                    
+        return results
