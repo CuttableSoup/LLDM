@@ -39,7 +39,8 @@ entity:
       range: 1
       target:
         effect:
-          - name: damage
+          - name: slashing
+            apply: damage_cur_hp
             magnitude:
               value: longsword
               type: roll

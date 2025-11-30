@@ -268,6 +268,26 @@ def create_entity_from_dict(data: Dict[str, Any], attribute_map: Dict[str, str] 
     # --- Attribute Processing ---
     final_attributes: Dict[str, Attribute] = {}
     
+    # Pre-process nested skills/specializations in attribute
+    if 'attribute' in data_copy and isinstance(data_copy['attribute'], dict):
+        attr_dict = data_copy['attribute']
+        
+        # Extract nested skill
+        if 'skill' in attr_dict:
+            nested_skills = attr_dict.pop('skill')
+            if isinstance(nested_skills, dict):
+                if 'skill' not in data_copy:
+                    data_copy['skill'] = {}
+                data_copy['skill'].update(nested_skills)
+        
+        # Extract nested specialization
+        if 'specialization' in attr_dict:
+            nested_specs = attr_dict.pop('specialization')
+            if isinstance(nested_specs, dict):
+                if 'specialization' not in data_copy:
+                    data_copy['specialization'] = {}
+                data_copy['specialization'].update(nested_specs)
+
     # 1. Process Base Attributes
     if 'attribute' in data_copy and isinstance(data_copy['attribute'], dict):
         for name, value in data_copy['attribute'].items():
