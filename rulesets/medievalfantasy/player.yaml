@@ -29,6 +29,7 @@ entity:
     
     skill:
       blade: 6
+      strength: 2
       
     specialization:
       longsword: 6
@@ -42,16 +43,26 @@ entity:
           - name: slashing
             apply: damage_cur_hp
             magnitude:
-              value: longsword
+              value: strength
               type: roll
               source: user
-              reference: attribute
+              reference: skill
+              post_mod: 2
+            resist:
+              value: opposed
+              type: roll
+              source: target
+              reference: skill
       user:
         requirement:
           - type: test
             test:
               source: user
               value: longsword
+              reference: specialization
+              type: roll
             difficulty:
-              type: static
-              value: 10
+              source: target
+              type: roll
+              value: opposed
+              reference: skill

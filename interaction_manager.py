@@ -13,8 +13,42 @@ from models import Entity, Interaction, Effect, Requirement, Magnitude, Duration
 logger = logging.getLogger("InteractionManager")
 
 class InteractionManager:
-    def __init__(self):
-        pass
+    def __init__(self, attributes_data: List[Dict] = None):
+        self.opposes_map: Dict[str, set] = {}
+        self.spec_to_skill_map: Dict[str, str] = {}
+        if attributes_data:
+            self._build_opposes_map(attributes_data)
+
+    def _build_opposes_map(self, attributes_data: List[Dict]):
+        """Builds a map of attack_skill -> set of defense_skills."""
+        for doc in attributes_data:
+            if 'aptitude' not in doc: continue
+            for attr_name, attr_data in doc['aptitude'].items():
+                if not isinstance(attr_data, dict): continue
+                
+                for skill_name, skill_data in attr_data.items():
+                    if skill_name in ['description', 'keywords', 'opposes']: continue
+                    
+                    if isinstance(skill_data, dict):
+                        # Skill level
+                        if 'opposes' in skill_data:
+                            for target in skill_data['opposes']:
+                                if target not in self.opposes_map:
+                                    self.opposes_map[target] = set()
+                                self.opposes_map[target].add(skill_name)
+                        
+                        # Specialization level
+                        for spec_name, spec_data in skill_data.items():
+                            if spec_name in ['description', 'keywords', 'opposes']: continue
+                            
+                            # Map spec to skill
+                            self.spec_to_skill_map[spec_name] = skill_name
+
+                            if isinstance(spec_data, dict) and 'opposes' in spec_data:
+                                for target in spec_data['opposes']:
+                                    if target not in self.opposes_map:
+                                        self.opposes_map[target] = set()
+                                    self.opposes_map[target].add(spec_name)
 
     def roll_d6(self, dice: int, pips: int = 0) -> int:
         """Rolls N d6 and adds pips."""
@@ -65,6 +99,37 @@ class InteractionManager:
             diff_actor = target if diff_source == 'target' else user
             
             diff_stat = difficulty_params.get('value')
+            
+            # Resolve 'opposed' keyword
+            if diff_stat == 'opposed':
+                # Find best opposing skill
+                candidates = set()
+                
+                # Check direct mapping
+                if stat_name in self.opposes_map:
+                    candidates.update(self.opposes_map[stat_name])
+                
+                # Check parent skill mapping
+                if stat_name in self.spec_to_skill_map:
+                    parent_skill = self.spec_to_skill_map[stat_name]
+                    if parent_skill in self.opposes_map:
+                        candidates.update(self.opposes_map[parent_skill])
+                
+                # Find best candidate
+                best_skill = None
+                best_val = -1
+                
+                for cand in candidates:
+                    val = 0
+                    if cand in diff_actor.attribute:
+                        val = diff_actor.attribute[cand].base
+                    
+                    if val > best_val:
+                        best_val = val
+                        best_skill = cand
+                
+                if best_skill:
+                    diff_stat = best_skill
             diff_stat_val = 0
             if diff_stat in diff_actor.attribute:
                 diff_stat_val = diff_actor.attribute[diff_stat].base
@@ -73,7 +138,11 @@ class InteractionManager:
             d_pips = diff_stat_val % 3
             difficulty_val = self.roll_d6(d_dice, d_pips)
 
-        logger.info(f"Test: {actor.name} rolled {roll_total} (Stat: {stat_val} -> {dice}D+{pips}) vs Difficulty {difficulty_val}")
+        skill_msg = f"Skill: {stat_name}"
+        if diff_type == 'roll':
+            skill_msg += f" vs {diff_stat}"
+
+        logger.info(f"Test: {actor.name} rolled {roll_total} (Stat: {stat_val} -> {dice}D+{pips}) vs Difficulty {difficulty_val} ({skill_msg})")
         
         return roll_total >= difficulty_val
 
@@ -151,11 +220,11 @@ class InteractionManager:
     def _check_single_requirement(self, user: Entity, req: Requirement, target: Entity) -> bool:
         if req.type == "test":
             if req.test:
-                 test_params = req.test.copy()
-                 if req.difficulty:
-                     test_params['difficulty'] = req.difficulty
-                 
-                 return self.resolve_test(user, test_params, target)
+                test_params = req.test.copy()
+                if req.difficulty:
+                    test_params['difficulty'] = req.difficulty
+                
+                return self.resolve_test(user, test_params, target)
             return True
             
         elif req.type == "property":
@@ -208,6 +277,65 @@ class InteractionManager:
         if effect.magnitude:
             value = self.resolve_magnitude(effect.magnitude, user, target)
         
+        # Resolve Resistance
+        if effect.parameters and 'resist' in effect.parameters:
+            resist_params = effect.parameters['resist']
+            resistance = 0
+            skill_used = "None"
+            
+            res_source = resist_params.get('source', 'target')
+            res_actor = target if res_source == 'target' else user
+            
+            res_type = resist_params.get('type', 'static')
+            
+            if res_type == 'static':
+                resistance = resist_params.get('value', 0)
+            elif res_type == 'roll':
+                # Attempt to find the stat name
+                stat_name = resist_params.get('value')
+                if stat_name == 'opposed':
+                    # Find best defense skill available
+                    all_defenses = set()
+                    for defenses in self.opposes_map.values():
+                        all_defenses.update(defenses)
+                    
+                    best_skill = None
+                    best_val = -1
+                    
+                    for cand in all_defenses:
+                        val = 0
+                        if cand in res_actor.attribute:
+                            val = res_actor.attribute[cand].base
+                        
+                        if val > best_val:
+                            best_val = val
+                            best_skill = cand
+                    
+                    if best_skill:
+                        stat_name = best_skill
+                    else:
+                        stat_name = "dodge" # Default fallback
+                
+                skill_used = stat_name
+                stat_val = 0
+                if stat_name:
+                    if stat_name in res_actor.attribute:
+                        stat_val = res_actor.attribute[stat_name].base
+                    # Check flattened skills (attribute map logic is in loader, but Entity has flattened attributes?)
+                    # The loader puts skills into 'attribute' dict of Entity.
+                    elif stat_name in res_actor.attribute: 
+                        stat_val = res_actor.attribute[stat_name].base
+                
+                if stat_val > 0:
+                    r_dice = stat_val // 3
+                    r_pips = stat_val % 3
+                    resistance = self.roll_d6(r_dice, r_pips)
+            
+            value = max(0, value - resistance)
+            skill_log_msg = f"Skill: {skill_used}"
+            
+            logger.info(f"Resistance applied: {resistance} ({skill_log_msg}), {value} applied to {effect.apply}")
+            
         # Status Effect (Entity Application)
         if effect.entity and game_entities:
             # Look up the status entity
@@ -324,36 +452,38 @@ class InteractionManager:
             source_entity = user
         
         # 2. Get Reference Value
-        if source_entity and magnitude.reference:
+        if source_entity:
+            lookup_key = magnitude.reference
+            
+            # If reference is a category, use the value as the lookup key
+            if magnitude.reference in ['skill', 'attribute', 'specialization'] and isinstance(magnitude.value, str):
+                lookup_key = magnitude.value
+            
             # Check attributes
-            if magnitude.reference in source_entity.attribute:
-                base_value = source_entity.attribute[magnitude.reference].base
-            # Check skills (nested in attributes? or flattened?)
-            # The loader flattens attributes, so "physique.strength" might be a key.
-            elif magnitude.reference in source_entity.attribute: # Flattened keys
-                 base_value = source_entity.attribute[magnitude.reference].base
+            if lookup_key in source_entity.attribute:
+                base_value = source_entity.attribute[lookup_key].base
             # Direct property
-            elif hasattr(source_entity, magnitude.reference):
-                base_value = getattr(source_entity, magnitude.reference)
+            elif hasattr(source_entity, lookup_key):
+                base_value = getattr(source_entity, lookup_key)
                 if not isinstance(base_value, (int, float)):
                     base_value = 0
         
         # 3. Apply Value (if static)
         if magnitude.value and isinstance(magnitude.value, (int, float)):
-             if magnitude.type == "static":
-                 base_value = magnitude.value
-             elif magnitude.type == "roll":
-                 # If magnitude is a roll based on a stat
-                 # But here 'value' is usually the stat name if reference is skill/attribute
-                 # If reference is 'none' and type is 'roll', maybe value is raw dice?
-                 pass
+            if magnitude.type == "static":
+                base_value = magnitude.value
+            elif magnitude.type == "roll":
+                # If magnitude is a roll based on a stat
+                # But here 'value' is usually the stat name if reference is skill/attribute
+                # If reference is 'none' and type is 'roll', maybe value is raw dice?
+                pass
 
         # If reference was valid, base_value is the stat total.
         # If type is roll, we roll it.
         if magnitude.type == "roll":
-             dice = base_value // 3
-             pips = base_value % 3
-             base_value = self.roll_d6(dice, pips)
+            dice = base_value // 3
+            pips = base_value % 3
+            base_value = self.roll_d6(dice, pips)
         
         # 4. Apply Pre-Mod
         total = base_value + magnitude.pre_mod

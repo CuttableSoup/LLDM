@@ -15,7 +15,7 @@ entity:
   weight: 20.0
   
   attribute:
-    physique: 5
+    physique: 15
     dexterity: 1
     intelligence: 0
     wisdom: 0

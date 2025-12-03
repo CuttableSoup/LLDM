@@ -37,6 +37,8 @@ aptitude:
       keywords:
       - fortitude
       - resist
+      opposes:
+      - strength
     strength:
       description: Raw physical power, affecting lift capacity and melee damage.
       keywords:

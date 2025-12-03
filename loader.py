@@ -183,14 +183,14 @@ def create_entity_from_dict(data: Dict[str, Any], attribute_map: Dict[str, str] 
                 if isinstance(eff['magnitude'], dict):
                     eff['magnitude'] = Magnitude(**eff['magnitude'])
                 elif isinstance(eff['magnitude'], (int, float, str)):
-                     # Fallback for simple values to default static magnitude
-                     eff['magnitude'] = Magnitude(value=eff['magnitude'])
+                    # Fallback for simple values to default static magnitude
+                    eff['magnitude'] = Magnitude(value=eff['magnitude'])
             
             if 'duration' in eff and isinstance(eff['duration'], dict):
-                 dur = eff['duration']
-                 if isinstance(dur.get('length'), dict):
-                     dur['length'] = dur['length'].get('value', 0)
-                 eff['duration'] = DurationComponent(**dur)
+                dur = eff['duration']
+                if isinstance(dur.get('length'), dict):
+                    dur['length'] = dur['length'].get('value', 0)
+                eff['duration'] = DurationComponent(**dur)
             
             # Separate parameters
             eff_args = {}
@@ -217,11 +217,11 @@ def create_entity_from_dict(data: Dict[str, Any], attribute_map: Dict[str, str] 
             if 'test' in req:
                 req_obj = Requirement(type='test', test=req['test'])
                 if 'difficulty' in req:
-                     req_obj.difficulty = req['difficulty']
+                    req_obj.difficulty = req['difficulty']
                 parsed.append(req_obj)
             elif 'ally' in req:
-                 req_obj = Requirement(type='ally', name=req['ally'].get('name'))
-                 parsed.append(req_obj)
+                req_obj = Requirement(type='ally', name=req['ally'].get('name'))
+                parsed.append(req_obj)
             elif 'name' in req:
                 parsed.append(Requirement(type='name', name=req['name']))
             elif 'relation' in req:
@@ -237,9 +237,9 @@ def create_entity_from_dict(data: Dict[str, Any], attribute_map: Dict[str, str] 
                 req_obj.sub_requirements = _parse_requirements(sub_reqs)
                 parsed.append(req_obj)
             else:
-                 for k, v in req.items():
-                     if k not in ['test', 'ally', 'name', 'relation', 'or', 'not']:
-                         parsed.append(Requirement(type='property', name=k, relation=v))
+                for k, v in req.items():
+                    if k not in ['test', 'ally', 'name', 'relation', 'or', 'not']:
+                        parsed.append(Requirement(type='property', name=k, relation=v))
         return parsed
 
     def _parse_interactions(inter_list: List[Dict]) -> List[Interaction]:
@@ -315,8 +315,8 @@ def create_entity_from_dict(data: Dict[str, Any], attribute_map: Dict[str, str] 
             skill_total = get_base(parent_skill) if parent_skill else 0
             
             if skill_total == 0 and parent_skill:
-                 grandparent_attr = attribute_map.get(parent_skill)
-                 skill_total = get_base(grandparent_attr) if grandparent_attr else 0
+                grandparent_attr = attribute_map.get(parent_skill)
+                skill_total = get_base(grandparent_attr) if grandparent_attr else 0
 
             total_val = skill_total + spec_val
             final_attributes[spec_name] = Attribute(base=total_val)
@@ -373,24 +373,24 @@ def resolve_entity_references(entity: Entity):
                 logger.warning(f"Could not resolve reference '{match.group(0)}' in entity '{context_entity.name}'")
                 return match.group(0)
         else:
-             logger.warning(f"Unsupported reference source '{source}' in '{match.group(0)}'")
-             return match.group(0)
+            logger.warning(f"Unsupported reference source '{source}' in '{match.group(0)}'")
+            return match.group(0)
 
     def _resolve_value(value: Any, context_entity: Entity) -> Any:
         if isinstance(value, str):
             match = ref_pattern.fullmatch(value.strip())
             if match: return _resolve_single_ref(match, context_entity)
             if "reference(" in value:
-                 return ref_pattern.sub(lambda m: str(_resolve_single_ref(m, context_entity)), value)
+                return ref_pattern.sub(lambda m: str(_resolve_single_ref(m, context_entity)), value)
             return value
         elif isinstance(value, list):
             return [_resolve_value(item, context_entity) for item in value]
         elif isinstance(value, dict):
             return {k: _resolve_value(v, context_entity) for k, v in value.items()}
         elif hasattr(value, '__dataclass_fields__'):
-             for f in fields(value):
-                 setattr(value, f.name, _resolve_value(getattr(value, f.name), context_entity))
-             return value
+            for f in fields(value):
+                setattr(value, f.name, _resolve_value(getattr(value, f.name), context_entity))
+            return value
         return value
 
     for f in fields(entity):

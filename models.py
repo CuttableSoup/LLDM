@@ -150,6 +150,7 @@ class Magnitude:
     reference: str = "none"    # skill, attribute, level, none
     value: Any = 0             # The specific stat name or raw value
     pre_mod: int = 0           # Static modifier added before calculation
+    post_mod: int = 0          # Static modifier added after calculation
     type: str = "static"       # static, roll, value
 
 @dataclass

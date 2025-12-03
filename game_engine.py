@@ -34,7 +34,7 @@ class GameController:
         self.loader = loader
         self.nlp_processor = NLPProcessor(ruleset_path)
         self.llm_manager = llm_manager
-        self.interaction_manager = InteractionManager()
+        self.interaction_manager = InteractionManager(loader.attributes)
         
         self.player_entity: Optional[Entity] = None
         self.game_time = GameTime()
@@ -113,12 +113,12 @@ class GameController:
                 entity_name = legend_lookup.get(char_code)
                 entity_obj = self.game_entities.get(entity_name)
                 if entity_obj and entity_obj not in self.initiative_order:
-                     # Only add intelligent/basic creatures to initiative
-                     if any(s in entity_obj.status for s in ["intelligent", "basic"]):
+                    # Only add intelligent/basic creatures to initiative
+                    if any(s in entity_obj.status for s in ["intelligent", "basic"]):
                         self.initiative_order.append(entity_obj)
         else:
-             if self.player_entity: 
-                 self.initiative_order = [self.player_entity]
+            if self.player_entity: 
+                self.initiative_order = [self.player_entity]
 
         if self.player_entity and self.player_entity not in self.initiative_order:
             self.initiative_order.append(self.player_entity)
@@ -297,21 +297,21 @@ class GameController:
         for layer in self.current_room.layers:
             # Check if target is valid in this layer (bounds)
             if target_y < len(layer) and target_x < len(layer[target_y]):
-                 # Check if target is passable (not wall 'W')
-                 # This is a very basic check.
-                 target_code = layer[target_y][target_x]
-                 if target_code == 'W': # Hardcoded wall check for now
-                     return False
-                 
-                 # Clear old
-                 if hasattr(entity, 'y') and hasattr(entity, 'x'):
-                     if entity.y < len(layer) and entity.x < len(layer[entity.y]):
-                         if layer[entity.y][entity.x] == old_char:
-                             layer[entity.y][entity.x] = 'x' # Restore floor?
-                 
-                 # Set new
-                 layer[target_y][target_x] = old_char
-                 moved = True
+                # Check if target is passable (not wall 'W')
+                # This is a very basic check.
+                target_code = layer[target_y][target_x]
+                if target_code == 'W': # Hardcoded wall check for now
+                    return False
+                
+                # Clear old
+                if hasattr(entity, 'y') and hasattr(entity, 'x'):
+                    if entity.y < len(layer) and entity.x < len(layer[entity.y]):
+                        if layer[entity.y][entity.x] == old_char:
+                            layer[entity.y][entity.x] = 'x' # Restore floor?
+                
+                # Set new
+                layer[target_y][target_x] = old_char
+                moved = True
         
         if moved:
             entity.x = target_x
@@ -339,9 +339,9 @@ class GameController:
                 # Simple "move to adjacent" logic
                 # 1. Get target position
                 if not hasattr(target, 'x') or not hasattr(target, 'y'):
-                     # If target isn't on map (maybe abstract?), we can't move to it physically
-                     results.append((f"You can't see {target.name} here.", f"Player tried to move to {target.name} but it's not on the map."))
-                     continue
+                    # If target isn't on map (maybe abstract?), we can't move to it physically
+                    results.append((f"You can't see {target.name} here.", f"Player tried to move to {target.name} but it's not on the map."))
+                    continue
                 
                 # 2. Calculate adjacent square
                 # Simple approach: Move to same Y, X-1 (left) or X+1 (right) depending on relative pos
@@ -355,17 +355,17 @@ class GameController:
                     new_x = player.x + (1 if dx > 0 else -1)
                     # Don't overlap target
                     if new_x == target.x and new_y == target.y:
-                         new_x = player.x # Stay put if adjacent? Or stop 1 short.
+                        new_x = player.x # Stay put if adjacent? Or stop 1 short.
                 else:
                     # Move vertically
                     new_y = player.y + (1 if dy > 0 else -1)
                     if new_x == target.x and new_y == target.y:
-                         new_y = player.y
+                        new_y = player.y
 
                 # Check if we are already adjacent
                 if abs(player.x - target.x) <= 1 and abs(player.y - target.y) <= 1:
-                     results.append((f"You are already close to {target.name}.", f"Player is already near {target.name}."))
-                     continue
+                    results.append((f"You are already close to {target.name}.", f"Player is already near {target.name}."))
+                    continue
 
                 # Execute Move
                 if self.move_entity(player, new_x, new_y):
@@ -492,21 +492,21 @@ class GameController:
         for layer in self.current_room.layers:
             # Check if target is valid in this layer (bounds)
             if target_y < len(layer) and target_x < len(layer[target_y]):
-                 # Check if target is passable (not wall 'W')
-                 # This is a very basic check.
-                 target_code = layer[target_y][target_x]
-                 if target_code == 'W': # Hardcoded wall check for now
-                     return False
-                 
-                 # Clear old
-                 if hasattr(entity, 'y') and hasattr(entity, 'x'):
-                     if entity.y < len(layer) and entity.x < len(layer[entity.y]):
-                         if layer[entity.y][entity.x] == old_char:
-                             layer[entity.y][entity.x] = 'x' # Restore floor?
-                 
-                 # Set new
-                 layer[target_y][target_x] = old_char
-                 moved = True
+                # Check if target is passable (not wall 'W')
+                # This is a very basic check.
+                target_code = layer[target_y][target_x]
+                if target_code == 'W': # Hardcoded wall check for now
+                    return False
+                
+                # Clear old
+                if hasattr(entity, 'y') and hasattr(entity, 'x'):
+                    if entity.y < len(layer) and entity.x < len(layer[entity.y]):
+                        if layer[entity.y][entity.x] == old_char:
+                            layer[entity.y][entity.x] = 'x' # Restore floor?
+                
+                # Set new
+                layer[target_y][target_x] = old_char
+                moved = True
         
         if moved:
             entity.x = target_x
@@ -534,9 +534,9 @@ class GameController:
                 # Simple "move to adjacent" logic
                 # 1. Get target position
                 if not hasattr(target, 'x') or not hasattr(target, 'y'):
-                     # If target isn't on map (maybe abstract?), we can't move to it physically
-                     results.append((f"You can't see {target.name} here.", f"Player tried to move to {target.name} but it's not on the map."))
-                     continue
+                    # If target isn't on map (maybe abstract?), we can't move to it physically
+                    results.append((f"You can't see {target.name} here.", f"Player tried to move to {target.name} but it's not on the map."))
+                    continue
                 
                 # 2. Calculate adjacent square
                 # Simple approach: Move to same Y, X-1 (left) or X+1 (right) depending on relative pos
@@ -550,17 +550,17 @@ class GameController:
                     new_x = player.x + (1 if dx > 0 else -1)
                     # Don't overlap target
                     if new_x == target.x and new_y == target.y:
-                         new_x = player.x # Stay put if adjacent? Or stop 1 short.
+                        new_x = player.x # Stay put if adjacent? Or stop 1 short.
                 else:
                     # Move vertically
                     new_y = player.y + (1 if dy > 0 else -1)
                     if new_x == target.x and new_y == target.y:
-                         new_y = player.y
+                        new_y = player.y
 
                 # Check if we are already adjacent
                 if abs(player.x - target.x) <= 1 and abs(player.y - target.y) <= 1:
-                     results.append((f"You are already close to {target.name}.", f"Player is already near {target.name}."))
-                     continue
+                    results.append((f"You are already close to {target.name}.", f"Player is already near {target.name}."))
+                    continue
 
                 # Execute Move
                 if self.move_entity(player, new_x, new_y):
@@ -589,8 +589,8 @@ class GameController:
             # Fallback for basic attacks if not explicitly defined but requested?
             # For now, if not found, we can't do it.
             if not interaction_obj:
-                 results.append((f"You don't know how to {action.keyword}.", f"{player.name} tried to {action.keyword} but failed."))
-                 continue
+                results.append((f"You don't know how to {action.keyword}.", f"{player.name} tried to {action.keyword} but failed."))
+                continue
 
             # Execute
             success, narrative, log = self.interaction_manager.execute_interaction(player, interaction_obj, processed_input.targets, self.game_time, self.game_entities)

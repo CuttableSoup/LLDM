@@ -117,7 +117,7 @@ class EntityDebugTab(ttk.Frame):
         # Note: loader.creatures, loader.items, etc. might not exist depending on RulesetLoader implementation.
         # But entities_by_supertype does.
         for st_dict in self.loader.entities_by_supertype.values():
-             self.all_entities.update(st_dict)
+            self.all_entities.update(st_dict)
         
         for entity_name in sorted(self.all_entities.keys()):
             self.entity_listbox.insert(tk.END, entity_name)
@@ -190,9 +190,9 @@ class EntityDebugTab(ttk.Frame):
                 self.loader.characters[self.selected_entity_name] = new_entity
             else:
                 for st_dict in self.loader.entities_by_supertype.values():
-                     if self.selected_entity_name in st_dict:
-                         st_dict[self.selected_entity_name] = new_entity
-                         break
+                    if self.selected_entity_name in st_dict:
+                        st_dict[self.selected_entity_name] = new_entity
+                        break
             
             self.all_entities[self.selected_entity_name] = new_entity
             
