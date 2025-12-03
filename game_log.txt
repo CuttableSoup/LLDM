@@ -1,0 +1,267 @@
+
+
+--- Session Started: Year 2000, Month 1, Day 1, Hour 08:00 ---
+
+[Year 2000, Month 1, Day 1, Hour 08:00] The adventure begins for TestPlayer...
+> look around
+You don't know how to look.
+
+
+--- Session Started: Year 2000, Month 1, Day 1, Hour 08:00 ---
+
+[Year 2000, Month 1, Day 1, Hour 08:00] The adventure begins for Valerius (Fallback)...
+
+
+--- Session Started: Year 2000, Month 1, Day 1, Hour 08:00 ---
+
+[Year 2000, Month 1, Day 1, Hour 08:00] The adventure begins for Valerius (Fallback)...
+> I move up and attack the dummy
+Move where?
+You don't know how to attack.
+
+
+--- Session Started: Year 2000, Month 1, Day 1, Hour 08:00 ---
+
+[Year 2000, Month 1, Day 1, Hour 08:00] The adventure begins for Valerius (Fallback)...
+> I move up and attack the dummy
+Move where?
+You don't know how to attack.
+
+
+--- Session Started: Year 2000, Month 1, Day 1, Hour 08:00 ---
+
+[Year 2000, Month 1, Day 1, Hour 08:00] The adventure begins for Valerius (Fallback)...
+> I move up and attack the dummy
+
+
+--- Session Started: Year 2000, Month 1, Day 1, Hour 08:00 ---
+
+[Year 2000, Month 1, Day 1, Hour 08:00] The adventure begins for Valerius (Fallback)...
+> I move up and attack the dummy
+Something blocks your way.
+You don't know how to attack.
+
+
+--- Session Started: Year 2000, Month 1, Day 1, Hour 08:00 ---
+
+[Year 2000, Month 1, Day 1, Hour 08:00] The adventure begins for Valerius (Fallback)...
+> I move up and attack the dummy
+Something blocks your way.
+You don't know how to attack.
+
+
+--- Session Started: Year 2000, Month 1, Day 1, Hour 08:00 ---
+
+[Year 2000, Month 1, Day 1, Hour 08:00] The adventure begins for Valerius (Fallback)...
+> I move up and attack the dummy
+Something blocks your way.
+You don't know how to attack.
+
+
+--- Session Started: Year 2000, Month 1, Day 1, Hour 08:00 ---
+
+[Year 2000, Month 1, Day 1, Hour 08:00] The adventure begins for Valerius (Fallback)...
+> I move up and attack the dummy
+Something blocks your way.
+You don't know how to attack.
+
+
+--- Session Started: Year 2000, Month 1, Day 1, Hour 08:00 ---
+
+[Year 2000, Month 1, Day 1, Hour 08:00] The adventure begins for Valerius (Fallback)...
+> I move up and attack the dummy
+Something blocks your way.
+You don't know how to attack.
+> I move up and attack the dummy
+Something blocks your way.
+You don't know how to attack.
+
+
+--- Session Started: Year 2000, Month 1, Day 1, Hour 08:00 ---
+
+[Year 2000, Month 1, Day 1, Hour 08:00] The adventure begins for Valerius...
+> I move up and attack the dummy
+
+
+--- Session Started: Year 2000, Month 1, Day 1, Hour 08:00 ---
+
+[Year 2000, Month 1, Day 1, Hour 08:00] The adventure begins for Valerius...
+> I move up and attack the dummy
+
+
+--- Session Started: Year 2000, Month 1, Day 1, Hour 08:00 ---
+
+[Year 2000, Month 1, Day 1, Hour 08:00] The adventure begins for Valerius...
+> I move up and attack the dummy
+Something blocks your way.
+You cannot do that: Target Training Dummy is out of range (3 > 1)
+
+
+--- Session Started: Year 2000, Month 1, Day 1, Hour 08:00 ---
+
+[Year 2000, Month 1, Day 1, Hour 08:00] The adventure begins for Valerius...
+> I move up and attack the dummy
+You move towards Training Dummy.
+You cannot do that: User requirement failed: test 
+
+
+--- Session Started: Year 2000, Month 1, Day 1, Hour 08:00 ---
+
+[Year 2000, Month 1, Day 1, Hour 08:00] The adventure begins for Valerius...
+> I move up and attack the dummy
+You move towards Training Dummy.
+You cannot do that: User requirement failed: test 
+
+
+--- Session Started: Year 2000, Month 1, Day 1, Hour 08:00 ---
+
+[Year 2000, Month 1, Day 1, Hour 08:00] The adventure begins for Valerius...
+> I move up and attack the dummy
+You move towards Training Dummy.
+You cannot do that: User requirement failed: test 
+
+
+--- Session Started: Year 2000, Month 1, Day 1, Hour 08:00 ---
+
+[Year 2000, Month 1, Day 1, Hour 08:00] The adventure begins for Valerius...
+> I move up and attack the dummy
+You move towards Training Dummy.
+You cannot do that: User requirement failed: test 
+
+
+--- Session Started: Year 2000, Month 1, Day 1, Hour 08:00 ---
+
+[Year 2000, Month 1, Day 1, Hour 08:00] The adventure begins for Valerius...
+> I move up and attack the dummy
+You move towards Training Dummy.
+You cannot do that: User requirement failed: test 
+
+
+--- Session Started: Year 2000, Month 1, Day 1, Hour 08:00 ---
+
+[Year 2000, Month 1, Day 1, Hour 08:00] The adventure begins for Valerius...
+> I move up and attack the dummy
+You move towards Training Dummy.
+You cannot do that: User requirement failed: test 
+
+
+--- Session Started: Year 2000, Month 1, Day 1, Hour 08:00 ---
+
+[Year 2000, Month 1, Day 1, Hour 08:00] The adventure begins for Valerius...
+> I move up and attack the dummy
+You move towards Training Dummy.
+Valerius swings their weapon. Training Dummy's cur_hp decreases by 0.
+
+
+--- Session Started: Year 2000, Month 1, Day 1, Hour 08:00 ---
+
+[Year 2000, Month 1, Day 1, Hour 08:00] The adventure begins for Valerius...
+> I move up and attack the dummy
+You move towards Training Dummy.
+Valerius swings their weapon. Training Dummy's cur_hp decreases by 0.
+
+
+--- Session Started: Year 2000, Month 1, Day 1, Hour 08:00 ---
+
+[Year 2000, Month 1, Day 1, Hour 08:00] The adventure begins for Valerius...
+> I move up and attack the dummy
+You move towards Training Dummy.
+Valerius swings their weapon. Training Dummy's cur_hp decreases by 0.
+
+
+--- Session Started: Year 2000, Month 1, Day 1, Hour 08:00 ---
+
+[Year 2000, Month 1, Day 1, Hour 08:00] The adventure begins for Valerius...
+> I move up and attack the dummy
+You move towards Training Dummy.
+Valerius swings their weapon. Training Dummy's cur_hp decreases by 0.
+
+
+--- Session Started: Year 2000, Month 1, Day 1, Hour 08:00 ---
+
+[Year 2000, Month 1, Day 1, Hour 08:00] The adventure begins for Valerius...
+> I move up and attack the dummy
+You move towards Training Dummy.
+Valerius swings their weapon. Training Dummy's cur_hp decreases by 11.
+
+
+--- Session Started: Year 2000, Month 1, Day 1, Hour 08:00 ---
+
+[Year 2000, Month 1, Day 1, Hour 08:00] The adventure begins for Valerius...
+> I move up and attack the dummy
+You move towards Training Dummy.
+Valerius swings their weapon. Training Dummy's cur_hp decreases by 15.
+> I attack the dummy
+Valerius swings their weapon. Training Dummy's cur_hp decreases by 20.
+
+
+--- Session Started: Year 2000, Month 1, Day 1, Hour 08:00 ---
+
+[Year 2000, Month 1, Day 1, Hour 08:00] The adventure begins for Valerius...
+> I move up and attack the dummy
+You move towards Training Dummy.
+Valerius swings their weapon. Training Dummy's cur_hp decreases by 12.
+
+
+--- Session Started: Year 2000, Month 1, Day 1, Hour 08:00 ---
+
+[Year 2000, Month 1, Day 1, Hour 08:00] The adventure begins for Valerius...
+> I move up and attack the dummy
+You move towards Training Dummy.
+Valerius swings their weapon. Training Dummy's cur_hp decreases by 13.
+
+
+--- Session Started: Year 2000, Month 1, Day 1, Hour 08:00 ---
+
+[Year 2000, Month 1, Day 1, Hour 08:00] The adventure begins for Valerius...
+> I move up and attack the dummy
+You move towards Training Dummy.
+Valerius swings their weapon. Training Dummy's cur_hp decreases by 15.
+
+
+--- Session Started: Year 2000, Month 1, Day 1, Hour 08:00 ---
+
+[Year 2000, Month 1, Day 1, Hour 08:00] The adventure begins for Valerius...
+> I move up and attack the dummy
+
+
+--- Session Started: Year 2000, Month 1, Day 1, Hour 08:00 ---
+
+[Year 2000, Month 1, Day 1, Hour 08:00] The adventure begins for Valerius...
+> I move up and attack the dummy
+You move towards Training Dummy.
+Valerius swings their weapon. Training Dummy's cur_hp decreases by 10.
+
+
+--- Session Started: Year 2000, Month 1, Day 1, Hour 08:00 ---
+
+[Year 2000, Month 1, Day 1, Hour 08:00] The adventure begins for Valerius...
+> I move up and attack the dummy
+You move towards Training Dummy.
+Valerius swings their weapon. Training Dummy's cur_hp decreases by 13.
+
+
+--- Session Started: Year 2000, Month 1, Day 1, Hour 08:00 ---
+
+[Year 2000, Month 1, Day 1, Hour 08:00] The adventure begins for Valerius...
+> I move up and attack
+Move where?
+> I move up and attack the dummy
+You move towards Training Dummy.
+Valerius swings their weapon. Training Dummy's cur_hp decreases by 10.
+
+
+--- Session Started: Year 2000, Month 1, Day 1, Hour 08:00 ---
+
+[Year 2000, Month 1, Day 1, Hour 08:00] The adventure begins for Valerius...
+> I move up and attack the dummy
+You move towards Training Dummy.
+Valerius swings their weapon. Training Dummy's cur_hp decreases by 15.
+
+
+--- Session Started: Year 2000, Month 1, Day 1, Hour 08:00 ---
+
+[Year 2000, Month 1, Day 1, Hour 08:00] The adventure begins for Valerius...
+> I move up and attack the dummy
+You move towards Training Dummy.
+Valerius swings their weapon. Training Dummy's cur_hp decreases by 11.
