@@ -358,7 +358,7 @@ class InputBar(ttk.Frame):
 class MainWindow:
     """The main window of the LLDM application."""
     def __init__(self, root_widget: tk.Tk, loader: RulesetLoader, ruleset_path: Path,
-                 config_manager: ConfigManager, llm_manager: LLMManager):
+            config_manager: ConfigManager, llm_manager: LLMManager):
         """Initializes the MainWindow."""
         self.root = root_widget
         self.root.title("LLDM - AI Dungeon Master")
