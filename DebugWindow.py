@@ -1,8 +1,3 @@
-"""
-This module provides a debug window for inspecting and editing game data.
-It uses Tkinter to create a GUI that allows developers to view and modify
-entities loaded from the ruleset files.
-"""
 from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -32,7 +27,6 @@ except ImportError as e:
     class Entity: pass
     def create_entity_from_dict(data): return None
 class EntityDebugTab(ttk.Frame):
-    """A tab in the debug window for inspecting and editing entities."""
     def __init__(self, parent: ttk.Notebook, loader: RulesetLoader):
         """
         Initializes the EntityDebugTab.
@@ -81,7 +75,6 @@ class EntityDebugTab(ttk.Frame):
         self._populate_entity_list()
         self.entity_listbox.bind("<<ListboxSelect>>", self._on_entity_select)
     def _populate_entity_list(self):
-        """Populates the listbox with all available entities."""
         self.entity_listbox.delete(0, tk.END)
         self.all_entities.clear()
         self.all_entities.update(self.loader.characters)
@@ -90,7 +83,6 @@ class EntityDebugTab(ttk.Frame):
         for entity_name in sorted(self.all_entities.keys()):
             self.entity_listbox.insert(tk.END, entity_name)
     def _on_entity_select(self, event: Any = None):
-        """Handles the selection of an entity in the listbox."""
         selected_indices = self.entity_listbox.curselection()
         if not selected_indices:
             return
@@ -119,7 +111,6 @@ class EntityDebugTab(ttk.Frame):
             self.text_editor.insert('1.0', f"Error displaying entity:\n{e}")
             self.text_editor.config(state='disabled')
     def _on_save_changes(self):
-        """Saves the changes made in the text editor to the entity object."""
         if not self.selected_entity_name:
             messagebox.showerror("Save Error", "No entity is selected.")
             return
@@ -150,7 +141,6 @@ class EntityDebugTab(ttk.Frame):
         except Exception as e:
             messagebox.showerror("Save Error", f"Failed to update entity object:\n{e}")
 class DebugWindow(tk.Toplevel):
-    """The main debug window that contains the different debug tabs."""
     def __init__(self, parent: tk.Tk, loader: RulesetLoader):
         """
         Initializes the DebugWindow.

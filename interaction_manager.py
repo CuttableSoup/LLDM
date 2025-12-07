@@ -1,8 +1,3 @@
-"""
-interaction_manager.py
-This module handles the logic for entity interactions, including requirement checks
-and effect application.
-"""
 from typing import List, Tuple, Dict, Any, Optional
 import logging
 import random
@@ -15,7 +10,6 @@ class InteractionManager:
         if attributes_data:
             self._build_opposes_map(attributes_data)
     def _build_opposes_map(self, attributes_data: List[Dict]):
-        """Builds a map of attack_skill -> set of defense_skills."""
         for doc in attributes_data:
             if 'aptitude' not in doc: continue
             for attr_name, attr_data in doc['aptitude'].items():
@@ -37,7 +31,6 @@ class InteractionManager:
                                         self.opposes_map[target] = set()
                                     self.opposes_map[target].add(spec_name)
     def roll_d6(self, dice: int, pips: int = 0) -> int:
-        """Rolls N d6 and adds pips."""
         total = 0
         for _ in range(dice):
             total += random.randint(1, 6)
@@ -126,7 +119,6 @@ class InteractionManager:
         log = f"{user.name} executed {interaction.type}. " + " ".join(log_parts)
         return True, narrative, log
     def check_requirements(self, user: Entity, interaction: Interaction, targets: List[Entity]) -> Tuple[bool, str]:
-        """Checks if the interaction can be performed."""
         if interaction.range > 0:
             for target in targets:
                 if not hasattr(user, 'x') or not hasattr(user, 'y') or not hasattr(target, 'x') or not hasattr(target, 'y'):
@@ -169,7 +161,6 @@ class InteractionManager:
                 return bool(val)
         return True
     def _consume_costs(self, user: Entity, interaction: Interaction):
-        """Deduct resources."""
         for req in interaction.user_requirement:
             if req.type == "property" and req.name in ['cur_mp', 'cur_fp', 'cur_hp']:
                 if isinstance(req.relation, (int, float)) and req.relation < 0:
@@ -370,4 +361,3 @@ class InteractionManager:
                         results.extend(msgs)
                     trigger.timestamp = current_seconds
         return results
-

@@ -18,4 +18,3 @@ def setup_logging(level=logging.INFO):
         root_logger.handlers.clear()
     root_logger.addHandler(console_handler)
     logging.info("Logging system initialized.")
-

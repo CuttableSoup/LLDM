@@ -1,8 +1,3 @@
-"""
-loader.py
-This module handles loading game data from YAML files and converting it into
-Entity and Environment objects.
-"""
 from __future__ import annotations
 import logging
 from pathlib import Path
@@ -31,7 +26,6 @@ class RulesetLoader:
         self.attribute_map: Dict[str, str] = {}
         logger.info(f"RulesetLoader initialized for path: {self.ruleset_path}")
     def load_all(self):
-        """Loads all YAML files from the ruleset directory in two passes."""
         if not self.ruleset_path.is_dir():
             logger.error(f"Ruleset path not found: {self.ruleset_path}")
             return
@@ -108,7 +102,6 @@ class RulesetLoader:
         except Exception as e:
             logger.error(f"Error loading scenario from {file_name}: {e}")
     def _build_attribute_map(self):
-        """Builds a map of child -> parent for attributes, skills, and specializations."""
         for attr_doc in self.attributes:
             if 'aptitude' not in attr_doc: continue
             for attr_name, attr_data in attr_doc['aptitude'].items():
@@ -125,7 +118,6 @@ class RulesetLoader:
     def get_character(self, name: str) -> Optional[Entity]:
         return self.characters.get(name)
 def create_entity_from_dict(data: Dict[str, Any], attribute_map: Dict[str, str] = None) -> Entity:
-    """Creates an Entity object from a dictionary, handling nested structures."""
     data_copy = data.copy()
     if 'quality' in data_copy:
         data_copy['quality'] = Quality(**data_copy['quality'])
@@ -275,7 +267,6 @@ def create_entity_from_dict(data: Dict[str, Any], attribute_map: Dict[str, str] 
     resolve_entity_references(entity)
     return entity
 def resolve_entity_references(entity: Entity):
-    """Recursively resolves 'reference(source:path)' strings in the entity's fields."""
     import re
     ref_pattern = re.compile(r"reference\(([^:]+):([^)]+)\)")
     def _resolve_single_ref(match, context_entity: Entity) -> Any:

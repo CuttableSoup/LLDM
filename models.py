@@ -1,14 +1,8 @@
-"""
-models.py
-This module defines the core data classes used throughout the game, including entities,
-rooms, interactions, and narrative history events.
-"""
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Union
 @dataclass
 class GameTime:
-    """Represents the in-game time. Year is stored separately to avoid overflow."""
     year: int = 2001
     total_seconds: int = 0
     SECONDS_PER_MINUTE = 60
@@ -49,11 +43,9 @@ class GameTime:
     def second(self) -> int:
         return self.total_seconds % self.SECONDS_PER_MINUTE
     def advance_time(self, seconds: int = 1):
-        """Advances the game time by a specified number of seconds."""
         self.total_seconds += seconds
         self._normalize()
     def set_time(self, year: int = 1, month: int = 1, day: int = 1, hour: int = 0, minute: int = 0, second: int = 0):
-        """Sets the game time to a specific date and time."""
         self.year = year
         self.total_seconds = (
             (month - 1) * self.SECONDS_PER_MONTH +
@@ -69,14 +61,12 @@ class GameTime:
         return GameTime(year=self.year, total_seconds=self.total_seconds)
 @dataclass
 class HistoryEvent:
-    """Represents a single event that occurred in the game world."""
     timestamp: GameTime
     event_type: str
     description: str
     participants: List[str] = field(default_factory=list)
 @dataclass
 class EntityHistory:
-    """Stores the history of events for a specific entity."""
     entity_name: str
     memory: List[HistoryEvent] = field(default_factory=list)
     def add_event(self, event: HistoryEvent):
@@ -117,7 +107,6 @@ class DurationComponent:
     timestamp: int = 0
 @dataclass
 class Magnitude:
-    """Represents the magnitude calculation for an effect."""
     source: str = "none"
     reference: str = "none"
     value: Any = 0
@@ -126,7 +115,6 @@ class Magnitude:
     type: str = "static"
 @dataclass
 class Effect:
-    """Represents an effect applied by an interaction."""
     name: str = ""
     magnitude: Optional[Magnitude] = None
     duration: Optional[DurationComponent] = None
@@ -136,7 +124,6 @@ class Effect:
     parameters: Dict[str, Any] = field(default_factory=dict)
 @dataclass
 class Requirement:
-    """Represents a requirement for an interaction."""
     type: str = "test"
     test: Optional[Dict[str, Any]] = None
     difficulty: Optional[Union[int, Dict[str, Any]]] = None
@@ -147,7 +134,6 @@ class Requirement:
     relation: Optional[Any] = None
 @dataclass
 class Interaction:
-    """Represents an active use or ability."""
     type: str = ""
     description: str = ""
     target_effect: List[Effect] = field(default_factory=list)
@@ -159,7 +145,6 @@ class Interaction:
     range: int = 0
 @dataclass
 class Trigger:
-    """Represents an automatic event."""
     frequency: str = ""
     length: Any = "*"
     timestamp: Optional[Any] = None
@@ -184,7 +169,6 @@ class Cost:
     item: List[Dict[str, Any]] = field(default_factory=list)
 @dataclass
 class Entity:
-    """A generic representation of any object or character in the game world."""
     name: str = ""
     supertype: str = ""
     type: str = ""
@@ -249,4 +233,3 @@ class Environment:
 class Scenario:
     scenario_name: str = ""
     environment: Environment = field(default_factory=Environment)
-

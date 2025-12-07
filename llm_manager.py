@@ -1,8 +1,3 @@
-"""
-This module manages interactions with Large Language Models (LLMs).
-It provides a unified interface for generating text responses from different LLM backends,
-currently supporting local models via Ollama and online models via OpenRouter.
-"""
 import requests
 import json
 import sys
@@ -21,24 +16,10 @@ OLLAMA_MODELS = {
 OLLAMA_API_URL = "http://127.0.0.1:11434"
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 class LLMManager:
-    """Manages all interactions with the LLM services."""
     def __init__(self, config_manager: ConfigManager):
-        """
-        Initializes the LLMManager.
-        Args:
-            config_manager: The application's configuration manager.
-        """
         self.config = config_manager
         self.session = requests.Session()
     def generate_response(self, prompt: str, history: List[Dict]) -> str:
-        """
-        Generates a response from the appropriate LLM based on the current mode.
-        Args:
-            prompt: The user's prompt.
-            history: The chat history.
-        Returns:
-            The generated response from the LLM.
-        """
         mode = self.config.get('mode', 'offline')
         if mode == 'offline':
             default_model = list(OLLAMA_MODELS.values())[0]
@@ -48,7 +29,6 @@ class LLMManager:
             model = "google/gemma-2-9b-it"
             return self._generate_openrouter(prompt, history, model)
     def _generate_ollama(self, prompt: str, history: List[Dict], model: str) -> str:
-        """Generates a response from a local Ollama model."""
         logger.info(f"Sending request to Ollama (Model: {model})")
         messages = history + [{"role": "user", "content": prompt}]
         payload = {
@@ -78,7 +58,6 @@ class LLMManager:
             logger.exception(f"An unknown error occurred with Ollama: {e}")
             return f"Error: {e}"
     def _generate_openrouter(self, prompt: str, history: List[Dict], model: str) -> str:
-        """Generates a response from the OpenRouter API."""
         api_key = self.config.get('openrouter_key')
         if not api_key:
             return "Error: OpenRouter API key not set. Please set it in the LLM menu."
@@ -111,13 +90,6 @@ class LLMManager:
             logger.exception(f"An unknown error occurred with OpenRouter: {e}")
             return f"Error: {e}"
     def check_ollama_model(self, model_name: str) -> bool:
-        """
-        Checks if a specific Ollama model is available locally.
-        Args:
-            model_name: The name of the model to check.
-        Returns:
-            True if the model is available, False otherwise.
-        """
         logger.info(f"Checking for Ollama model: {model_name}...")
         try:
             response = self.session.post(
@@ -133,12 +105,6 @@ class LLMManager:
             logger.error(f"Error checking model: {e}")
             return False
     def pull_ollama_model(self, model_name: str, callback: Callable[[str], None]):
-        """
-        Downloads an Ollama model from the registry.
-        Args:
-            model_name: The name of the model to download.
-            callback: A function to call with status updates during the download.
-        """
         logger.info(f"Starting download for model: {model_name}")
         last_reported_percent = -1
         try:
@@ -186,4 +152,3 @@ class LLMManager:
             callback(error_msg)
         except Exception as e:
             callback(f"Error during model download: {e}")
-

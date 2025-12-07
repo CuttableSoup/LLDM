@@ -1,9 +1,3 @@
-"""
-This module contains the main graphical user interface (GUI) for the LLDM application.
-It uses Tkinter to create the main window and all the UI panels, including the narrative,
-map, character sheet, and inventory. It also handles user input and communication with
-the GameController.
-"""
 from __future__ import annotations
 from typing import List, Any, Optional, Callable
 import tkinter as tk
@@ -49,9 +43,7 @@ except ImportError as e:
         update_inventory_callback = lambda entity: None
         update_map_callback = lambda room: None
 class NarrativePanel(ttk.Frame):
-    """A panel for displaying the game's narrative text."""
     def __init__(self, parent_widget: tk.Widget):
-        """Initializes the NarrativePanel."""
         super().__init__(parent_widget)
         self.text_area = ScrolledText(
             self,
@@ -64,16 +56,13 @@ class NarrativePanel(ttk.Frame):
         self.text_area.pack(expand=True, fill='both')
         logger.info("NarrativePanel created.")
     def add_narrative_text(self, text: str):
-        """Adds text to the narrative display."""
         self.text_area.config(state='normal')
         self.text_area.insert(tk.END, text + "\n\n")
         self.text_area.config(state='disabled')
         self.text_area.see(tk.END)
         logger.debug(f"NARRATIVE: {text}")
 class MapPanel(ttk.Frame):
-    """A panel for displaying the game map."""
     def __init__(self, parent_widget: tk.Widget):
-        """Initializes the MapPanel."""
         super().__init__(parent_widget, padding=10)
         self.map_canvas = tk.Canvas(self, bg='darkgrey', relief='sunken', borderwidth=2)
         self.map_canvas.pack(expand=True, fill='both')
@@ -85,7 +74,6 @@ class MapPanel(ttk.Frame):
         )
         logger.info("MapPanel created.")
     def update_map(self, room: Optional[Room] = None, tokens: List[Entity] = []):
-        """Updates the map display with the current room data."""
         logger.debug("MAP: Refreshing map display.")
         self.map_canvas.delete("all")
         if not room:
@@ -142,9 +130,7 @@ class MapPanel(ttk.Frame):
                             fill="white"
                         )
 class InventoryPanel(ttk.Frame):
-    """A panel for displaying the player's inventory."""
     def __init__(self, parent_widget: tk.Widget):
-        """Initializes the InventoryPanel."""
         super().__init__(parent_widget, padding=10)
         columns = ('item', 'qty', 'equipped')
         self.tree = ttk.Treeview(self, columns=columns, show='headings')
@@ -156,7 +142,6 @@ class InventoryPanel(ttk.Frame):
         self.tree.pack(expand=True, fill='both')
         logger.info("InventoryPanel created.")
     def update_inventory(self, entity: Entity):
-        """Updates the inventory display for the given entity."""
         for i in self.tree.get_children():
             self.tree.delete(i)
         if not entity:
@@ -177,9 +162,7 @@ class InventoryPanel(ttk.Frame):
                         values=(f"  - {sub_item.item}", sub_item.quantity, "")
                     )
 class CharacterPanel(ttk.Frame):
-    """A panel for displaying the character sheet."""
     def __init__(self, parent_widget: tk.Widget):
-        """Initializes the CharacterPanel."""
         super().__init__(parent_widget, padding=15)
         vitals_frame = ttk.LabelFrame(self, text="Vitals", padding=10)
         vitals_frame.pack(fill='x', expand=False, pady=5)
@@ -205,7 +188,6 @@ class CharacterPanel(ttk.Frame):
         self.skills_frame.pack(fill='both', expand=True, pady=5)
         logger.info("CharacterPanel created.")
     def update_character_sheet(self, entity: Entity):
-        """Updates the character sheet with the entity's data."""
         if not entity:
             return
         logger.debug(f"CHAR SHEET: Refreshing for {entity.name}")
@@ -238,9 +220,7 @@ class CharacterPanel(ttk.Frame):
                 ttk.Label(self.skills_frame, text=str(skill_obj.base)).grid(row=row, column=1, sticky='e', padx=10)
                 row += 1
 class InfoMultipane(ttk.Notebook):
-    """A notebook widget to hold the Character, Inventory, and Map panels."""
     def __init__(self, parent_widget: tk.Widget):
-        """Initializes the InfoMultipane."""
         super().__init__(parent_widget)
         self.map_panel = MapPanel(parent_widget=self)
         self.inventory_panel = InventoryPanel(parent_widget=self)
@@ -250,19 +230,14 @@ class InfoMultipane(ttk.Notebook):
         self.add(self.map_panel, text='Map')
         logger.info("InfoMultipane (tab widget) created.")
     def get_character_panel(self) -> CharacterPanel:
-        """Returns the CharacterPanel instance."""
         return self.character_panel
     def get_inventory_panel(self) -> InventoryPanel:
-        """Returns the InventoryPanel instance."""
         return self.inventory_panel
     def get_map_panel(self) -> MapPanel:
-        """Returns the MapPanel instance."""
         return self.map_panel
 class InputBar(ttk.Frame):
-    """A widget for user text input."""
     def __init__(self, parent_widget: tk.Widget,
                 submit_callback: Callable[[str], None]):
-        """Initializes the InputBar."""
         super().__init__(parent_widget, padding=5)
         self.submit_callback = submit_callback
         self.entry = ttk.Entry(self, font=("Arial", 11))
@@ -272,16 +247,13 @@ class InputBar(ttk.Frame):
         self.entry.bind("<Return>", self._on_user_submit)
         logger.info("InputBar created.")
     def _on_user_submit(self, event: Any = None):
-        """Handles the submission of user input."""
         text = self.entry.get().strip()
         if text:
             self.submit_callback(text)
             self.entry.delete(0, tk.END)
 class MainWindow:
-    """The main window of the LLDM application."""
     def __init__(self, root_widget: tk.Tk, loader: RulesetLoader, ruleset_path: Path,
             config_manager: ConfigManager, llm_manager: LLMManager):
-        """Initializes the MainWindow."""
         self.root = root_widget
         self.root.title("LLDM - AI Dungeon Master")
         self.root.geometry("1200x800")
@@ -327,7 +299,6 @@ class MainWindow:
         self.controller.update_map_callback = self.info_multipane.get_map_panel().update_map
         logger.info("MainWindow created and all components wired up.")
     def _create_menu(self):
-        """Creates the main menu bar."""
         menubar = tk.Menu(self.root)
         self.root.config(menu=menubar)
         file_menu = tk.Menu(menubar, tearoff=0)
@@ -371,13 +342,11 @@ class MainWindow:
         else:
             debug_menu.add_command(label="View Loaded Ruleset", state="disabled")
     def _on_select_mode(self):
-        """Handles the selection of the LLM mode (online/offline)."""
         mode = self.llm_mode_var.get()
         self.config_manager.set('mode', mode)
         self.narrative_panel.add_narrative_text(f"Switched to {mode} mode.")
         logger.info(f"Config: Set mode to {mode}")
     def _on_select_model(self):
-        """Handles the selection of the Ollama model."""
         model_id = self.ollama_model_var.get()
         self.config_manager.set('ollama_model', model_id)
         self.narrative_panel.add_narrative_text(f"Set Ollama model to: {model_id}")
@@ -388,12 +357,10 @@ class MainWindow:
             daemon=True
         ).start()
     def _check_and_pull_model(self, model_id: str):
-        """Checks if the selected Ollama model is available locally."""
         if not self.llm_manager.check_ollama_model(model_id):
             logger.info(f"Model {model_id} not found locally.")
             self.root.after(0, self._ask_to_pull_model, model_id)
     def _ask_to_pull_model(self, model_id: str):
-        """Asks the user if they want to download the model."""
         if messagebox.askyesno(
             "Download Model?",
             f"The model '{model_id}' was not found on your system.\n\n"
@@ -406,10 +373,8 @@ class MainWindow:
                 daemon=True
             ).start()
     def _model_pull_callback(self, status_message: str):
-        """Callback function to display the model download status."""
         self.root.after(0, self.narrative_panel.add_narrative_text, status_message)
     def _on_set_api_key(self):
-        """Opens a dialog to set the OpenRouter API key."""
         current_key = self.config_manager.get('openrouter_key', '')
         new_key = simpledialog.askstring(
             "OpenRouter API Key",
@@ -421,7 +386,6 @@ class MainWindow:
             self.narrative_panel.add_narrative_text("OpenRouter API Key saved.")
             logger.info("Config: OpenRouter key updated.")
     def _open_debug_window(self):
-        """Opens the debug window."""
         if self.debug_window_instance and self.debug_window_instance.winfo_exists():
             self.debug_window_instance.lift()
             self.debug_window_instance.focus()
@@ -431,7 +395,6 @@ class MainWindow:
                 loader=self.controller.loader
             )
     def run(self, player: Entity):
-        """Starts the main game loop."""
         if not player:
             logger.critical("FATAL: No player entity provided to app.run()")
             self.narrative_panel.add_narrative_text("FATAL ERROR: No player entity could be loaded. See console for details.")

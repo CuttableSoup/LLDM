@@ -1,8 +1,3 @@
-"""
-game_engine.py
-This module contains the GameController class, which acts as the central engine
-for the game loop, coordinating between player input, NPC logic, and the GUI.
-"""
 from __future__ import annotations
 import logging
 from typing import List, Dict, Any, Optional, Callable, Tuple
@@ -193,7 +188,6 @@ class GameController:
             self.round_history = []
             self.advance_round()
     def advance_round(self):
-        """Advances the game time by one round (6 seconds) and processes triggers."""
         self.game_time.advance_time(6)
         for entity in self.initiative_order:
             msgs = self.interaction_manager.process_triggers(entity, self.game_time)
@@ -216,7 +210,6 @@ class GameController:
         answer = self.llm_manager.generate_response(prompt=prompt, history=self.llm_chat_history)
         self.update_narrative(f"\n--- ADaM: {answer} ---")
     def move_entity(self, entity: Entity, target_x: int, target_y: int) -> bool:
-        """Moves an entity to a new position on the map."""
         if not self.current_room: return False
         old_char = None
         for item in self.current_room.legend:
@@ -325,7 +318,6 @@ class GameController:
             self.round_history = []
             self.advance_round()
     def advance_round(self):
-        """Advances the game time by one round (6 seconds) and processes triggers."""
         self.game_time.advance_time(6)
         for entity in self.initiative_order:
             msgs = self.interaction_manager.process_triggers(entity, self.game_time)
@@ -348,7 +340,6 @@ class GameController:
         answer = self.llm_manager.generate_response(prompt=prompt, history=self.llm_chat_history)
         self.update_narrative(f"\n--- ADaM: {answer} ---")
     def move_entity(self, entity: Entity, target_x: int, target_y: int) -> bool:
-        """Moves an entity to a new position on the map."""
         if not self.current_room: return False
         old_char = None
         for item in self.current_room.legend:

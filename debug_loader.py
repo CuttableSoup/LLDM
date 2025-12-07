@@ -18,4 +18,3 @@ def test_loading():
     print(f"Has 'evocation'? {'evocation' in entity.attribute}")
 if __name__ == "__main__":
     test_loading()
-

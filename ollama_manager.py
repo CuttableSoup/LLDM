@@ -1,8 +1,3 @@
-"""
-This module manages the Ollama service.
-It includes functionality for finding the Ollama executable, starting and stopping the
-service, and handling the installation of Ollama on Windows.
-"""
 import subprocess
 import shutil
 import sys
@@ -17,19 +12,10 @@ logger = logging.getLogger("OllamaManager")
 OLLAMA_API_URL = "http://127.0.0.1:11434"
 OLLAMA_WINDOWS_DOWNLOAD_URL = "https://ollama.com/download/OllamaSetup.exe"
 class OllamaManager:
-    """Manages the Ollama service process."""
     def __init__(self):
-        """Initializes the OllamaManager."""
         self.process: subprocess.Popen | None = None
         self.ollama_path: str | None = None
     def find_ollama(self) -> bool:
-        """
-        Finds the Ollama executable.
-        It first checks the system's PATH, and if not found, checks the default
-        installation location on Windows.
-        Returns:
-            True if Ollama is found, False otherwise.
-        """
         self.ollama_path = shutil.which("ollama")
         if self.ollama_path:
             logger.info(f"Ollama found in PATH: {self.ollama_path}")
@@ -48,11 +34,6 @@ class OllamaManager:
         self.ollama_path = None
         return False
     def is_service_running(self) -> bool:
-        """
-        Checks if the Ollama service is currently running.
-        Returns:
-            True if the service is running, False otherwise.
-        """
         try:
             response = requests.get(OLLAMA_API_URL, timeout=1)
             return True
@@ -61,12 +42,6 @@ class OllamaManager:
         except requests.exceptions.RequestException:
             return False
     def start(self) -> bool:
-        """
-        Starts the Ollama service.
-        If the service is not already running, it starts it as a background process.
-        Returns:
-            True if the service is started successfully, False otherwise.
-        """
         if self.is_service_running():
             logger.info("Ollama service is already running.")
             return True
@@ -109,7 +84,6 @@ class OllamaManager:
             logger.exception(f"An unexpected error occurred while starting Ollama: {e}")
             return False
     def stop(self):
-        """Stops the Ollama service process if it was started by this manager."""
         if self.process:
             logger.info(f"Stopping Ollama service (PID: {self.process.pid})...")
             try:
@@ -166,4 +140,3 @@ class OllamaManager:
                     logger.info(f"Removed installer from: {installer_path}")
                 except Exception as e:
                     logger.warning(f"Warning: Could not remove installer: {e}")
-

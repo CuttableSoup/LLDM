@@ -1,10 +1,3 @@
-"""
-This module handles Natural Language Processing (NLP) for the LLDM application.
-It uses sentence-transformers for intent classification and spaCy for named entity
-recognition (NER). The processor hardcodes core game intents and dynamically
-builds a 'USE_SKILL' intent by loading keywords from 'aptitude' blocks
-in any ruleset YAML file.
-"""
 from __future__ import annotations
 from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
@@ -144,30 +137,25 @@ CORE_INTENTS_DATA = [
 ]
 @dataclass
 class Intent:
-    """Represents a player's intent, loaded from a YAML file."""
     name: str
     description: str
     keywords: List[str]
 @dataclass
 class ActionComponent:
-    """Represents a single action component identified in the player's input."""
     intent: Intent
     keyword: str
     skill_name: Optional[str] = None
 @dataclass
 class ProcessedInput:
-    """Represents the processed output of the NLP pipeline."""
     raw_text: str
     actions: List[ActionComponent] = field(default_factory=list)
     targets: List[Entity] = field(default_factory=list)
     interaction_entities: List[Entity] = field(default_factory=list)
 class NLPProcessor:
-    """Processes player input to understand intent and extract entities."""
     MODEL_NAME = 'all-MiniLM-L6-v2'
     SIMILARITY_THRESHOLD = 0.4
     SPACY_MODEL_NAME = 'en_core_web_sm'
     def __init__(self, ruleset_path: Path):
-        """Initializes the NLPProcessor."""
         self.intents: Dict[str, Intent] = {}
         if not yaml:
             raise ImportError("PyYAML is required to load intents.")

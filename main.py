@@ -1,8 +1,3 @@
-"""
-This is the main entry point for the LLDM application.
-It initializes the necessary managers (Config, Ollama, LLM), loads the game ruleset,
-and starts the main GUI window.
-"""
 import tkinter as tk
 from tkinter import ttk, messagebox
 from pathlib import Path
@@ -24,7 +19,6 @@ RULESET_PATH = Path(__file__).parent / "rulesets" / "medievalfantasy"
 CONFIG_FILE = "config.json"
 PLAYER_NAME = "Valerius"
 def main():
-    """The main function that runs the LLDM application."""
     setup_logging()
     logger = logging.getLogger("Main")
     config_manager = ConfigManager(CONFIG_FILE)
