@@ -1,0 +1,56 @@
+[[entity]]
+name = "shortsword"
+supertype = "object"
+type = "weapon"
+subtype = "blade"
+skill = "blades"
+specialization = "shortsword"
+max_wounds = 1
+ranges = { range1 = 0 }
+damage_value = { dice = 1, pips = 2, bonus = "strength_damage" }
+damage_tags = [ "slashing" ]
+bulk = 1
+value = 15
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "long bow"
+supertype = "object"
+type = "weapon"
+subtype = "bow"
+skill = "missiles"
+specialization = "bow"
+max_wounds = 1
+ranges = { range1 = 10, range2 = 100, range3 = 250 }
+damage_value = { dice = 2, pips = 2, bonus = 0 }
+damage_tags = [ "piercing" ]
+bulk = 1
+value = 10
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "chain mail"
+supertype = "object"
+type = "armor"
+subtype = "heavy"
+max_wounds = 2
+armor_value = { dice = 2, pips = 0 }
+armor_tags = [ "physical" ]
+bulk = 1
+value = 15
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "health potion"
+supertype = "object"
+type = "consumable"
+subtype = "potion"
+tags = [ "healing" ]
+bulk = 0
+value = 15
+[entity.skills]
+healing = { dice = 5, pips = 0 }
+fortitude = { dice = 1, pips = 0 }

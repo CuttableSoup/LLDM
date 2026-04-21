@@ -1,0 +1,51 @@
+The LLDM engine is a decoupled, event-driven tabletop RPG framework. It strictly separates mechanical state from narrative presentation,
+using a central Pub/Sub message broker to route information between specialized apps.
+
+Architecture and Event Staging
+The system is divided into a Core App, Data App, AI App, and Client App. These communicate through the Event Bus.
+To prevent the user interface from spoiling the story, the Event Bus uses a staging queue.
+The Core App calculates mechanical outcomes instantly and sends the raw data to the AI App.
+The Client App UI, including health and resource tracks, does not update until the AI App broadcasts a NARRATIVE_COMPLETE event containing the generated text.
+
+
+Input Handling
+Player input is processed by an NLP Bridge using text embeddings and semantic similarity.
+The player's raw text is mathematically compared against a hardcoded list of standard engine actions
+(e.g., Melee Attack, Ranged Attack, Cast Spell) via cosine similarity.
+If the highest match meets a strict confidence threshold, the engine extracts the intent and executes the action.
+If the score falls below the threshold, the engine halts and prompts the player to clarify. This deterministic approach prevents hallucinated actions.
+
+
+Core Stats and Combat (D6 System)
+Attributes, resistance, and damage pools are measured in 6-sided dice and pips (e.g., 3D+1). Pips accumulate mathematically; every 3 pips convert into a full die.
+Combat resolves through opposed rolls:
+The Roll: The player's assembled Damage Total is rolled against the enemy's Resistance Total.
+Hidden Rolls: The engine rolls the enemy's resistance behind the scenes. This generates mathematical variance,
+providing the LLM (gemma 4) with unpredictable margins of success or failure to describe narratively.
+Margin of Success: The difference between the damage roll and the resistance roll dictates the severity of the consequence,
+advancing the target's Wound or Fatigue tracks accordingly.
+Base melee damage scales off physical attributes. The engine calculates this by converting the character's strength to pips,
+dividing the number by two, rounding up and coverting back to dice plus pips. The weapon's static bonus is then added to this base.
+
+
+Data-Driven Math Engine
+Mechanical formulas are not hardcoded in Python. They are stored as strings directly in the TOML files (e.g., scaling_formula = "ceil(strength_dice / 2)").
+AST Execution: The engine uses Python's built-in Abstract Syntax Tree (ast) module to safely parse and evaluate these formula strings at runtime,
+injecting the character's current stats into the evaluation context.
+Validation: During boot, the Data App evaluates every formula in the TOML files against a dummy character sheet.
+It flags syntax errors or bad math in the console before the game starts, preventing crashes during gameplay.
+Push-Your-Luck Mechanics
+Physical techniques and spells carry inherent risk, tied to the Fatigue (FP) and Magic (MP) tracks.
+
+
+Execution: Every technique and spell has an assigned difficulty number. When used, the action always succeeds mechanically and narratively.
+The Cost: The player rolls a skill against the action's difficulty. If the roll meets or exceeds the difficulty, the exertion is handled perfectly.
+If the roll is lower than the difficulty, the respective FP or MP track advances by 1.
+
+Tag Engine
+Conditions and elemental types are handled via text tags.
+Durations: Prefixes dictate when a tag expires. Fleeting: tags expire after one action.
+Scene: tags clear at the end of combat. Rest: tags persist until a long break.
+Elements: Weapons and spells carry damage tags (e.g., Slashing, Fire) that trigger elemental vulnerabilities or resistances on target creatures.
+Deferred Design Decisions: Rules for tag stacking (e.g., multiple "Burning" tags)
+and the mechanical consequences of reaching the absolute maximum limit on the FP or MP tracks are pending future specification. 

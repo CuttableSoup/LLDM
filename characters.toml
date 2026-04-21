@@ -1,0 +1,72 @@
+[[entity]]
+name = "valerius"
+supertype = "creature"
+type = "humanoid"
+subtype = "human"
+description = "A man"
+
+hp = 0
+max_hp = 36 # dependant on fortitude
+
+currency = 100
+max_bulk = 5
+weight = 150
+exp = 100
+
+spells = [ "fireball" ]
+techniques = [ "cleave" ]
+inventory = [
+    "shortsword",
+    "chain mail",
+    "health potion",
+    "health potion",
+    "health potion"
+]
+
+languages = [ "common" ]
+memories = [ "A wife at home" ]
+quotes = [ "Hello, world" ]
+
+[abilities]
+[[abilities.attack]]
+name = "punch"
+skill = "brawling"
+damage_tags = [ "bludgeoning" ]
+damage_value = { dice = 0, pips = 0, bonus = "user.strength_damage" }
+
+[attitudes]
+default = [ 0, 0, 0, 0, 0, 0 ]
+# disposition   Hostile <-> Friendly
+# trust         Suspicious <-> Trusting
+# confidence    Fearful <-> Confident
+# respect       Disdainful <-> Admiring
+# obligation    Unfettered <-> Indebted
+# intimacy      Disgusted <-> Enamored
+
+[allies]
+
+[enemies]
+supertype = [ "undead" ]
+
+[qualities]
+body = "athletic"
+eye = "brown"
+gender = "male"
+hair = "black"
+height = "tall"
+skin = "fair"
+size = "medium"
+age = 35
+
+[skills]
+blades = { dice = 2, pips = 0 }
+athletics = { dice = 2, pips = 2 }
+arcane = { dice = 2, pips = 0 }
+fortitude = { dice = 2, pips = 0 }
+willpower = { dice = 2, pips = 0 }
+reflexes = { dice = 2, pips = 0 }
+strength = { dice = 2, pips = 0 }
+brawling = { dice = 2, pips = 0 }
+
+[specializations]
+longsword = { dice = 1, pips = 0 }

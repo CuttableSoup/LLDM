@@ -1,0 +1,86 @@
+[ranges]
+[[distance]]
+name = "point blank"
+minimum = 0
+maximum = 3
+modifier = { dice = 0, pips = 0, bonus = -5 }
+[[distance]]
+name = "short"
+minimum = 3
+maximum = "range1"
+modifier = { dice = 0, pips = 0, bonus = 0 }
+[[distance]]
+name = "medium"
+minimum = "range1"
+maximum = "range2"
+modifier = { dice = 0, pips = 0, bonus = 5 }
+[[distance]]
+name = "long"
+minimum = "range2"
+maximum = "range3"
+modifier = { dice = 0, pips = 0, bonus = 10 }
+# range.multiplier*range_bands decides distance.modifier 
+# IF roll(actor.attack_skill) - distance.modifier > roll(target.defense_skill), THEN target.bp -= roll(attacker.damage) - roll(target.resistance)
+# hp_per_remain decides wound level -> condition
+[wounds]
+[[effect]] # bruised
+hp_per_remain = { minimum = 0.81, maximum = 0.99 }
+modifier = { dice = 0, pips = 0, bonus = 0 }
+description = "Absorbed most or all of the attack"
+
+[[effect]] # stunned
+hp_per_remain = { minimum = 0.60, maximum = 0.80 }
+apply = { condition = "stunned", duration = "fleeting", dismiss = "none" }
+description = "Moderate bruise or minor sprain; laceration; muscle tear; minor dislocation of joint."
+
+[[effect]] # wounded
+hp_per_remain = { minimum = 0.40, maximum = 0.59 }
+apply = { condition = "wounded", duration = "permanent", dismiss = "healing" }
+description = "Severe abrasion or sprain; deep laceration; torn ligaments; major dislocation or minor break."
+
+[[effect]] # severe
+hp_per_remain = { minimum = 0.20, maximum = 0.39 }
+apply = { condition = "severe", duration = "permanent", dismiss = "healing" }
+description = "Broken bone; gaping wound; ripped cartilage and muscle; concussion."
+
+[[effect]] # incapacitated
+hp_per_remain = { minimum = 0.10, maximum = 0.19 }
+apply = { condition = "incapacitated", duration = "permanent", dismiss = "healing" }
+test = { difficulty = 15, skill = "fotitude, willpower", pass = "", fail = { condition = "unconscious", duration = "scene", dismiss = "healing" } }
+description = "Multiple fracture; laceration in vital area; heavy concussion."
+
+[[effect]] # mortal
+hp_per_remain = { minimum = 0.10, maximum = 0.09 }
+apply = { condition = "unconscious", duration = "permanent", dismiss = "healing" }
+test = { difficulty = 6, skill = "fotitude", pass = "", fail = { condition = "dead", duration = "permanent", dismiss = "healing" } } # difficulty is number of minutes unconscious
+description = "Multiple internal injuries."
+
+[[effect]] # dead
+hp_per_remain = { minimum = 0, maximum = 0 }
+apply = { condition = "dead", duration = "permanent", dismiss = "resurrection" }
+description = "Broken neck; punctured lung; eviscerated."
+
+[conditions]
+[[condition]]
+name = "stunned"
+modifier = { dice = -1, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "wounded"
+modifier = { dice = -1, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "severe"
+modifier = { dice = -2, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "incapacitated"
+modifier = { dice = -3, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "mortal"
+modifier = { dice = -3, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "dead"
+modifier = { dice = 0, pips = 0, bonus = 0 }

@@ -1,0 +1,22 @@
+[[entity]]
+name = "wolf"
+supertype = "creature"
+type = "animal"
+subtype = "canine"
+
+max_hp = 16
+
+[abilities]
+[[abilities.attack]]
+name = "bite"
+skill = "brawling"
+damage_tags = [ "piercing" ]
+damage_value = { dice = 1, pips = 0, bonus = "user.strength_damage" }
+
+[skills]
+fortitude = { dice = 2, pips = 0 }
+willpower = { dice = 2, pips = 0 }
+reflexes = { dice = 2, pips = 0 }
+dodge = { dice = 6, pips = 0 }
+strength = { dice = 2, pips = 0 }
+brawling = { dice = 5, pips = 0 }
