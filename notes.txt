@@ -1,43 +1,46 @@
 LLDM
 Four Apps:
-    LLM_Core.py: controls the context and output of the large language model (currently gemma 4)
+    LLM_Core.py: controls the context and output of the large language model (currently local gemma 4)
         RAG from sourcebook, actions from the last turn, conversations, memories and quotes for NPCs.
     DM_Core.py: contains references and calculations based on the role playing system.
         Interactions between health, inventory, skills, spells, techniques, attitudes, damage, resistances, combat, etc.
     GUI_Core.py: controls the input and output of the graphical user interface.
-        Health, inventory, party, a representation of the combat field or map.
+        Health, inventory, party, notes, a representation of the combat field or map.
     NLP_Core.py: recieves and processes the player input using semantic similarity.
         Each skill or action has a list of words/phrases that correspond to player inputs.
 
 RPG system:
     Derived from D6 from West End Games. Only six-sided dice are used. Pips are added until +3, then converted to an extra die.
     "Entity" is the term for any creature, object, or thing that can be interacted with.
-    Entities have supertypes, types, and subtypes that can restrict interactions of elements of the game (ex: spells)
-    No attributes, only skill and specializations.  Large number of skills. Everything is defined by TOML files.
+    Entities have supertypes and subtypes that can restrict interactions of elements of the game (ex: spells)
+    No attributes, only skills and specializations.  Large number of skills. Everything is defined by TOML files.
     Uses hit points (body points in D6). Wounds are conditions gained if percentage of hp is low enough.
-    Tags on enities denote how some entities interact. (Fire damage tagged so fire resistance reduce it)
-    Damage is calculated: IF[ roll(attack) > roll(defense) - distance_modifier ], HP-MAX( 0, [roll(resist) - roll(damage) - damage_modifier] )
+    Tags on enities denote how some entities interact. (Ex: fire damage tagged so fire resistance reduce it, poison damage tagged so undead are immune)
+    Damage is calculated: IF[ roll(skill) > roll(opposition) - distance_modifier ], HP-MAX( 0, [roll(resist) - roll(damage) - damage_modifier] )
         Distance_modifier is determined by weapon ranges, damage_modifier is determined by skill divided by a number, opposition skills are defined.
-    There are five range bands on the field when combat is initiated, each actor placed in a band. [ -2 [ -1 [ 00 ] +1 ] +2 ]
+    There are five range bands on the field when combat is initiated, each actor placed in a band in the field. [ -2 [ -1 [ 00 ] +1 ] +2 ]
     Player can designate the party to start in certain bands/ranges, NPCs controlled by the LLM/basic if/then trees.
+    The player party can be deployed in the -2, -1, and 0 bands.  The enemy party can be deployed in the 0, 1, and 2 bands.
     Weapons have ranges in meters, range bands have a distance multiplier based on surroundings. (A field is larger than a room)
-    Spells and techniques cost nothing to use, but require and appropriate skill roll.  Failure means the action fails.
-    Actors have one action per turn, movement allowed with rules.
+    Spells and techniques cost nothing to use, but require an appropriate skill roll.  Failure means the action fails.
+    Actors have one action per turn, movement allowed with simple rules.
+    Movement allowed only if no enemy exists, or pass an acrobatics check against present enemies, or opponents in the band are outnumbered by 3 or more.
     Items have value in coins, ambiguous bulk rather than weight.
     NPCs have six attitudes, ranging from -100 to 100, with keywords at different thresholds fed to the LLM to generate dialogue.
-    Attitudes are based on individuals, qualities, types, etc.
-        disposition:   Hostile <-> Friendly
-        trust:         Suspicious <-> Trusting
-        confidence:    Fearful <-> Confident
-        respect:       Disdainful <-> Admiring
-        obligation:    Unfettered <-> Indebted
-        intimacy:      Disgusted <-> Enamored
+    Attitudes are listed with different values for default, individuals, qualities, types, etc. (Ex: default friendly, but hates dwarves)
+        Disposition:   Hostile <-> Friendly
+        Trust:         Suspicious <-> Trusting
+        Confidence:    Fearful <-> Confident
+        Respect:       Disdainful <-> Admiring
+        Obligation:    Unfettered <-> Indebted
+        Intimacy:      Disgusted <-> Enamored
     LLM is fed a limited context window NPC memories, quotes, attitudes, qualities, items, conditions (this includes descriptive
-        words for health loss/gain), recent action, and dialogue to generate new dialogue and descriptions between turns of battle.
+        words for health loss/gain), recent actions, and dialogue to generate new dialogue and descriptions between turns of battle.
 
 Extended goals:
     Characters are language dependant.
     Multiple actions from the D6 system.
+    Add entity speeds, forms of movement (flying, swimming, land).
     Dialogue sentiment sways attitudes.
     Actions sway attitudes by varying degrees.
     Random enounters, enemy generator.
