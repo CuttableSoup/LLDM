@@ -5,7 +5,6 @@ type = "humanoid"
 subtype = "human"
 description = "A man"
 
-hp = 0
 max_hp = 36 # dependant on fortitude
 
 currency = 100

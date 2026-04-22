@@ -1,27 +1,21 @@
-[ranges]
-[[distance]]
-name = "point blank"
+[range_modifiers]
+[[distance]] # point blank
 minimum = 0
 maximum = 3
 modifier = { dice = 0, pips = 0, bonus = -5 }
-[[distance]]
-name = "short"
+[[distance]] # short
 minimum = 3
-maximum = "range1"
+maximum = "short"
 modifier = { dice = 0, pips = 0, bonus = 0 }
-[[distance]]
-name = "medium"
-minimum = "range1"
-maximum = "range2"
+[[distance]] # medium
+minimum = "short"
+maximum = "medium"
 modifier = { dice = 0, pips = 0, bonus = 5 }
-[[distance]]
-name = "long"
-minimum = "range2"
-maximum = "range3"
+[[distance]] # long
+minimum = "medium"
+maximum = "long"
 modifier = { dice = 0, pips = 0, bonus = 10 }
-# range.multiplier*range_bands decides distance.modifier 
-# IF roll(actor.attack_skill) - distance.modifier > roll(target.defense_skill), THEN target.bp -= roll(attacker.damage) - roll(target.resistance)
-# hp_per_remain decides wound level -> condition
+
 [wounds]
 [[effect]] # bruised
 hp_per_remain = { minimum = 0.81, maximum = 0.99 }

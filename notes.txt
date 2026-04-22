@@ -1,51 +1,43 @@
-The LLDM engine is a decoupled, event-driven tabletop RPG framework. It strictly separates mechanical state from narrative presentation,
-using a central Pub/Sub message broker to route information between specialized apps.
+LLDM
+Four Apps:
+    LLM_Core.py: controls the context and output of the large language model (currently gemma 4)
+        RAG from sourcebook, actions from the last turn, conversations, memories and quotes for NPCs.
+    DM_Core.py: contains references and calculations based on the role playing system.
+        Interactions between health, inventory, skills, spells, techniques, attitudes, damage, resistances, combat, etc.
+    GUI_Core.py: controls the input and output of the graphical user interface.
+        Health, inventory, party, a representation of the combat field or map.
+    NLP_Core.py: recieves and processes the player input using semantic similarity.
+        Each skill or action has a list of words/phrases that correspond to player inputs.
 
-Architecture and Event Staging
-The system is divided into a Core App, Data App, AI App, and Client App. These communicate through the Event Bus.
-To prevent the user interface from spoiling the story, the Event Bus uses a staging queue.
-The Core App calculates mechanical outcomes instantly and sends the raw data to the AI App.
-The Client App UI, including health and resource tracks, does not update until the AI App broadcasts a NARRATIVE_COMPLETE event containing the generated text.
+RPG system:
+    Derived from D6 from West End Games. Only six-sided dice are used. Pips are added until +3, then converted to an extra die.
+    "Entity" is the term for any creature, object, or thing that can be interacted with.
+    Entities have supertypes, types, and subtypes that can restrict interactions of elements of the game (ex: spells)
+    No attributes, only skill and specializations.  Large number of skills. Everything is defined by TOML files.
+    Uses hit points (body points in D6). Wounds are conditions gained if percentage of hp is low enough.
+    Tags on enities denote how some entities interact. (Fire damage tagged so fire resistance reduce it)
+    Damage is calculated: IF[ roll(attack) > roll(defense) - distance_modifier ], HP-MAX( 0, [roll(resist) - roll(damage) - damage_modifier] )
+        Distance_modifier is determined by weapon ranges, damage_modifier is determined by skill divided by a number, opposition skills are defined.
+    There are five range bands when combat is initiated, each actor placed on the field. [ -2 [ -1 [ 00 ] +1 ] +2 ]
+    Player can designated the party to start in certain bands/ranges, NPCs controlled by the LLM/basic if/then trees.
+    Weapons have ranges in meters, range bands have a distance multiplier based on surroundings. (A field is larger than a room)
+    Spells and techniques cost nothing to use, but require and appropriate skill roll.  Failure means the action fails.
+    Actors have one action per turn, movement allowed with rules.
+    Items have value in coins, ambiguous bulk rather than weight.
+    NPCs have six attitudes, ranging from -100 to 100, with keywords at different thresholds fed to the LLM to generate dialogue.
+    Actions sway attitudes by varying degrees.
+        disposition:   Hostile <-> Friendly
+        trust:         Suspicious <-> Trusting
+        confidence:    Fearful <-> Confident
+        respect:       Disdainful <-> Admiring
+        obligation:    Unfettered <-> Indebted
+        intimacy:      Disgusted <-> Enamored
+    LLM is fed a limited context window NPC memories, quotes, attitudes, qualities, items, conditions (this includes descriptive
+        words for health loss/gain), recent action, and dialogue to generate new dialogue and descriptions between turns of battle.
 
-
-Input Handling
-Player input is processed by an NLP Bridge using text embeddings and semantic similarity.
-The player's raw text is mathematically compared against a hardcoded list of standard engine actions
-(e.g., Melee Attack, Ranged Attack, Cast Spell) via cosine similarity.
-If the highest match meets a strict confidence threshold, the engine extracts the intent and executes the action.
-If the score falls below the threshold, the engine halts and prompts the player to clarify. This deterministic approach prevents hallucinated actions.
-
-
-Core Stats and Combat (D6 System)
-Attributes, resistance, and damage pools are measured in 6-sided dice and pips (e.g., 3D+1). Pips accumulate mathematically; every 3 pips convert into a full die.
-Combat resolves through opposed rolls:
-The Roll: The player's assembled Damage Total is rolled against the enemy's Resistance Total.
-Hidden Rolls: The engine rolls the enemy's resistance behind the scenes. This generates mathematical variance,
-providing the LLM (gemma 4) with unpredictable margins of success or failure to describe narratively.
-Margin of Success: The difference between the damage roll and the resistance roll dictates the severity of the consequence,
-advancing the target's Wound or Fatigue tracks accordingly.
-Base melee damage scales off physical attributes. The engine calculates this by converting the character's strength to pips,
-dividing the number by two, rounding up and coverting back to dice plus pips. The weapon's static bonus is then added to this base.
-
-
-Data-Driven Math Engine
-Mechanical formulas are not hardcoded in Python. They are stored as strings directly in the TOML files (e.g., scaling_formula = "ceil(strength_dice / 2)").
-AST Execution: The engine uses Python's built-in Abstract Syntax Tree (ast) module to safely parse and evaluate these formula strings at runtime,
-injecting the character's current stats into the evaluation context.
-Validation: During boot, the Data App evaluates every formula in the TOML files against a dummy character sheet.
-It flags syntax errors or bad math in the console before the game starts, preventing crashes during gameplay.
-Push-Your-Luck Mechanics
-Physical techniques and spells carry inherent risk, tied to the Fatigue (FP) and Magic (MP) tracks.
-
-
-Execution: Every technique and spell has an assigned difficulty number. When used, the action always succeeds mechanically and narratively.
-The Cost: The player rolls a skill against the action's difficulty. If the roll meets or exceeds the difficulty, the exertion is handled perfectly.
-If the roll is lower than the difficulty, the respective FP or MP track advances by 1.
-
-Tag Engine
-Conditions and elemental types are handled via text tags.
-Durations: Prefixes dictate when a tag expires. Fleeting: tags expire after one action.
-Scene: tags clear at the end of combat. Rest: tags persist until a long break.
-Elements: Weapons and spells carry damage tags (e.g., Slashing, Fire) that trigger elemental vulnerabilities or resistances on target creatures.
-Deferred Design Decisions: Rules for tag stacking (e.g., multiple "Burning" tags)
-and the mechanical consequences of reaching the absolute maximum limit on the FP or MP tracks are pending future specification. 
+Extended goals:
+    Characters are language dependant.
+    Multiple actions from the D6 system.
+    Dialogue sentiment sways attitudes.
+    Random enounters, enemy generator.
+    Scenario, quest, NPC, item, location generators.
