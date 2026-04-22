@@ -19,7 +19,6 @@ modifier = { dice = 0, pips = 0, bonus = 10 }
 [wounds]
 [[effect]] # bruised
 hp_per_remain = { minimum = 0.81, maximum = 0.99 }
-modifier = { dice = 0, pips = 0, bonus = 0 }
 description = "Absorbed most or all of the attack"
 
 [[effect]] # stunned

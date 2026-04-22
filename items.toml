@@ -1,8 +1,7 @@
 [[entity]]
 name = "shortsword"
 supertype = "object"
-type = "weapon"
-subtype = "blade"
+subtype = "weapon"
 skill = "blades"
 specialization = "shortsword"
 max_hp = 10
@@ -17,8 +16,7 @@ fortitude = { dice = 3, pips = 0 }
 [[entity]]
 name = "long bow"
 supertype = "object"
-type = "weapon"
-subtype = "bow"
+subtype = "weapon"
 skill = "missiles"
 specialization = "bow"
 max_hp = 5
@@ -33,8 +31,7 @@ fortitude = { dice = 1, pips = 0 }
 [[entity]]
 name = "chain mail"
 supertype = "object"
-type = "armor"
-subtype = "heavy"
+subtype = "armor"
 max_hp = 20
 armor_value = { dice = 2, pips = 0 }
 armor_tags = [ "physical" ]
@@ -46,7 +43,6 @@ fortitude = { dice = 5, pips = 0 }
 [[entity]]
 name = "health potion"
 supertype = "object"
-type = "consumable"
 subtype = "potion"
 tags = [ "healing" ]
 bulk = 0

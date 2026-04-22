@@ -18,14 +18,14 @@ RPG system:
     Tags on enities denote how some entities interact. (Fire damage tagged so fire resistance reduce it)
     Damage is calculated: IF[ roll(attack) > roll(defense) - distance_modifier ], HP-MAX( 0, [roll(resist) - roll(damage) - damage_modifier] )
         Distance_modifier is determined by weapon ranges, damage_modifier is determined by skill divided by a number, opposition skills are defined.
-    There are five range bands when combat is initiated, each actor placed on the field. [ -2 [ -1 [ 00 ] +1 ] +2 ]
-    Player can designated the party to start in certain bands/ranges, NPCs controlled by the LLM/basic if/then trees.
+    There are five range bands on the field when combat is initiated, each actor placed in a band. [ -2 [ -1 [ 00 ] +1 ] +2 ]
+    Player can designate the party to start in certain bands/ranges, NPCs controlled by the LLM/basic if/then trees.
     Weapons have ranges in meters, range bands have a distance multiplier based on surroundings. (A field is larger than a room)
     Spells and techniques cost nothing to use, but require and appropriate skill roll.  Failure means the action fails.
     Actors have one action per turn, movement allowed with rules.
     Items have value in coins, ambiguous bulk rather than weight.
     NPCs have six attitudes, ranging from -100 to 100, with keywords at different thresholds fed to the LLM to generate dialogue.
-    Actions sway attitudes by varying degrees.
+    Attitudes are based on individuals, qualities, types, etc.
         disposition:   Hostile <-> Friendly
         trust:         Suspicious <-> Trusting
         confidence:    Fearful <-> Confident
@@ -39,5 +39,6 @@ Extended goals:
     Characters are language dependant.
     Multiple actions from the D6 system.
     Dialogue sentiment sways attitudes.
+    Actions sway attitudes by varying degrees.
     Random enounters, enemy generator.
     Scenario, quest, NPC, item, location generators.

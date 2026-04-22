@@ -1,10 +1,10 @@
 [[entity]]
 name = "fireball"
 supertype = "spell"
-type = "arcane"
 subtype = "evocation"
 skill = "arcane"
 specialization = "evocation"
+difficulty = 10
 range = { minimum = 0, maximum = 60 }
 targets = { number = 1, aoe = 5 }
 damage_value = { dice = 5, pips = 0, bonus = 0 }

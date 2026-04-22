@@ -1,11 +1,10 @@
 [[entity]]
-name = "valerius"
+name = "gladstone"
 supertype = "creature"
-type = "humanoid"
-subtype = "human"
+subtype = "humanoid"
 description = "A man"
 
-max_hp = 36 # dependant on fortitude
+max_hp = 36 # dependent on fortitude
 
 currency = 100
 max_bulk = 5
@@ -29,9 +28,19 @@ quotes = [ "Hello, world" ]
 [abilities]
 [[abilities.attack]]
 name = "punch"
+supertype = "innate"
+subtype = "weapon"
 skill = "brawling"
 damage_tags = [ "bludgeoning" ]
 damage_value = { dice = 0, pips = 0, bonus = "user.strength_damage" }
+
+[[abilities.technique]]
+name = "enhance"
+supertype = "technique"
+subtype = "supernatural"
+skill = "fortitude"
+difficulty = 10
+apply = { modifier = { dice = 1, pips = 0, bonus = 0 }, duration = "fleeting", dismiss = "none" }
 
 [attitudes]
 default = [ 0, 0, 0, 0, 0, 0 ]
@@ -41,6 +50,8 @@ default = [ 0, 0, 0, 0, 0, 0 ]
 # respect       Disdainful <-> Admiring
 # obligation    Unfettered <-> Indebted
 # intimacy      Disgusted <-> Enamored
+supertype.undead = [ -100, -100, 100, -100, -100, -100 ]
+name.anne = [ 100, 100, 100, 100, 100, 100 ]
 
 [allies]
 
@@ -55,6 +66,7 @@ hair = "black"
 height = "tall"
 skin = "fair"
 size = "medium"
+race = "human"
 age = 35
 
 [skills]

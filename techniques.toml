@@ -1,9 +1,10 @@
 [[entity]]
 name = "cleave"
 supertype = "technique"
-type = "martial"
-subtype = "melee"
+subtype = "martial"
 skill = [ "blades", "axes" ]
+specialization = [ "any" ]
+difficulty = 10
 range = { minimum = 0, maximum = 1 }
 targets = { number = 3, aoe = 0 }
 damage_value = { dice = "user.weapon.dice", pips = "user.weapon.pips", bonus = "user.strength_damage" }

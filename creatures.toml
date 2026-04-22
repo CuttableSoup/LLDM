@@ -1,8 +1,7 @@
 [[entity]]
 name = "wolf"
 supertype = "creature"
-type = "animal"
-subtype = "canine"
+subtype = "animal"
 
 max_hp = 16
 
