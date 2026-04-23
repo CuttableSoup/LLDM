@@ -10,9 +10,9 @@ def main():
     event_bus = EventBus()
     logger = Logger(event_bus)
 
+    gui_core = GUICore(event_bus)
     llm_core = LLMCore(event_bus)
     dm_core = DMCore(event_bus)
-    gui_core = GUICore(event_bus)
     nlp_core = NLPCore(event_bus)
 
     event_bus.publish("log_info", "Application started successfully.")

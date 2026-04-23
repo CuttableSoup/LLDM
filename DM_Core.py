@@ -1,7 +1,5 @@
-"""!
-@file DM_Core.py
-@brief Contains references and calculations based on the role-playing system.
-"""
+import os
+import tomllib
 
 class DMCore:
     """!
@@ -14,7 +12,34 @@ class DMCore:
         @param event_bus The central event bus instance.
         """
         self.event_bus = event_bus
+        self.skills = {}
+        self.entities = {}
+        self.load_rules(os.path.join("Rules", "Fantasy"))
         self.event_bus.publish("log_info", "DMCore initialized.")
+        self.event_bus.publish("rules_loaded", {"skills": self.skills, "entities": self.entities})
+
+    def load_rules(self, rules_dir):
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        full_dir = os.path.join(base_dir, rules_dir)
+
+        if not os.path.exists(full_dir):
+            self.event_bus.publish("log_error", f"Rules directory not found: {full_dir}")
+            return
+
+        for filename in os.listdir(full_dir):
+            if filename.endswith(".toml"):
+                filepath = os.path.join(full_dir, filename)
+                try:
+                    with open(filepath, "rb") as f:
+                        data = tomllib.load(f)
+                    if "skill" in data:
+                        for skill in data["skill"]:
+                            self.skills[skill.get("name")] = skill
+                    if "entity" in data:
+                        for entity in data["entity"]:
+                            self.entities[entity.get("name")] = entity
+                except Exception as e:
+                    self.event_bus.publish("log_error", f"Error loading {filename}: {e}")
 
     def calculate_damage(self, attacker_stats, defender_stats):
         """!

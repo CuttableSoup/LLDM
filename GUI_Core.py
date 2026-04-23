@@ -44,6 +44,11 @@ class GUICore:
         self.map_text = tk.Text(self.map_tab, wrap=tk.NONE)
         self.map_text.pack(fill=tk.BOTH, expand=True)
         self.notebook.add(self.map_tab, text="Map")
+
+        self.debug_tab = tk.Frame(self.notebook)
+        self.debug_text = tk.Text(self.debug_tab, wrap=tk.WORD)
+        self.debug_text.pack(fill=tk.BOTH, expand=True)
+        self.notebook.add(self.debug_tab, text="Debug")
         
         self.input_frame = tk.Frame(self.root)
         self.input_frame.pack(fill=tk.X, side=tk.BOTTOM, padx=5, pady=5)
@@ -58,6 +63,7 @@ class GUICore:
         self.user_input = ""
         self.event_bus.publish("log_info", "GUICore initialized.")
         self.event_bus.subscribe("llm_response_ready", self.display_llm_response)
+        self.event_bus.subscribe("rules_loaded", self.display_debug_info)
 
     def start(self):
         self.root.mainloop()
@@ -109,6 +115,20 @@ class GUICore:
         self.event_bus.publish("log_info", "Rendering combat field.")
         self.map_text.delete(1.0, tk.END)
         self.map_text.insert(tk.END, map_data)
+
+    def display_debug_info(self, rules_data):
+        self.event_bus.publish("log_info", "Displaying debug info.")
+        self.debug_text.delete(1.0, tk.END)
+        skills = rules_data.get("skills", {})
+        entities = rules_data.get("entities", {})
+        
+        self.debug_text.insert(tk.END, "--- Skills ---\n")
+        for data in skills.items():
+            self.debug_text.insert(tk.END, f"{data}\n\n")
+            
+        self.debug_text.insert(tk.END, "--- Entities ---\n")
+        for data in entities.items():
+            self.debug_text.insert(tk.END, f"{data}\n\n")
 
     def get_user_input(self):
         """!
