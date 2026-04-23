@@ -24,8 +24,8 @@ languages = [ "common" ]
 memories = [ "A wife at home" ]
 quotes = [ "Hello, world" ]
 
-[abilities]
-[[abilities.attack]]
+[entity.abilities]
+[[entity.abilities.attack]]
 name = "punch"
 supertype = "innate"
 subtype = "weapon"
@@ -33,7 +33,7 @@ skill = "brawling"
 damage_tags = [ "bludgeoning" ]
 damage_value = { dice = 0, pips = 0, bonus = "user.strength_damage" }
 
-[[abilities.technique]]
+[[entity.abilities.technique]]
 name = "enhance"
 supertype = "technique"
 subtype = "supernatural"
@@ -41,7 +41,7 @@ skill = "fortitude"
 difficulty = 10
 apply = { modifier = { dice = 1, pips = 0, bonus = 0 }, duration = "fleeting", dismiss = "none" }
 
-[attitudes]
+[entity.attitudes]
 default = [ 0, 0, 0, 0, 0, 0 ]
 # disposition   Hostile <-> Friendly
 # trust         Suspicious <-> Trusting
@@ -49,15 +49,19 @@ default = [ 0, 0, 0, 0, 0, 0 ]
 # respect       Disdainful <-> Admiring
 # obligation    Unfettered <-> Indebted
 # intimacy      Disgusted <-> Enamored
-supertype.undead = [ -100, -100, 100, -100, -100, -100 ]
-name.anne = [ 100, 100, 100, 100, 100, 100 ]
 
-[allies]
+[entity.attitudes.supertype]
+undead = [ -100, -100, 100, -100, -100, -100 ]
 
-[enemies]
+[entity.attitudes.name]
+anne = [ 100, 100, 100, 100, 100, 100 ]
+
+[entity.allies]
+
+[entity.enemies]
 supertype = [ "undead" ]
 
-[qualities]
+[entity.qualities]
 body = "athletic"
 eye = "brown"
 gender = "male"
@@ -68,7 +72,7 @@ size = "medium"
 race = "human"
 age = 35
 
-[skills]
+[entity.skills]
 blades = { dice = 2, pips = 0 }
 athletics = { dice = 2, pips = 2 }
 arcane = { dice = 2, pips = 0 }
@@ -78,5 +82,5 @@ reflexes = { dice = 2, pips = 0 }
 strength = { dice = 2, pips = 0 }
 brawling = { dice = 2, pips = 0 }
 
-[specializations]
+[entity.specializations]
 longsword = { dice = 1, pips = 0 }
