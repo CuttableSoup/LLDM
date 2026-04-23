@@ -11,8 +11,7 @@ max_bulk = 5
 weight = 150
 exp = 100
 
-spells = [ "fireball" ]
-techniques = [ "cleave" ]
+abilities = [ "fireball", "cleave" ]
 inventory = [
     "shortsword",
     "chain mail",

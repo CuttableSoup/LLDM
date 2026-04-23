@@ -1,9 +1,9 @@
 LLDM
 Four Apps:
-    LLM_Core.py: controls the context and output of the large language model (currently local gemma 4)
+    LLM_Core.py: controls the context and output of the large language model (currently local Gemma E4B @ http://127.0.0.1:1234)
         RAG from sourcebook, actions from the last turn, conversations, memories and quotes for NPCs.
     DM_Core.py: contains references and calculations based on the role playing system.
-        Interactions between health, inventory, skills, spells, techniques, attitudes, damage, resistances, combat, etc.
+        Interactions between health, inventory, skills, abilities, attitudes, damage, resistances, combat, etc.
     GUI_Core.py: controls the input and output of the graphical user interface.
         Health, inventory, party, notes, a representation of the combat field or map.
     NLP_Core.py: recieves and processes the player input using semantic similarity.
@@ -22,7 +22,7 @@ RPG system:
     Player can designate the party to start in certain bands/ranges, NPCs controlled by the LLM/basic if/then trees.
     The player party can be deployed in the -2, -1, and 0 bands.  The enemy party can be deployed in the 0, 1, and 2 bands.
     Weapons have ranges in meters, range bands have a distance multiplier based on surroundings. (A field is larger than a room)
-    Spells and techniques cost nothing to use, but require an appropriate skill roll.  Failure means the action fails.
+    Abilities cost nothing to use, but require an appropriate skill roll.  Failure means the action fails.
     Actors have one action per turn, movement allowed with simple rules.
     Movement allowed only if no enemy exists, or pass an acrobatics check against present enemies, or opponents in the band are outnumbered by 3 or more.
     Items have value in coins, ambiguous bulk rather than weight.
