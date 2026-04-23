@@ -16,6 +16,8 @@ def main():
     nlp_core = NLPCore(event_bus)
 
     event_bus.publish("log_info", "Application started successfully.")
+    
+    gui_core.start()
 
 if __name__ == "__main__":
     main()
