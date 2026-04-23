@@ -77,3 +77,7 @@ modifier = { dice = -3, pips = 0, bonus = 0 }
 [[condition]]
 name = "dead"
 modifier = { dice = 0, pips = 0, bonus = 0 }
+
+[strength_damage]
+skill = "strength"
+divisor = 2
