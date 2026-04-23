@@ -24,6 +24,10 @@ languages = [ "common" ]
 memories = [ "A wife at home" ]
 quotes = [ "Hello, world" ]
 
+[entity.equipped]
+rhand = "shortsword"
+chest = "chain mail"
+
 [entity.abilities]
 [[entity.abilities.attack]]
 name = "punch"
