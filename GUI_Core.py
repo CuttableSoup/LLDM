@@ -57,6 +57,7 @@ class GUICore:
 
         self.user_input = ""
         self.event_bus.publish("log_info", "GUICore initialized.")
+        self.event_bus.subscribe("llm_response_ready", self.display_llm_response)
 
     def start(self):
         self.root.mainloop()
@@ -66,14 +67,20 @@ class GUICore:
 
     def submit_input(self):
         self.user_input = self.input_entry.get()
+        if not self.user_input.strip():
+            return
         self.input_entry.delete(0, tk.END)
         self.append_to_history(f"> {self.user_input}\n")
+        self.event_bus.publish("user_input_submitted", self.user_input)
 
     def append_to_history(self, text):
         self.history_text.config(state=tk.NORMAL)
         self.history_text.insert(tk.END, text)
         self.history_text.see(tk.END)
         self.history_text.config(state=tk.DISABLED)
+
+    def display_llm_response(self, text):
+        self.append_to_history(f"{text}\n\n")
 
     def display_party_status(self, health_data, inventory_data):
         """!

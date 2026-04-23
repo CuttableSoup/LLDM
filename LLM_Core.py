@@ -1,7 +1,6 @@
-"""!
-@file LLM_Core.py
-@brief Controls the context and output of the large language model.
-"""
+import json
+import urllib.request
+import threading
 
 class LLMCore:
     """!
@@ -15,6 +14,9 @@ class LLMCore:
         """
         self.event_bus = event_bus
         self.event_bus.publish("log_info", "LLMCore initialized.")
+        self.api_url = "http://127.0.0.1:1234/v1/chat/completions"
+        self.context_window = []
+        self.event_bus.subscribe("user_input_submitted", self.generate_response)
 
     def perform_rag(self, query):
         """!
@@ -42,3 +44,34 @@ class LLMCore:
         """
         self.event_bus.publish("log_info", "Generating NPC response.")
         return ""
+
+    def generate_response(self, user_input):
+        self.event_bus.publish("log_info", "Generating LLM response.")
+        self.context_window.append({"role": "user", "content": user_input})
+        
+        if len(self.context_window) > 100:
+            self.context_window = self.context_window[-100:]
+
+        def fetch_from_llm():
+            data = {
+                "messages": [{"role": "system", "content": "You are the Game Master."}] + self.context_window,
+                "temperature": 0.7,
+                "max_tokens": 4096
+            }
+            req = urllib.request.Request(
+                self.api_url, 
+                data=json.dumps(data).encode('utf-8'), 
+                headers={'Content-Type': 'application/json'}
+            )
+            
+            try:
+                response = urllib.request.urlopen(req)
+                result = json.loads(response.read().decode('utf-8'))
+                llm_text = result['choices'][0]['message']['content']
+                self.context_window.append({"role": "assistant", "content": llm_text})
+                self.event_bus.publish("llm_response_ready", llm_text)
+            except Exception as e:
+                self.event_bus.publish("log_error", f"LLM connection failed: {e}")
+                self.event_bus.publish("llm_response_ready", "System: Could not connect to the local LLM.")
+
+        threading.Thread(target=fetch_from_llm, daemon=True).start()
