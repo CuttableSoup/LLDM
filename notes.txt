@@ -1,5 +1,5 @@
 LLDM
-Four Apps:
+Four Apps, two utilities:
     LLM_Core.py: controls the context and output of the large language model (currently local Gemma E4B @ http://127.0.0.1:1234)
         RAG from sourcebook, actions from the last turn, conversations, memories and quotes for NPCs.
     DM_Core.py: contains references and calculations based on the role playing system.
@@ -8,6 +8,8 @@ Four Apps:
         Health, inventory, party, notes, a representation of the combat field or map.
     NLP_Core.py: recieves and processes the player input using semantic similarity.
         Each skill or action has a list of words/phrases that correspond to player inputs.
+    Logger.py: Dedicated logging methods.
+    Event_Bus.py: Manage application subscriptions/publications.
 
 RPG system:
     Derived from D6 from West End Games. Only six-sided dice are used. Pips are added until +3, then converted to an extra die.

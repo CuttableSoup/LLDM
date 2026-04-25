@@ -1,251 +1,251 @@
 [[skill]]
 name = "athletics"
 description = "Physical movement and sports activities."
-keywords = ["movement", "exertion", "physical"]
-opposes = []
+keywords = ["movement", "exertion", "physical", "climb", "jump", "swim", "run", "sprint"]
+opposes = ["athletics", "observation"]
 specializations = ["climbing", "jumping", "swimming"]
 
 [[skill]]
 name = "blades"
 description = "Using swords and knives in close combat."
-keywords = ["combat", "melee", "armed"]
-opposes = []
+keywords = ["combat", "melee", "armed", "sword", "dagger", "knife", "blade", "stab", "slash", "cut", "attack"]
+opposes = ["dodge", "blades", "brawling", "axes", "polearms"]
 specializations = ["longsword", "dagger", "greatsword"]
 
 [[skill]]
 name = "throwing"
 description = "Hurling weapons or objects at a target."
-keywords = ["combat", "ranged", "projectile"]
-opposes = []
+keywords = ["combat", "ranged", "projectile", "throw", "hurl", "toss"]
+opposes = ["dodge", "reflexes"]
 specializations = ["throwing knives", "axes", "rocks"]
 
 [[skill]]
 name = "fortitude"
 description = "Resisting fatigue, disease, or poison."
-keywords = ["defense", "resistance", "passive"]
+keywords = ["defense", "resistance", "passive", "endure", "survive", "toughness"]
 opposes = []
 specializations = ["poison resistance", "disease resistance", "endurance"]
 
 [[skill]]
 name = "strength"
 description = "Feats of raw physical power and lifting."
-keywords = ["exertion", "lifting", "force"]
-opposes = []
+keywords = ["exertion", "lifting", "force", "power", "push", "pull", "break", "smash"]
+opposes = ["strength", "brawling", "fortitude"]
 specializations = ["lifting", "breaking doors", "carrying"]
 
 [[skill]]
 name = "axes"
 description = "Wielding axes in melee combat."
-keywords = ["combat", "melee", "armed"]
-opposes = []
+keywords = ["combat", "melee", "armed", "axe", "hatchet", "cleave", "chop"]
+opposes = ["dodge", "blades", "axes", "polearms"]
 specializations = ["battleaxe", "hand axe", "greataxe"]
 
 [[skill]]
 name = "polearms"
 description = "Wielding long hafted weapons in combat."
-keywords = ["combat", "melee", "reach"]
-opposes = []
+keywords = ["combat", "melee", "reach", "spear", "halberd", "pike", "lance", "thrust"]
+opposes = ["dodge", "blades", "axes", "polearms"]
 specializations = ["pike", "glaive", "halberd"]
 
 [[skill]]
 name = "brawling"
 description = "Unarmed melee combat."
-keywords = ["combat", "melee", "unarmed"]
-opposes = []
+keywords = ["combat", "melee", "unarmed", "punch", "kick", "unarmed strike", "grapple", "wrestle", "fight"]
+opposes = ["dodge", "brawling", "blades", "axes", "polearms"]
 specializations = ["boxing", "wrestling", "martial arts"]
 
 [[skill]]
 name = "acrobatics"
 description = "Tumbling, balancing, and executing flips."
-keywords = ["movement", "agility", "balance"]
-opposes = []
+keywords = ["movement", "agility", "balance", "flip", "tumble", "roll", "dodge", "evade"]
+opposes = ["observation", "reflexes"]
 specializations = ["tumbling", "tightrope walking", "falling safely"]
 
 [[skill]]
 name = "finesse"
 description = "Delicate physical manipulation of objects."
-keywords = ["manipulation", "precision", "covert"]
-opposes = []
+keywords = ["manipulation", "precision", "covert", "pick", "lock", "steal", "dexterity"]
+opposes = ["observation", "reflexes"]
 specializations = ["sleight of hand", "lockpicking", "pickpocketing"]
 
 [[skill]]
 name = "escape"
 description = "Breaking free from restraints or grapples."
-keywords = ["movement", "evasion", "struggle"]
-opposes = []
+keywords = ["movement", "evasion", "struggle", "free", "break", "slip", "untie"]
+opposes = ["strength", "finesse", "brawling"]
 specializations = ["slipping bonds", "breaking grapples", "contortion"]
 
 [[skill]]
 name = "fly"
 description = "Maneuvering and traveling while airborne."
-keywords = ["movement", "aerial", "travel"]
-opposes = []
+keywords = ["movement", "aerial", "travel", "wings", "soar", "glide"]
+opposes = ["fly", "observation"]
 specializations = ["soaring", "hovering", "aerial combat"]
 
 [[skill]]
 name = "trickery"
 description = "Deceptive physical actions or misdirection."
-keywords = ["deception", "misdirection", "sleight of hand"]
-opposes = []
+keywords = ["deception", "misdirection", "sleight of hand", "distract", "feint", "fake", "bluff"]
+opposes = ["observation", "willpower"]
 specializations = ["distraction", "palming objects", "stage magic"]
 
 [[skill]]
 name = "stealth"
 description = "Moving silently and remaining hidden."
-keywords = ["movement", "concealment", "covert"]
-opposes = []
+keywords = ["movement", "concealment", "covert", "hide", "sneak", "silent", "shadows"]
+opposes = ["observation", "reflexes"]
 specializations = ["sneaking", "hiding in shadows", "camouflage"]
 
 [[skill]]
 name = "dodge"
 description = "Avoiding physical and ranged attacks."
-keywords = ["defense", "evasion", "reaction"]
-opposes = []
+keywords = ["defense", "evasion", "reaction", "avoid", "duck", "sidestep", "jump away"]
+opposes = ["blades", "axes", "polearms", "brawling", "missiles", "throwing"]
 specializations = ["ranged attacks", "melee attacks", "traps"]
 
 [[skill]]
 name = "reflexes"
 description = "Quick physical reactions to sudden events."
-keywords = ["defense", "reaction", "speed"]
-opposes = []
+keywords = ["defense", "reaction", "speed", "quick", "fast", "react", "catch"]
+opposes = ["stealth", "acrobatics", "finesse", "trickery"]
 specializations = ["catching objects", "reacting to hazards", "initiative"]
 
 [[skill]]
 name = "missiles"
 description = "Using bows, crossbows, and slings."
-keywords = ["combat", "ranged", "projectile"]
-opposes = []
+keywords = ["combat", "ranged", "projectile", "bow", "arrow", "shoot", "aim", "fire"]
+opposes = ["dodge", "reflexes"]
 specializations = ["longbow", "crossbow", "sling"]
 
 [[skill]]
 name = "appraise"
 description = "Determining the financial or historical value of items."
-keywords = ["evaluation", "commerce", "investigation"]
-opposes = []
+keywords = ["evaluation", "commerce", "investigation", "value", "price", "worth", "cost", "identify", "examine"]
+opposes = ["forgery", "deception"]
 specializations = ["jewelry", "weapons", "antiques"]
 
 [[skill]]
 name = "linguistics"
 description = "Speaking, reading, and writing various languages."
-keywords = ["communication", "translation", "social"]
-opposes = []
+keywords = ["communication", "translation", "social", "language", "write", "read", "speak", "translate"]
+opposes = ["forgery"]
 specializations = ["elven", "dwarven", "ancient scripts"]
 
 [[skill]]
 name = "arcane"
 description = "Knowledge and practical use of magic."
-keywords = ["magic", "spellcasting", "supernatural"]
-opposes = []
+keywords = ["magic", "spellcasting", "supernatural", "wizard", "sorcery", "spell", "cast", "mana", "ritual"]
+opposes = ["willpower", "arcane"]
 specializations = ["conjuration", "evocation", "divination", "transmutation", "enchantment", "abjuration", "illusion", "necromancy"]
 
 [[skill]]
 name = "navigation"
 description = "Finding paths overland or at sea."
-keywords = ["travel", "exploration", "survival"]
+keywords = ["travel", "exploration", "survival", "map", "path", "direction", "compass", "orient"]
 opposes = []
 specializations = ["sea navigation", "orienteering", "astronomy"]
 
 [[skill]]
 name = "medicine"
 description = "Healing injuries, illnesses, and poisons."
-keywords = ["healing", "recovery", "treatment"]
-opposes = []
+keywords = ["healing", "recovery", "treatment", "heal", "doctor", "wound", "bandage", "cure"]
+opposes = ["fortitude"]
 specializations = ["first aid", "surgery", "herbalism"]
 
 [[skill]]
 name = "survival"
 description = "Staying alive in hostile wilderness environments."
-keywords = ["wilderness", "exploration", "foraging"]
-opposes = []
+keywords = ["wilderness", "exploration", "foraging", "camp", "nature", "track", "outdoor"]
+opposes = ["survival"]
 specializations = ["tracking", "foraging", "shelter building"]
 
 [[skill]]
 name = "willpower"
 description = "Resisting mental influence, fear, or coercion."
-keywords = ["defense", "resistance", "mental"]
-opposes = []
+keywords = ["defense", "resistance", "mental", "focus", "concentration", "resolve", "determination"]
+opposes = ["arcane", "miracles", "psionics", "charisma", "intimidation", "deception"]
 specializations = ["resisting spells", "resisting intimidation", "focus"]
 
 [[skill]]
 name = "miracles"
 description = "Invoking divine magic from deities."
-keywords = ["magic", "divine", "spellcasting"]
-opposes = []
+keywords = ["magic", "divine", "spellcasting", "priest", "holy", "prayer", "blessing", "god", "faith"]
+opposes = ["willpower", "miracles"]
 specializations = ["conjuration", "evocation", "divination", "transmutation", "enchantment", "abjuration", "illusion", "necromancy"]
 
 [[skill]]
 name = "artistry"
 description = "Creating fine art or performing for an audience."
-keywords = ["performance", "creation", "expression"]
-opposes = []
+keywords = ["performance", "creation", "expression", "art", "music", "sing", "paint", "draw", "dance"]
+opposes = ["observation"]
 specializations = ["painting", "singing", "instrumental music"]
 
 [[skill]]
 name = "forgery"
 description = "Faking official documents or valuable items."
-keywords = ["creation", "deception", "clandestine"]
-opposes = []
+keywords = ["creation", "deception", "clandestine", "fake", "copy", "counterfeit"]
+opposes = ["appraise", "observation", "linguistics"]
 specializations = ["official papers", "coinage", "artwork"]
 
 [[skill]]
 name = "gambling"
 description = "Playing games of chance for profit."
-keywords = ["commerce", "recreation", "social"]
-opposes = []
+keywords = ["commerce", "recreation", "social", "bet", "cards", "dice", "luck", "game"]
+opposes = ["gambling", "observation", "deception"]
 specializations = ["cards", "dice", "sports betting"]
 
 [[skill]]
 name = "streetwise"
 description = "Knowledge of criminal networks and urban environments."
-keywords = ["investigation", "social", "urban"]
-opposes = []
+keywords = ["investigation", "social", "urban", "city", "contacts", "rumors", "underworld", "black market"]
+opposes = ["streetwise"]
 specializations = ["finding black markets", "gathering rumors", "fencing goods"]
 
 [[skill]]
 name = "observation"
 description = "Spotting hidden things or noticing fine details."
-keywords = ["perception", "investigation", "awareness"]
-opposes = []
+keywords = ["perception", "investigation", "awareness", "search", "spot", "look", "notice", "see", "hear", "listen", "find"]
+opposes = ["stealth", "disguise", "trickery", "finesse", "forgery", "deception"]
 specializations = ["searching", "eavesdropping", "tracking"]
 
 [[skill]]
 name = "charisma"
 description = "Influencing others through sheer presence and personality."
-keywords = ["social", "persuasion", "influence"]
-opposes = []
+keywords = ["social", "persuasion", "influence", "persuade", "talk", "negotiate", "charm", "convince"]
+opposes = ["willpower", "charisma"]
 specializations = ["leadership", "charm", "persuasion"]
 
 [[skill]]
 name = "deception"
 description = "Lying or misleading others convincingly."
-keywords = ["social", "manipulation", "lying"]
-opposes = []
+keywords = ["social", "manipulation", "lying", "lie", "bluff", "con", "mislead"]
+opposes = ["willpower", "observation", "appraise"]
 specializations = ["bluffing", "conning", "feinting"]
 
 [[skill]]
 name = "disguise"
 description = "Altering physical appearance to hide identity."
-keywords = ["concealment", "deception", "impersonation"]
-opposes = []
+keywords = ["concealment", "deception", "impersonation", "mask", "costume", "makeup", "blend in"]
+opposes = ["observation"]
 specializations = ["impersonation", "blending in", "makeup"]
 
 [[skill]]
 name = "husbandry"
 description = "Caring for, handling, and training animals."
-keywords = ["animal handling", "care", "training"]
-opposes = []
+keywords = ["animal handling", "care", "training", "beast", "pet", "ride", "tame"]
+opposes = ["husbandry"]
 specializations = ["riding", "animal training", "veterinary care"]
 
 [[skill]]
 name = "intimidation"
 description = "Frightening others to gain compliance."
-keywords = ["social", "coercion", "threat"]
-opposes = []
+keywords = ["social", "coercion", "threat", "scare", "frighten", "bully", "menace", "force", "threaten", "intimidation", "scaring"]
+opposes = ["willpower", "intimidation"]
 specializations = ["interrogation", "staring down", "physical threats"]
 
 [[skill]]
 name = "psionics"
 description = "Utilizing mental powers to affect the world."
-keywords = ["magic", "mental", "supernatural"]
-opposes = []
+keywords = ["magic", "mental", "supernatural", "psychic", "mind", "thought", "telepathy", "telekinesis"]
+opposes = ["willpower", "psionics"]
 specializations = ["clairsentience", "psychokinetic", "psychometabolic", "psychoportative", "telepathy"]

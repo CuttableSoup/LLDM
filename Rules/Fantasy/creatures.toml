@@ -5,6 +5,9 @@ subtype = "animal"
 
 max_hp = 16
 
+[entity.allies]
+name = [ "wolf" ]
+
 [abilities]
 [[abilities.attack]]
 name = "bite"

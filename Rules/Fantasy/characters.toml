@@ -4,14 +4,13 @@ supertype = "creature"
 subtype = "humanoid"
 description = "A man"
 
-max_hp = 36 # dependent on fortitude
+max_hp = 36
 
 currency = 100
 max_bulk = 5
 weight = 150
 exp = 100
 
-abilities = [ "fireball", "cleave" ]
 inventory = [
     "shortsword",
     "chain mail",
@@ -29,7 +28,10 @@ rhand = "shortsword"
 chest = "chain mail"
 
 [entity.abilities]
-[[entity.abilities.attack]]
+[[entity.abilities.fireball]]
+[[entity.abilities.cleave]]
+
+[[entity.abilities.punch]]
 name = "punch"
 supertype = "innate"
 subtype = "weapon"
@@ -37,13 +39,13 @@ skill = "brawling"
 damage_tags = [ "bludgeoning" ]
 damage_value = { dice = 0, pips = 0, bonus = "user.strength_damage" }
 
-[[entity.abilities.technique]]
+[[entity.abilities.enhance]]
 name = "enhance"
 supertype = "technique"
 subtype = "supernatural"
 skill = "fortitude"
 difficulty = 10
-apply = { modifier = { dice = 1, pips = 0, bonus = 0 }, duration = "fleeting", dismiss = "none" }
+apply = { modifier = { dice = 1, pips = 0, bonus = 0 }, duration = "scene", dismiss = "none" }
 
 [entity.attitudes]
 default = [ 0, 0, 0, 0, 0, 0 ]
@@ -54,13 +56,14 @@ default = [ 0, 0, 0, 0, 0, 0 ]
 # obligation    Unfettered <-> Indebted
 # intimacy      Disgusted <-> Enamored
 
-[entity.attitudes.supertype]
+[[entity.attitudes.supertype]]
 undead = [ -100, -100, 100, -100, -100, -100 ]
 
-[entity.attitudes.name]
+[[entity.attitudes.name]]
 anne = [ 100, 100, 100, 100, 100, 100 ]
 
 [entity.allies]
+name = [ "anne" ]
 
 [entity.enemies]
 supertype = [ "undead" ]
