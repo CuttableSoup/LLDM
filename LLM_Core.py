@@ -16,7 +16,7 @@ class LLMCore:
         self.event_bus.publish("log_info", "LLMCore initialized.")
         self.api_url = "http://127.0.0.1:1234/v1/chat/completions"
         self.context_window = []
-        self.event_bus.subscribe("user_input_submitted", self.generate_response)
+        self.event_bus.subscribe("action_resolved", self.generate_response)
 
     def perform_rag(self, query):
         """!
@@ -45,10 +45,27 @@ class LLMCore:
         self.event_bus.publish("log_info", "Generating NPC response.")
         return ""
 
-    def generate_response(self, user_input):
+    def generate_response(self, action_result):
         self.event_bus.publish("log_info", "Generating LLM response.")
-        self.context_window.append({"role": "user", "content": user_input})
-        
+
+        outcome = "succeeds" if action_result.get("success") else "fails"
+        defender = action_result.get("defender")
+        opposing_skill = action_result.get("opposing_skill")
+        if opposing_skill:
+            opposition = f" opposed by {defender}'s {opposing_skill}"
+        elif defender:
+            opposition = f" against {defender} (no defense)"
+        else:
+            opposition = ""
+        prompt = (
+            f"The player attempts: \"{action_result.get('input', '')}\"\n"
+            f"Skill used: {action_result.get('skill')} "
+            f"(rolled {action_result.get('roll')} vs difficulty {action_result.get('difficulty')}{opposition}) "
+            f"- the action {outcome}.\n"
+            f"Narrate the outcome in 2-3 sentences as the Game Master."
+        )
+        self.context_window.append({"role": "user", "content": prompt})
+
         if len(self.context_window) > 100:
             self.context_window = self.context_window[-100:]
 
