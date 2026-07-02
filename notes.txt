@@ -15,7 +15,7 @@ RPG system:
     Derived from D6 from West End Games. Only six-sided dice are used. Pips are added until +3, then converted to an extra die.
     "Entity" is the term for any creature, object, or thing that can be interacted with.
     Entities have supertypes and subtypes that can restrict interactions of elements of the game (ex: spells)
-    No attributes, only skills and specializations.  Large number of skills. Everything is defined by TOML files.
+    No attributes, only skills.  Large number of skills. Everything is defined by TOML files.
     Uses hit points (body points in D6). Wounds are conditions gained if percentage of hp is low enough.
     Tags on enities denote how some entities interact. (Ex: fire damage tagged so fire resistance reduce it, poison damage tagged so undead are immune)
     Damage is calculated: IF[ roll(skill) > roll(opposition) - distance_modifier ], HP-MAX( 0, [roll(resist) - roll(damage) - damage_modifier] )

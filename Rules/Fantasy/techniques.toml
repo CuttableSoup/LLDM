@@ -3,7 +3,6 @@ name = "cleave"
 supertype = "technique"
 subtype = "martial"
 skill = [ "blades", "axes" ]
-specialization = [ "any" ]
 difficulty = 10
 range = { minimum = 0, maximum = 1 }
 targets = { number = 3, aoe = 0 }

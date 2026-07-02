@@ -57,11 +57,20 @@ class LLMCore:
             opposition = f" against {defender} (no defense)"
         else:
             opposition = ""
+        damage = action_result.get("damage")
+        if damage:
+            damage_text = (
+                f" {damage['defender']} takes {damage['net_damage']} damage"
+                f" ({damage['remaining_hp']} HP remaining)."
+            )
+        else:
+            damage_text = ""
+
         prompt = (
             f"The player attempts: \"{action_result.get('input', '')}\"\n"
             f"Skill used: {action_result.get('skill')} "
             f"(rolled {action_result.get('roll')} vs difficulty {action_result.get('difficulty')}{opposition}) "
-            f"- the action {outcome}.\n"
+            f"- the action {outcome}.{damage_text}\n"
             f"Narrate the outcome in 2-3 sentences as the Game Master."
         )
         self.context_window.append({"role": "user", "content": prompt})

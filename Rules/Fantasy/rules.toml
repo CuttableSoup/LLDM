@@ -39,13 +39,13 @@ description = "Broken bone; gaping wound; ripped cartilage and muscle; concussio
 [[wounds.effect]] # incapacitated
 hp_per_remain = { minimum = 0.10, maximum = 0.19 }
 apply = { condition = "incapacitated", duration = "permanent", dismiss = "healing" }
-test = { difficulty = 15, skill = "fotitude, willpower", pass = "", fail = { condition = "unconscious", duration = "scene", dismiss = "healing" } }
+test = { difficulty = 15, skill = ["fortitude", "willpower"], pass = "", fail = { condition = "unconscious", duration = "scene", dismiss = "healing" } }
 description = "Multiple fracture; laceration in vital area; heavy concussion."
 
 [[wounds.effect]] # mortal
-hp_per_remain = { minimum = 0.10, maximum = 0.09 }
-apply = { condition = "unconscious", duration = "permanent", dismiss = "healing" }
-test = { difficulty = 6, skill = "fotitude", pass = "", fail = { condition = "dead", duration = "permanent", dismiss = "healing" } } # difficulty is number of minutes unconscious
+hp_per_remain = { minimum = 0.01, maximum = 0.09 }
+apply = { condition = "unconscious", duration = "permanent", dismiss = "healing", duration_minutes = 6 }
+test = { skill = ["fortitude"], pass = "", fail = { condition = "dead", duration = "permanent", dismiss = "healing" } }
 description = "Multiple internal injuries."
 
 [[wounds.effect]] # dead

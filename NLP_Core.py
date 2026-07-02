@@ -71,17 +71,11 @@ class NLPCore:
                 all_phrases.append(f"{name} {desc}")
                 skill_indices.append(name)
             
-            # Keywords and specializations
+            # Keywords
             for k in skill.get("keywords", []):
                 all_phrases.append(k)
                 skill_indices.append(name)
                 all_phrases.append(f"{name} {k}")
-                skill_indices.append(name)
-                
-            for s in skill.get("specializations", []):
-                all_phrases.append(s)
-                skill_indices.append(name)
-                all_phrases.append(f"{name} {s}")
                 skill_indices.append(name)
 
         # Pre-calculate embeddings for all phrases

@@ -12,7 +12,7 @@ weight = 150
 exp = 100
 
 inventory = [
-    "shortsword",
+    "longsword",
     "chain mail",
     "health potion",
     "health potion",
@@ -24,7 +24,7 @@ memories = [ "A wife at home" ]
 quotes = [ "Hello, world" ]
 
 [entity.equipped]
-rhand = "shortsword"
+rhand = "longsword"
 chest = "chain mail"
 
 [entity.abilities]
@@ -38,14 +38,6 @@ subtype = "weapon"
 skill = "brawling"
 damage_tags = [ "bludgeoning" ]
 damage_value = { dice = 0, pips = 0, bonus = "user.strength_damage" }
-
-[[entity.abilities.enhance]]
-name = "enhance"
-supertype = "technique"
-subtype = "supernatural"
-skill = "fortitude"
-difficulty = 10
-apply = { modifier = { dice = 1, pips = 0, bonus = 0 }, duration = "scene", dismiss = "none" }
 
 [entity.attitudes]
 default = [ 0, 0, 0, 0, 0, 0 ]
@@ -79,6 +71,8 @@ size = "medium"
 race = "human"
 age = 35
 
+[entity.conditions]
+
 [entity.skills]
 blades = { dice = 2, pips = 0 }
 athletics = { dice = 2, pips = 2 }
@@ -88,6 +82,3 @@ willpower = { dice = 2, pips = 0 }
 reflexes = { dice = 2, pips = 0 }
 strength = { dice = 2, pips = 0 }
 brawling = { dice = 2, pips = 0 }
-
-[entity.specializations]
-longsword = { dice = 1, pips = 0 }

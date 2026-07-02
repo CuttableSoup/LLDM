@@ -16,6 +16,7 @@ class DMCore:
         self.skills = {}
         self.entities = {}
         self.scenario = {}
+        self.rules = {}
         # No party/character selection exists yet, so the first loaded
         # player-like entity stands in as the active player character.
         self.player_name = "gladstone"
@@ -46,18 +47,121 @@ class DMCore:
                             self.entities[entity.get("name")] = entity
                     if "scenario" in data:
                         self.scenario = data["scenario"]
+                    for key, value in data.items():
+                        if key not in ("skill", "entity", "scenario"):
+                            self.rules[key] = value
                 except Exception as e:
                     self.event_bus.publish("log_error", f"Error loading {filename}: {e}")
 
-    def calculate_damage(self, attacker_stats, defender_stats):
+    def resolve_bonus(self, attacker_name, bonus):
         """!
-        @brief Calculates damage interactions including resistances.
-        @param attacker_stats The offensive capabilities and damage values.
-        @param defender_stats The defensive capabilities and armor values.
-        @return The final calculated damage to be applied.
+        @brief Resolves a damage_value's bonus field, which may be a flat number or a
+               "user.<rule>" reference (ex: "user.strength_damage") into a rules.toml formula.
+        @param attacker_name The name of the entity dealing damage.
+        @param bonus The bonus field from a damage_value table.
+        @return The resolved flat bonus amount.
         """
-        self.event_bus.publish("log_info", "Calculating damage.")
-        return 0
+        if isinstance(bonus, (int, float)):
+            return bonus
+        if not isinstance(bonus, str):
+            return 0
+
+        rule_name = bonus.split(".")[-1]
+        formula = self.rules.get(rule_name)
+        if not formula:
+            self.event_bus.publish("log_warning", f"Unknown damage bonus reference: {bonus}")
+            return 0
+
+        skill_stats = self.entities.get(attacker_name, {}).get("skills", {}).get(formula.get("skill"), {"dice": 0})
+        return skill_stats.get("dice", 0) // formula.get("divisor", 1)
+
+    def resolve_damage_value(self, attacker_name, damage_value):
+        """!
+        @brief Rolls a damage_value's dice/pips and adds its resolved bonus.
+        @param attacker_name The name of the entity dealing damage.
+        @param damage_value A {dice, pips, bonus} table from an ability, weapon, or spell.
+        @return The total rolled damage before any reduction.
+        """
+        dice = damage_value.get("dice", 0)
+        pips = damage_value.get("pips", 0)
+        if not isinstance(dice, (int, float)) or not isinstance(pips, (int, float)):
+            self.event_bus.publish("log_warning", f"Unsupported damage dice/pips reference: {damage_value}")
+            dice, pips = 0, 0
+
+        bonus = self.resolve_bonus(attacker_name, damage_value.get("bonus", 0))
+        return self.roll_dice(int(dice), int(pips)) + bonus
+
+    def get_damage_reduction(self, defender_name, damage_tags):
+        """!
+        @brief Sums the rolled armor value of the defender's equipped items that resist any of the given damage tags.
+        @param defender_name The name of the entity taking damage.
+        @param damage_tags The damage tags of the incoming attack (ex: ["slashing"]).
+        @return The total damage reduction.
+        """
+        equipped = self.entities.get(defender_name, {}).get("equipped", {})
+        reduction = 0
+        for item_name in equipped.values():
+            item = self.entities.get(item_name, {})
+            armor_value = item.get("armor_value")
+            armor_tags = item.get("armor_tags", [])
+            if armor_value and any(tag in armor_tags for tag in damage_tags):
+                reduction += self.roll_dice(armor_value.get("dice", 0), armor_value.get("pips", 0))
+        return reduction
+
+    def get_current_hp(self, entity_name):
+        """!
+        @brief Gets an entity's current HP, initializing it from max_hp the first time it's needed.
+        @param entity_name The name of the entity.
+        @return The entity's current HP.
+        """
+        entity = self.entities.get(entity_name, {})
+        if "hp" not in entity:
+            entity["hp"] = entity.get("max_hp", 0)
+        return entity["hp"]
+
+    def apply_damage(self, entity_name, amount):
+        """!
+        @brief Subtracts damage from an entity's current HP, floored at 0.
+        @param entity_name The name of the entity taking damage.
+        @param amount The amount of damage to apply.
+        @return The entity's remaining HP.
+        """
+        entity = self.entities.get(entity_name)
+        if entity is None:
+            return 0
+        current_hp = self.get_current_hp(entity_name)
+        entity["hp"] = max(0, current_hp - amount)
+        self.event_bus.publish("log_info", f"{entity_name} takes {amount} damage ({current_hp} -> {entity['hp']} HP).")
+        return entity["hp"]
+
+    def calculate_damage(self, attacker_name, defender_name, ability):
+        """!
+        @brief Calculates and applies damage from an attacker's ability to a defender, including resistances.
+        @param attacker_name The name of the entity dealing damage.
+        @param defender_name The name of the entity taking damage.
+        @param ability A table with damage_value {dice, pips, bonus} and damage_tags, such as a weapon, spell, or innate ability.
+        @return A dict describing the raw damage, reduction, net damage, and the defender's remaining HP.
+        """
+        damage_value = ability.get("damage_value", {"dice": 0, "pips": 0, "bonus": 0})
+        damage_tags = ability.get("damage_tags", [])
+
+        raw_damage = self.resolve_damage_value(attacker_name, damage_value)
+        reduction = self.get_damage_reduction(defender_name, damage_tags)
+        net_damage = max(0, raw_damage - reduction)
+        remaining_hp = self.apply_damage(defender_name, net_damage)
+
+        self.event_bus.publish(
+            "log_info",
+            f"{attacker_name} deals {raw_damage} raw damage to {defender_name}, reduced by {reduction} -> {net_damage} net damage."
+        )
+        return {
+            "attacker": attacker_name,
+            "defender": defender_name,
+            "raw_damage": raw_damage,
+            "reduction": reduction,
+            "net_damage": net_damage,
+            "remaining_hp": remaining_hp,
+        }
 
     def manage_combat(self, participants):
         """!
@@ -150,9 +254,31 @@ class DMCore:
         result["opposing_skill"] = opposing_skill
         return result
 
+    def find_attack_ability(self, entity_name, skill_name):
+        """!
+        @brief Finds the entity's equipped weapon or innate ability that uses the given skill and deals damage.
+        @param entity_name The name of the acting entity.
+        @param skill_name The skill being used.
+        @return The matching weapon/ability table (with damage_value and damage_tags), or None.
+        """
+        entity = self.entities.get(entity_name, {})
+
+        for item_name in entity.get("equipped", {}).values():
+            item = self.entities.get(item_name)
+            if item and item.get("skill") == skill_name and "damage_value" in item:
+                return item
+
+        for ability_variants in entity.get("abilities", {}).values():
+            for ability in ability_variants:
+                if ability.get("skill") == skill_name and "damage_value" in ability:
+                    return ability
+
+        return None
+
     def _on_action_detected(self, data):
         """!
-        @brief Event handler that resolves a detected player action, opposed by a scenario target if one exists.
+        @brief Event handler that resolves a detected player action, opposed by a scenario target if one exists,
+               and applies damage if the action hit with an attack ability.
         @param data The action_detected payload from NLPCore ({skill, score, input}).
         """
         skill_name = data.get("skill")
@@ -164,6 +290,11 @@ class DMCore:
             result = self.resolve_opposed_action(self.player_name, skill_name, target_name)
         else:
             result = self.resolve_action(self.player_name, skill_name)
+
+        if result["success"] and target_name:
+            ability = self.find_attack_ability(self.player_name, skill_name)
+            if ability:
+                result["damage"] = self.calculate_damage(self.player_name, target_name, ability)
 
         result["input"] = data.get("input")
         self.event_bus.publish("action_resolved", result)

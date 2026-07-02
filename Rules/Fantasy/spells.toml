@@ -3,7 +3,6 @@ name = "fireball"
 supertype = "spell"
 subtype = "evocation"
 skill = "arcane"
-specialization = "evocation"
 difficulty = 10
 range = { minimum = 0, maximum = 60 }
 targets = { number = 1, aoe = 5 }

@@ -1,9 +1,8 @@
 [[entity]]
-name = "shortsword"
+name = "longsword"
 supertype = "object"
 subtype = "weapon"
 skill = "blades"
-specialization = "shortsword"
 max_hp = 10
 ranges = { short = 0 }
 damage_value = { dice = 1, pips = 2, bonus = "strength_damage" }
@@ -18,7 +17,6 @@ name = "long bow"
 supertype = "object"
 subtype = "weapon"
 skill = "missiles"
-specialization = "bow"
 max_hp = 5
 ranges = { short = 10, medium = 100, long = 250 }
 damage_value = { dice = 2, pips = 2, bonus = 0 }
@@ -34,7 +32,7 @@ supertype = "object"
 subtype = "armor"
 max_hp = 20
 armor_value = { dice = 2, pips = 0 }
-armor_tags = [ "physical" ]
+armor_tags = [ "physical", "piercing", "bludgeoning", "slashing" ]
 bulk = 1
 value = 15
 [entity.skills]
