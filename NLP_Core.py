@@ -21,6 +21,9 @@ class NLPCore:
         self.skills_data = {}
         self.skill_names = []
         self.skill_embeddings = None
+        # Below this cosine-similarity score, treat the input as not matching any skill at
+        # all rather than forcing it onto whatever phrase happened to score highest 
+        self.confidence_threshold = 0.5
         
         # Subscribe to rules_loaded event to build embeddings
         self.event_bus.subscribe("rules_loaded", self._on_rules_loaded)
@@ -37,6 +40,10 @@ class NLPCore:
         skill, score = self.map_to_action(processed)
         if skill:
             self.event_bus.publish("action_detected", {"skill": skill, "score": score, "input": processed})
+        else:
+            # Below confidence_threshold: publish this instead of staying silent, so the
+            # player gets some response rather than the app appearing to stall.
+            self.event_bus.publish("action_not_understood", {"input": processed, "score": score})
 
 
     def _on_rules_loaded(self, data):
@@ -124,6 +131,14 @@ class NLPCore:
         best_phrase_idx = np.argmax(cosine_scores.cpu().numpy())
         best_score = cosine_scores[best_phrase_idx].item()
         best_skill = self.skill_indices[best_phrase_idx]
+
+        if best_score < self.confidence_threshold:
+            self.event_bus.publish(
+                "log_info",
+                f"Best match was {best_skill} (Score: {best_score:.4f}), below confidence "
+                f"threshold ({self.confidence_threshold}) - no skill triggered."
+            )
+            return None, best_score
 
         self.event_bus.publish("log_info", f"Mapped input to action: {best_skill} via best phrase (Score: {best_score:.4f})")
         return best_skill, best_score

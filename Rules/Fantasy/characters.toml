@@ -74,7 +74,7 @@ age = 35
 [entity.conditions]
 
 [entity.skills]
-blades = { dice = 2, pips = 0 }
+blades = { dice = 5, pips = 0 }
 athletics = { dice = 2, pips = 2 }
 arcane = { dice = 2, pips = 0 }
 fortitude = { dice = 2, pips = 0 }
@@ -82,3 +82,4 @@ willpower = { dice = 2, pips = 0 }
 reflexes = { dice = 2, pips = 0 }
 strength = { dice = 2, pips = 0 }
 brawling = { dice = 2, pips = 0 }
+finesse = { dice = 3, pips = 0 }

@@ -48,3 +48,32 @@ value = 15
 [entity.skills]
 healing = { dice = 5, pips = 0 }
 fortitude = { dice = 1, pips = 0 }
+
+[[entity]]
+name = "chest"
+supertype = "object"
+subtype = "container"
+description = "A stout, iron-bound chest, padlocked shut."
+max_hp = 50
+bulk = 5
+value = 10
+currency = 20
+
+[entity.conditions.locked]
+duration = "permanent"
+
+[entity.test]
+difficulty = 12
+skill = [ "finesse" ]
+
+[entity.test.pass]
+dismiss_condition = "locked"
+loot = true
+
+[entity.test.fail]
+condition = "jammed"
+duration = "permanent"
+dismiss = ""
+
+[entity.skills]
+fortitude = { dice = 5, pips = 0 }

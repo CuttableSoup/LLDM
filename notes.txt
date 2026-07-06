@@ -10,6 +10,7 @@ Four Apps, two utilities:
         Each skill or action has a list of words/phrases that correspond to player inputs.
     Logger.py: Dedicated logging methods.
     Event_Bus.py: Manage application subscriptions/publications.
+    Textual_Core.py: Entirely for mirroring for vibe-coding.
 
 RPG system:
     Derived from D6 from West End Games. Only six-sided dice are used. Pips are added until +3, then converted to an extra die.

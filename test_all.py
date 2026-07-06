@@ -1,0 +1,880 @@
+import asyncio
+import threading
+import time
+import unittest
+import urllib.request
+from unittest.mock import patch
+
+import pytest
+
+from DM_Core import DMCore
+from Event_Bus import EventBus
+from LLM_Core import LLMCore
+from NLP_Core import NLPCore
+from Textual_Core import TextualCore
+from textual.widgets import RichLog, TabbedContent
+
+
+def _lm_studio_reachable():
+    try:
+        urllib.request.urlopen("http://127.0.0.1:1234/v1/models", timeout=2)
+        return True
+    except Exception:
+        return False
+
+
+class TestGameBoot(unittest.TestCase):
+    def test_boot_and_skill_identification(self):
+        # 1. Initialize Event Bus
+        event_bus = EventBus()
+
+        # 2. Track action_detected events
+        detected_actions = []
+        def on_action_detected(data):
+            detected_actions.append(data)
+        event_bus.subscribe("action_detected", on_action_detected)
+
+        # 3. Initialize NLPCore FIRST so it doesn't miss rules_loaded
+        nlp_core = NLPCore(event_bus)
+
+        # 4. Initialize DMCore (this triggers rules_loaded)
+        dm_core = DMCore(event_bus)
+
+        # Verify that skills were actually loaded into nlp_core
+        self.assertGreater(len(nlp_core.skill_names), 0, "No skills loaded into NLPCore")
+
+        # 5. Simulate user input
+        test_input = "I attack with my sword"
+        event_bus.publish("user_input_submitted", test_input)
+
+        # 6. Verify skill identification
+        self.assertGreater(len(detected_actions), 0, "No action detected event published")
+        last_action = detected_actions[-1]
+        self.assertEqual(last_action["skill"], "blades")
+        self.assertGreater(last_action["score"], 0.5)
+        print(f"Integration Test Success: '{test_input}' -> {last_action['skill']} ({last_action['score']:.4f})")
+
+
+class TestNlpConfidenceThreshold(unittest.TestCase):
+    # setUpClass (not setUp) so the slow sentence-transformers load only happens once for
+    # both test methods in this class.
+    @classmethod
+    def setUpClass(cls):
+        cls.event_bus = EventBus()
+        cls.nlp_core = NLPCore(cls.event_bus)
+        cls.dm_core = DMCore(cls.event_bus)
+
+    def test_low_confidence_input_triggers_no_skill(self):
+        # A greeting with no real skill/action content shouldn't be forced onto whatever
+        # phrase happens to score highest (previously this mapped to "artistry" at ~0.32).
+        detected_actions = []
+        not_understood = []
+        self.event_bus.subscribe("action_detected", detected_actions.append)
+        self.event_bus.subscribe("action_not_understood", not_understood.append)
+
+        self.event_bus.publish("user_input_submitted", "Hey there innkeeper")
+
+        self.assertEqual(detected_actions, [])
+        # Publishing this instead of just staying silent is what lets LLMCore give the
+        # player some response rather than the app appearing to stall.
+        self.assertEqual(len(not_understood), 1)
+        self.assertIn("innkeeper", not_understood[0]["input"])
+
+    def test_clear_action_still_triggers_above_threshold(self):
+        detected_actions = []
+        self.event_bus.subscribe("action_detected", detected_actions.append)
+
+        self.event_bus.publish("user_input_submitted", "I attack with my sword")
+
+        self.assertEqual(len(detected_actions), 1)
+        self.assertEqual(detected_actions[0]["skill"], "blades")
+        self.assertGreaterEqual(detected_actions[0]["score"], self.nlp_core.confidence_threshold)
+
+
+class TestClarificationResponse(unittest.TestCase):
+    def setUp(self):
+        self.event_bus = EventBus()
+        self.llm_core = LLMCore(self.event_bus)
+
+    def test_unmatched_input_queues_a_clarification_prompt_not_a_dice_roll(self):
+        # _queue_narration appends to context_window synchronously before spawning the
+        # background network fetch, so this is checkable without waiting on (or mocking) LM
+        # Studio -- the point here is the prompt shape, not the LLM's actual reply.
+        self.event_bus.publish("action_not_understood", {"input": "hey there innkeeper", "score": 0.32})
+
+        prompt = self.llm_core.context_window[-1]["content"]
+        self.assertIn("hey there innkeeper", prompt)
+        # No roll data (that's _describe_outcome's shape, used by the other narration paths).
+        self.assertNotIn("Skill used:", prompt)
+        self.assertNotIn("difficulty", prompt)
+
+    def test_describe_outcome_includes_loot_so_the_llm_isnt_left_guessing(self):
+        # Without this, the LLM has no idea what was actually gained and will happily invent
+        # contents that don't match the real game state (observed: it narrated a "silver key
+        # and leather-bound journal" for a chest that actually just held currency).
+        result = {
+            "input": "I pick the lock", "skill": "finesse", "roll": 18, "difficulty": 12,
+            "success": True, "defender": "chest", "loot": {"currency": 20, "items": []},
+        }
+        description = self.llm_core._describe_outcome(result)
+        self.assertIn("20 currency", description)
+
+    def test_describe_outcome_omits_loot_text_when_nothing_gained(self):
+        result = {
+            "input": "I pick the lock", "skill": "finesse", "roll": 3, "difficulty": 12,
+            "success": False, "defender": "chest",
+        }
+        description = self.llm_core._describe_outcome(result)
+        self.assertNotIn("The player gains", description)
+
+
+@unittest.skipUnless(_lm_studio_reachable(), "LM Studio not reachable at http://127.0.0.1:1234")
+class TestInnkeeperConversation(unittest.TestCase):
+    """!
+    @brief End-to-end conversation test against a real, running LM Studio -- the only way to
+           actually verify the LLM uses fed context (scenario setting, character roster,
+           per-turn defender_details) rather than just checking the prompt shape. Skipped
+           entirely (not failed) when LM Studio isn't reachable, so the rest of the suite
+           stays fast and network-independent.
+    """
+
+    def setUp(self):
+        self.event_bus = EventBus()
+        self.responses = []
+        self.event_bus.subscribe("llm_response_ready", self.responses.append)
+
+        self.nlp_core = NLPCore(self.event_bus)
+        self.llm_core = LLMCore(self.event_bus)
+        self.dm_core = DMCore(self.event_bus, scenario_name="tavern")
+
+        self._wait_for_responses(1)  # the scene intro, fired during DMCore.__init__
+
+    def _wait_for_responses(self, count, timeout=30):
+        deadline = time.time() + timeout
+        while len(self.responses) < count and time.time() < deadline:
+            time.sleep(0.2)
+        self.assertGreaterEqual(
+            len(self.responses), count,
+            f"Timed out waiting for the {count}th LLM response (LM Studio may be slow/unloaded).",
+        )
+
+    def _say(self, player_input):
+        self.event_bus.publish("user_input_submitted", player_input)
+        self._wait_for_responses(len(self.responses) + 1)
+        return self.responses[-1]
+
+    def test_full_conversation_with_innkeeper(self):
+        # NLPCore's confidence_threshold turns out to reject almost any naturally-phrased
+        # social action once it names a topic ("...about the road", "...her husband" etc.
+        # dilute the sentence embedding) -- only near-bare keyword phrasing like "charm her"
+        # reliably clears it for "charisma". So this conversation deliberately mixes both
+        # real paths a player will actually hit: one turn that clears the threshold (genuine
+        # action_resolved + defender_details) and natural follow-ups that don't (routed to
+        # action_not_understood's clarification response instead). Both should stay coherent
+        # and grounded, since the persistent system-message roster covers either path.
+        action_events = []
+        round_events = []
+        self.event_bus.subscribe("action_resolved", action_events.append)
+        self.event_bus.subscribe("round_resolved", round_events.append)
+
+        turns = [
+            "I try to charm her",  # verified: scores ~0.60 on "charisma", clears the threshold
+            "Have you heard anything about trouble on the road?",  # verified: ~0.41, below it
+            "I'm sorry -- what happened to your husband?",  # verified: ~0.32, below it
+        ]
+        transcript = []
+        for player_input in turns:
+            response = self._say(player_input)
+            transcript.append((player_input, response))
+            self.assertTrue(response.strip())
+            self.assertNotIn("Could not connect to the local LLM", response)
+
+        print("\n=== Innkeeper conversation transcript ===")
+        for player_input, response in transcript:
+            print(f"> {player_input}\n{response}\n")
+
+        # A friendly NPC's dialogue should never batch into combat-round narration, and the
+        # one turn that did resolve as a real action should be about the innkeeper specifically.
+        self.assertEqual(round_events, [])
+        self.assertEqual(len(action_events), 1)
+        self.assertEqual(action_events[0]["defender"], "innkeeper")
+        self.assertIn("innkeeper", action_events[0]["defender_details"])
+
+        # Deliberately NOT asserting on exact narrative content past this point (ex: that the
+        # husband question's response literally says "bandit"/"husband") -- a real run showed
+        # the LLM can convey her grief ("a deep, painful sadness... vague sigh") without ever
+        # using those words, so a keyword check on live LLM output is just flaky, not a real
+        # regression signal. The printed transcript above is how this actually gets verified.
+
+
+class TestOpposedResolution(unittest.TestCase):
+    def setUp(self):
+        self.event_bus = EventBus()
+        self.dm_core = DMCore(self.event_bus)
+
+    def test_highest_value_opposing_skill_is_used(self):
+        # blades opposes = ['dodge', 'blades', 'brawling', 'axes', 'polearms']
+        # 'dodge' is listed first, but 'brawling' rates higher (5*3=15 vs 2*3=6),
+        # so 'brawling' must be the one chosen and rolled.
+        self.dm_core.entities["test_defender"] = {
+            "name": "test_defender",
+            "skills": {
+                "dodge": {"dice": 2, "pips": 0},
+                "brawling": {"dice": 5, "pips": 0},
+            },
+        }
+
+        chosen = self.dm_core.get_opposing_skill("blades", "test_defender")
+        self.assertEqual(chosen, "brawling")
+
+        result = self.dm_core.resolve_opposed_action("gladstone", "blades", "test_defender")
+        self.assertEqual(result["opposing_skill"], "brawling")
+        self.assertEqual(result["defender"], "test_defender")
+        # 5 dice + 0 pips can only roll between 5 and 30
+        self.assertGreaterEqual(result["difficulty"], 5)
+        self.assertLessEqual(result["difficulty"], 30)
+
+    def test_pips_count_toward_the_rating(self):
+        # 'dodge' has fewer dice (2) than 'brawling' (3), but +3 pips bumps its
+        # rating past brawling's: dodge = 2*3+3=9, brawling = 3*3+0=9... so add one
+        # more pip to make dodge strictly higher and confirm pips are honored.
+        self.dm_core.entities["test_defender"] = {
+            "name": "test_defender",
+            "skills": {
+                "dodge": {"dice": 2, "pips": 4},
+                "brawling": {"dice": 3, "pips": 0},
+            },
+        }
+
+        chosen = self.dm_core.get_opposing_skill("blades", "test_defender")
+        self.assertEqual(chosen, "dodge")
+
+    def test_wolf_scenario_defender_picks_dodge_over_brawling(self):
+        # Regression check against the real creatures.toml data:
+        # wolf dodge = 6*3=18, wolf brawling = 5*3=15, so dodge should win.
+        chosen = self.dm_core.get_opposing_skill("blades", "wolf")
+        self.assertEqual(chosen, "dodge")
+
+    def test_no_matching_opposing_skill_defaults_to_zero(self):
+        self.dm_core.entities["empty_defender"] = {"name": "empty_defender", "skills": {}}
+
+        chosen = self.dm_core.get_opposing_skill("blades", "empty_defender")
+        self.assertIsNone(chosen)
+
+        result = self.dm_core.resolve_opposed_action("gladstone", "blades", "empty_defender")
+        self.assertIsNone(result["opposing_skill"])
+        self.assertEqual(result["difficulty"], 0)
+
+    def test_no_difficulty_passed_defaults_to_zero(self):
+        result = self.dm_core.resolve_action("gladstone", "blades")
+        self.assertEqual(result["difficulty"], 0)
+
+
+class TestDamageCalculation(unittest.TestCase):
+    def setUp(self):
+        self.event_bus = EventBus()
+        self.dm_core = DMCore(self.event_bus)
+
+    def test_bonus_resolves_flat_number(self):
+        self.assertEqual(self.dm_core.resolve_bonus("gladstone", 5), 5)
+
+    def test_bonus_resolves_from_rule_reference(self):
+        # strength_damage rule: skill="strength", divisor=2. Gladstone's strength is 2 dice, so bonus = 2 // 2 = 1.
+        self.assertEqual(self.dm_core.resolve_bonus("gladstone", "user.strength_damage"), 1)
+        # Without the "user." prefix should resolve the same way.
+        self.assertEqual(self.dm_core.resolve_bonus("gladstone", "strength_damage"), 1)
+
+    def test_bonus_unknown_reference_defaults_to_zero(self):
+        self.assertEqual(self.dm_core.resolve_bonus("gladstone", "user.made_up_rule"), 0)
+
+    @patch("random.randint", return_value=4)
+    def test_damage_value_rolls_dice_and_adds_bonus(self, mock_randint):
+        # 2 dice @ 4 each + 1 pip + strength_damage bonus (1) = 10
+        total = self.dm_core.resolve_damage_value(
+            "gladstone", {"dice": 2, "pips": 1, "bonus": "user.strength_damage"}
+        )
+        self.assertEqual(total, 10)
+
+    def test_damage_value_ignores_unsupported_dice_reference(self):
+        # Indirect references like "user.weapon.dice" (used by techniques.toml) aren't
+        # resolvable yet; they should degrade to 0 dice rather than raise.
+        total = self.dm_core.resolve_damage_value(
+            "gladstone", {"dice": "user.weapon.dice", "pips": "user.weapon.pips", "bonus": 0}
+        )
+        self.assertEqual(total, 0)
+
+    @patch("random.randint", return_value=3)
+    def test_damage_reduction_only_applies_to_matching_tags(self, mock_randint):
+        # Gladstone wears chain mail: armor_value = 2 dice, tags = physical/piercing/bludgeoning/slashing.
+        self.assertEqual(self.dm_core.get_damage_reduction("gladstone", ["bludgeoning"]), 6)
+        self.assertEqual(self.dm_core.get_damage_reduction("gladstone", ["fire"]), 0)
+
+    def test_get_current_hp_initializes_from_max_hp(self):
+        self.assertEqual(self.dm_core.get_current_hp("gladstone"), 36)
+
+    def test_apply_damage_subtracts_and_floors_at_zero(self):
+        self.dm_core.apply_damage("gladstone", 10)
+        self.assertEqual(self.dm_core.get_current_hp("gladstone"), 26)
+        self.dm_core.apply_damage("gladstone", 1000)
+        self.assertEqual(self.dm_core.get_current_hp("gladstone"), 0)
+
+    @patch("random.randint", return_value=2)
+    def test_calculate_damage_applies_unresisted_damage_to_hp(self, mock_randint):
+        # Fireball: 5 dice, no bonus, fire damage - gladstone's chain mail doesn't resist fire.
+        fireball = {"damage_value": {"dice": 5, "pips": 0, "bonus": 0}, "damage_tags": ["fire"]}
+        result = self.dm_core.calculate_damage("wolf", "gladstone", fireball)
+
+        self.assertEqual(result["raw_damage"], 10)  # 5 dice @ 2 each
+        self.assertEqual(result["reduction"], 0)
+        self.assertEqual(result["net_damage"], 10)
+        self.assertEqual(result["remaining_hp"], 26)
+        self.assertEqual(self.dm_core.get_current_hp("gladstone"), 26)
+
+    @patch("random.randint", return_value=3)
+    def test_calculate_damage_reduced_by_matching_armor(self, mock_randint):
+        # Punch: 0 dice + strength_damage bonus (1), bludgeoning - chain mail resists bludgeoning (2 dice @ 3 each = 6).
+        punch = {"damage_value": {"dice": 0, "pips": 0, "bonus": "user.strength_damage"}, "damage_tags": ["bludgeoning"]}
+        result = self.dm_core.calculate_damage("wolf", "gladstone", punch)
+
+        self.assertEqual(result["raw_damage"], 1)
+        self.assertEqual(result["reduction"], 6)
+        self.assertEqual(result["net_damage"], 0)
+        self.assertEqual(result["remaining_hp"], 36)
+
+
+class TestCombatLoop(unittest.TestCase):
+    def setUp(self):
+        self.event_bus = EventBus()
+        self.resolved = []
+        # These tests always face a scenario target, so combat narration ("round_resolved")
+        # is what fires, not the no-combat "action_resolved" path.
+        self.event_bus.subscribe("round_resolved", self.resolved.append)
+        self.dm_core = DMCore(self.event_bus)
+
+    def test_find_attack_ability_prefers_equipped_weapon(self):
+        # Gladstone has a longsword equipped in rhand, which uses the "blades" skill.
+        ability = self.dm_core.find_attack_ability("gladstone", "blades")
+        self.assertIsNotNone(ability)
+        self.assertEqual(ability["name"], "longsword")
+
+    def test_find_attack_ability_falls_back_to_innate_ability(self):
+        # No equipped weapon uses "brawling", so the innate "punch" ability should be found instead.
+        ability = self.dm_core.find_attack_ability("gladstone", "brawling")
+        self.assertIsNotNone(ability)
+        self.assertEqual(ability["name"], "punch")
+
+    def test_find_attack_ability_returns_none_for_unmatched_skill(self):
+        self.assertIsNone(self.dm_core.find_attack_ability("gladstone", "arcane"))
+
+    def test_missed_attack_does_not_apply_damage(self):
+        # wolf's dodge (6 dice) will always beat gladstone's blades (2 dice) at this fixed roll.
+        with patch("random.randint", return_value=1):
+            self.dm_core._on_action_detected({"skill": "blades", "input": "I attack with my sword"})
+
+        result = self.resolved[-1]
+        self.assertFalse(result["success"])
+        self.assertNotIn("damage", result)
+        self.assertEqual(result["round"], 1)
+        self.assertEqual(self.dm_core.get_current_hp("wolf"), 16)
+
+    def test_successful_attack_applies_damage_to_the_target(self):
+        # Give the player an opponent with no matching opposing skill, so the attack auto-succeeds (difficulty 0).
+        self.dm_core.entities["practice_dummy"] = {"name": "practice_dummy", "max_hp": 20, "skills": {}}
+        self.dm_core.scenario = {"entities": [{"name": "practice_dummy", "band": 0}]}
+        self.dm_core.load_scenario()
+
+        with patch("random.randint", return_value=3):
+            self.dm_core._on_action_detected({"skill": "blades", "input": "I attack with my sword"})
+
+        result = self.resolved[-1]
+        self.assertTrue(result["success"])
+        self.assertIn("damage", result)
+        self.assertEqual(result["damage"]["defender"], "practice_dummy")
+        self.assertGreater(result["damage"]["net_damage"], 0)
+        self.assertEqual(
+            self.dm_core.get_current_hp("practice_dummy"),
+            20 - result["damage"]["net_damage"],
+        )
+
+    def test_non_attack_skill_never_applies_damage(self):
+        # "athletics" has no equipped weapon or innate ability tied to it, so no damage should occur even on a hit.
+        self.dm_core.entities["practice_dummy"] = {"name": "practice_dummy", "max_hp": 20, "skills": {}}
+        self.dm_core.scenario = {"entities": [{"name": "practice_dummy", "band": 0}]}
+        self.dm_core.load_scenario()
+
+        self.dm_core._on_action_detected({"skill": "athletics", "input": "I climb the wall"})
+
+        result = self.resolved[-1]
+        self.assertNotIn("damage", result)
+
+    def test_no_target_narrates_via_action_resolved_not_round_resolved(self):
+        # An empty scenario has no target, so this is a non-combat skill use: it should
+        # narrate immediately via "action_resolved", not get batched as a combat round.
+        action_events = []
+        self.event_bus.subscribe("action_resolved", action_events.append)
+        self.dm_core.scenario = {"entities": [{"name": "gladstone", "band": 0}]}
+        self.dm_core.load_scenario()
+
+        self.dm_core._on_action_detected({"skill": "athletics", "input": "I climb the wall"})
+
+        self.assertEqual(len(action_events), 1)
+        self.assertEqual(self.resolved, [])
+        self.assertNotIn("round", action_events[0])
+
+    def test_scenario_load_publishes_scenario_loaded(self):
+        # DMCore.__init__ (in setUp) should have already published a one-time scene-intro event.
+        scenario_events = []
+        event_bus = EventBus()
+        event_bus.subscribe("scenario_loaded", scenario_events.append)
+        DMCore(event_bus)
+
+        self.assertEqual(len(scenario_events), 1)
+        self.assertEqual(scenario_events[0]["name"], "The Arena")
+
+    def test_missing_scenario_raises_instead_of_starting_with_no_data(self):
+        # A scenario name with no matching file under Rules/Fantasy/scenarios/ must fail
+        # loudly -- silently continuing with an empty self.scenario used to let the LLM
+        # narrate an opening scene with no name/description (it would happily hallucinate
+        # one, ex: a "featureless gray void", with no indication anything had gone wrong).
+        with self.assertRaises(FileNotFoundError):
+            DMCore(EventBus(), scenario_name="does_not_exist")
+
+
+class TestStatusEvaluation(unittest.TestCase):
+    def setUp(self):
+        self.event_bus = EventBus()
+        self.dm_core = DMCore(self.event_bus)
+
+    def test_hp_per_remain_requirement_matches_current_percentage(self):
+        # gladstone: max_hp 36. At 18 hp (50%) the "wounded" status (0.40-0.59) should match.
+        self.dm_core.apply_damage("gladstone", 18)
+        matched_names = [s["name"] for s in self.dm_core.get_applicable_statuses("gladstone", "on_damage")]
+        self.assertIn("wounded", matched_names)
+        self.assertNotIn("severe", matched_names)
+
+    def test_trigger_filters_out_non_matching_statuses(self):
+        # Even at full HP (matches "bruised"'s 0.81-0.99 range), a different trigger name should match nothing.
+        matched = self.dm_core.get_applicable_statuses("gladstone", "on_turn_start")
+        self.assertEqual(matched, [])
+
+    def test_not_in_requirement_blocks_a_match(self):
+        self.dm_core.rules["status"] = [{
+            "name": "test_exclude",
+            "trigger": "on_damage",
+            "requirements": [{"field": "supertype", "operator": "not_in", "value": ["creature"]}],
+        }]
+        # gladstone is supertype "creature", so this status must not match.
+        matched = self.dm_core.get_applicable_statuses("gladstone", "on_damage")
+        self.assertEqual(matched, [])
+
+    def test_in_requirement_requires_a_match(self):
+        self.dm_core.rules["status"] = [{
+            "name": "test_include",
+            "trigger": "on_damage",
+            "requirements": [{"field": "supertype", "operator": "in", "value": ["undead"]}],
+        }]
+        # gladstone is supertype "creature", not "undead", so this status must not match.
+        matched = self.dm_core.get_applicable_statuses("gladstone", "on_damage")
+        self.assertEqual(matched, [])
+
+        self.dm_core.entities["gladstone"]["supertype"] = "undead"
+        matched = self.dm_core.get_applicable_statuses("gladstone", "on_damage")
+        self.assertEqual([s["name"] for s in matched], ["test_include"])
+
+    def test_unknown_operator_never_matches(self):
+        self.dm_core.rules["status"] = [{
+            "name": "test_bad_operator",
+            "trigger": "on_damage",
+            "requirements": [{"field": "hp_per_remain", "operator": "~=", "value": 1}],
+        }]
+        matched = self.dm_core.get_applicable_statuses("gladstone", "on_damage")
+        self.assertEqual(matched, [])
+
+    def test_apply_damage_auto_applies_matching_condition(self):
+        self.dm_core.apply_damage("gladstone", 18)  # -> 50% hp -> "wounded"
+        self.assertIn("wounded", self.dm_core.entities["gladstone"]["active_conditions"])
+
+    def test_apply_damage_does_not_apply_when_no_status_matches(self):
+        # A single point of damage keeps gladstone above 0.99 hp_per_remain (the top of "bruised"'s
+        # range is 0.99, and no status covers 1.0), so nothing should be applied yet. active_conditions
+        # itself always exists now (seeded empty from the template's "conditions" at instancing time,
+        # see load_scenario), so the check here is emptiness, not absence of the key.
+        self.dm_core.apply_damage("gladstone", 0)
+        self.assertEqual(self.dm_core.entities["gladstone"]["active_conditions"], {})
+
+    def test_progressing_through_tiers_accumulates_conditions(self):
+        # Auto-apply only adds; it doesn't remove a condition once its requirements stop holding.
+        self.dm_core.apply_damage("gladstone", 18)  # 50% -> wounded
+        self.dm_core.apply_damage("gladstone", 13)  # ~14% -> incapacitated
+        active = self.dm_core.entities["gladstone"]["active_conditions"]
+        self.assertIn("wounded", active)
+        self.assertIn("incapacitated", active)
+
+
+class TestScenarioLoading(unittest.TestCase):
+    def setUp(self):
+        self.event_bus = EventBus()
+        self.dm_core = DMCore(self.event_bus)
+
+    def test_duplicate_entities_get_unique_instance_names(self):
+        # scenario.toml lists gladstone once and wolf twice.
+        self.assertEqual(self.dm_core.scenario_entities, ["gladstone", "wolf", "wolf_2"])
+        self.assertIn("wolf", self.dm_core.entities)
+        self.assertIn("wolf_2", self.dm_core.entities)
+
+    def test_duplicate_instances_are_independent(self):
+        self.dm_core.apply_damage("wolf", 10)
+        self.assertEqual(self.dm_core.get_current_hp("wolf"), 6)
+        self.assertEqual(self.dm_core.get_current_hp("wolf_2"), 16)
+
+    def test_instances_carry_their_own_entity_id(self):
+        # entity_id lives on the instance itself, so it's still identifiable
+        # once the dict is passed around independently of its self.entities key.
+        self.assertEqual(self.dm_core.entities["gladstone"]["entity_id"], "gladstone")
+        self.assertEqual(self.dm_core.entities["wolf"]["entity_id"], "wolf")
+        self.assertEqual(self.dm_core.entities["wolf_2"]["entity_id"], "wolf_2")
+
+    def test_instances_carry_their_scenario_band(self):
+        self.dm_core.scenario = {"entities": [
+            {"name": "wolf", "band": -1},
+            {"name": "wolf", "band": 2},
+        ]}
+        self.dm_core.load_scenario()
+        self.assertEqual(self.dm_core.entities["wolf"]["band"], -1)
+        self.assertEqual(self.dm_core.entities["wolf_2"]["band"], 2)
+
+    def test_unknown_entity_in_scenario_is_skipped_not_crashed(self):
+        self.dm_core.scenario = {"entities": [{"name": "griffin", "band": 0}]}
+        self.dm_core.load_scenario()
+        self.assertEqual(self.dm_core.scenario_entities, [])
+
+    def test_get_target_name_skips_the_player(self):
+        target = self.dm_core._get_target_name()
+        self.assertEqual(target, "wolf")
+
+    def test_reloading_scenario_resets_instances(self):
+        self.dm_core.scenario = {"entities": [{"name": "wolf", "band": 0}]}
+        self.dm_core.load_scenario()
+        self.assertEqual(self.dm_core.scenario_entities, ["wolf"])
+
+
+class TestLockedChest(unittest.TestCase):
+    def setUp(self):
+        self.event_bus = EventBus()
+        self.action_events = []
+        self.round_events = []
+        self.event_bus.subscribe("action_resolved", self.action_events.append)
+        self.event_bus.subscribe("round_resolved", self.round_events.append)
+        # Rules/Fantasy/scenarios/dungeon.toml puts the player alone with a locked chest
+        # (items.toml's "chest": [entity.test] {difficulty=12, skill=["finesse"]}, starting
+        # condition "locked").
+        self.dm_core = DMCore(self.event_bus, scenario_name="dungeon")
+
+    def test_chest_starts_locked(self):
+        # Seeded from the template's [entity.conditions.locked] at instancing time (load_scenario).
+        self.assertTrue(self.dm_core.is_locked("chest"))
+        self.assertIn("locked", self.dm_core.entities["chest"]["active_conditions"])
+
+    def test_chest_is_never_hostile_despite_no_attitude_data(self):
+        # Objects opt out of combat routing regardless of the neutral-disposition default
+        # that would otherwise mark a no-attitude-data entity as hostile (ex: wolf).
+        self.assertFalse(self.dm_core.is_hostile("chest", "gladstone"))
+
+    def test_forcing_it_with_strength_falls_through_to_the_opposed_fortitude_path(self):
+        # "strength" isn't in the chest's [entity.test] skill list, so this isn't a lock pick
+        # attempt at all -- it falls through to the *normal* resolve_opposed_action path, which
+        # finds the chest's own "fortitude" (5 dice, since strength's `opposes` includes
+        # "fortitude") and uses that as the difficulty. No special-casing needed for this at all.
+        with patch("random.randint", return_value=1):  # gladstone: 2 dice @ 1 = 2 vs chest: 5 @ 1 = 5
+            self.dm_core._on_action_detected({"skill": "strength", "input": "I try to force the chest"})
+
+        self.assertTrue(self.dm_core.is_locked("chest"))  # forcing it isn't what removes "locked"
+        self.assertEqual(self.round_events, [])
+        result = self.action_events[-1]
+        self.assertFalse(result["success"])
+        self.assertEqual(result["defender"], "chest")
+        self.assertEqual(result["opposing_skill"], "fortitude")
+        self.assertEqual(result["difficulty"], 5)
+
+    def test_failed_pick_leaves_it_locked_and_applies_jammed_on_fail(self):
+        with patch("random.randint", return_value=1):  # 3 dice @ 1 = 3, well under test difficulty 12
+            self.dm_core._on_action_detected({"skill": "finesse", "input": "I pick the lock"})
+
+        self.assertTrue(self.dm_core.is_locked("chest"))
+        self.assertEqual(self.round_events, [])
+        result = self.action_events[-1]
+        self.assertFalse(result["success"])
+        self.assertEqual(result["defender"], "chest")
+        self.assertIsNone(result["opposing_skill"])
+        self.assertEqual(result["difficulty"], 12)
+        # [entity.test.fail] applies the permanent "jammed" condition.
+        self.assertIn("jammed", self.dm_core.entities["chest"]["active_conditions"])
+
+    def test_successful_pick_dismisses_the_locked_condition_and_loots_the_chest(self):
+        starting_currency = self.dm_core.entities["gladstone"]["currency"]
+        with patch("random.randint", return_value=6):  # 3 dice @ 6 = 18, clears test difficulty 12
+            self.dm_core._on_action_detected({"skill": "finesse", "input": "I pick the lock"})
+
+        self.assertFalse(self.dm_core.is_locked("chest"))
+        self.assertNotIn("jammed", self.dm_core.entities["chest"]["active_conditions"])
+        result = self.action_events[-1]
+        self.assertTrue(result["success"])
+        self.assertEqual(result["defender"], "chest")
+
+        # [entity.test.pass]'s "loot" key hands the chest's currency to the player.
+        self.assertEqual(self.dm_core.entities["chest"]["currency"], 0)
+        self.assertEqual(self.dm_core.entities["gladstone"]["currency"], starting_currency + 20)
+
+    def test_dismiss_condition_is_a_noop_for_a_condition_not_present(self):
+        self.assertFalse(self.dm_core.dismiss_condition("chest", "not_a_real_condition"))
+        self.assertTrue(self.dm_core.is_locked("chest"))  # unaffected
+
+    def test_apply_test_outcome_is_a_noop_for_empty_outcome(self):
+        self.dm_core.apply_test_outcome("chest", "")
+        self.dm_core.apply_test_outcome("chest", None)
+        self.assertEqual(self.dm_core.entities["chest"]["active_conditions"], {"locked": {"duration": "permanent"}})
+
+
+class TestInventoryTransfer(unittest.TestCase):
+    def setUp(self):
+        self.event_bus = EventBus()
+        self.dm_core = DMCore(self.event_bus, scenario_name="dungeon")
+
+    def test_transfer_currency_moves_the_full_amount_by_default(self):
+        moved = self.dm_core.transfer_currency("chest", "gladstone")
+        self.assertEqual(moved, 20)
+        self.assertEqual(self.dm_core.entities["chest"]["currency"], 0)
+        self.assertEqual(self.dm_core.entities["gladstone"]["currency"], 120)
+
+    def test_transfer_currency_moves_only_the_requested_amount(self):
+        moved = self.dm_core.transfer_currency("chest", "gladstone", amount=5)
+        self.assertEqual(moved, 5)
+        self.assertEqual(self.dm_core.entities["chest"]["currency"], 15)
+        self.assertEqual(self.dm_core.entities["gladstone"]["currency"], 105)
+
+    def test_transfer_currency_clamps_to_whats_available(self):
+        moved = self.dm_core.transfer_currency("chest", "gladstone", amount=1000)
+        self.assertEqual(moved, 20)
+        self.assertEqual(self.dm_core.entities["chest"]["currency"], 0)
+
+    def test_transfer_currency_is_a_noop_for_a_missing_entity(self):
+        moved = self.dm_core.transfer_currency("chest", "does_not_exist")
+        self.assertEqual(moved, 0)
+        self.assertEqual(self.dm_core.entities["chest"]["currency"], 20)  # unchanged
+
+    def test_transfer_item_moves_one_matching_entry(self):
+        # gladstone carries three "health potion" entries -- only one should move per call.
+        moved = self.dm_core.transfer_item("gladstone", "chest", "health potion")
+        self.assertTrue(moved)
+        self.assertEqual(self.dm_core.entities["gladstone"]["inventory"].count("health potion"), 2)
+        self.assertIn("health potion", self.dm_core.entities["chest"]["inventory"])
+
+    def test_transfer_item_returns_false_when_item_not_present(self):
+        moved = self.dm_core.transfer_item("chest", "gladstone", "longsword")
+        self.assertFalse(moved)
+
+    def test_loot_entity_moves_currency_and_every_inventory_item(self):
+        # Give the chest some items too, not just currency, to exercise the full sweep.
+        self.dm_core.entities["chest"]["inventory"] = ["health potion", "health potion"]
+
+        self.dm_core.loot_entity("chest", "gladstone")
+
+        self.assertEqual(self.dm_core.entities["chest"]["currency"], 0)
+        self.assertEqual(self.dm_core.entities["chest"].get("inventory"), [])
+        self.assertEqual(self.dm_core.entities["gladstone"]["currency"], 120)
+        self.assertEqual(self.dm_core.entities["gladstone"]["inventory"].count("health potion"), 5)
+
+
+class TestNpcDialogue(unittest.TestCase):
+    def setUp(self):
+        self.event_bus = EventBus()
+        self.action_events = []
+        self.round_events = []
+        self.event_bus.subscribe("action_resolved", self.action_events.append)
+        self.event_bus.subscribe("round_resolved", self.round_events.append)
+        # Rules/Fantasy/scenarios/tavern.toml puts the player with a friendly NPC
+        # (npcs.toml's innkeeper) instead of the default "arena" combat scenario.
+        self.dm_core = DMCore(self.event_bus, scenario_name="tavern")
+
+    def test_innkeeper_is_not_hostile_toward_the_player(self):
+        self.assertFalse(self.dm_core.is_hostile("innkeeper", "gladstone"))
+
+    def test_wolf_is_still_hostile_by_default(self):
+        # Wolves carry no explicit attitudes data, so the neutral (0) default should still
+        # count as hostile/combat-ready -- this is a regression guard for is_hostile's threshold.
+        self.assertTrue(self.dm_core.is_hostile("wolf", "gladstone"))
+
+    def test_talking_to_the_innkeeper_narrates_immediately_as_dialogue(self):
+        self.dm_core._on_action_detected({
+            "skill": "charisma",
+            "input": "I ask the innkeeper if she's heard any news from the road",
+        })
+
+        self.assertEqual(len(self.action_events), 1)
+        self.assertEqual(self.round_events, [])
+        result = self.action_events[0]
+        self.assertEqual(result["defender"], "innkeeper")
+        self.assertNotIn("round", result)
+        self.assertNotIn("damage", result)
+
+    def test_attacking_the_innkeeper_still_resolves_but_does_not_batch_into_a_round(self):
+        # Hostility (not weapon possession) gates round batching, so even an attack against a
+        # non-hostile NPC narrates immediately rather than waiting for "the round" to end.
+        self.dm_core._on_action_detected({
+            "skill": "blades",
+            "input": "I draw my sword on the innkeeper",
+        })
+
+        self.assertEqual(len(self.action_events), 1)
+        self.assertEqual(self.round_events, [])
+
+    def test_fighting_a_hostile_target_still_batches_into_round_resolved(self):
+        # Sanity check the branch didn't regress combat routing for an actually hostile target.
+        self.dm_core.scenario = {
+            "entities": [
+                { "name": "gladstone", "band": 0 },
+                { "name": "wolf", "band": 0 },
+            ],
+        }
+        self.dm_core.load_scenario()
+
+        self.dm_core._on_action_detected({"skill": "blades", "input": "I attack the wolf"})
+
+        self.assertEqual(len(self.round_events), 1)
+        self.assertEqual(self.action_events, [])
+        self.assertEqual(self.round_events[0]["round"], 1)
+
+    def test_describe_character_includes_descriptive_flavor_fields(self):
+        description = self.dm_core.describe_character("innkeeper")
+        self.assertIn("stout woman with flour-dusted sleeves", description)
+        self.assertIn("Lost her husband to a bandit raid", description)
+        self.assertIn("Welcome to the Rusty Tankard", description)
+
+    def test_describe_character_returns_empty_for_pure_mechanics_entity(self):
+        # wolf has skills but no description/qualities/memories/quotes -- nothing to narrate.
+        self.assertEqual(self.dm_core.describe_character("wolf"), "")
+
+    def test_scenario_loaded_includes_character_roster(self):
+        scenario_events = []
+        self.event_bus.subscribe("scenario_loaded", scenario_events.append)
+        DMCore(self.event_bus, scenario_name="tavern")
+
+        characters = scenario_events[-1]["characters"]
+        self.assertTrue(any("innkeeper" in c for c in characters))
+        self.assertTrue(any("gladstone" in c for c in characters))
+
+    def test_action_resolved_includes_defender_details_for_a_described_npc(self):
+        self.dm_core._on_action_detected({
+            "skill": "charisma",
+            "input": "I ask the innkeeper about her husband",
+        })
+
+        result = self.action_events[0]
+        self.assertIn("Lost her husband to a bandit raid", result["defender_details"])
+
+
+def lines_of(app, widget_id):
+    return [str(line) for line in app.query_one(f"#{widget_id}", RichLog).lines]
+
+
+@pytest.mark.asyncio
+async def test_user_input_and_llm_response_mirror_into_history():
+    event_bus = EventBus()
+    app = TextualCore(event_bus)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        event_bus.publish("user_input_submitted", "I attack the wolf")
+        event_bus.publish("llm_response_ready", "The wolf dodges your blow.")
+        await pilot.pause()
+
+        history = lines_of(app, "history")
+        assert any("> I attack the wolf" in line for line in history)
+        assert any("The wolf dodges your blow." in line for line in history)
+
+
+@pytest.mark.asyncio
+async def test_events_published_before_mount_are_buffered_then_flushed():
+    event_bus = EventBus()
+    app = TextualCore(event_bus)
+
+    # Mirrors DMCore publishing rules_loaded synchronously during __init__, which in
+    # LLDM.py happens before the GUI's event loop (Tkinter's or Textual's) is running.
+    event_bus.publish("rules_loaded", {
+        "skills": {"blades": {"name": "blades"}},
+        "entities": {"gladstone": {"name": "gladstone"}},
+    })
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        debug_log = lines_of(app, "debug_log")
+        assert any("blades" in line for line in debug_log)
+        assert any("gladstone" in line for line in debug_log)
+
+
+@pytest.mark.asyncio
+async def test_background_thread_publish_is_thread_safe():
+    # LLMCore publishes llm_response_ready from a background fetch thread, not the app's
+    # own thread, so this exercises call_safely's cross-thread path via call_from_thread.
+    event_bus = EventBus()
+    app = TextualCore(event_bus)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        def from_background_thread():
+            event_bus.publish("llm_response_ready", "Narration from a background thread.")
+
+        thread = threading.Thread(target=from_background_thread)
+        thread.start()
+        await asyncio.to_thread(thread.join)
+        await pilot.pause()
+
+        assert any("Narration from a background thread." in line for line in lines_of(app, "history"))
+
+
+@pytest.mark.asyncio
+async def test_typing_and_pressing_enter_publishes_and_echoes_input():
+    event_bus = EventBus()
+    app = TextualCore(event_bus)
+    received = []
+    event_bus.subscribe("user_input_submitted", received.append)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.click("#input_box")
+        keys = ["space" if c == " " else c for c in "attack the wolf"]
+        await pilot.press(*keys)
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert received == ["attack the wolf"]
+        assert any("> attack the wolf" in line for line in lines_of(app, "history"))
+        # The input field clears after submitting, mirroring GUICore.submit_input.
+        assert app.query_one("#input_box").value == ""
+
+
+@pytest.mark.asyncio
+async def test_inactive_tab_content_requires_activation_to_read_lines():
+    # Gotcha: a RichLog's .lines reflects width-wrapped content, and a widget inside a
+    # non-active TabPane has no render width, so .lines reads empty until that tab is
+    # switched to - even though the write already happened. Tests reading a background
+    # tab's log must activate it first, as this test demonstrates.
+    event_bus = EventBus()
+    app = TextualCore(event_bus)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        event_bus.publish("log_info", "a log line")
+        await pilot.pause()
+
+        assert lines_of(app, "event_log") == []
+
+        app.query_one(TabbedContent).active = "event_log_tab"
+        await pilot.pause()
+
+        assert any("a log line" in line for line in lines_of(app, "event_log"))
+
+
+if __name__ == "__main__":
+    unittest.main()

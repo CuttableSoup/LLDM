@@ -1,0 +1,8 @@
+[scenario]
+name = "The Forgotten Cellar"
+description = "A small, dreary dungeon room. Water drips somewhere in the dark, and a single locked chest sits against the far wall."
+distance_multiplier = 1
+entities = [
+    { name = "gladstone", band = 0 },
+    { name = "chest", band = 0 }
+]

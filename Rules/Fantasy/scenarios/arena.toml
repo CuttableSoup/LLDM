@@ -3,6 +3,7 @@ name = "The Arena"
 description = "A large arena. Dried blood spatters paint the dirt. The crowd demands to be entertained."
 distance_multiplier = 3
 entities = [
+    { name = "gladstone", band = 0 },
     { name = "wolf", band = 0 },
     { name = "wolf", band = 0 }
 ]

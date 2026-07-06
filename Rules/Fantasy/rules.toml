@@ -1,81 +1,127 @@
-[range_modifiers]
-[[range_modifiers.distance]] # point blank
+[[range_modifier]]
+name = "point blank"
 minimum = 0
 maximum = 3
 modifier = { dice = 0, pips = 0, bonus = -5 }
-[[range_modifiers.distance]] # short
+
+[[range_modifier]]
+name = "short"
 minimum = 3
 maximum = "short"
 modifier = { dice = 0, pips = 0, bonus = 0 }
-[[range_modifiers.distance]] # medium
+
+[[range_modifier]]
+name = "medium"
 minimum = "short"
 maximum = "medium"
 modifier = { dice = 0, pips = 0, bonus = 5 }
-[[range_modifiers.distance]] # long
+
+[[range_modifier]]
+name = "long"
 minimum = "medium"
 maximum = "long"
 modifier = { dice = 0, pips = 0, bonus = 10 }
 
-[wounds]
-[[wounds.effect]] # bruised
-hp_per_remain = { minimum = 0.81, maximum = 0.99 }
+[[status]]
+name = "bruised"
+trigger = "on_damage"
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.81 },
+    { field = "hp_per_remain", operator = "<=", value = 0.99 },
+]
 description = "Absorbed most or all of the attack"
 
-[[wounds.effect]] # stunned
-hp_per_remain = { minimum = 0.60, maximum = 0.80 }
-apply = { condition = "stunned", duration = "fleeting", dismiss = "none" }
+[[status]]
+name = "stunned"
+trigger = "on_damage"
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.60 },
+    { field = "hp_per_remain", operator = "<=", value = 0.80 },
+]
+apply = { condition = "stunned", duration = "fleeting", dismiss = "" }
 description = "Moderate bruise or minor sprain; laceration; muscle tear; minor dislocation of joint."
 
-[[wounds.effect]] # wounded
-hp_per_remain = { minimum = 0.40, maximum = 0.59 }
-apply = { condition = "wounded", duration = "permanent", dismiss = "healing" }
+[[status]]
+name = "wounded"
+trigger = "on_damage"
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.40 },
+    { field = "hp_per_remain", operator = "<=", value = 0.59 },
+]
+apply = { condition = "wounded", duration = "permanent", dismiss = "" }
 description = "Severe abrasion or sprain; deep laceration; torn ligaments; major dislocation or minor break."
 
-[[wounds.effect]] # severe
-hp_per_remain = { minimum = 0.20, maximum = 0.39 }
-apply = { condition = "severe", duration = "permanent", dismiss = "healing" }
+[[status]]
+name = "severe"
+trigger = "on_damage"
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.20 },
+    { field = "hp_per_remain", operator = "<=", value = 0.39 },
+]
+apply = { condition = "severe", duration = "permanent", dismiss = "" }
 description = "Broken bone; gaping wound; ripped cartilage and muscle; concussion."
 
-[[wounds.effect]] # incapacitated
-hp_per_remain = { minimum = 0.10, maximum = 0.19 }
-apply = { condition = "incapacitated", duration = "permanent", dismiss = "healing" }
-test = { difficulty = 15, skill = ["fortitude", "willpower"], pass = "", fail = { condition = "unconscious", duration = "scene", dismiss = "healing" } }
+[[status]]
+name = "incapacitated"
+trigger = "on_damage"
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.10 },
+    { field = "hp_per_remain", operator = "<=", value = 0.19 },
+]
+apply = { condition = "incapacitated", duration = "permanent", dismiss = "" }
+test = { difficulty = 15, skill = ["fortitude", "willpower"], pass = "", fail = { condition = "unconscious", duration = "scene", dismiss = "" } }
 description = "Multiple fracture; laceration in vital area; heavy concussion."
 
-[[wounds.effect]] # mortal
-hp_per_remain = { minimum = 0.01, maximum = 0.09 }
-apply = { condition = "unconscious", duration = "permanent", dismiss = "healing", duration_minutes = 6 }
-test = { skill = ["fortitude"], pass = "", fail = { condition = "dead", duration = "permanent", dismiss = "healing" } }
+[[status]]
+name = "mortal"
+trigger = "on_damage"
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+    { field = "hp_per_remain", operator = "<=", value = 0.09 },
+]
+apply = { condition = "unconscious", duration = "scene", dismiss = "" }
+test = { difficulty = 15, skill = ["fortitude"], pass = "", fail = { condition = "dead", duration = "permanent", dismiss = "" } }
 description = "Multiple internal injuries."
 
-[[wounds.effect]] # dead
-hp_per_remain = { minimum = 0, maximum = 0 }
+[[status]]
+name = "dead"
+trigger = "on_damage"
+requirements = [
+    { field = "hp_per_remain", operator = "==", value = 0 },
+]
 apply = { condition = "dead", duration = "permanent", dismiss = "resurrection" }
 description = "Broken neck; punctured lung; eviscerated."
 
-[conditions]
-[[conditions.condition]]
+[[condition]]
 name = "stunned"
 modifier = { dice = -1, pips = 0, bonus = 0 }
 
-[[conditions.condition]]
+[[condition]]
 name = "wounded"
 modifier = { dice = -1, pips = 0, bonus = 0 }
 
-[[conditions.condition]]
+[[condition]]
 name = "severe"
 modifier = { dice = -2, pips = 0, bonus = 0 }
 
-[[conditions.condition]]
+[[condition]]
 name = "incapacitated"
 modifier = { dice = -3, pips = 0, bonus = 0 }
 
-[[conditions.condition]]
+[[condition]]
 name = "mortal"
 modifier = { dice = -3, pips = 0, bonus = 0 }
 
-[[conditions.condition]]
+[[condition]]
 name = "dead"
+modifier = { dice = 0, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "locked"
+modifier = { dice = 0, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "jammed"
 modifier = { dice = 0, pips = 0, bonus = 0 }
 
 [strength_damage]
