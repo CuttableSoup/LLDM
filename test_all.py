@@ -90,6 +90,41 @@ class TestNlpConfidenceThreshold(unittest.TestCase):
         self.assertEqual(detected_actions[0]["skill"], "blades")
         self.assertGreaterEqual(detected_actions[0]["score"], self.nlp_core.confidence_threshold)
 
+    def test_detect_item_intent_examine_vs_take_vs_neither(self):
+        self.assertEqual(self.nlp_core._detect_item_intent("examine the dagger"), "examine")
+        self.assertEqual(self.nlp_core._detect_item_intent("take the gold"), "take")
+        self.assertIsNone(self.nlp_core._detect_item_intent("attack with my sword"))
+
+    def test_picking_a_lock_is_not_mistaken_for_taking_an_item(self):
+        # "pick" alone would collide with "I pick the lock" (finesse) if it were a bare-word
+        # match -- only the two-word "pick up" phrase should count as take-intent.
+        self.assertIsNone(self.nlp_core._detect_item_intent("pick the lock"))
+        self.assertEqual(self.nlp_core._detect_item_intent("pick up the dagger"), "take")
+
+        detected_actions = []
+        item_events = []
+        self.event_bus.subscribe("action_detected", detected_actions.append)
+        self.event_bus.subscribe("item_interaction_detected", item_events.append)
+
+        self.event_bus.publish("user_input_submitted", "I pick the lock")
+
+        self.assertEqual(item_events, [])
+        self.assertEqual(len(detected_actions), 1)
+        self.assertEqual(detected_actions[0]["skill"], "finesse")
+
+    def test_full_pipeline_detects_a_known_item_by_name(self):
+        # Item matching runs against every known "object"-supertype entity (globally, not
+        # scoped to the active scenario) -- DMCore is what checks whether it's actually
+        # present in the current target's inventory (see TestItemInteraction).
+        item_events = []
+        self.event_bus.subscribe("item_interaction_detected", item_events.append)
+
+        self.event_bus.publish("user_input_submitted", "I examine the cursed dagger")
+
+        self.assertEqual(len(item_events), 1)
+        self.assertEqual(item_events[0]["intent"], "examine")
+        self.assertEqual(item_events[0]["item_name"], "cursed dagger")
+
 
 class TestClarificationResponse(unittest.TestCase):
     def setUp(self):
@@ -126,6 +161,32 @@ class TestClarificationResponse(unittest.TestCase):
         }
         description = self.llm_core._describe_outcome(result)
         self.assertNotIn("The player gains", description)
+
+    def test_examine_prompt_never_implies_a_transfer(self):
+        self.event_bus.publish("item_interaction_resolved", {
+            "intent": "examine", "item_name": "cursed dagger", "input": "I examine the cursed dagger",
+            "found": True, "description": "A wickedly curved dagger etched with glowing runes.",
+        })
+        prompt = self.llm_core.context_window[-1]["content"]
+        self.assertIn("glowing runes", prompt)
+        self.assertIn("nothing is taken", prompt)
+
+    def test_take_prompt_reflects_currency_amount_not_the_literal_word_currency(self):
+        self.event_bus.publish("item_interaction_resolved", {
+            "intent": "take", "item_name": "currency", "input": "I take the gold",
+            "found": True, "container": "chest", "amount": 20,
+        })
+        prompt = self.llm_core.context_window[-1]["content"]
+        self.assertIn("20 currency", prompt)
+
+    def test_locked_container_prompt_explains_the_denial(self):
+        self.event_bus.publish("item_interaction_resolved", {
+            "intent": "take", "item_name": "cursed dagger", "input": "I take the dagger",
+            "found": False, "reason": "locked", "container": "chest",
+        })
+        prompt = self.llm_core.context_window[-1]["content"]
+        self.assertIn("locked", prompt)
+        self.assertIn("no roll involved", prompt)
 
 
 @unittest.skipUnless(_lm_studio_reachable(), "LM Studio not reachable at http://127.0.0.1:1234")
@@ -610,7 +671,10 @@ class TestLockedChest(unittest.TestCase):
         # [entity.test.fail] applies the permanent "jammed" condition.
         self.assertIn("jammed", self.dm_core.entities["chest"]["active_conditions"])
 
-    def test_successful_pick_dismisses_the_locked_condition_and_loots_the_chest(self):
+    def test_successful_pick_dismisses_the_locked_condition_without_forcing_loot(self):
+        # Opening the chest must NOT auto-transfer its contents -- a player should be able to
+        # examine what's inside (ex: a cursed weapon) before ever deciding to take it. See
+        # TestItemInteraction for the separate examine/take mechanism.
         starting_currency = self.dm_core.entities["gladstone"]["currency"]
         with patch("random.randint", return_value=6):  # 3 dice @ 6 = 18, clears test difficulty 12
             self.dm_core._on_action_detected({"skill": "finesse", "input": "I pick the lock"})
@@ -620,10 +684,41 @@ class TestLockedChest(unittest.TestCase):
         result = self.action_events[-1]
         self.assertTrue(result["success"])
         self.assertEqual(result["defender"], "chest")
+        self.assertNotIn("loot", result)
 
-        # [entity.test.pass]'s "loot" key hands the chest's currency to the player.
-        self.assertEqual(self.dm_core.entities["chest"]["currency"], 0)
-        self.assertEqual(self.dm_core.entities["gladstone"]["currency"], starting_currency + 20)
+        self.assertEqual(self.dm_core.entities["chest"]["currency"], 20)
+        self.assertEqual(self.dm_core.entities["gladstone"]["currency"], starting_currency)
+        self.assertIn("cursed dagger", self.dm_core.entities["chest"]["inventory"])
+
+    def test_picking_an_already_open_chest_does_not_retrigger_the_test_or_reloot(self):
+        # requires_condition="locked" means the test is only attemptable while locked -- once
+        # dismissed, a repeat "finesse" attempt must fall through to the normal opposed path
+        # (difficulty 0, since the chest has no observation/reflexes for finesse to oppose),
+        # not silently re-run [entity.test] and re-loot an already-empty chest.
+        with patch("random.randint", return_value=6):
+            self.dm_core._on_action_detected({"skill": "finesse", "input": "I pick the lock"})
+        currency_after_first_pick = self.dm_core.entities["gladstone"]["currency"]
+
+        self.dm_core._on_action_detected({"skill": "finesse", "input": "I pick the lock again"})
+
+        result = self.action_events[-1]
+        self.assertEqual(result["difficulty"], 0)
+        self.assertEqual(self.dm_core.entities["gladstone"]["currency"], currency_after_first_pick)
+
+    def test_jammed_permanently_blocks_further_pick_attempts(self):
+        # blocks_if_condition="jammed" means once jammed (applied by test.fail), the test can
+        # never be attempted again via finesse -- even a roll that would clear difficulty 12
+        # must fall through to the normal opposed path instead (difficulty 0), leaving it locked.
+        with patch("random.randint", return_value=1):  # fails, applies "jammed"
+            self.dm_core._on_action_detected({"skill": "finesse", "input": "I fumble the lock"})
+        self.assertIn("jammed", self.dm_core.entities["chest"]["active_conditions"])
+
+        with patch("random.randint", return_value=6):  # would clear difficulty 12 if it ran
+            self.dm_core._on_action_detected({"skill": "finesse", "input": "I try again"})
+
+        self.assertTrue(self.dm_core.is_locked("chest"))
+        result = self.action_events[-1]
+        self.assertEqual(result["difficulty"], 0)
 
     def test_dismiss_condition_is_a_noop_for_a_condition_not_present(self):
         self.assertFalse(self.dm_core.dismiss_condition("chest", "not_a_real_condition"))
@@ -633,6 +728,96 @@ class TestLockedChest(unittest.TestCase):
         self.dm_core.apply_test_outcome("chest", "")
         self.dm_core.apply_test_outcome("chest", None)
         self.assertEqual(self.dm_core.entities["chest"]["active_conditions"], {"locked": {"duration": "permanent"}})
+
+
+class TestItemInteraction(unittest.TestCase):
+    def setUp(self):
+        self.event_bus = EventBus()
+        self.resolved = []
+        self.event_bus.subscribe("item_interaction_resolved", self.resolved.append)
+        # dungeon.toml's chest carries a "cursed dagger" plus currency=20, for exercising
+        # examine (read-only) vs take (transfers) without any dice roll involved.
+        self.dm_core = DMCore(self.event_bus, scenario_name="dungeon")
+
+    def test_examine_and_take_are_blocked_while_the_container_is_locked(self):
+        self.dm_core._on_item_interaction_detected({
+            "intent": "examine", "item_name": "cursed dagger", "input": "I examine the cursed dagger",
+        })
+        result = self.resolved[-1]
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "locked")
+        self.assertNotIn("cursed dagger", self.dm_core.entities["gladstone"]["inventory"])
+
+    def _unlock_the_chest(self):
+        self.dm_core.roll_dice = lambda dice, pips: 99
+        self.dm_core._on_action_detected({"skill": "finesse", "input": "I pick the lock"})
+
+    def test_examine_describes_an_item_without_transferring_it(self):
+        self._unlock_the_chest()
+        self.dm_core._on_item_interaction_detected({
+            "intent": "examine", "item_name": "cursed dagger", "input": "I examine the cursed dagger",
+        })
+        result = self.resolved[-1]
+        self.assertTrue(result["found"])
+        self.assertIn("runes", result["description"])
+        self.assertNotIn("cursed dagger", self.dm_core.entities["gladstone"]["inventory"])
+        self.assertIn("cursed dagger", self.dm_core.entities["chest"]["inventory"])
+
+    def test_take_transfers_the_item(self):
+        self._unlock_the_chest()
+        self.dm_core._on_item_interaction_detected({
+            "intent": "take", "item_name": "cursed dagger", "input": "I take the cursed dagger",
+        })
+        result = self.resolved[-1]
+        self.assertTrue(result["found"])
+        self.assertIn("cursed dagger", self.dm_core.entities["gladstone"]["inventory"])
+        self.assertNotIn("cursed dagger", self.dm_core.entities["chest"]["inventory"])
+
+    def test_currency_examine_and_take_use_transfer_currency_not_transfer_item(self):
+        self._unlock_the_chest()
+        self.dm_core._on_item_interaction_detected({
+            "intent": "examine", "item_name": "currency", "input": "I check the gold",
+        })
+        examine_result = self.resolved[-1]
+        self.assertTrue(examine_result["found"])
+        self.assertIn("20", examine_result["description"])
+        self.assertEqual(self.dm_core.entities["gladstone"]["currency"], 100)  # unchanged
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "take", "item_name": "currency", "input": "I take the gold",
+        })
+        take_result = self.resolved[-1]
+        self.assertTrue(take_result["found"])
+        self.assertEqual(take_result["amount"], 20)
+        self.assertEqual(self.dm_core.entities["gladstone"]["currency"], 120)
+        self.assertEqual(self.dm_core.entities["chest"]["currency"], 0)
+
+    def test_item_not_present_is_reported_not_present(self):
+        self._unlock_the_chest()
+        self.dm_core._on_item_interaction_detected({
+            "intent": "take", "item_name": "longsword", "input": "I take the longsword",
+        })
+        result = self.resolved[-1]
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "not_present")
+
+    def test_examining_the_container_itself_describes_it(self):
+        self._unlock_the_chest()
+        self.dm_core._on_item_interaction_detected({
+            "intent": "examine", "item_name": "chest", "input": "I examine the chest",
+        })
+        result = self.resolved[-1]
+        self.assertTrue(result["found"])
+        self.assertIn("iron-bound", result["description"])
+
+    def test_taking_the_container_itself_is_not_takeable(self):
+        self._unlock_the_chest()
+        self.dm_core._on_item_interaction_detected({
+            "intent": "take", "item_name": "chest", "input": "I take the whole chest",
+        })
+        result = self.resolved[-1]
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "not_takeable")
 
 
 class TestInventoryTransfer(unittest.TestCase):

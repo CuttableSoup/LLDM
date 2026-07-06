@@ -6,6 +6,17 @@
 import numpy as np
 from sentence_transformers import SentenceTransformer, util
 
+# Substring checks against processed input to decide "examine" vs "take" intent, before any
+# skill matching runs. Phrases (not bare words) where a bare word would collide with an
+# existing skill phrasing already in use -- ex: "pick" alone would misfire on "I pick the lock"
+# (finesse), so "pick up" (the two-word phrase) is required instead.
+EXAMINE_KEYWORDS = ("examine", "inspect", "look at", "check out")
+TAKE_KEYWORDS = ("take ", "grab ", "pick up", "loot ")
+
+# map_to_item checks these before any embedding match -- currency is a plain integer field
+# (entity["currency"]), not an object-supertype entity with a name/description to embed.
+CURRENCY_SYNONYMS = ("gold", "coin", "currency", "money")
+
 class NLPCore:
     """!
     @brief Main class handling the interpretation of natural language input.
@@ -21,8 +32,10 @@ class NLPCore:
         self.skills_data = {}
         self.skill_names = []
         self.skill_embeddings = None
+        self.item_embeddings = None
+        self.item_indices = []
         # Below this cosine-similarity score, treat the input as not matching any skill at
-        # all rather than forcing it onto whatever phrase happened to score highest 
+        # all rather than forcing it onto whatever phrase happened to score highest
         self.confidence_threshold = 0.5
         
         # Subscribe to rules_loaded event to build embeddings
@@ -37,6 +50,19 @@ class NLPCore:
         @brief Event handler for user input.
         """
         processed = self.process_input(player_input)
+
+        intent = self._detect_item_intent(processed)
+        if intent:
+            item_name, item_score = self.map_to_item(processed)
+            if item_name:
+                self.event_bus.publish("item_interaction_detected", {
+                    "intent": intent, "item_name": item_name, "input": processed, "score": item_score,
+                })
+                return
+            # A recognized "examine"/"take" verb but no matching item name -- fall through to
+            # skill matching below rather than silently dropping it (ex: could still be a
+            # legitimate skill phrase that happens to contain one of these words).
+
         skill, score = self.map_to_action(processed)
         if skill:
             self.event_bus.publish("action_detected", {"skill": skill, "score": score, "input": processed})
@@ -44,6 +70,18 @@ class NLPCore:
             # Below confidence_threshold: publish this instead of staying silent, so the
             # player gets some response rather than the app appearing to stall.
             self.event_bus.publish("action_not_understood", {"input": processed, "score": score})
+
+    def _detect_item_intent(self, processed_text):
+        """!
+        @brief Checks processed input for an "examine" or "take" verb, ahead of skill matching.
+        @param processed_text The cleaned and processed player input.
+        @return "examine", "take", or None.
+        """
+        if any(keyword in processed_text for keyword in EXAMINE_KEYWORDS):
+            return "examine"
+        if any(keyword in processed_text for keyword in TAKE_KEYWORDS):
+            return "take"
+        return None
 
 
     def _on_rules_loaded(self, data):
@@ -91,6 +129,33 @@ class NLPCore:
         self.skill_indices = skill_indices
 
         self.event_bus.publish("log_info", f"NLPCore: {len(all_phrases)} skill phrases encoded for {len(self.skill_names)} skills.")
+
+        # Also build item-name embeddings, for "examine"/"take" item-interaction matching
+        # (map_to_item). Only "object" supertype entities are physical items a player could
+        # plausibly examine or pick up -- this indexes every known item by name/description,
+        # not just what's in the current scene; DMCore is what checks whether the matched item
+        # is actually present in the current target's inventory.
+        entities_data = data.get("entities", {})
+        item_phrases = []
+        item_indices = []
+        for name, entity in entities_data.items():
+            if entity.get("supertype") != "object":
+                continue
+            item_phrases.append(name)
+            item_indices.append(name)
+            description = entity.get("description", "")
+            if description:
+                item_phrases.append(description)
+                item_indices.append(name)
+
+        if item_phrases:
+            self.item_embeddings = self.model.encode(item_phrases, convert_to_tensor=True)
+            self.item_indices = item_indices
+        else:
+            self.item_embeddings = None
+            self.item_indices = []
+
+        self.event_bus.publish("log_info", f"NLPCore: {len(item_phrases)} item phrases encoded for {len(set(item_indices))} items.")
 
     def process_input(self, player_input):
         """!
@@ -142,3 +207,32 @@ class NLPCore:
 
         self.event_bus.publish("log_info", f"Mapped input to action: {best_skill} via best phrase (Score: {best_score:.4f})")
         return best_skill, best_score
+
+    def map_to_item(self, processed_text):
+        """!
+        @brief Maps the processed text to a specific item's name using semantic similarity,
+               the same way map_to_action does for skills but against item_embeddings/item_indices.
+               Currency is checked first as a fixed synonym list rather than semantically --
+               it's a plain "currency" integer field on entities, not an object-supertype entity
+               with a name/description of its own, so there's nothing to embed it against.
+        @param processed_text The cleaned and processed player input.
+        @return A tuple of (item_name, confidence_score); item_name is None below confidence_threshold.
+        """
+        if any(synonym in processed_text for synonym in CURRENCY_SYNONYMS):
+            return "currency", 1.0
+
+        if self.item_embeddings is None:
+            return None, 0.0
+
+        input_embedding = self.model.encode(processed_text, convert_to_tensor=True)
+        cosine_scores = util.cos_sim(input_embedding, self.item_embeddings)[0]
+
+        best_phrase_idx = np.argmax(cosine_scores.cpu().numpy())
+        best_score = cosine_scores[best_phrase_idx].item()
+        best_item = self.item_indices[best_phrase_idx]
+
+        if best_score < self.confidence_threshold:
+            return None, best_score
+
+        self.event_bus.publish("log_info", f"Mapped input to item: {best_item} (Score: {best_score:.4f})")
+        return best_item, best_score

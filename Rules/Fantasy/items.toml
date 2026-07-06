@@ -58,6 +58,7 @@ max_hp = 50
 bulk = 5
 value = 10
 currency = 20
+inventory = [ "cursed dagger" ]
 
 [entity.conditions.locked]
 duration = "permanent"
@@ -65,10 +66,11 @@ duration = "permanent"
 [entity.test]
 difficulty = 12
 skill = [ "finesse" ]
+requires_condition = "locked"
+blocks_if_condition = "jammed"
 
 [entity.test.pass]
 dismiss_condition = "locked"
-loot = true
 
 [entity.test.fail]
 condition = "jammed"
@@ -77,3 +79,18 @@ dismiss = ""
 
 [entity.skills]
 fortitude = { dice = 5, pips = 0 }
+
+[[entity]]
+name = "cursed dagger"
+supertype = "object"
+subtype = "weapon"
+skill = "blades"
+description = "A wickedly curved dagger, its blade etched with faintly glowing runes that seem to shift when unwatched."
+max_hp = 8
+damage_value = { dice = 1, pips = 1, bonus = "strength_damage" }
+damage_tags = [ "slashing" ]
+tags = [ "cursed" ]
+bulk = 1
+value = 5
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }

@@ -23,6 +23,7 @@ class LLMCore:
         self.event_bus.subscribe("round_resolved", self.generate_round_response)
         self.event_bus.subscribe("action_resolved", self.generate_response)
         self.event_bus.subscribe("action_not_understood", self.generate_clarification_response)
+        self.event_bus.subscribe("item_interaction_resolved", self.generate_item_interaction_response)
 
     def perform_rag(self, query):
         """!
@@ -162,6 +163,49 @@ class LLMCore:
             f"Respond in-character as the Game Master in 1-2 sentences: acknowledge what they "
             f"said without resolving any roll"
         )
+        self._queue_narration(prompt)
+
+    def generate_item_interaction_response(self, data):
+        """!
+        @brief Narrates an "examine" or "take" attempt against an item, resolved with no dice
+               roll (see DMCore._on_item_interaction_detected). "examine" only ever describes;
+               it's the deliberate alternative to items being auto-looted into the player's
+               inventory the moment a container opens (ex: a cursed weapon should be seen and
+               described before anyone decides to touch it).
+        @param data The "item_interaction_resolved" payload
+               ({intent, item_name, input, found, description?, container?, reason?}).
+        """
+        self.event_bus.publish("log_info", f"Generating item interaction response ({data.get('intent')}).")
+
+        item_name = data.get("item_name")
+        if not data.get("found"):
+            reason_text = {
+                "locked": f"{data.get('container', 'it')} is locked shut and can't be reached yet",
+                "not_present": f"there's no \"{item_name}\" here to {data.get('intent')}",
+                "not_takeable": f"{item_name} isn't something that can be picked up and carried",
+            }.get(data.get("reason"), f"the player's attempt to {data.get('intent')} {item_name} doesn't apply here")
+            prompt = (
+                f"The player tries to {data.get('intent')} \"{item_name}\" "
+                f"(input: \"{data.get('input', '')}\"), but {reason_text} -- no roll involved.\n"
+                f"Narrate a brief, in-character explanation in 1-2 sentences as the Game Master."
+            )
+        elif data.get("intent") == "examine":
+            prompt = (
+                f"The player examines \"{item_name}\".\n"
+                f"Description: {data.get('description', '')}\n"
+                f"Narrate what they observe in 2-3 sentences as the Game Master. This is only "
+                f"looking -- nothing is taken, moved, or changed."
+            )
+        elif item_name == "currency":
+            prompt = (
+                f"The player takes {data.get('amount', 0)} currency and adds it to their own.\n"
+                f"Narrate this in 1-2 sentences as the Game Master."
+            )
+        else:
+            prompt = (
+                f"The player takes \"{item_name}\" and adds it to their own inventory.\n"
+                f"Narrate this in 1-2 sentences as the Game Master."
+            )
         self._queue_narration(prompt)
 
     def _queue_narration(self, prompt):

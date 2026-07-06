@@ -62,6 +62,7 @@ class DMCore:
             "characters": characters,
         })
         self.event_bus.subscribe("action_detected", self._on_action_detected)
+        self.event_bus.subscribe("item_interaction_detected", self._on_item_interaction_detected)
 
     def load_rules(self, rules_dir):
         base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -377,6 +378,32 @@ class DMCore:
                 items_moved.append(item_name)
         return {"currency": currency_moved, "items": items_moved}
 
+    def is_test_available(self, entity_name, test, skill_name):
+        """!
+        @brief Whether an entity's [entity.test] can currently be attempted with the given
+               skill. Gates the test on the entity's *current* active_conditions, not just
+               whether the skill matches -- without this, ex: an already-picked chest's
+               [entity.test] would keep re-triggering on repeat attempts (harmless only by
+               accident, since there'd be nothing left to loot), and a "jammed" condition
+               applied on a failed attempt would have no actual effect on future ones.
+        @param entity_name The name of the entity being tested (ex: a chest).
+        @param test The entity's test table ({difficulty, skill, requires_condition,
+               blocks_if_condition, pass, fail}).
+        @param skill_name The skill the player is attempting to use.
+        @return True if skill_name matches test["skill"], test["requires_condition"] (if set)
+                is currently active, and test["blocks_if_condition"] (if set) is not.
+        """
+        if skill_name not in test.get("skill", []):
+            return False
+        active_conditions = self.entities.get(entity_name, {}).get("active_conditions", {})
+        requires = test.get("requires_condition")
+        if requires and requires not in active_conditions:
+            return False
+        blocks = test.get("blocks_if_condition")
+        if blocks and blocks in active_conditions:
+            return False
+        return True
+
     def apply_test_outcome(self, entity_name, outcome):
         """!
         @brief Applies the pass/fail consequence of an entity's [entity.test] (ex: a chest's
@@ -580,7 +607,7 @@ class DMCore:
 
         target_name = self._get_target_name()
         test = self.entities.get(target_name, {}).get("test") if target_name else None
-        if test and skill_name in test.get("skill", []):
+        if test and self.is_test_available(target_name, test, skill_name):
             # An entity's own [entity.test] (ex: a chest's lock) is a flat difficulty check,
             # not an opposed roll -- it doesn't compete via the attacker's skill's `opposes`
             # list the way a creature's defense does. Any *other* skill against this same
@@ -617,6 +644,66 @@ class DMCore:
             self.event_bus.publish("round_resolved", result)
         else:
             self.event_bus.publish("action_resolved", result)
+
+    def _on_item_interaction_detected(self, data):
+        """!
+        @brief Event handler for a free-text "examine"/"take" match against an item name
+               (see NLPCore.map_to_item). Deliberately bypasses the whole skill/dice system --
+               looking at or picking up something already accessible doesn't warrant a roll.
+               "examine" never changes state; "take" calls transfer_item. Publishes
+               "item_interaction_resolved" either way, with enough detail for narration to
+               explain a miss (locked, not present, not takeable) rather than staying silent.
+        @param data The item_interaction_detected payload from NLPCore ({intent, item_name, input, score}).
+        """
+        intent = data.get("intent")
+        item_name = data.get("item_name")
+        input_text = data.get("input")
+        target_name = self._get_target_name()
+
+        def resolved(found, **extra):
+            self.event_bus.publish("item_interaction_resolved", {
+                "intent": intent, "item_name": item_name, "input": input_text, "found": found, **extra,
+            })
+
+        if target_name and self.is_locked(target_name):
+            resolved(False, reason="locked", container=target_name)
+            return
+
+        if item_name == "currency":
+            # Currency is a plain "currency" integer field, not an inventory item -- handled
+            # separately from transfer_item/container_inventory below.
+            available = self.entities.get(target_name, {}).get("currency", 0) if target_name else 0
+            if available <= 0:
+                resolved(False, reason="not_present")
+                return
+            if intent == "examine":
+                resolved(True, description=f"{available} currency", container=target_name)
+            else:
+                moved = self.transfer_currency(target_name, self.player_name)
+                resolved(True, container=target_name, amount=moved)
+            return
+
+        if item_name == target_name:
+            # Examining the container/creature itself, not something inside it -- there's
+            # nothing to "take" about the target as a whole.
+            if intent == "examine":
+                description = self.describe_character(target_name) or ""
+                resolved(True, description=description)
+            else:
+                resolved(False, reason="not_takeable")
+            return
+
+        container_inventory = self.entities.get(target_name, {}).get("inventory", []) if target_name else []
+        if item_name not in container_inventory:
+            resolved(False, reason="not_present")
+            return
+
+        if intent == "examine":
+            description = self.entities.get(item_name, {}).get("description", "")
+            resolved(True, description=description, container=target_name)
+        else:
+            self.transfer_item(target_name, self.player_name, item_name)
+            resolved(True, container=target_name)
 
     def get_attitude(self, entity_name, toward_name):
         """!

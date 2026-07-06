@@ -25,6 +25,9 @@ during `__init__`, so everything that needs it must already be subscribed).
   clears `self.confidence_threshold` (`0.5`); below it, `map_to_action` returns `(None, score)`,
   and `_on_user_input` publishes `action_not_understood` instead (ex: "Hey there innkeeper"
   used to map to "artistry" at a 0.32 score and roll a real skill check against a greeting).
+  It also separately matches free text against item names (`map_to_item`) for "examine"/"take"
+  — see "Examining and taking items" below; that path runs *before* skill matching and, if it
+  fires, skips it entirely for that input.
   **Don't let a low-confidence input fall through to complete silence** — with nothing
   subscribed to `action_not_understood`, the player types something, nothing ever happens, and
   it looks exactly like the app hung. `LLMCore` subscribing to it (below) is what closes that
@@ -231,6 +234,8 @@ built for `items.toml`'s `chest`, but nothing here is lock-specific:
 [entity.test]
 difficulty = 12
 skill = [ "finesse" ]
+requires_condition = "locked"
+blocks_if_condition = "jammed"
 [entity.test.pass]
 dismiss_condition = "locked"
 [entity.test.fail]
@@ -238,19 +243,34 @@ condition = "jammed"
 duration = "permanent"
 dismiss = ""
 ```
-In `_on_action_detected`: if the target has a `test` and the attacker's `skill_name` is in
-`test["skill"]`, it's resolved as a **flat difficulty check** (`resolve_action(player, skill,
-test["difficulty"])`), matching D6/WEG's convention of static DCs for passive obstacles —
+In `_on_action_detected`: if the target has a `test` and **`is_test_available(target, test,
+skill_name)`** says yes, it's resolved as a **flat difficulty check** (`resolve_action(player,
+skill, test["difficulty"])`), matching D6/WEG's convention of static DCs for passive obstacles —
 *not* run through `resolve_opposed_action`, since the target isn't rolling its own defense the
-way a creature does. Whichever of `test["pass"]`/`test["fail"]` matches the outcome is handed to
+way a creature does. `is_test_available` checks three things: `skill_name` is in `test["skill"]`;
+if `test["requires_condition"]` is set, that condition must currently be active (ex: `"locked"`
+— once dismissed, the test stops being reachable at all); if `test["blocks_if_condition"]` is
+set, that condition must *not* be active (ex: `"jammed"` — once applied by a failed attempt, no
+further pick attempts can ever succeed via this test again). **Without this gating, an
+already-opened chest would silently re-run the test (and re-loot, harmless only by accident
+since there'd be nothing left) on every repeat attempt, and a `"jammed"` condition applied on
+failure would have zero actual effect** — it was purely narrative flavor until this was added
+(verified live: re-picking an unlocked/jammed chest now resolves at difficulty `0` via the
+ordinary opposed path instead of re-running the `12`-difficulty test).
+
+Whichever of `test["pass"]`/`test["fail"]` matches the outcome is handed to
 **`apply_test_outcome(entity_name, outcome)`**, which dispatches purely on which keys are
 present (no "action" enum): `dismiss_condition` removes that condition, `condition` applies a
 new one (the exact `{condition, duration, dismiss}` shape `[[status]]`'s own `apply`/`test.fail`
-blocks already use), and a truthy `loot` key hands everything on the target to `self.player_name`
-via `loot_entity` (see "Inventory/currency transfer" below). Any combination of these three keys
-can be set at once, or the whole `outcome` can be empty/omitted for no consequence.
-`apply_test_outcome` returns `loot_entity`'s summary (or `None`) so `_on_action_detected` can
-attach it to `result["loot"]` for narration — see below, this matters.
+blocks already use). A truthy `loot` key would hand everything on the target to
+`self.player_name` via `loot_entity` in one shot (see "Inventory/currency transfer" below) —
+**this primitive still exists and works, but the chest no longer uses it** (see "Examining and
+taking items" below for why: opening a container must not force its contents into the player's
+inventory before they can look at what's there). It remains available for a future entity where
+instant auto-loot-on-success is actually the right call (ex: a mundane coin purse nobody would
+plausibly want to inspect first) — that's a per-entity TOML choice, not a hardcoded policy.
+`apply_test_outcome` returns `loot_entity`'s summary (or `None`) so a caller can attach it to
+`result["loot"]` for narration if it does use `loot`.
 
 **A skill *not* in `test["skill"]` isn't blocked — it just isn't a test at all,** and falls
 through to the normal `resolve_opposed_action` path below it. This is what makes "try the chest,
@@ -288,17 +308,55 @@ Three general-purpose methods on `DMCore`, none lock/chest-specific:
   the caller's job. Returns `False` (no-op) if the item isn't present or either entity is missing.
 - **`loot_entity(from_name, to_name)`** — sweeps *everything*: all currency plus every
   inventory item, one `transfer_item` call per entry. Returns `{currency, items}` describing
-  what actually moved. This is what `apply_test_outcome`'s `loot` key calls (see "Entity tests"
-  above) — a chest's `[entity.test.pass]` sets `loot = true` to hand its contents to
-  `self.player_name` the moment its lock is picked.
+  what actually moved.
 
-**The loot summary reaches narration, not just game state.** `_on_action_detected` attaches
-`apply_test_outcome`'s return value as `result["loot"]`, and `LLM_Core._describe_outcome` turns
-that into `" The player gains: 20 currency."` in the prompt. This isn't cosmetic: without it, a
-live run showed the LLM narrating a successful pick by *inventing* contents ("a silver key and
-leather-bound journal") that didn't match the actual game state (which only ever had currency in
-it) — the same class of problem as the scenario-description/character-roster grounding work
-earlier in this file, just for loot instead of setting/characters.
+`_on_action_detected` still attaches a `loot_entity` result as `result["loot"]` when
+`apply_test_outcome`'s `loot` key fires, and `LLM_Core._describe_outcome` turns that into
+`" The player gains: 20 currency."` in the prompt (verified live: an earlier version of this
+that omitted this had the LLM *inventing* contents — "a silver key and leather-bound journal" —
+for a chest that only ever held currency). This machinery is what "Examining and taking items"
+(below) now calls directly instead, per-item, rather than all-at-once via `loot`.
+
+## Examining and taking items
+
+**Opening a container must never force its contents into the player's inventory.** The chest's
+`[entity.test.pass]` used to set `loot = true`, auto-transferring everything the instant the
+lock was picked — this was reverted because a player has no chance to *examine* something (ex:
+a cursed weapon) before deciding whether to take it if it's already silently in their pack.
+Unlocking a container now only ever dismisses `"locked"`; the contents stay put until the player
+deliberately examines or takes something.
+
+This is a distinct interaction path from the whole skill/dice system, because looking at or
+picking up something already accessible doesn't warrant a roll:
+- **`NLPCore._detect_item_intent(processed_text)`** checks for an `"examine"` verb
+  (`examine`/`inspect`/`look at`/`check out`) or a `"take"` verb (`take `/`grab `/`pick up`/
+  `loot `) *before* skill matching runs. **Phrases, not bare words, on purpose** — a bare
+  `"pick"` would misfire on `"I pick the lock"` (the existing `finesse` lockpicking flow), so
+  `"pick up"` (two words) is required instead; verified this doesn't regress lockpicking.
+- **`NLPCore.map_to_item(processed_text)`** — the same embedding-match pattern as
+  `map_to_action`, but against every `supertype == "object"` entity's name/description (built in
+  `_on_rules_loaded` alongside the skill embeddings). **Currency is checked first as a fixed
+  synonym list** (`gold`/`coin`/`currency`/`money`), returning the sentinel item name
+  `"currency"` — it's a plain integer field on entities, not an object-supertype entity with a
+  name to embed, so there's nothing to match it against semantically.
+- If both a verb and an item are found, NLPCore publishes **`item_interaction_detected`**
+  (`{intent, item_name, input, score}`) *instead of* running skill matching for that input at
+  all. A recognized verb with no item match still falls through to normal skill matching (ex: in
+  case the phrase legitimately meant something else).
+- **`DMCore._on_item_interaction_detected`** resolves it with zero dice rolls: locked container
+  → denied (`reason: "locked"`); `item_name == "currency"` → `transfer_currency` (`"take"`) or
+  just describes the amount (`"examine"`), via the same fixed sentinel; `item_name` equal to the
+  current target's own name → `describe_character` for `"examine"`, `reason: "not_takeable"` for
+  `"take"` (you can't pocket the whole chest); otherwise checked against the target's `inventory`
+  list — `"take"` calls `transfer_item`, `"examine"` just reads `entities[item_name]["description"]`
+  and changes nothing. Publishes `item_interaction_resolved` either way (`found` plus
+  `description`/`container`/`amount`/`reason` as applicable) so narration always has something
+  to say, never silence.
+- **`LLMCore.generate_item_interaction_response`** narrates it — explicitly telling the LLM
+  `"nothing is taken, moved, or changed"` for a found `"examine"`, so it doesn't imply a transfer
+  that didn't happen. Verified live: examining `items.toml`'s `"cursed dagger"` (added specifically
+  to exercise this) describes its glowing runes without adding it anywhere; a separate `"take"`
+  afterward is what actually moves it, narrated as its own distinct moment.
 
 ## Data/TOML conventions worth knowing
 
@@ -381,7 +439,7 @@ one yet, dependencies are just installed ad hoc: `sentence-transformers`, `numpy
 
 ## Testing
 
-One file, `test_all.py`, ~74 tests across fourteen `unittest.TestCase` classes plus the Textual
+One file, `test_all.py`, ~89 tests across thirteen `unittest.TestCase` classes plus the Textual
 mirror's standalone `pytest.mark.asyncio` functions (all previously separate `test_*.py`
 files, combined into one on request). All fast except `TestGameBoot` and
 `TestNlpConfidenceThreshold` (both load the real `sentence-transformers` model, ~15-20s each
@@ -392,13 +450,21 @@ share one load rather than paying that cost twice) and `TestInnkeeperConversatio
 - `TestGameBoot` — original integration smoke test (boot → skill match).
 - `TestNlpConfidenceThreshold` — a low-confidence input (a plain greeting) triggers no
   `action_detected` at all (but does publish `action_not_understood`), while a clear action
-  still triggers `action_detected` at/above `NLPCore.confidence_threshold`.
+  still triggers `action_detected` at/above `NLPCore.confidence_threshold`. Also covers
+  `_detect_item_intent` (examine/take/neither), the `"pick the lock"` vs `"pick up X"`
+  collision guard (a real `user_input_submitted` of `"I pick the lock"` still produces
+  `action_detected` for `finesse`, never `item_interaction_detected`), and a full-pipeline
+  check that a known item name (`"cursed dagger"`) is matched regardless of which scenario is
+  currently active (matching is global; DMCore is what checks scene-relevance).
 - `TestClarificationResponse` — `action_not_understood` queues a prompt describing what the
   player said with no roll/damage shape in it (checked via `llm_core.context_window`
   immediately after publish, since `_queue_narration` appends synchronously before spawning
   the network fetch thread — no need to wait on or mock LM Studio for this). Also covers
-  `_describe_outcome` directly: a `result["loot"]` of `{"currency": 20, "items": []}` produces
-  `"20 currency"` in the text, and no loot present omits the "gains" text entirely.
+  `_describe_outcome` directly (a `result["loot"]` of `{"currency": 20, "items": []}` produces
+  `"20 currency"` in the text, and no loot present omits the "gains" text entirely) and
+  `generate_item_interaction_response`'s three prompt shapes (found-examine explicitly says
+  nothing was taken; found-take on the `"currency"` sentinel names the amount, not the literal
+  word "currency"; not-found explains the denial reason).
 - `TestInnkeeperConversation` — the only test that hits a real, running LM Studio (guarded by
   a module-level `_lm_studio_reachable()` check via `@unittest.skipUnless`, so it *skips*
   rather than fails when nothing's listening on `127.0.0.1:1234`, keeping the rest of the
@@ -433,10 +499,20 @@ share one load rather than paying that cost twice) and `TestInnkeeperConversatio
   hostile despite having no attitude data, `strength` (not in the chest's `test.skill`) falls
   through to the ordinary opposed path and gets resisted by its `fortitude` (5 dice) rather than
   the `[entity.test]` difficulty, a failed `finesse` pick leaves it locked *and* applies the
-  permanent `"jammed"` condition (`test.fail`), a successful one dismisses `"locked"` *and*
-  transfers the chest's `currency` to `gladstone` (`test.pass`'s `loot` key), `dismiss_condition`
-  no-ops (returns `False`) for a condition that isn't present, and `apply_test_outcome` no-ops
-  for an empty/`None` outcome.
+  permanent `"jammed"` condition (`test.fail`), a successful one dismisses `"locked"` **without**
+  auto-transferring anything (`result` has no `"loot"` key, `chest`'s `currency`/`inventory`
+  untouched — see "Examining and taking items"), a repeat pick attempt on an already-open chest
+  falls through to the ordinary path (difficulty `0`) instead of re-running the test
+  (`requires_condition`), a `"jammed"` chest permanently refuses further pick attempts the same
+  way (`blocks_if_condition`), `dismiss_condition` no-ops (returns `False`) for a condition
+  that isn't present, and `apply_test_outcome` no-ops for an empty/`None` outcome.
+- `TestItemInteraction` — `DMCore._on_item_interaction_detected` against the dungeon's chest
+  (holding `items.toml`'s `"cursed dagger"` plus `currency = 20`): blocked entirely while locked
+  (`reason: "locked"`), `"examine"` returns the item's description without touching either
+  entity's `inventory`, `"take"` actually calls `transfer_item`, the `"currency"` sentinel uses
+  `transfer_currency`/an amount-only description instead of `transfer_item`, an absent item
+  reports `reason: "not_present"`, examining the container itself (`item_name == target_name`)
+  uses `describe_character`, and taking the container itself reports `reason: "not_takeable"`.
 - `TestInventoryTransfer` — `transfer_currency` (moves all by default, clamps to what's
   available, no-ops for a missing entity), `transfer_item` (moves exactly one matching entry
   out of a duplicate-containing `inventory` list, returns `False` if absent), and `loot_entity`
