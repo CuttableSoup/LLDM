@@ -358,6 +358,80 @@ picking up something already accessible doesn't warrant a roll:
   to exercise this) describes its glowing runes without adding it anywhere; a separate `"take"`
   afterward is what actually moves it, narrated as its own distinct moment.
 
+## Tags vs. conditions
+
+Two distinct mechanisms, easy to conflate since both gate on "does this entity have X":
+- **Tags** are static, inherent classification data used purely for *matching* — they never
+  change over an entity's lifetime unless its template does. `damage_tags`/`armor_tags` were
+  the original example (an attack's damage type vs. worn armor's resistances); this was
+  generalized so an entity can carry its own innate `resistance_value`/`resistance_tags`
+  (rolled, partial reduction — same shape and same `get_damage_reduction` call as armor, just
+  checked against the entity itself rather than its equipped items) and `immunity_tags` (an
+  absolute, unrolled block — `is_immune_to` short-circuits `calculate_damage` to zero net
+  damage regardless of the roll, matching notes.txt's "poison damage tagged so undead are
+  immune" example). `creatures.toml`'s `fire elemental` exercises both at once:
+  `immunity_tags = ["fire"]` (fire never gets through) alongside
+  `resistance_value`/`resistance_tags` covering physical damage types (reduced, not blocked).
+- **Conditions** (`active_conditions`, `apply_condition`/`dismiss_condition`) are dynamic —
+  gained and lost during play via triggers/tests (wound tiers, a chest's `"locked"`/`"jammed"`).
+  Use a condition only for something that can plausibly change mid-scene (a spell granting
+  temporary fire resistance); use a tag for something permanent to what the entity *is*. Don't
+  seed a creature with an always-on, never-removed condition just to express innate immunity —
+  that's what `immunity_tags`/`resistance_tags` are for.
+
+**`abilities` is a flat list now, the same shape as `inventory`**, not a dict keyed by
+ability name (that key was never actually read by any code — `find_attack_ability` only ever
+iterated `.values()` — so it was pure decoration removed for simplicity). Each entry is
+either a plain string, naming a shared catalog entity (`spells.toml`/`techniques.toml`)
+resolved by the new `resolve_ability(ability)` via `self.entities[name]` (the same pattern
+equipped items already used), or an inline table for a one-off innate ability with no shared
+entity to point at (`wolf`'s `bite`, `fire elemental`'s `flame_touch`; both now declared as
+plain `[[entity.abilities]]` array-of-tables entries rather than nested under a named key).
+`characters.toml`'s `gladstone` mixes both in one array — `abilities = [ "fireball",
+"cleave", { name = "punch", ... } ]` — since TOML 1.0 arrays can hold mixed element types.
+**Gotcha:** a bare `key = [...]` array assignment only attaches to whichever table header is
+currently open; `abilities` had to be placed *before* `[entity.equipped]` opens (among
+gladstone's other flat keys like `inventory`), not after — placing it after silently nested
+it inside `entity.equipped` instead of `entity` itself, with no parse error to catch it.
+Referencing `"cleave"` this way is what makes `techniques.toml`'s `cleave` entity reachable via
+`resolve_ability` at all.
+
+**`cleave` is now fully wired, both of its previous gaps fixed:**
+- Its `skill = [ "blades", "axes" ]` is a *list* (either skill can trigger it), unlike every
+  other ability/weapon's single-string `skill`. `find_attack_ability` used to compare with
+  plain `==`, which a list can never satisfy; it now delegates to `ability_matches_skill`,
+  which checks list membership when `skill` is a list and falls back to `==` otherwise (so
+  ordinary single-skill weapons/abilities are unaffected).
+- Its `damage_value = { dice = "user.weapon.dice", pips = "user.weapon.pips", bonus =
+  "user.strength_damage" }` means cleave's damage scales with whatever weapon the attacker
+  currently has equipped rather than a fixed amount. `resolve_damage_value` now runs both
+  `dice` and `pips` through the new `resolve_weapon_reference`, which resolves that exact
+  string via the new `get_equipped_weapon` (first equipped item with a `damage_value`,
+  mirroring `find_attack_ability`'s own equipped-item scan) and degrades to `0` if nothing's
+  equipped — never raises either way.
+
+**Choosing a technique over a basic attack on the same skill is solved above NLPCore's
+matching, not inside `find_attack_ability`.** `find_attack_ability` still checks equipped
+weapon before abilities and still can't return `cleave` for a bare `"blades"` skill_name --
+that priority is unchanged and, on its own, unfixable (there's no way to tell "attack" and
+"cleave" apart once both have collapsed to the same skill name). Instead, `NLPCore` embeds
+every `supertype in ("technique", "spell")` entity (`cleave`, `fireball`) into the *same*
+phrase space as skills (`_on_rules_loaded`, alongside the skill-phrase loop -- both now go
+through the shared `_add_phrases` helper). A player naming a technique directly (ex: "I cleave
+through them") can therefore come back from `map_to_action` as `"cleave"` instead of
+`"blades"` in the first place. `DMCore._on_action_detected` then calls the new
+`resolve_named_ability(self.player_name, skill_name)`, which checks whether `skill_name`
+literally names one of the player's own abilities (gating this on ownership -- matching itself
+is global/name-only, same as `map_to_item`, so this is what stops a monster's technique name
+from being usable just because the model matched it). If it does, `select_ability_skill`
+picks the player's best-rated skill among the technique's list (`cleave`'s
+`["blades", "axes"]` -> `"blades"` for gladstone, same dice*3+pips rating convention as
+`get_opposing_skill`) for the actual roll, and the already-known ability is used directly for
+damage -- `find_attack_ability` is never even called in this path, so its priority never
+gets a chance to pick the wrong one. A bare skill match (ex: "blades" itself) takes the
+original path unchanged, since `resolve_named_ability` only ever matches an actual ability
+name, never a skill name.
+
 ## Data/TOML conventions worth knowing
 
 - `DM_Core.load_rules` only special-cases `skill` and `entity` top-level keys; everything else
@@ -543,6 +617,4 @@ Roughly in the order they came up, none started yet:
 - `enhance`'s variable condition design (skills/modifier parameterized per apply-site,
   mirroring how `damage_value` already works).
 - GUI `Party Status`/`Notes`/`Map` tabs have display methods but nothing publishes to them.
-- `techniques.toml`'s `"user.weapon.dice"`-style indirection (ability damage derived from
-  whatever's currently equipped) isn't resolved by `resolve_damage_value` yet.
 - No `requirements.txt` / dependency manifest.

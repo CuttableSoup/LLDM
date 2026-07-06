@@ -2,6 +2,7 @@
 name = "cleave"
 supertype = "technique"
 subtype = "martial"
+description = "A wide, sweeping strike that can cut through multiple enemies at once."
 skill = [ "blades", "axes" ]
 difficulty = 10
 range = { minimum = 0, maximum = 1 }

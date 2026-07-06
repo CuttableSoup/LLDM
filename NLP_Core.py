@@ -84,13 +84,41 @@ class NLPCore:
         return None
 
 
+    def _add_phrases(self, all_phrases, indices, key, data):
+        """!
+        @brief Appends name/description/keyword phrases for one skill or technique/spell
+               entity to the shared phrase/index lists used to build a single embedding
+               matrix -- multiple phrases per entry avoid "dilution" from averaging
+               everything into one embedding.
+        @param all_phrases The phrase list to append to.
+        @param indices The parallel list of keys (one per phrase in all_phrases).
+        @param key The skill or ability name these phrases resolve to on a match.
+        @param data The skill/entity table, read for "description" and "keywords".
+        """
+        all_phrases.append(key)
+        indices.append(key)
+
+        description = data.get("description", "")
+        if description:
+            all_phrases.append(description)
+            indices.append(key)
+            all_phrases.append(f"{key} {description}")
+            indices.append(key)
+
+        for keyword in data.get("keywords", []):
+            all_phrases.append(keyword)
+            indices.append(key)
+            all_phrases.append(f"{key} {keyword}")
+            indices.append(key)
+
     def _on_rules_loaded(self, data):
         """!
         @brief Callback when rules are loaded from DMCore.
-        @param data The rules data containing skills.
+        @param data The rules data containing skills and entities.
         """
         self.skills_data = data.get("skills", {})
         self.skill_names = list(self.skills_data.keys())
+        entities_data = data.get("entities", {})
 
         if not self.skill_names:
             self.event_bus.publish("log_warning", "NLPCore: No skills loaded.")
@@ -104,38 +132,30 @@ class NLPCore:
         skill_indices = []
 
         for name, skill in self.skills_data.items():
-            # The name is the most important
-            all_phrases.append(name)
-            skill_indices.append(name)
-            
-            # The description provides broad context
-            desc = skill.get("description", "")
-            if desc:
-                all_phrases.append(desc)
-                skill_indices.append(name)
-                all_phrases.append(f"{name} {desc}")
-                skill_indices.append(name)
-            
-            # Keywords
-            for k in skill.get("keywords", []):
-                all_phrases.append(k)
-                skill_indices.append(name)
-                all_phrases.append(f"{name} {k}")
-                skill_indices.append(name)
+            self._add_phrases(all_phrases, skill_indices, name, skill)
+
+        # Techniques/spells (ex: "cleave", "fireball") are matched in this same embedding
+        # space, so a player naming one directly (ex: "I cleave through them") can resolve
+        # to that exact ability instead of only the skill it happens to share with a plain
+        # weapon -- see DMCore.resolve_named_ability, which gates this on the acting entity
+        # actually owning that ability before treating the match as anything but a skill name.
+        for name, entity in entities_data.items():
+            if entity.get("supertype") not in ("technique", "spell"):
+                continue
+            self._add_phrases(all_phrases, skill_indices, name, entity)
 
         # Pre-calculate embeddings for all phrases
         all_embeddings = self.model.encode(all_phrases, convert_to_tensor=True)
         self.all_embeddings = all_embeddings
         self.skill_indices = skill_indices
 
-        self.event_bus.publish("log_info", f"NLPCore: {len(all_phrases)} skill phrases encoded for {len(self.skill_names)} skills.")
+        self.event_bus.publish("log_info", f"NLPCore: {len(all_phrases)} skill/ability phrases encoded for {len(self.skill_names)} skills.")
 
         # Also build item-name embeddings, for "examine"/"take" item-interaction matching
         # (map_to_item). Only "object" supertype entities are physical items a player could
         # plausibly examine or pick up -- this indexes every known item by name/description,
         # not just what's in the current scene; DMCore is what checks whether the matched item
         # is actually present in the current target's inventory.
-        entities_data = data.get("entities", {})
         item_phrases = []
         item_indices = []
         for name, entity in entities_data.items():

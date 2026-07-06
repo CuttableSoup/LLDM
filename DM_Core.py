@@ -173,8 +173,8 @@ class DMCore:
         @param damage_value A {dice, pips, bonus} table from an ability, weapon, or spell.
         @return The total rolled damage before any reduction.
         """
-        dice = damage_value.get("dice", 0)
-        pips = damage_value.get("pips", 0)
+        dice = self.resolve_weapon_reference(attacker_name, damage_value.get("dice", 0), "dice")
+        pips = self.resolve_weapon_reference(attacker_name, damage_value.get("pips", 0), "pips")
         if not isinstance(dice, (int, float)) or not isinstance(pips, (int, float)):
             self.event_bus.publish("log_warning", f"Unsupported damage dice/pips reference: {damage_value}")
             dice, pips = 0, 0
@@ -182,22 +182,78 @@ class DMCore:
         bonus = self.resolve_bonus(attacker_name, damage_value.get("bonus", 0))
         return self.roll_dice(int(dice), int(pips)) + bonus
 
+    def get_equipped_weapon(self, entity_name):
+        """!
+        @brief Finds the first of an entity's equipped items that deals damage.
+        @param entity_name The name of the entity to check.
+        @return The equipped weapon's entity table, or None if nothing equipped has a damage_value.
+        """
+        entity = self.entities.get(entity_name, {})
+        for item_name in entity.get("equipped", {}).values():
+            item = self.entities.get(item_name)
+            if item and "damage_value" in item:
+                return item
+        return None
+
+    def resolve_weapon_reference(self, attacker_name, value, field):
+        """!
+        @brief Resolves a damage_value's dice/pips field when it's the "user.weapon.<field>"
+               indirection (ex: techniques.toml's cleave, whose damage scales with whatever
+               weapon the attacker currently has equipped, rather than a fixed amount).
+        @param attacker_name The name of the entity dealing damage.
+        @param value The dice or pips field from a damage_value table.
+        @param field Which field this is ("dice" or "pips"), matched against "user.weapon.<field>".
+        @return value unchanged if it isn't that reference; otherwise the attacker's equipped
+                weapon's matching field, or 0 if the attacker has no equipped weapon.
+        """
+        if value != f"user.weapon.{field}":
+            return value
+        weapon = self.get_equipped_weapon(attacker_name)
+        if weapon is None:
+            return 0
+        return weapon.get("damage_value", {}).get(field, 0)
+
     def get_damage_reduction(self, defender_name, damage_tags):
         """!
-        @brief Sums the rolled armor value of the defender's equipped items that resist any of the given damage tags.
+        @brief Sums the rolled reduction against the given damage tags: the defender's own
+               innate resistance_value/resistance_tags (ex: a fire elemental's inherent
+               resistance to physical damage) plus the rolled armor value of any equipped
+               items that resist the same tags. Both are static, tag-matched traits of the
+               entity/item -- distinct from active_conditions, which represent temporary state
+               gained/lost during play (see CLAUDE.md's tags-vs-conditions note).
         @param defender_name The name of the entity taking damage.
-        @param damage_tags The damage tags of the incoming attack (ex: ["slashing"]).
+        @param damage_tags The damage tags of the incoming attack (ex: ["fire"]).
         @return The total damage reduction.
         """
-        equipped = self.entities.get(defender_name, {}).get("equipped", {})
+        defender = self.entities.get(defender_name, {})
         reduction = 0
-        for item_name in equipped.values():
+
+        resistance_value = defender.get("resistance_value")
+        resistance_tags = defender.get("resistance_tags", [])
+        if resistance_value and any(tag in resistance_tags for tag in damage_tags):
+            reduction += self.roll_dice(resistance_value.get("dice", 0), resistance_value.get("pips", 0))
+
+        for item_name in defender.get("equipped", {}).values():
             item = self.entities.get(item_name, {})
             armor_value = item.get("armor_value")
             armor_tags = item.get("armor_tags", [])
             if armor_value and any(tag in armor_tags for tag in damage_tags):
                 reduction += self.roll_dice(armor_value.get("dice", 0), armor_value.get("pips", 0))
+
         return reduction
+
+    def is_immune_to(self, defender_name, damage_tags):
+        """!
+        @brief Whether an entity's immunity_tags fully negate an incoming attack's damage tags
+               (ex: a fire elemental's immunity to "fire"). Distinct from resistance/armor, which
+               reduce damage by a rolled amount -- immunity is an absolute, tag-matched block,
+               mirroring notes.txt's "poison damage tagged so undead are immune" example.
+        @param defender_name The name of the entity taking damage.
+        @param damage_tags The damage tags of the incoming attack (ex: ["fire"]).
+        @return True if any damage tag matches the defender's immunity_tags.
+        """
+        immunity_tags = self.entities.get(defender_name, {}).get("immunity_tags", [])
+        return any(tag in immunity_tags for tag in damage_tags)
 
     def get_current_hp(self, entity_name):
         """!
@@ -454,7 +510,8 @@ class DMCore:
 
     def calculate_damage(self, attacker_name, defender_name, ability):
         """!
-        @brief Calculates and applies damage from an attacker's ability to a defender, including resistances.
+        @brief Calculates and applies damage from an attacker's ability to a defender, including
+               immunity and resistance/armor reduction.
         @param attacker_name The name of the entity dealing damage.
         @param defender_name The name of the entity taking damage.
         @param ability A table with damage_value {dice, pips, bonus} and damage_tags, such as a weapon, spell, or innate ability.
@@ -464,7 +521,10 @@ class DMCore:
         damage_tags = ability.get("damage_tags", [])
 
         raw_damage = self.resolve_damage_value(attacker_name, damage_value)
-        reduction = self.get_damage_reduction(defender_name, damage_tags)
+        if self.is_immune_to(defender_name, damage_tags):
+            reduction = raw_damage
+        else:
+            reduction = self.get_damage_reduction(defender_name, damage_tags)
         net_damage = max(0, raw_damage - reduction)
         remaining_hp = self.apply_damage(defender_name, net_damage)
 
@@ -575,6 +635,10 @@ class DMCore:
     def find_attack_ability(self, entity_name, skill_name):
         """!
         @brief Finds the entity's equipped weapon or innate ability that uses the given skill and deals damage.
+               An equipped weapon matching skill_name always wins over an ability/technique that
+               also matches it (ex: gladstone's plain longsword swing over "cleave", both usable
+               via "blades") -- there's no player-facing way to choose a technique over a basic
+               attack on the same skill yet; see CLAUDE.md's cleave note.
         @param entity_name The name of the acting entity.
         @param skill_name The skill being used.
         @return The matching weapon/ability table (with damage_value and damage_tags), or None.
@@ -583,15 +647,97 @@ class DMCore:
 
         for item_name in entity.get("equipped", {}).values():
             item = self.entities.get(item_name)
-            if item and item.get("skill") == skill_name and "damage_value" in item:
+            if item and self.ability_matches_skill(item, skill_name) and "damage_value" in item:
                 return item
 
-        for ability_variants in entity.get("abilities", {}).values():
-            for ability in ability_variants:
-                if ability.get("skill") == skill_name and "damage_value" in ability:
-                    return ability
+        for ability in entity.get("abilities", []):
+            ability = self.resolve_ability(ability)
+            if ability and self.ability_matches_skill(ability, skill_name) and "damage_value" in ability:
+                return ability
 
         return None
+
+    def ability_matches_skill(self, ability, skill_name):
+        """!
+        @brief Whether an ability/weapon's "skill" field matches the given skill name -- either
+               a single skill (ex: a weapon's own skill) or, for a multi-skill technique (ex:
+               techniques.toml's cleave, usable via either "blades" or "axes"), a list any one
+               of which counts as a match.
+        @param ability The ability/weapon/spell/technique table to check.
+        @param skill_name The skill being used.
+        @return True if skill_name matches, directly or via list membership.
+        """
+        ability_skill = ability.get("skill")
+        if isinstance(ability_skill, list):
+            return skill_name in ability_skill
+        return ability_skill == skill_name
+
+    def resolve_ability(self, ability):
+        """!
+        @brief Resolves one entry from an entity's flat abilities list (mirroring how
+               "inventory" is a flat list of item names) to its definition table. An entry
+               is either a fully inlined table (ex: gladstone's "punch", wolf's "bite" --
+               innate abilities unique to that one entity, not shared anywhere else) or a
+               plain string naming a shared catalog entity (ex: gladstone's "fireball",
+               which points at the standalone spell defined once in spells.toml and looked
+               up here the same way equipped items are looked up by name via
+               self.entities). Keeps that shared data in one place instead of requiring
+               every caster to carry its own copy that can drift out of sync.
+        @param ability Either an ability/spell/technique table, or a string name to look up.
+        @return The resolved ability table, or None if a string reference doesn't match
+                any loaded entity.
+        """
+        if isinstance(ability, str):
+            return self.entities.get(ability)
+        return ability
+
+    def resolve_named_ability(self, entity_name, ability_name):
+        """!
+        @brief Checks whether ability_name literally names one of entity_name's own abilities
+               (ex: NLPCore matched "I cleave through them" directly to the technique "cleave"
+               rather than the plain skill "blades" it happens to share with an equipped
+               weapon). This is what lets a named technique/spell win over
+               find_attack_ability's equipped-weapon-first priority -- the exact ability is
+               already known here, rather than inferred from a skill name afterward.
+        @param entity_name The name of the acting entity.
+        @param ability_name The candidate ability name (ex: action_detected's "skill" field).
+        @return The resolved ability table if entity_name actually has it, else None.
+        """
+        entity = self.entities.get(entity_name, {})
+        for ability in entity.get("abilities", []):
+            resolved = self.resolve_ability(ability)
+            if resolved and resolved.get("name") == ability_name:
+                return resolved
+        return None
+
+    def select_ability_skill(self, entity_name, ability):
+        """!
+        @brief Picks which single skill to roll an ability with, when its "skill" field lists
+               multiple options (ex: cleave's ["blades", "axes"]) -- the entity's highest-rated
+               skill among them, using the same rating convention as get_opposing_skill
+               (dice*3 + pips). A single-string "skill" is returned unchanged.
+        @param entity_name The name of the entity attempting the ability.
+        @param ability The ability table.
+        @return The resolved skill name to roll, or None if the ability has no skill at all.
+        """
+        ability_skill = ability.get("skill")
+        if not isinstance(ability_skill, list):
+            return ability_skill
+
+        entity_skills = self.entities.get(entity_name, {}).get("skills", {})
+        best_skill = None
+        best_rating = None
+        for candidate in ability_skill:
+            stats = entity_skills.get(candidate)
+            if stats is None:
+                continue
+            rating = stats.get("dice", 0) * 3 + stats.get("pips", 0)
+            if best_rating is None or rating > best_rating:
+                best_rating = rating
+                best_skill = candidate
+        if best_skill is not None:
+            return best_skill
+        return ability_skill[0] if ability_skill else None
 
     def _on_action_detected(self, data):
         """!
@@ -599,11 +745,19 @@ class DMCore:
                and applies damage if the action hit with an attack ability. Combat (a target present that is
                hostile toward the player) narrates once per round via "round_resolved"; everything else
                (no target, or a non-hostile target like a tavern NPC) narrates immediately via "action_resolved".
-        @param data The action_detected payload from NLPCore ({skill, score, input}).
+        @param data The action_detected payload from NLPCore ({skill, score, input}). "skill" is
+               usually a plain skill name, but may also be a named technique/spell the player
+               owns (ex: "cleave") -- resolve_named_ability/select_ability_skill are what
+               convert that into the skill it's actually rolled with, while keeping the named
+               ability itself to use directly for damage further down.
         """
         skill_name = data.get("skill")
         if not skill_name:
             return
+
+        named_ability = self.resolve_named_ability(self.player_name, skill_name)
+        if named_ability:
+            skill_name = self.select_ability_skill(self.player_name, named_ability) or skill_name
 
         target_name = self._get_target_name()
         test = self.entities.get(target_name, {}).get("test") if target_name else None
@@ -626,7 +780,7 @@ class DMCore:
             result = self.resolve_action(self.player_name, skill_name)
 
         if result["success"] and target_name:
-            ability = self.find_attack_ability(self.player_name, skill_name)
+            ability = named_ability or self.find_attack_ability(self.player_name, skill_name)
             if ability:
                 result["damage"] = self.calculate_damage(self.player_name, target_name, ability)
 

@@ -8,8 +8,7 @@ max_hp = 16
 [entity.allies]
 name = [ "wolf" ]
 
-[entity.abilities]
-[[entity.abilities.bite]]
+[[entity.abilities]]
 name = "bite"
 supertype = "innate"
 subtype = "weapon"
@@ -24,3 +23,38 @@ reflexes = { dice = 2, pips = 0 }
 dodge = { dice = 6, pips = 0 }
 strength = { dice = 2, pips = 0 }
 brawling = { dice = 5, pips = 0 }
+
+[[entity]]
+name = "fire elemental"
+supertype = "creature"
+subtype = "elemental"
+description = "A churning column of living flame, molten cracks glowing across its body."
+
+max_hp = 30
+
+# Absolute, tag-matched block -- no roll, fire damage is simply negated (notes.txt's
+# "poison damage tagged so undead are immune" example, applied to fire).
+immunity_tags = [ "fire" ]
+# Partial, rolled reduction against non-fire physical damage -- same shape as an item's
+# armor_value/armor_tags, just innate to the creature instead of worn equipment.
+resistance_value = { dice = 2, pips = 0 }
+resistance_tags = [ "physical", "piercing", "bludgeoning", "slashing" ]
+
+[entity.allies]
+name = [ "fire elemental" ]
+
+[[entity.abilities]]
+name = "flame touch"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "fire" ]
+damage_value = { dice = 3, pips = 0, bonus = 0 }
+
+[entity.skills]
+fortitude = { dice = 4, pips = 0 }
+willpower = { dice = 3, pips = 0 }
+reflexes = { dice = 3, pips = 0 }
+dodge = { dice = 3, pips = 0 }
+strength = { dice = 4, pips = 0 }
+brawling = { dice = 4, pips = 0 }

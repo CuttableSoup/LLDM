@@ -2,6 +2,7 @@
 name = "fireball"
 supertype = "spell"
 subtype = "evocation"
+description = "Hurl a bolt of arcane fire that bursts into flame on impact."
 skill = "arcane"
 difficulty = 10
 range = { minimum = 0, maximum = 60 }

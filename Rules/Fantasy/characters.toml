@@ -23,21 +23,18 @@ languages = [ "common" ]
 memories = [ "A wife at home" ]
 quotes = [ "Hello, world" ]
 
+# Flat list, same shape as "inventory": a string names a shared catalog entity
+# (spells.toml/techniques.toml) resolved by name at use time; a table is a one-off innate
+# ability with no shared entity to point at.
+abilities = [
+    "fireball",
+    "cleave",
+    { name = "punch", supertype = "innate", subtype = "weapon", skill = "brawling", damage_tags = [ "bludgeoning" ], damage_value = { dice = 0, pips = 0, bonus = "user.strength_damage" } },
+]
+
 [entity.equipped]
 rhand = "longsword"
 chest = "chain mail"
-
-[entity.abilities]
-[[entity.abilities.fireball]]
-[[entity.abilities.cleave]]
-
-[[entity.abilities.punch]]
-name = "punch"
-supertype = "innate"
-subtype = "weapon"
-skill = "brawling"
-damage_tags = [ "bludgeoning" ]
-damage_value = { dice = 0, pips = 0, bonus = "user.strength_damage" }
 
 [entity.attitudes]
 default = [ 0, 0, 0, 0, 0, 0 ]

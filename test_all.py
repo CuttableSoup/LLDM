@@ -356,11 +356,19 @@ class TestDamageCalculation(unittest.TestCase):
         )
         self.assertEqual(total, 10)
 
-    def test_damage_value_ignores_unsupported_dice_reference(self):
-        # Indirect references like "user.weapon.dice" (used by techniques.toml) aren't
-        # resolvable yet; they should degrade to 0 dice rather than raise.
+    @patch("random.randint", return_value=4)
+    def test_damage_value_resolves_weapon_reference_from_equipped_weapon(self, mock_randint):
+        # techniques.toml's cleave uses "user.weapon.dice"/"user.weapon.pips"; gladstone's
+        # equipped longsword (1 die, 2 pips) supplies both: 1 die @ 4 + 2 pips = 6.
         total = self.dm_core.resolve_damage_value(
             "gladstone", {"dice": "user.weapon.dice", "pips": "user.weapon.pips", "bonus": 0}
+        )
+        self.assertEqual(total, 6)
+
+    def test_damage_value_weapon_reference_degrades_to_zero_without_equipped_weapon(self):
+        # wolf has no equipped weapon at all, so the same indirection safely falls back to 0.
+        total = self.dm_core.resolve_damage_value(
+            "wolf", {"dice": "user.weapon.dice", "pips": "user.weapon.pips", "bonus": 0}
         )
         self.assertEqual(total, 0)
 
@@ -402,6 +410,62 @@ class TestDamageCalculation(unittest.TestCase):
         self.assertEqual(result["net_damage"], 0)
         self.assertEqual(result["remaining_hp"], 36)
 
+    def test_fire_elemental_is_immune_to_fire_tag(self):
+        self.assertTrue(self.dm_core.is_immune_to("fire elemental", ["fire"]))
+        self.assertFalse(self.dm_core.is_immune_to("fire elemental", ["slashing"]))
+        # Immunity is a hard tag match, not a rolled amount -- an entity with no
+        # immunity_tags at all (gladstone) is never immune to anything.
+        self.assertFalse(self.dm_core.is_immune_to("gladstone", ["fire"]))
+
+    @patch("random.randint", return_value=3)
+    def test_innate_resistance_reduces_matching_tags_like_armor(self, mock_randint):
+        # Fire elemental's resistance_value (2 dice) applies to physical tags, not fire.
+        self.assertEqual(self.dm_core.get_damage_reduction("fire elemental", ["slashing"]), 6)
+        self.assertEqual(self.dm_core.get_damage_reduction("fire elemental", ["fire"]), 0)
+
+    @patch("random.randint", return_value=4)
+    def test_calculate_damage_fireball_negated_by_matching_immunity(self, mock_randint):
+        # Gladstone's fireball (5 dice fire) rolls 20 raw damage, but the fire elemental's
+        # immunity_tags fully negate it -- net damage is 0 regardless of the roll.
+        fireball = self.dm_core.find_attack_ability("gladstone", "arcane")
+        result = self.dm_core.calculate_damage("gladstone", "fire elemental", fireball)
+
+        self.assertEqual(result["raw_damage"], 20)
+        self.assertEqual(result["reduction"], 20)
+        self.assertEqual(result["net_damage"], 0)
+        self.assertEqual(result["remaining_hp"], 30)
+
+    @patch("random.randint", return_value=4)
+    def test_calculate_damage_fireball_unresisted_against_non_immune_target(self, mock_randint):
+        # The same fireball against a target with no fire immunity/resistance (wolf) hits normally.
+        fireball = self.dm_core.find_attack_ability("gladstone", "arcane")
+        result = self.dm_core.calculate_damage("gladstone", "wolf", fireball)
+
+        self.assertEqual(result["raw_damage"], 20)
+        self.assertEqual(result["reduction"], 0)
+        self.assertEqual(result["net_damage"], 20)
+
+    def test_cleave_is_reachable_via_either_listed_skill(self):
+        # cleave's skill field is a list (["blades", "axes"]) -- gladstone's equipped longsword
+        # already matches "blades" and wins there (see find_attack_ability's docstring), but
+        # nothing equipped matches "axes", so cleave surfaces via ability_matches_skill's
+        # list-membership check.
+        cleave = self.dm_core.find_attack_ability("gladstone", "axes")
+        self.assertIsNotNone(cleave)
+        self.assertEqual(cleave["name"], "cleave")
+
+    @patch("random.randint", return_value=4)
+    def test_calculate_damage_cleave_uses_equipped_weapons_dice_and_pips(self, mock_randint):
+        # cleave's damage_value is "user.weapon.dice"/"user.weapon.pips", resolved from
+        # gladstone's equipped longsword (1 die, 2 pips) plus strength_damage bonus (1):
+        # 1 die @ 4 + 2 pips + 1 bonus = 7 raw damage, slashing.
+        cleave = self.dm_core.find_attack_ability("gladstone", "axes")
+        result = self.dm_core.calculate_damage("gladstone", "wolf", cleave)
+
+        self.assertEqual(result["raw_damage"], 7)
+        self.assertEqual(result["reduction"], 0)
+        self.assertEqual(result["net_damage"], 7)
+
 
 class TestCombatLoop(unittest.TestCase):
     def setUp(self):
@@ -424,8 +488,66 @@ class TestCombatLoop(unittest.TestCase):
         self.assertIsNotNone(ability)
         self.assertEqual(ability["name"], "punch")
 
+    def test_find_attack_ability_resolves_name_referenced_spell(self):
+        # Gladstone's abilities table names "fireball" rather than inlining it; find_attack_ability
+        # must resolve that reference to the shared spells.toml entity to find "arcane"/damage_value.
+        ability = self.dm_core.find_attack_ability("gladstone", "arcane")
+        self.assertIsNotNone(ability)
+        self.assertEqual(ability["name"], "fireball")
+        self.assertIs(ability, self.dm_core.entities["fireball"])
+
+    def test_resolve_ability_passes_through_inline_tables_and_looks_up_string_references(self):
+        inline = {"name": "punch", "skill": "brawling"}
+        self.assertIs(self.dm_core.resolve_ability(inline), inline)
+        self.assertIs(self.dm_core.resolve_ability("fireball"), self.dm_core.entities["fireball"])
+        self.assertIsNone(self.dm_core.resolve_ability("not_a_real_ability"))
+
     def test_find_attack_ability_returns_none_for_unmatched_skill(self):
-        self.assertIsNone(self.dm_core.find_attack_ability("gladstone", "arcane"))
+        self.assertIsNone(self.dm_core.find_attack_ability("gladstone", "athletics"))
+
+    def test_resolve_named_ability_finds_owned_ability_by_name(self):
+        cleave = self.dm_core.resolve_named_ability("gladstone", "cleave")
+        self.assertIsNotNone(cleave)
+        self.assertIs(cleave, self.dm_core.entities["cleave"])
+
+    def test_resolve_named_ability_returns_none_for_a_plain_skill_name(self):
+        # "blades" is a skill gladstone has, not an ability of his -- must not match.
+        self.assertIsNone(self.dm_core.resolve_named_ability("gladstone", "blades"))
+
+    def test_resolve_named_ability_returns_none_for_an_ability_the_entity_lacks(self):
+        # wolf has no "cleave" ability, only "bite".
+        self.assertIsNone(self.dm_core.resolve_named_ability("wolf", "cleave"))
+
+    def test_select_ability_skill_picks_best_rated_option_from_a_skill_list(self):
+        # cleave's skill is ["blades", "axes"]; gladstone has "blades" (5 dice) and no "axes"
+        # entry at all, so "blades" must be the one selected.
+        cleave = self.dm_core.entities["cleave"]
+        self.assertEqual(self.dm_core.select_ability_skill("gladstone", cleave), "blades")
+
+    def test_select_ability_skill_passes_through_a_single_skill_string(self):
+        fireball = self.dm_core.entities["fireball"]
+        self.assertEqual(self.dm_core.select_ability_skill("gladstone", fireball), "arcane")
+
+    def test_action_detected_with_named_ability_bypasses_find_attack_ability_priority(self):
+        # find_attack_ability("gladstone", "blades") would normally return the equipped
+        # longsword, never "cleave" (see test_find_attack_ability_prefers_equipped_weapon).
+        # When NLPCore matches input directly to "cleave" by name, _on_action_detected must
+        # use that exact ability instead -- proven here by asserting find_attack_ability is
+        # never even called.
+        self.dm_core.entities["practice_dummy"] = {"name": "practice_dummy", "max_hp": 20, "skills": {}}
+        self.dm_core.scenario = {"entities": [{"name": "practice_dummy", "band": 0}]}
+        self.dm_core.load_scenario()
+
+        with patch.object(self.dm_core, "find_attack_ability", wraps=self.dm_core.find_attack_ability) as spy:
+            with patch("random.randint", return_value=3):
+                self.dm_core._on_action_detected({"skill": "cleave", "input": "I cleave through them"})
+
+        spy.assert_not_called()
+        result = self.resolved[-1]
+        self.assertTrue(result["success"])
+        self.assertEqual(result["skill"], "blades")  # cleave resolved to gladstone's best listed skill
+        self.assertIn("damage", result)
+        self.assertGreater(result["damage"]["net_damage"], 0)
 
     def test_missed_attack_does_not_apply_damage(self):
         # wolf's dodge (6 dice) will always beat gladstone's blades (2 dice) at this fixed roll.
