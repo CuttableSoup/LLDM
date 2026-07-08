@@ -63,6 +63,9 @@ inventory = [ "cursed dagger" ]
 [entity.conditions.locked]
 duration = "permanent"
 
+[entity.conditions.closed]
+duration = "permanent"
+
 [entity.test]
 difficulty = 12
 skill = [ "finesse" ]

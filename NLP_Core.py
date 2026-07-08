@@ -6,12 +6,24 @@
 import numpy as np
 from sentence_transformers import SentenceTransformer, util
 
-# Substring checks against processed input to decide "examine" vs "take" intent, before any
-# skill matching runs. Phrases (not bare words) where a bare word would collide with an
-# existing skill phrasing already in use -- ex: "pick" alone would misfire on "I pick the lock"
-# (finesse), so "pick up" (the two-word phrase) is required instead.
+# Substring checks against processed input to decide item-interaction intent, before any skill
+# matching runs. Phrases (not bare words) where a bare word would collide with an existing
+# skill phrasing already in use -- ex: "pick" alone would misfire on "I pick the lock"
+# (finesse), so "pick up" (the two-word phrase) is required instead. Same reasoning for
+# OPEN/CLOSE_KEYWORDS requiring "the"/"it" rather than a bare "close " -- "blades"'s own
+# description is "Using swords and knives in close combat.", which a bare "close " would
+# misfire on before skill matching ever got a chance to run.
 EXAMINE_KEYWORDS = ("examine", "inspect", "look at", "check out")
 TAKE_KEYWORDS = ("take ", "grab ", "pick up", "loot ")
+# "give"/"trade" move an item the opposite directions ("give" is player -> target, "trade" is
+# target -> player but paid) -- see DMCore._on_item_interaction_detected. TRADE_KEYWORDS
+# deliberately avoids every word in skills.toml's "appraise" keywords list (evaluation,
+# commerce, investigation, value, price, worth, cost, identify, examine), so a phrase like
+# "what's this worth" still reaches appraise instead of being swallowed here.
+GIVE_KEYWORDS = ("give ", "hand over", "offer ")
+TRADE_KEYWORDS = ("trade ", "buy ", "purchase ")
+OPEN_KEYWORDS = ("open the ", "open it")
+CLOSE_KEYWORDS = ("close the ", "close it", "shut the ", "shut it")
 
 # map_to_item checks these before any embedding match -- currency is a plain integer field
 # (entity["currency"]), not an object-supertype entity with a name/description to embed.
@@ -64,6 +76,14 @@ class NLPCore:
             return
 
         intent = self._detect_item_intent(processed)
+        if intent in ("open", "close"):
+            # These act on the current scene target directly (ex: "open the chest" opens
+            # *the* chest, not some named item inside it) -- no item name to resolve at all,
+            # so map_to_item never runs for them.
+            self.event_bus.publish("item_interaction_detected", {
+                "intent": intent, "item_name": None, "input": processed, "score": None,
+            })
+            return
         if intent:
             item_name, item_score = self.map_to_item(processed)
             if item_name:
@@ -71,9 +91,9 @@ class NLPCore:
                     "intent": intent, "item_name": item_name, "input": processed, "score": item_score,
                 })
                 return
-            # A recognized "examine"/"take" verb but no matching item name -- fall through to
-            # skill matching below rather than silently dropping it (ex: could still be a
-            # legitimate skill phrase that happens to contain one of these words).
+            # A recognized "examine"/"take"/"give"/"trade" verb but no matching item name --
+            # fall through to skill matching below rather than silently dropping it (ex: could
+            # still be a legitimate skill phrase that happens to contain one of these words).
 
         skill, score = self.map_to_action(processed)
         if skill:
@@ -85,14 +105,22 @@ class NLPCore:
 
     def _detect_item_intent(self, processed_text):
         """!
-        @brief Checks processed input for an "examine" or "take" verb, ahead of skill matching.
+        @brief Checks processed input for an item-interaction verb, ahead of skill matching.
         @param processed_text The cleaned and processed player input.
-        @return "examine", "take", or None.
+        @return "examine", "take", "give", "trade", "open", "close", or None.
         """
         if any(keyword in processed_text for keyword in EXAMINE_KEYWORDS):
             return "examine"
         if any(keyword in processed_text for keyword in TAKE_KEYWORDS):
             return "take"
+        if any(keyword in processed_text for keyword in GIVE_KEYWORDS):
+            return "give"
+        if any(keyword in processed_text for keyword in TRADE_KEYWORDS):
+            return "trade"
+        if any(keyword in processed_text for keyword in OPEN_KEYWORDS):
+            return "open"
+        if any(keyword in processed_text for keyword in CLOSE_KEYWORDS):
+            return "close"
         return None
 
     def _detect_save_load_intent(self, processed_text):

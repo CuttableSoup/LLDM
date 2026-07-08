@@ -405,6 +405,17 @@ class DMCore:
         """
         return "locked" in self.entities.get(entity_name, {}).get("active_conditions", {})
 
+    def is_closed(self, entity_name):
+        """!
+        @brief Whether a container (ex: a chest) currently has the "closed" condition active.
+               Mirrors is_locked exactly. Absent from active_conditions means not closed (open)
+               by default, so any container with no [entity.conditions.closed] seeded in TOML
+               is unaffected -- only items.toml's chest opts into this today.
+        @param entity_name The name of the entity to check.
+        @return True if "closed" is in the entity's active_conditions.
+        """
+        return "closed" in self.entities.get(entity_name, {}).get("active_conditions", {})
+
     def transfer_currency(self, from_name, to_name, amount=None):
         """!
         @brief Moves currency from one entity to another (ex: looting a chest's gold).
@@ -908,13 +919,21 @@ class DMCore:
 
     def _on_item_interaction_detected(self, data):
         """!
-        @brief Event handler for a free-text "examine"/"take" match against an item name
-               (see NLPCore.map_to_item). Deliberately bypasses the whole skill/dice system --
-               looking at or picking up something already accessible doesn't warrant a roll.
-               "examine" never changes state; "take" calls transfer_item. Publishes
-               "item_interaction_resolved" either way, with enough detail for narration to
-               explain a miss (locked, not present, not takeable) rather than staying silent.
-        @param data The item_interaction_detected payload from NLPCore ({intent, item_name, input, score}).
+        @brief Event handler for a free-text item-interaction match (see NLPCore.map_to_item):
+               "examine"/"take"/"give"/"trade" against a named item, or "open"/"close" against
+               the scene target itself. Deliberately bypasses the whole skill/dice system --
+               none of these warrant a roll. Publishes "item_interaction_resolved" either way,
+               with enough detail for narration to explain a miss (locked, closed, not present,
+               not takeable, ...) rather than staying silent.
+
+               "take"/"trade" move an item from the target to the player; "give" moves one from
+               the player to the target -- same transfer_item/transfer_currency primitives,
+               just with source/destination swapped. "trade" additionally charges the item's
+               TOML `value` as a price (denied outright if the player can't afford it, rather
+               than a partial payment). "examine" and "open"/"close" never move anything.
+        @param data The item_interaction_detected payload from NLPCore
+               ({intent, item_name, input, score}). "item_name" is None for "open"/"close",
+               which act on the scene target directly rather than a named item.
         """
         intent = data.get("intent")
         item_name = data.get("item_name")
@@ -930,23 +949,13 @@ class DMCore:
             resolved(False, reason="locked", container=target_name)
             return
 
-        if item_name == "currency":
-            # Currency is a plain "currency" integer field, not an inventory item -- handled
-            # separately from transfer_item/container_inventory below.
-            available = self.entities.get(target_name, {}).get("currency", 0) if target_name else 0
-            if available <= 0:
-                resolved(False, reason="not_present")
-                return
-            if intent == "examine":
-                resolved(True, description=f"{available} currency", container=target_name)
-            else:
-                moved = self.transfer_currency(target_name, self.player_name)
-                resolved(True, container=target_name, amount=moved)
+        if intent in ("open", "close"):
+            self._resolve_open_close_intent(intent, target_name, resolved)
             return
 
         if item_name == target_name:
-            # Examining the container/creature itself, not something inside it -- there's
-            # nothing to "take" about the target as a whole.
+            # Interacting with the container/creature itself, not something inside it -- there's
+            # nothing to "take"/"give"/"trade" about the target as a whole.
             if intent == "examine":
                 description = self.describe_character(target_name, toward_name=self.player_name) or ""
                 resolved(True, description=description)
@@ -954,17 +963,88 @@ class DMCore:
                 resolved(False, reason="not_takeable")
             return
 
-        container_inventory = self.entities.get(target_name, {}).get("inventory", []) if target_name else []
-        if item_name not in container_inventory:
+        if target_name and self.is_closed(target_name):
+            # A closed (but unlocked) container can still be examined/opened from the outside
+            # (handled above/below) -- only reaching its *contents* is gated here.
+            resolved(False, reason="closed", container=target_name)
+            return
+
+        if intent == "give":
+            if not target_name:
+                resolved(False, reason="no_recipient")
+                return
+            source_name, destination_name = self.player_name, target_name
+        else:
+            source_name, destination_name = target_name, self.player_name
+
+        if item_name == "currency":
+            if intent == "trade":
+                # Trading for currency itself is meaningless -- nothing to buy or sell here.
+                # Checked before availability, since this is wrong regardless of the amount.
+                resolved(False, reason="not_takeable")
+                return
+            # Currency is a plain "currency" integer field, not an inventory item -- handled
+            # separately from transfer_item/source_inventory below.
+            available = self.entities.get(source_name, {}).get("currency", 0) if source_name else 0
+            if available <= 0:
+                resolved(False, reason="not_present")
+                return
+            if intent == "examine":
+                resolved(True, description=f"{available} currency", container=target_name)
+            else:
+                moved = self.transfer_currency(source_name, destination_name)
+                resolved(True, container=target_name, amount=moved)
+            return
+
+        source_inventory = self.entities.get(source_name, {}).get("inventory", []) if source_name else []
+        if item_name not in source_inventory:
             resolved(False, reason="not_present")
             return
 
         if intent == "examine":
             description = self.entities.get(item_name, {}).get("description", "")
             resolved(True, description=description, container=target_name)
+        elif intent == "trade":
+            price = self.entities.get(item_name, {}).get("value", 0)
+            buyer_currency = self.entities.get(self.player_name, {}).get("currency", 0)
+            if buyer_currency < price:
+                resolved(False, reason="cant_afford", price=price)
+                return
+            self.transfer_currency(self.player_name, target_name, price)
+            self.transfer_item(source_name, destination_name, item_name)
+            resolved(True, container=target_name, price=price)
         else:
-            self.transfer_item(target_name, self.player_name, item_name)
+            self.transfer_item(source_name, destination_name, item_name)
             resolved(True, container=target_name)
+
+    def _resolve_open_close_intent(self, intent, target_name, resolved):
+        """!
+        @brief Handles "open"/"close" against the current scene target directly -- these act on
+               the container itself, not a named item inside it, so (unlike the other item
+               intents) they never go through map_to_item at all. Gated to subtype ==
+               "container" (ex: items.toml's chest) so aiming "open"/"close" at a creature or a
+               plain object with no openable nature fails safely instead of silently applying a
+               nonsensical condition to it.
+        @param intent "open" or "close".
+        @param target_name The current scene target's name, or None if there isn't one.
+        @param resolved The item_interaction_resolved publisher closure from the caller.
+        """
+        if not target_name or self.entities.get(target_name, {}).get("subtype") != "container":
+            resolved(False, reason="not_openable")
+            return
+
+        if intent == "open":
+            if not self.is_closed(target_name):
+                resolved(False, reason="already_open", container=target_name)
+                return
+            self.dismiss_condition(target_name, "closed")
+        else:
+            if self.is_closed(target_name):
+                resolved(False, reason="already_closed", container=target_name)
+                return
+            self.apply_condition(target_name, "closed", duration="permanent", dismiss="")
+
+        resolved(True, container=target_name)
 
     def get_attitude(self, entity_name, toward_name):
         """!

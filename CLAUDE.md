@@ -496,39 +496,70 @@ for a chest that only ever held currency). This machinery is what "Examining and
 lock was picked — this was reverted because a player has no chance to *examine* something (ex:
 a cursed weapon) before deciding whether to take it if it's already silently in their pack.
 Unlocking a container now only ever dismisses `"locked"`; the contents stay put until the player
-deliberately examines or takes something.
+deliberately opens it and then examines or takes something.
 
-This is a distinct interaction path from the whole skill/dice system, because looking at or
-picking up something already accessible doesn't warrant a roll:
-- **`NLPCore._detect_item_intent(processed_text)`** checks for an `"examine"` verb
-  (`examine`/`inspect`/`look at`/`check out`) or a `"take"` verb (`take `/`grab `/`pick up`/
-  `loot `) *before* skill matching runs. **Phrases, not bare words, on purpose** — a bare
-  `"pick"` would misfire on `"I pick the lock"` (the existing `finesse` lockpicking flow), so
-  `"pick up"` (two words) is required instead; verified this doesn't regress lockpicking.
-- **`NLPCore.map_to_item(processed_text)`** — the same embedding-match pattern as
-  `map_to_action`, but against every `supertype == "object"` entity's name/description (built in
-  `_on_rules_loaded` alongside the skill embeddings). **Currency is checked first as a fixed
-  synonym list** (`gold`/`coin`/`currency`/`money`), returning the sentinel item name
-  `"currency"` — it's a plain integer field on entities, not an object-supertype entity with a
-  name to embed, so there's nothing to match it against semantically.
-- If both a verb and an item are found, NLPCore publishes **`item_interaction_detected`**
-  (`{intent, item_name, input, score}`) *instead of* running skill matching for that input at
-  all. A recognized verb with no item match still falls through to normal skill matching (ex: in
-  case the phrase legitimately meant something else).
-- **`DMCore._on_item_interaction_detected`** resolves it with zero dice rolls: locked container
-  → denied (`reason: "locked"`); `item_name == "currency"` → `transfer_currency` (`"take"`) or
-  just describes the amount (`"examine"`), via the same fixed sentinel; `item_name` equal to the
-  current target's own name → `describe_character` for `"examine"`, `reason: "not_takeable"` for
-  `"take"` (you can't pocket the whole chest); otherwise checked against the target's `inventory`
-  list — `"take"` calls `transfer_item`, `"examine"` just reads `entities[item_name]["description"]`
-  and changes nothing. Publishes `item_interaction_resolved` either way (`found` plus
-  `description`/`container`/`amount`/`reason` as applicable) so narration always has something
-  to say, never silence.
+This is a distinct interaction path from the whole skill/dice system, because looking at,
+taking, giving, trading, opening, or closing something already accessible doesn't warrant a
+roll. Six intents share one pipeline:
+- **`NLPCore._detect_item_intent(processed_text)`** checks for one of six verbs, *before* skill
+  matching runs: `"examine"` (`examine`/`inspect`/`look at`/`check out`), `"take"` (`take `/
+  `grab `/`pick up`/`loot `), `"give"` (`give `/`hand over`/`offer `), `"trade"` (`trade `/
+  `buy `/`purchase `), `"open"` (`open the `/`open it`), `"close"` (`close the `/`close it`/
+  `shut the `/`shut it`). **Phrases, not bare words, on purpose** — a bare `"pick"` would
+  misfire on `"I pick the lock"` (the existing `finesse` lockpicking flow), so `"pick up"` (two
+  words) is required instead; verified this doesn't regress lockpicking. Same reasoning forced
+  `open`/`close` into `"...the "`/`"...it"` phrases rather than bare `"open "`/`"close "` —
+  `blades`'s own description is `"Using swords and knives in close combat."`, and a bare
+  `"close "` would have swallowed that input before skill matching ever ran. **`TRADE_KEYWORDS`
+  deliberately avoids every word in `appraise`'s own keyword list** (`evaluation`, `commerce`,
+  `investigation`, `value`, `price`, `worth`, `cost`, `identify`, `examine`), so a phrase like
+  "what's this worth" still reaches `appraise` instead of being swallowed here.
+- **`open`/`close` skip item-name matching entirely.** They act on the current scene target
+  directly (`"open the chest"` opens *the* chest, not some named item inside it), so `NLPCore`
+  publishes `item_interaction_detected` with `item_name: None` for them without ever calling
+  `map_to_item`. The other four intents still go through **`NLPCore.map_to_item(processed_text)`**
+  — the same embedding-match pattern as `map_to_action`, but against every `supertype == "object"`
+  entity's name/description (built in `_on_rules_loaded` alongside the skill embeddings).
+  **Currency is checked first as a fixed synonym list** (`gold`/`coin`/`currency`/`money`),
+  returning the sentinel item name `"currency"` — it's a plain integer field on entities, not an
+  object-supertype entity with a name to embed, so there's nothing to match it against
+  semantically. If a verb is recognized but no item matches, the input falls through to normal
+  skill matching (ex: in case the phrase legitimately meant something else).
+- **`DMCore._on_item_interaction_detected`** resolves it with zero dice rolls. Shared gates
+  first: a locked container denies everything (`reason: "locked"`); `open`/`close` are handled
+  by `_resolve_open_close_intent` and return immediately (see below); `item_name` equal to the
+  current target's own name means the player is addressing the target itself, not something
+  inside it (`describe_character` for `"examine"`, `reason: "not_takeable"` for anything else —
+  you can't pocket, give away, or sell the whole chest); a **closed** (but unlocked) container
+  denies reaching its *contents* (`reason: "closed"`) while still allowing it to be examined or
+  opened. Past those gates, **`"take"`/`"trade"` move an item from the target to the player;
+  `"give"` moves one from the player to the target** — same `transfer_item`/`transfer_currency`
+  primitives, just with source/destination swapped depending on intent. `"trade"` additionally
+  charges the item's TOML `value` field as a price, charged via `transfer_currency` *before* the
+  item moves — if the player can't afford it, the trade is denied outright (`reason:
+  "cant_afford"`) rather than partially resolving. Publishes `item_interaction_resolved` either
+  way (`found` plus `description`/`container`/`amount`/`price`/`reason` as applicable) so
+  narration always has something to say, never silence.
+- **`DMCore._resolve_open_close_intent`** is gated to `subtype == "container"` (ex: `chest`), so
+  aiming `"open"`/`"close"` at a creature or a plain object with no openable nature fails safely
+  (`reason: "not_openable"`) instead of silently applying a nonsensical condition to it. Toggles
+  the same `"closed"` condition `is_closed` reads, seeded on `chest` via
+  `[entity.conditions.closed]` — **independent of `"locked"`**: unlocking (picking the lock)
+  only ever dismisses `"locked"`, so a freshly-picked chest is unlocked but still closed, and
+  needs its own `"open"` action before its contents are reachable. Re-closing (`"close"`)
+  re-applies the condition and re-blocks contents access; opening/closing an already-open/closed
+  container fails safely (`reason: "already_open"`/`"already_closed"`) rather than re-toggling.
 - **`LLMCore.generate_item_interaction_response`** narrates it — explicitly telling the LLM
   `"nothing is taken, moved, or changed"` for a found `"examine"`, so it doesn't imply a transfer
   that didn't happen. Verified live: examining `items.toml`'s `"cursed dagger"` (added specifically
   to exercise this) describes its glowing runes without adding it anywhere; a separate `"take"`
-  afterward is what actually moves it, narrated as its own distinct moment.
+  afterward is what actually moves it, narrated as its own distinct moment. Since `item_name` is
+  `None` for `"open"`/`"close"`, the prompt-building falls back to `container` (the target's own
+  name) wherever it would otherwise quote the item.
+
+**Known gap, deliberately out of scope for now:** movement/positioning on a battle grid is
+anticipated as the next interaction verb once band/range targeting exists (see "Open threads"),
+but nothing here — not even a `move`/`go` keyword — attempts it yet.
 
 ## Tags vs. conditions
 
@@ -711,11 +742,14 @@ share one load rather than paying that cost twice) and `TestInnkeeperConversatio
 - `TestNlpConfidenceThreshold` — a low-confidence input (a plain greeting) triggers no
   `action_detected` at all (but does publish `action_not_understood`), while a clear action
   still triggers `action_detected` at/above `NLPCore.confidence_threshold`. Also covers
-  `_detect_item_intent` (examine/take/neither), the `"pick the lock"` vs `"pick up X"`
-  collision guard (a real `user_input_submitted` of `"I pick the lock"` still produces
-  `action_detected` for `finesse`, never `item_interaction_detected`), and a full-pipeline
-  check that a known item name (`"cursed dagger"`) is matched regardless of which scenario is
-  currently active (matching is global; DMCore is what checks scene-relevance).
+  `_detect_item_intent` (all six verbs, including `"pick the lock"` vs `"pick up X"`'s
+  collision guard — a real `user_input_submitted` of `"I pick the lock"` still produces
+  `action_detected` for `finesse`, never `item_interaction_detected` — and `"close combat"` vs
+  `"close the chest"`'s equivalent guard for `blades`), a full-pipeline check that a known item
+  name (`"cursed dagger"`) is matched regardless of which scenario is currently active (matching
+  is global; DMCore is what checks scene-relevance), a full-pipeline check that `"open"` never
+  calls `map_to_item` at all (`item_name` stays `None`), and a check that none of `appraise`'s
+  own keywords accidentally trigger the trade intercept.
 - `TestClarificationResponse` — `action_not_understood` queues a prompt describing what the
   player said with no roll/damage shape in it (checked via `llm_core.context_window`
   immediately after publish, since `_queue_narration` appends synchronously before spawning
@@ -773,6 +807,24 @@ share one load rather than paying that cost twice) and `TestInnkeeperConversatio
   `transfer_currency`/an amount-only description instead of `transfer_item`, an absent item
   reports `reason: "not_present"`, examining the container itself (`item_name == target_name`)
   uses `describe_character`, and taking the container itself reports `reason: "not_takeable"`.
+  Also covers the new `"closed"` gate: contents are blocked (`reason: "closed"`) once
+  unlocked-but-not-yet-opened, via a shared `_open_the_chest` helper other tests call before
+  reaching in.
+- `TestOpenClose` — `DMCore._resolve_open_close_intent` against the dungeon's chest: starts
+  closed (seeded from `[entity.conditions.closed]`), blocked by `"locked"` first, `"open"`
+  dismisses `"closed"` once unlocked, repeat `"open"`/`"close"` on an already-open/closed chest
+  fails safe (`reason: "already_open"`/`"already_closed"`) instead of re-toggling, `"close"`
+  re-applies the condition and re-blocks contents access, and both fail safe with `reason:
+  "not_openable"` against a non-`"container"` subtype (ex: the tavern's `innkeeper`) or no
+  target at all.
+- `TestGiveAndTrade` — `"give"` moves an item or all currency from the player to the target
+  (tavern's `innkeeper`, a living recipient unlike the dungeon's chest); an item the player
+  doesn't actually have reports `reason: "not_present"`; no target at all reports `reason:
+  "no_recipient"`. `"trade"` charges the item's TOML `value` (dungeon's `chest` reused as an
+  ad-hoc "shop"), moving currency *and* the item only together, never partially — an
+  unaffordable price is denied outright (`reason: "cant_afford"`) with both sides left
+  untouched; trading for the `"currency"` sentinel itself is rejected (`reason:
+  "not_takeable"`) since buying gold with gold is meaningless.
 - `TestInventoryTransfer` — `transfer_currency` (moves all by default, clamps to what's
   available, no-ops for a missing entity), `transfer_item` (moves exactly one matching entry
   out of a duplicate-containing `inventory` list, returns `False` if absent), and `loot_entity`
@@ -831,3 +883,6 @@ Roughly in the order they came up, none started yet:
   mirroring how `damage_value` already works).
 - GUI `Party Status`/`Notes`/`Map` tabs have display methods but nothing publishes to them.
 - No `requirements.txt` / dependency manifest.
+- **Movement/positioning on a battle grid** — flagged as important once band/range targeting
+  (see "Real targeting" above) exists, but not started; no `move`/`go` keyword exists anywhere
+  yet, unlike `examine`/`take`/`give`/`trade`/`open`/`close`.

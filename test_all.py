@@ -163,6 +163,47 @@ class TestNlpConfidenceThreshold(unittest.TestCase):
             # write Saves/test-nlp-save-slot/ -- clean it up rather than leaving it behind.
             shutil.rmtree(self.dm_core._save_slot_dir("test-nlp-save-slot"), ignore_errors=True)
 
+    def test_detect_item_intent_recognizes_give_trade_open_close(self):
+        self.assertEqual(self.nlp_core._detect_item_intent("give the innkeeper a health potion"), "give")
+        self.assertEqual(self.nlp_core._detect_item_intent("hand over the gold"), "give")
+        self.assertEqual(self.nlp_core._detect_item_intent("trade the cursed dagger"), "trade")
+        self.assertEqual(self.nlp_core._detect_item_intent("buy a health potion"), "trade")
+        self.assertEqual(self.nlp_core._detect_item_intent("open the chest"), "open")
+        self.assertEqual(self.nlp_core._detect_item_intent("close the chest"), "close")
+        self.assertEqual(self.nlp_core._detect_item_intent("shut it"), "close")
+
+    def test_trade_keywords_do_not_overlap_with_appraise(self):
+        # skills.toml's "appraise" keywords: evaluation, commerce, investigation, value,
+        # price, worth, cost, identify, examine -- none of those should ever get swallowed
+        # by the trade intercept before appraise's own skill-matching gets a chance to run.
+        appraise_keywords = ["evaluation", "commerce", "investigation", "value", "price",
+                              "worth", "cost", "identify"]
+        for keyword in appraise_keywords:
+            self.assertIsNone(
+                self.nlp_core._detect_item_intent(f"what's the {keyword} of this"),
+                f"'{keyword}' should not trigger the trade intercept",
+            )
+
+    def test_close_combat_does_not_misfire_the_close_intent(self):
+        # blades' own description is "Using swords and knives in close combat." -- a bare
+        # "close " keyword would have swallowed this before skill matching ever ran.
+        self.assertIsNone(self.nlp_core._detect_item_intent("I fight in close combat"))
+
+    def test_full_pipeline_open_bypasses_item_name_matching(self):
+        # "open"/"close" act on the scene target directly -- map_to_item should never even
+        # run for them, so item_name is always None regardless of what's actually present.
+        item_events = []
+        detected_actions = []
+        self.event_bus.subscribe("item_interaction_detected", item_events.append)
+        self.event_bus.subscribe("action_detected", detected_actions.append)
+
+        self.event_bus.publish("user_input_submitted", "open the chest")
+
+        self.assertEqual(len(item_events), 1)
+        self.assertEqual(item_events[0]["intent"], "open")
+        self.assertIsNone(item_events[0]["item_name"])
+        self.assertEqual(detected_actions, [])
+
 
 class TestClarificationResponse(unittest.TestCase):
     def setUp(self):
@@ -1038,7 +1079,10 @@ class TestLockedChest(unittest.TestCase):
     def test_apply_test_outcome_is_a_noop_for_empty_outcome(self):
         self.dm_core.apply_test_outcome("chest", "")
         self.dm_core.apply_test_outcome("chest", None)
-        self.assertEqual(self.dm_core.entities["chest"]["active_conditions"], {"locked": {"duration": "permanent"}})
+        self.assertEqual(
+            self.dm_core.entities["chest"]["active_conditions"],
+            {"locked": {"duration": "permanent"}, "closed": {"duration": "permanent"}},
+        )
 
 
 class TestItemInteraction(unittest.TestCase):
@@ -1063,8 +1107,25 @@ class TestItemInteraction(unittest.TestCase):
         self.dm_core.roll_dice = lambda dice, pips: 99
         self.dm_core._on_action_detected({"skill": "finesse", "input": "I pick the lock"})
 
+    def _open_the_chest(self):
+        # Unlocking and opening are independent conditions -- picking the lock only dismisses
+        # "locked"; reaching the chest's *contents* also requires "closed" to be dismissed.
+        self.dm_core._on_item_interaction_detected({
+            "intent": "open", "item_name": None, "input": "I open the chest",
+        })
+
+    def test_examine_and_take_are_blocked_while_closed_but_unlocked(self):
+        self._unlock_the_chest()
+        self.dm_core._on_item_interaction_detected({
+            "intent": "examine", "item_name": "cursed dagger", "input": "I examine the cursed dagger",
+        })
+        result = self.resolved[-1]
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "closed")
+
     def test_examine_describes_an_item_without_transferring_it(self):
         self._unlock_the_chest()
+        self._open_the_chest()
         self.dm_core._on_item_interaction_detected({
             "intent": "examine", "item_name": "cursed dagger", "input": "I examine the cursed dagger",
         })
@@ -1076,6 +1137,7 @@ class TestItemInteraction(unittest.TestCase):
 
     def test_take_transfers_the_item(self):
         self._unlock_the_chest()
+        self._open_the_chest()
         self.dm_core._on_item_interaction_detected({
             "intent": "take", "item_name": "cursed dagger", "input": "I take the cursed dagger",
         })
@@ -1086,6 +1148,7 @@ class TestItemInteraction(unittest.TestCase):
 
     def test_currency_examine_and_take_use_transfer_currency_not_transfer_item(self):
         self._unlock_the_chest()
+        self._open_the_chest()
         self.dm_core._on_item_interaction_detected({
             "intent": "examine", "item_name": "currency", "input": "I check the gold",
         })
@@ -1105,6 +1168,7 @@ class TestItemInteraction(unittest.TestCase):
 
     def test_item_not_present_is_reported_not_present(self):
         self._unlock_the_chest()
+        self._open_the_chest()
         self.dm_core._on_item_interaction_detected({
             "intent": "take", "item_name": "longsword", "input": "I take the longsword",
         })
@@ -1125,6 +1189,193 @@ class TestItemInteraction(unittest.TestCase):
         self._unlock_the_chest()
         self.dm_core._on_item_interaction_detected({
             "intent": "take", "item_name": "chest", "input": "I take the whole chest",
+        })
+        result = self.resolved[-1]
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "not_takeable")
+
+
+class TestOpenClose(unittest.TestCase):
+    def setUp(self):
+        self.event_bus = EventBus()
+        self.resolved = []
+        self.event_bus.subscribe("item_interaction_resolved", self.resolved.append)
+        self.dm_core = DMCore(self.event_bus, scenario_name="dungeon")
+
+    def _unlock_the_chest(self):
+        self.dm_core.roll_dice = lambda dice, pips: 99
+        self.dm_core._on_action_detected({"skill": "finesse", "input": "I pick the lock"})
+
+    def _open(self):
+        self.dm_core._on_item_interaction_detected({
+            "intent": "open", "item_name": None, "input": "I open the chest",
+        })
+
+    def _close(self):
+        self.dm_core._on_item_interaction_detected({
+            "intent": "close", "item_name": None, "input": "I close the chest",
+        })
+
+    def test_chest_starts_closed(self):
+        self.assertTrue(self.dm_core.is_closed("chest"))
+
+    def test_open_is_blocked_while_locked(self):
+        self._open()
+        result = self.resolved[-1]
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "locked")
+        self.assertTrue(self.dm_core.is_closed("chest"))
+
+    def test_open_dismisses_closed_once_unlocked(self):
+        self._unlock_the_chest()
+        self._open()
+        result = self.resolved[-1]
+        self.assertTrue(result["found"])
+        self.assertEqual(result["container"], "chest")
+        self.assertFalse(self.dm_core.is_closed("chest"))
+
+    def test_opening_an_already_open_chest_fails_safe(self):
+        self._unlock_the_chest()
+        self._open()
+        self._open()
+        result = self.resolved[-1]
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "already_open")
+
+    def test_close_reapplies_the_condition_and_reblocks_contents(self):
+        self._unlock_the_chest()
+        self._open()
+        self._close()
+        result = self.resolved[-1]
+        self.assertTrue(result["found"])
+        self.assertTrue(self.dm_core.is_closed("chest"))
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "examine", "item_name": "cursed dagger", "input": "I examine the cursed dagger",
+        })
+        self.assertEqual(self.resolved[-1]["reason"], "closed")
+
+    def test_closing_an_already_closed_chest_fails_safe(self):
+        self._unlock_the_chest()
+        self._close()
+        result = self.resolved[-1]
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "already_closed")
+
+    def test_open_close_on_a_non_container_fails_safe(self):
+        # innkeeper (tavern.toml) is subtype "humanoid", not "container" -- opening/closing
+        # a person must fail safely rather than silently applying a nonsensical condition.
+        self.dm_core.scenario = {"entities": [{"name": "gladstone", "band": 0}, {"name": "innkeeper", "band": 0}]}
+        self.dm_core.load_scenario()
+
+        self._open()
+
+        result = self.resolved[-1]
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "not_openable")
+
+    def test_open_close_with_no_target_fails_safe(self):
+        self.dm_core.scenario = {"entities": [{"name": "gladstone", "band": 0}]}
+        self.dm_core.load_scenario()
+
+        self._open()
+
+        result = self.resolved[-1]
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "not_openable")
+
+
+class TestGiveAndTrade(unittest.TestCase):
+    def setUp(self):
+        self.event_bus = EventBus()
+        self.resolved = []
+        self.event_bus.subscribe("item_interaction_resolved", self.resolved.append)
+        # tavern.toml's innkeeper -- a living recipient, unlike the dungeon's chest, so give
+        # actually has somewhere sensible to go.
+        self.dm_core = DMCore(self.event_bus, scenario_name="tavern")
+
+    def test_give_moves_an_item_from_the_player_to_the_target(self):
+        self.dm_core._on_item_interaction_detected({
+            "intent": "give", "item_name": "health potion", "input": "I give the innkeeper a health potion",
+        })
+        result = self.resolved[-1]
+        self.assertTrue(result["found"])
+        self.assertEqual(result["container"], "innkeeper")
+        self.assertIn("health potion", self.dm_core.entities["innkeeper"]["inventory"])
+        self.assertEqual(self.dm_core.entities["gladstone"]["inventory"].count("health potion"), 2)
+
+    def test_give_currency_moves_it_from_the_player_to_the_target(self):
+        self.dm_core._on_item_interaction_detected({
+            "intent": "give", "item_name": "currency", "input": "I give her some gold",
+        })
+        result = self.resolved[-1]
+        self.assertTrue(result["found"])
+        self.assertEqual(self.dm_core.entities["gladstone"]["currency"], 0)
+        self.assertEqual(self.dm_core.entities["innkeeper"]["currency"], 140)
+
+    def test_give_an_item_the_player_does_not_have_reports_not_present(self):
+        self.dm_core._on_item_interaction_detected({
+            "intent": "give", "item_name": "long bow", "input": "I give her my longbow",
+        })
+        # gladstone never had a "long bow" at all -- not in inventory or equipped.
+        result = self.resolved[-1]
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "not_present")
+
+    def test_give_with_no_target_reports_no_recipient(self):
+        self.dm_core.scenario = {"entities": [{"name": "gladstone", "band": 0}]}
+        self.dm_core.load_scenario()
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "give", "item_name": "health potion", "input": "I give away a health potion",
+        })
+        result = self.resolved[-1]
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "no_recipient")
+
+    def test_trade_charges_the_items_toml_value_and_moves_it_to_the_player(self):
+        # dungeon.toml's chest holds "cursed dagger" (value = 5); tavern's innkeeper has
+        # neither, so build an ad-hoc scenario reusing the chest as a "shop" for this test.
+        self.dm_core.scenario = {"entities": [{"name": "gladstone", "band": 0}, {"name": "chest", "band": 0}]}
+        self.dm_core.load_scenario()
+        self.dm_core.dismiss_condition("chest", "locked")
+        self.dm_core.dismiss_condition("chest", "closed")
+        starting_currency = self.dm_core.entities["gladstone"]["currency"]
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "trade", "item_name": "cursed dagger", "input": "I buy the cursed dagger",
+        })
+
+        result = self.resolved[-1]
+        self.assertTrue(result["found"])
+        self.assertEqual(result["price"], 5)
+        self.assertEqual(self.dm_core.entities["gladstone"]["currency"], starting_currency - 5)
+        self.assertEqual(self.dm_core.entities["chest"]["currency"], 25)
+        self.assertIn("cursed dagger", self.dm_core.entities["gladstone"]["inventory"])
+        self.assertNotIn("cursed dagger", self.dm_core.entities["chest"]["inventory"])
+
+    def test_trade_denied_outright_when_the_player_cant_afford_it(self):
+        self.dm_core.scenario = {"entities": [{"name": "gladstone", "band": 0}, {"name": "chest", "band": 0}]}
+        self.dm_core.load_scenario()
+        self.dm_core.dismiss_condition("chest", "locked")
+        self.dm_core.dismiss_condition("chest", "closed")
+        self.dm_core.entities["gladstone"]["currency"] = 2  # less than the dagger's value of 5
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "trade", "item_name": "cursed dagger", "input": "I buy the cursed dagger",
+        })
+
+        result = self.resolved[-1]
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "cant_afford")
+        self.assertEqual(result["price"], 5)
+        # Nothing partially transferred -- currency and inventory are both untouched.
+        self.assertEqual(self.dm_core.entities["gladstone"]["currency"], 2)
+        self.assertIn("cursed dagger", self.dm_core.entities["chest"]["inventory"])
+
+    def test_trading_for_currency_itself_is_rejected(self):
+        self.dm_core._on_item_interaction_detected({
+            "intent": "trade", "item_name": "currency", "input": "I trade for some gold",
         })
         result = self.resolved[-1]
         self.assertFalse(result["found"])

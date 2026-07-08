@@ -183,39 +183,79 @@ class LLMCore:
 
     def generate_item_interaction_response(self, data):
         """!
-        @brief Narrates an "examine" or "take" attempt against an item, resolved with no dice
-               roll (see DMCore._on_item_interaction_detected). "examine" only ever describes;
-               it's the deliberate alternative to items being auto-looted into the player's
-               inventory the moment a container opens (ex: a cursed weapon should be seen and
-               described before anyone decides to touch it).
-        @param data The "item_interaction_resolved" payload
-               ({intent, item_name, input, found, description?, container?, reason?}).
+        @brief Narrates an "examine"/"take"/"give"/"trade"/"open"/"close" attempt, resolved
+               with no dice roll (see DMCore._on_item_interaction_detected). "examine" only
+               ever describes; it's the deliberate alternative to items being auto-looted into
+               the player's inventory the moment a container opens (ex: a cursed weapon should
+               be seen and described before anyone decides to touch it).
+        @param data The "item_interaction_resolved" payload ({intent, item_name, input, found,
+               description?, container?, reason?, amount?, price?}). "item_name" is None for
+               "open"/"close", which act on "container" (the scene target) directly.
         """
-        self.event_bus.publish("log_info", f"Generating item interaction response ({data.get('intent')}).")
+        intent = data.get("intent")
+        self.event_bus.publish("log_info", f"Generating item interaction response ({intent}).")
 
         item_name = data.get("item_name")
+        container = data.get("container")
+        # "open"/"close" have no item_name to quote (they act on the target itself); every
+        # other intent always has one by the time this fires.
+        subject = f"\"{item_name}\"" if item_name else (container or "it")
+
         if not data.get("found"):
             reason_text = {
-                "locked": f"{data.get('container', 'it')} is locked shut and can't be reached yet",
-                "not_present": f"there's no \"{item_name}\" here to {data.get('intent')}",
-                "not_takeable": f"{item_name} isn't something that can be picked up and carried",
-            }.get(data.get("reason"), f"the player's attempt to {data.get('intent')} {item_name} doesn't apply here")
+                "locked": f"{container or 'it'} is locked shut and can't be reached yet",
+                "closed": f"{container or 'it'} is closed and needs to be opened first",
+                "not_present": f"there's no \"{item_name}\" here to {intent}",
+                "not_takeable": f"{subject} isn't something that can be picked up, given, or traded",
+                "no_recipient": "there's no one here to give it to",
+                "not_openable": f"{subject} isn't something that can be opened or closed",
+                "already_open": f"{container or 'it'} is already open",
+                "already_closed": f"{container or 'it'} is already closed",
+                "cant_afford": f"the player can't afford the {data.get('price', 0)} currency it costs",
+            }.get(data.get("reason"), f"the player's attempt to {intent} {subject} doesn't apply here")
             prompt = (
-                f"The player tries to {data.get('intent')} \"{item_name}\" "
+                f"The player tries to {intent} {subject} "
                 f"(input: \"{data.get('input', '')}\"), but {reason_text} -- no roll involved.\n"
                 f"Narrate a brief, in-character explanation in 1-2 sentences as the Game Master."
             )
-        elif data.get("intent") == "examine":
+        elif intent == "examine":
             prompt = (
                 f"The player examines \"{item_name}\".\n"
                 f"Description: {data.get('description', '')}\n"
                 f"Narrate what they observe in 2-3 sentences as the Game Master. This is only "
                 f"looking -- nothing is taken, moved, or changed."
             )
-        elif item_name == "currency":
+        elif intent == "open":
             prompt = (
-                f"The player takes {data.get('amount', 0)} currency and adds it to their own.\n"
+                f"The player opens {container}.\n"
                 f"Narrate this in 1-2 sentences as the Game Master."
+            )
+        elif intent == "close":
+            prompt = (
+                f"The player closes {container}.\n"
+                f"Narrate this in 1-2 sentences as the Game Master."
+            )
+        elif item_name == "currency":
+            if intent == "give":
+                prompt = (
+                    f"The player gives {data.get('amount', 0)} currency to {container}.\n"
+                    f"Narrate this in 1-2 sentences as the Game Master."
+                )
+            else:
+                prompt = (
+                    f"The player takes {data.get('amount', 0)} currency and adds it to their own.\n"
+                    f"Narrate this in 1-2 sentences as the Game Master."
+                )
+        elif intent == "give":
+            prompt = (
+                f"The player gives \"{item_name}\" to {container}.\n"
+                f"Narrate this in 1-2 sentences as the Game Master."
+            )
+        elif intent == "trade":
+            prompt = (
+                f"The player pays {data.get('price', 0)} currency to {container} in exchange "
+                f"for \"{item_name}\".\n"
+                f"Narrate this brief transaction in 1-2 sentences as the Game Master."
             )
         else:
             prompt = (
