@@ -9,7 +9,18 @@ from DM_Status import StatusMixin
 
 class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, RulesMixin, PersistenceMixin):
     """!
-    @brief Main class handling the core mechanics of the RPG system.
+    @brief Main class handling the core mechanics of the RPG system. The implementation is
+           composed from domain mixins in sibling files -- DM_Rules.py (rules/scenario
+           loading), DM_Combat.py (dice/damage/ability resolution), DM_Status.py (the
+           status/condition system and entity tests), DM_Inventory.py (currency/item
+           transfer), DM_Social.py (attitudes and character description), and
+           DM_Persistence.py (save/load) -- so that every dm_core.<method>(...) call site
+           throughout the codebase and test_all.py keeps working unchanged regardless of
+           which file actually defines a given method (Python's MRO flattens every mixin
+           method onto this one class). DM_Core.py itself is reduced to __init__ (boot
+           wiring) plus the two real event handlers, _on_action_detected and
+           _on_item_interaction_detected, and their direct helpers -- the pieces that
+           orchestrate calls across every mixin and don't belong to any single domain.
     """
 
     def __init__(self, event_bus, scenario_name="arena"):
