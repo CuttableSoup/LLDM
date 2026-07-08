@@ -15,9 +15,19 @@ every subscriber immediately, in whatever thread called `publish`). `LLDM.py` bo
 this order: `NLPCore`, `LLMCore`, `GUICore`, then `DMCore` last (it publishes `rules_loaded`
 during `__init__`, so everything that needs it must already be subscribed).
 
-- **`DM_Core.py`** — the rules engine. Loads all TOML in `Rules/Fantasy/`, does dice rolling,
-  opposed checks, damage, and the status/condition system. This is where almost all the real
-  logic lives now; see "Combat loop" below.
+- **`DM_Core.py`** — the rules engine; this is where almost all the real logic lives now, see
+  "Combat loop" below. The `DMCore` class's implementation is composed from domain mixins in
+  sibling files, each holding one concern: `DM_Rules.py` (TOML/scenario loading),
+  `DM_Combat.py` (dice rolling, opposed checks, damage, ability/behavior resolution),
+  `DM_Status.py` (the status/condition system and entity tests), `DM_Inventory.py`
+  (currency/item transfer), `DM_Social.py` (attitudes and character description), and
+  `DM_Persistence.py` (save/load). Because Python's MRO flattens every mixin method onto the
+  one `DMCore` instance, every `dm_core.<method>(...)` call site elsewhere in the codebase (and
+  in `test_all.py`, which unit-tests most of these methods directly) is unaffected by which
+  file actually defines a given method. `DM_Core.py` itself is reduced to `__init__` (boot
+  wiring) plus the two real event handlers (`_on_action_detected`, `_on_item_interaction_detected`)
+  and their direct helpers — the pieces that orchestrate calls across every mixin and don't
+  belong to any single domain.
 - **`NLP_Core.py`** — `sentence-transformers` (`all-MiniLM-L6-v2`) embeds each skill's
   name/description/keywords as separate phrases (not just one embedding per skill, to avoid
   dilution), then cosine-matches player input against all phrases. On `user_input_submitted`,
@@ -124,7 +134,7 @@ NPC's known backstory) turns after the intro message has scrolled out of the rol
 100-message `context_window`, rather than relying on that one message alone.
 
 **Where the character roster comes from:** `DMCore.describe_character(entity_name, toward_name=None)`
-(in `DM_Core.py`) builds a flavor-text line per entity out of purely descriptive TOML fields —
+(in `DM_Social.py`) builds a flavor-text line per entity out of purely descriptive TOML fields —
 `description`, `qualities`, `memories`, `quotes` — deliberately excluding mechanical data
 (skills/dice), since this is meant to tell the LLM *who* someone is, not how they roll.
 Entities with none of those fields (ex: `wolf`, which is pure mechanics) return `""` when
@@ -141,8 +151,16 @@ husband (her `memories` includes "Lost her husband to a bandit raid") produced n
 referencing that loss unprompted — the data actually reaches and shapes generation, not just
 cosmetic plumbing.
 
-**Player is hardcoded** as `self.player_name = "gladstone"` — there's no party/character
-selection system yet.
+**Player is still effectively singular** — there's no party/character selection system yet —
+but `self.player_name` is no longer a bare string literal. `_resolve_player_name()` (in
+`DM_Rules.py`) scans loaded entity templates for the one with `is_player = true` (`characters.toml`'s
+`gladstone`) and uses its name, raising `ValueError` if none is marked (same "fail loudly on
+missing data" convention as `load_scenario_definition`'s missing-file check). This runs once in
+`__init__`, right after `load_rules()` and before scenario instancing — not per-`load_scenario()`
+call — so ad-hoc test scenarios that omit `gladstone` entirely (ex: `TestCombatLoop`'s
+`practice_dummy`-only scenarios) still keep the `player_name` they booted with, unchanged from
+the old hardcoded behavior. Swapping the active player character still means editing which
+template has `is_player = true`, not a runtime selection UI.
 
 ## Attitude phrases
 
@@ -252,8 +270,8 @@ independent places that both funnel into the same handlers:
 **What `DMCore.save_game` writes** is a diff from a fresh instantiation, not a raw dump of
 `self.entities` (which also holds every static template — see the note above): `scenario_key`,
 `player_name`, `round_number`, `scenario_entities`, and per-instance
-`{hp, active_conditions, currency, inventory}` — the only fields anything in `DM_Core.py`
-actually mutates at runtime (`apply_damage`, `apply_condition`/`dismiss_condition`,
+`{hp, active_conditions, currency, inventory}` — the only fields anything in `DMCore`'s
+implementation actually mutates at runtime (`apply_damage`, `apply_condition`/`dismiss_condition`,
 `transfer_currency`, `transfer_item`). `equipped` and `band` are never saved because nothing
 mutates them post-instancing today.
 
@@ -357,14 +375,14 @@ Each status has:
   right now, wired into `apply_damage`). Adding a new trigger point later needs one new
   `evaluate_statuses(entity, "trigger_name")` call site in Python; no new status needs new code.
 - `requirements` — a **list** of `{field, operator, value}` comparisons, ALL of which must
-  hold (`COMPARATORS` dict in `DM_Core.py`: `>`, `<`, `>=`, `<=`, `==`, `!=`, `in`, `not_in`).
+  hold (`COMPARATORS` dict in `DM_Status.py`: `>`, `<`, `>=`, `<=`, `==`, `!=`, `in`, `not_in`).
   `field` is either the derived `"hp_per_remain"` (current HP / max HP) or a direct entity
   attribute (`supertype`, `subtype`, etc.). This replaced an earlier, less general
   `{minimum, maximum}` / `include` / `exclude` shape — fully collapsed into one mechanism now.
 - `apply` — `{condition, duration, dismiss}`. `condition` names an entry in `[[condition]]`.
 - `test` — `{difficulty, skill, pass, fail}` (ex: "incapacitated"/"mortal" test
   fortitude/willpower to see if the entity falls unconscious or dies). **Still unused/dead
-  data** — nothing in `DM_Core.py` reads a status's `test` field. Don't confuse this with the
+  data** — nothing in `DMCore`'s implementation reads a status's `test` field. Don't confuse this with the
   unrelated, *actually wired up* `[entity.test]` (see "Entity tests" below), which only shares
   the field name and general "difficulty/skill/pass/fail" shape by design, not any code path.
 

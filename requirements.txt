@@ -1,0 +1,11 @@
+# Requires Python >= 3.11 (DM_Core.py uses stdlib tomllib).
+# tkinter (GUI_Core.py) ships with the standard CPython installer on Windows/macOS;
+# on Linux it's a separate OS package (e.g. `apt install python3-tk`).
+
+sentence-transformers==5.1.2
+numpy==2.3.3
+textual==8.2.8
+
+# Test suite (test_all.py)
+pytest==8.4.1
+pytest-asyncio==1.4.0

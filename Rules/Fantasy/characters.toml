@@ -3,6 +3,7 @@ name = "gladstone"
 supertype = "creature"
 subtype = "humanoid"
 description = "A man"
+is_player = true
 
 max_hp = 36
 
