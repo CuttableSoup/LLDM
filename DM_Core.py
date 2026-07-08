@@ -4,6 +4,8 @@ import os
 import random
 import tomllib
 
+from DM_Inventory import InventoryMixin
+
 COMPARATORS = {
     ">": lambda actual, value: actual > value,
     "<": lambda actual, value: actual < value,
@@ -25,7 +27,7 @@ def scenario_file_path(scenario_name):
     base_dir = os.path.dirname(os.path.abspath(__file__))
     return os.path.join(base_dir, "Rules", "Fantasy", "scenarios", f"{scenario_name}.toml")
 
-class DMCore:
+class DMCore(InventoryMixin):
     """!
     @brief Main class handling the core mechanics of the RPG system.
     """
@@ -43,15 +45,18 @@ class DMCore:
         self.scenario = {}
         self.scenario_entities = []
         self.rules = {}
-        # No party/character selection exists yet, so the first loaded
-        # player-like entity stands in as the active player character.
-        self.player_name = "gladstone"
         self.round_number = 0
         # The filename passed to load_scenario_definition -- distinct from self.scenario's
         # own "name" field (a display string, ex: "The Arena") -- kept so save_game/load_game
         # know which scenarios/*.toml file a saved slot belongs to.
         self.scenario_key = scenario_name
         self.load_rules(os.path.join("Rules", "Fantasy"))
+        # No party/character selection exists yet, so the one entity template marked
+        # is_player = true (characters.toml's gladstone) stands in as the active player
+        # character. Resolved once here, from templates, rather than per-scenario-load, so
+        # ad-hoc test scenarios that omit gladstone entirely still keep the same player_name
+        # they booted with.
+        self.player_name = self._resolve_player_name()
         self.load_scenario_definition(scenario_name)
         self.load_scenario()
         self.event_bus.publish("log_info", "DMCore initialized.")
@@ -105,6 +110,22 @@ class DMCore:
                             self.rules[key] = value
                 except Exception as e:
                     self.event_bus.publish("log_error", f"Error loading {filename}: {e}")
+
+    def _resolve_player_name(self):
+        """!
+        @brief Finds the one entity template marked `is_player = true` (ex: characters.toml's
+               gladstone) and returns its name, to stand in as the active player character.
+        @raises ValueError if no loaded entity template has `is_player = true` -- fatal on
+                purpose, same reasoning as load_scenario_definition's missing-scenario-file
+                check: silently falling back to some default here would let the rest of
+                DMCore run against a player_name that matches no real entity, failing later
+                in confusing, indirect ways instead of failing clearly at boot.
+        @return The name of the player entity template.
+        """
+        for name, entity in self.entities.items():
+            if entity.get("is_player"):
+                return name
+        raise ValueError("No entity template has is_player = true; cannot determine the player character.")
 
     def load_scenario_definition(self, scenario_name):
         """!
@@ -416,71 +437,6 @@ class DMCore:
         """
         return "closed" in self.entities.get(entity_name, {}).get("active_conditions", {})
 
-    def transfer_currency(self, from_name, to_name, amount=None):
-        """!
-        @brief Moves currency from one entity to another (ex: looting a chest's gold).
-        @param from_name The name of the entity currency is taken from.
-        @param to_name The name of the entity currency is given to.
-        @param amount How much to move; if None, moves all of from_name's currency.
-        @return The amount actually transferred (0 if either entity is missing or there's none to move).
-        """
-        source = self.entities.get(from_name)
-        destination = self.entities.get(to_name)
-        if source is None or destination is None:
-            return 0
-
-        available = source.get("currency", 0)
-        moved = available if amount is None else min(amount, available)
-        if moved <= 0:
-            return 0
-
-        source["currency"] = available - moved
-        destination["currency"] = destination.get("currency", 0) + moved
-        self.event_bus.publish("log_info", f"{moved} currency moved from {from_name} to {to_name}.")
-        return moved
-
-    def transfer_item(self, from_name, to_name, item_name):
-        """!
-        @brief Moves one occurrence of an item from one entity's inventory list to another's.
-               Duplicates (ex: three "health potion" entries) represent quantity, so only one
-               matching entry is removed per call.
-        @param from_name The name of the entity the item is taken from.
-        @param to_name The name of the entity the item is given to.
-        @param item_name The name of the item to move.
-        @return True if the item was present in from_name's inventory and moved, False otherwise.
-        """
-        source = self.entities.get(from_name)
-        destination = self.entities.get(to_name)
-        if source is None or destination is None:
-            return False
-
-        source_inventory = source.get("inventory", [])
-        if item_name not in source_inventory:
-            return False
-
-        source_inventory.remove(item_name)
-        destination.setdefault("inventory", []).append(item_name)
-        self.event_bus.publish("log_info", f"{item_name} moved from {from_name} to {to_name}.")
-        return True
-
-    def loot_entity(self, from_name, to_name):
-        """!
-        @brief Moves everything -- all currency and every inventory item -- from one entity to
-               another. Ex: taking a chest's contents once it's open (see apply_test_outcome's
-               "loot" key).
-        @param from_name The name of the entity being looted (ex: a chest).
-        @param to_name The name of the entity receiving the loot (ex: the player).
-        @return A {currency, items} summary of what actually moved, so callers (ex:
-                _on_action_detected, for narration) know what was gained without the LLM having
-                to invent it.
-        """
-        currency_moved = self.transfer_currency(from_name, to_name)
-        items_moved = []
-        for item_name in list(self.entities.get(from_name, {}).get("inventory", [])):
-            if self.transfer_item(from_name, to_name, item_name):
-                items_moved.append(item_name)
-        return {"currency": currency_moved, "items": items_moved}
-
     def is_test_available(self, entity_name, test, skill_name):
         """!
         @brief Whether an entity's [entity.test] can currently be attempted with the given
@@ -595,22 +551,6 @@ class DMCore:
             "net_damage": net_damage,
             "remaining_hp": remaining_hp,
         }
-
-    def manage_combat(self, participants):
-        """!
-        @brief Manages combat interactions between entities.
-        @param participants A list of entities involved in the combat.
-        """
-        self.event_bus.publish("log_info", "Managing combat phase.")
-
-    def process_entity_state(self, entity_health, entity_inventory, entity_attitudes):
-        """!
-        @brief Processes interactions between health, inventory, and attitudes.
-        @param entity_health The current health status of the entity.
-        @param entity_inventory The items held by the entity.
-        @param entity_attitudes The attitude metrics of the entity.
-        """
-        self.event_bus.publish("log_info", "Processing entity state.")
 
     def roll_dice(self, dice, pips):
         """!
@@ -871,7 +811,9 @@ class DMCore:
 
         target_name = self._get_target_name()
         test = self.entities.get(target_name, {}).get("test") if target_name else None
+        via_test = False
         if test and self.is_test_available(target_name, test, skill_name):
+            via_test = True
             # An entity's own [entity.test] (ex: a chest's lock) is a flat difficulty check,
             # not an opposed roll -- it doesn't compete via the attacker's skill's `opposes`
             # list the way a creature's defense does. Any *other* skill against this same
@@ -889,7 +831,11 @@ class DMCore:
         else:
             result = self.resolve_action(self.player_name, skill_name)
 
-        if result["success"] and target_name:
+        if result["success"] and target_name and not via_test:
+            # A test-path success (ex: a lockpick) is a flat difficulty check, not an attack --
+            # it must never also roll bonus weapon damage even if skill_name happens to match
+            # an equipped weapon/ability (ex: a future finesse-based dagger matching the chest's
+            # finesse-skill lock test).
             ability = named_ability or self.find_attack_ability(self.player_name, skill_name)
             if ability:
                 result["damage"] = self.calculate_damage(self.player_name, target_name, ability)
