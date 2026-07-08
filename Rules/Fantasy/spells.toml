@@ -9,3 +9,15 @@ range = { minimum = 0, maximum = 60 }
 targets = { number = 1, aoe = 5 }
 damage_value = { dice = 5, pips = 0, bonus = 0 }
 damage_tags = [ "fire" ]
+
+[[entity]]
+name = "splash flow"
+supertype = "spell"
+subtype = "evocation"
+description = "Conjure a sudden torrent of water and slam it into a single target."
+skill = "arcane"
+difficulty = 10
+range = { minimum = 0, maximum = 60 }
+targets = { number = 1, aoe = 0 }
+damage_value = { dice = 4, pips = 0, bonus = 0 }
+damage_tags = [ "water" ]

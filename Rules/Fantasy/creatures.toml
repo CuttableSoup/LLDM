@@ -16,6 +16,17 @@ skill = "brawling"
 damage_tags = [ "piercing" ]
 damage_value = { dice = 1, pips = 0, bonus = "user.strength_damage" }
 
+# Checked in order; the first entry whose requirements are all met is what the wolf
+# does on its turn. A wolf always bites as long as it's not at 0 HP -- once
+# hp_per_remain drops below 0.01 no behavior matches, so it simply stops acting.
+# "action" names one of the wolf's own abilities (below), not a bare skill -- resolved
+# the same way a player naming a technique directly is (resolve_named_ability).
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "bite"
+
 [entity.skills]
 fortitude = { dice = 2, pips = 0 }
 willpower = { dice = 2, pips = 0 }
@@ -39,6 +50,10 @@ immunity_tags = [ "fire" ]
 # armor_value/armor_tags, just innate to the creature instead of worn equipment.
 resistance_value = { dice = 2, pips = 0 }
 resistance_tags = [ "physical", "piercing", "bludgeoning", "slashing" ]
+# Mirror image of resistance_value/resistance_tags: rolled bonus damage instead of
+# reduction, on a matching tag -- a fire elemental takes extra damage from water.
+vulnerability_value = { dice = 2, pips = 0 }
+vulnerability_tags = [ "water" ]
 
 [entity.allies]
 name = [ "fire elemental" ]

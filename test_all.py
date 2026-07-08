@@ -1,4 +1,7 @@
 import asyncio
+import json
+import os
+import shutil
 import threading
 import time
 import unittest
@@ -12,7 +15,7 @@ from Event_Bus import EventBus
 from LLM_Core import LLMCore
 from NLP_Core import NLPCore
 from Textual_Core import TextualCore
-from textual.widgets import RichLog, TabbedContent
+from textual.widgets import Button, RichLog, TabbedContent
 
 
 def _lm_studio_reachable():
@@ -125,6 +128,41 @@ class TestNlpConfidenceThreshold(unittest.TestCase):
         self.assertEqual(item_events[0]["intent"], "examine")
         self.assertEqual(item_events[0]["item_name"], "cursed dagger")
 
+    def test_detect_save_load_intent_parses_slot_names(self):
+        self.assertEqual(self.nlp_core._detect_save_load_intent("save as arena run 1"), ("save", "arena run 1"))
+        self.assertEqual(
+            self.nlp_core._detect_save_load_intent("save game as arena-run-1"), ("save", "arena-run-1")
+        )
+        self.assertEqual(self.nlp_core._detect_save_load_intent("save boss-fight"), ("save", "boss-fight"))
+        self.assertEqual(self.nlp_core._detect_save_load_intent("load boss-fight"), ("load", "boss-fight"))
+        self.assertEqual(
+            self.nlp_core._detect_save_load_intent("load game as boss-fight"), ("load", "boss-fight")
+        )
+
+    def test_detect_save_load_intent_ignores_unrelated_input(self):
+        self.assertEqual(self.nlp_core._detect_save_load_intent("i attack the wolf"), (None, None))
+        # A recognized word alone with nothing following it is not a usable slot name.
+        self.assertEqual(self.nlp_core._detect_save_load_intent("save"), (None, None))
+
+    def test_full_pipeline_save_command_bypasses_skill_and_item_matching(self):
+        save_events = []
+        detected_actions = []
+        item_events = []
+        self.event_bus.subscribe("save_requested", save_events.append)
+        self.event_bus.subscribe("action_detected", detected_actions.append)
+        self.event_bus.subscribe("item_interaction_detected", item_events.append)
+
+        try:
+            self.event_bus.publish("user_input_submitted", "save as test-nlp-save-slot")
+
+            self.assertEqual(save_events, [{"slot": "test-nlp-save-slot"}])
+            self.assertEqual(detected_actions, [])
+            self.assertEqual(item_events, [])
+        finally:
+            # This shared DMCore instance is also on the bus, so the publish above really did
+            # write Saves/test-nlp-save-slot/ -- clean it up rather than leaving it behind.
+            shutil.rmtree(self.dm_core._save_slot_dir("test-nlp-save-slot"), ignore_errors=True)
+
 
 class TestClarificationResponse(unittest.TestCase):
     def setUp(self):
@@ -161,6 +199,36 @@ class TestClarificationResponse(unittest.TestCase):
         }
         description = self.llm_core._describe_outcome(result)
         self.assertNotIn("The player gains", description)
+
+    def test_describe_outcome_uses_the_given_actor_and_skips_the_attempt_line_without_input(self):
+        # A creature's own behavior-driven action (ex: a wolf's bite) has no free-text
+        # "input" the way a player action does -- the leading "X attempts: ..." line
+        # should be omitted entirely rather than printing an empty quoted string, and
+        # the actor name should reflect who actually acted, not default to "the player".
+        enemy_result = {
+            "skill": "brawling", "roll": 9, "difficulty": 7, "success": True,
+            "defender": "gladstone", "opposing_skill": "blades",
+        }
+        description = self.llm_core._describe_outcome(enemy_result, actor="wolf")
+        self.assertNotIn("attempts", description)
+        self.assertIn("Skill used: brawling", description)
+        self.assertIn("opposed by gladstone's blades", description)
+
+    def test_round_response_narrates_the_targets_counterattack(self):
+        round_result = {
+            "round": 1, "skill": "athletics", "roll": 10, "difficulty": 0, "success": True,
+            "defender": "wolf", "input": "I vault past the wolf",
+            "enemy_action": {
+                "skill": "brawling", "roll": 9, "difficulty": 7, "success": True,
+                "defender": "gladstone", "opposing_skill": "blades",
+                "damage": {"attacker": "wolf", "defender": "gladstone", "raw_damage": 5,
+                           "reduction": 0, "net_damage": 5, "remaining_hp": 31},
+            },
+        }
+        self.event_bus.publish("round_resolved", round_result)
+        prompt = self.llm_core.context_window[-1]["content"]
+        self.assertIn("wolf", prompt)
+        self.assertIn("gladstone takes 5 damage", prompt)
 
     def test_examine_prompt_never_implies_a_transfer(self):
         self.event_bus.publish("item_interaction_resolved", {
@@ -445,6 +513,39 @@ class TestDamageCalculation(unittest.TestCase):
         self.assertEqual(result["reduction"], 0)
         self.assertEqual(result["net_damage"], 20)
 
+    @patch("random.randint", return_value=3)
+    def test_vulnerability_bonus_only_applies_to_matching_tags(self, mock_randint):
+        # Fire elemental's vulnerability_value (2 dice) applies to water, not fire.
+        self.assertEqual(self.dm_core.get_vulnerability_bonus("fire elemental", ["water"]), 6)
+        self.assertEqual(self.dm_core.get_vulnerability_bonus("fire elemental", ["fire"]), 0)
+        # No vulnerability_value/tags at all (gladstone) is never vulnerable to anything.
+        self.assertEqual(self.dm_core.get_vulnerability_bonus("gladstone", ["water"]), 0)
+
+    @patch("random.randint", return_value=4)
+    def test_calculate_damage_splash_flow_exploits_water_vulnerability(self, mock_randint):
+        # splash flow: 4 dice water, no bonus -> 16 raw. Fire elemental has no resistance to
+        # water (only physical), so reduction is 0, and its vulnerability_value (2 dice) adds
+        # 8 more on top -- net damage should exceed the raw roll, not just match it.
+        splash_flow = self.dm_core.resolve_named_ability("gladstone", "splash flow")
+        result = self.dm_core.calculate_damage("gladstone", "fire elemental", splash_flow)
+
+        self.assertEqual(result["raw_damage"], 16)
+        self.assertEqual(result["reduction"], 0)
+        self.assertEqual(result["vulnerability_bonus"], 8)
+        self.assertEqual(result["net_damage"], 24)
+        self.assertEqual(result["remaining_hp"], 6)
+
+    @patch("random.randint", return_value=4)
+    def test_immunity_overrides_vulnerability_when_both_tags_present(self, mock_randint):
+        # An attack tagged both "fire" (immune) and "water" (vulnerable) should still be fully
+        # negated -- immunity is an absolute block that wins outright, not just a bigger number
+        # in the same tug-of-war as resistance/vulnerability.
+        hybrid_attack = {"damage_value": {"dice": 4, "pips": 0, "bonus": 0}, "damage_tags": ["fire", "water"]}
+        result = self.dm_core.calculate_damage("gladstone", "fire elemental", hybrid_attack)
+
+        self.assertEqual(result["vulnerability_bonus"], 0)
+        self.assertEqual(result["net_damage"], 0)
+
     def test_cleave_is_reachable_via_either_listed_skill(self):
         # cleave's skill field is a list (["blades", "axes"]) -- gladstone's equipped longsword
         # already matches "blades" and wins there (see find_attack_ability's docstring), but
@@ -495,6 +596,15 @@ class TestCombatLoop(unittest.TestCase):
         self.assertIsNotNone(ability)
         self.assertEqual(ability["name"], "fireball")
         self.assertIs(ability, self.dm_core.entities["fireball"])
+
+    def test_splash_flow_is_reachable_by_name_alongside_fireball(self):
+        # Both "fireball" and "splash flow" share the "arcane" skill, so find_attack_ability
+        # (skill-first lookup) always returns fireball, the earlier-listed entry -- splash flow
+        # is reached the same way a player naming "cleave" directly is, via resolve_named_ability.
+        splash_flow = self.dm_core.resolve_named_ability("gladstone", "splash flow")
+        self.assertIsNotNone(splash_flow)
+        self.assertIs(splash_flow, self.dm_core.entities["splash flow"])
+        self.assertEqual(splash_flow["damage_tags"], ["water"])
 
     def test_resolve_ability_passes_through_inline_tables_and_looks_up_string_references(self):
         inline = {"name": "punch", "skill": "brawling"}
@@ -621,6 +731,85 @@ class TestCombatLoop(unittest.TestCase):
         # one, ex: a "featureless gray void", with no indication anything had gone wrong).
         with self.assertRaises(FileNotFoundError):
             DMCore(EventBus(), scenario_name="does_not_exist")
+
+
+class TestEntityBehavior(unittest.TestCase):
+    def setUp(self):
+        self.event_bus = EventBus()
+        self.resolved = []
+        self.event_bus.subscribe("round_resolved", self.resolved.append)
+        self.dm_core = DMCore(self.event_bus)
+
+    def test_choose_behavior_matches_while_the_entity_is_alive(self):
+        # creatures.toml's wolf: a single behavior, "always bite while hp_per_remain >= 0.01".
+        behavior = self.dm_core.choose_behavior("wolf")
+        self.assertIsNotNone(behavior)
+        self.assertEqual(behavior["action"], "bite")
+
+    def test_choose_behavior_returns_none_once_effectively_dead(self):
+        # Reusing entity_matches_requirements means this needs no death-specific check of its
+        # own -- once hp_per_remain drops below 0.01, the requirement simply stops matching.
+        self.dm_core.apply_damage("wolf", self.dm_core.get_current_hp("wolf"))
+        self.assertEqual(self.dm_core.get_current_hp("wolf"), 0)
+        self.assertIsNone(self.dm_core.choose_behavior("wolf"))
+
+    def test_choose_behavior_returns_none_for_an_entity_with_no_behavior_data(self):
+        self.dm_core.entities["practice_dummy"] = {"name": "practice_dummy", "max_hp": 20, "skills": {}}
+        self.assertIsNone(self.dm_core.choose_behavior("practice_dummy"))
+
+    def test_resolve_behavior_action_returns_none_without_a_matching_behavior(self):
+        self.dm_core.entities["practice_dummy"] = {"name": "practice_dummy", "max_hp": 20, "skills": {}}
+        self.assertIsNone(self.dm_core.resolve_behavior_action("practice_dummy", "gladstone"))
+
+    def test_resolve_behavior_action_returns_none_for_an_action_the_entity_doesnt_own(self):
+        # A behavior's "action" is looked up the same ownership-gated way as a player naming
+        # a technique directly (resolve_named_ability) -- a typo'd or missing ability name
+        # must fail safe, not raise or silently roll against nothing.
+        self.dm_core.entities["confused_dummy"] = {
+            "name": "confused_dummy", "max_hp": 20, "skills": {},
+            "behavior": [{"requirements": [], "action": "does_not_exist"}],
+        }
+        self.assertIsNone(self.dm_core.resolve_behavior_action("confused_dummy", "gladstone"))
+
+    def test_resolve_behavior_action_strikes_back_and_applies_damage(self):
+        # An unarmored, skill-less target so the wolf's bite always lands and nothing
+        # reduces the raw damage -- isolates resolve_behavior_action from armor/opposed-skill
+        # specifics, which are already covered by TestDamageCalculation/TestOpposedResolution.
+        self.dm_core.entities["target_dummy"] = {"name": "target_dummy", "max_hp": 20, "skills": {}}
+
+        with patch("random.randint", return_value=4):
+            result = self.dm_core.resolve_behavior_action("wolf", "target_dummy")
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["skill"], "brawling")
+        self.assertIn("damage", result)
+        self.assertGreater(result["damage"]["net_damage"], 0)
+        self.assertEqual(
+            self.dm_core.get_current_hp("target_dummy"),
+            20 - result["damage"]["net_damage"],
+        )
+
+    def test_combat_round_includes_the_targets_counterattack(self):
+        # The default "arena" scenario's first wolf is hostile, so its own behavior should
+        # fire in the same round as the player's action -- proving combat is now mutual
+        # rather than only ever the player rolling to hit.
+        with patch("random.randint", return_value=4):
+            self.dm_core._on_action_detected({"skill": "athletics", "input": "I vault over the rubble"})
+
+        result = self.resolved[-1]
+        self.assertIn("enemy_action", result)
+        enemy_result = result["enemy_action"]
+        self.assertEqual(enemy_result["skill"], "brawling")
+        self.assertEqual(enemy_result["defender"], "gladstone")
+
+    def test_target_without_behavior_data_does_not_counterattack(self):
+        self.dm_core.entities["practice_dummy"] = {"name": "practice_dummy", "max_hp": 20, "skills": {}}
+        self.dm_core.scenario = {"entities": [{"name": "practice_dummy", "band": 0}]}
+        self.dm_core.load_scenario()
+
+        self.dm_core._on_action_detected({"skill": "athletics", "input": "I test my footing"})
+
+        self.assertNotIn("enemy_action", self.resolved[-1])
 
 
 class TestStatusEvaluation(unittest.TestCase):
@@ -1080,6 +1269,293 @@ class TestNpcDialogue(unittest.TestCase):
         self.assertIn("Lost her husband to a bandit raid", result["defender_details"])
 
 
+class TestAttitudePhrases(unittest.TestCase):
+    def setUp(self):
+        self.event_bus = EventBus()
+        self.dm_core = DMCore(self.event_bus)
+
+    def test_get_attitude_tier_selects_the_right_band(self):
+        self.assertEqual(self.dm_core.get_attitude_tier(-150)["name"], "hostile")
+        self.assertEqual(self.dm_core.get_attitude_tier(-99)["name"], "unfriendly")
+        self.assertEqual(self.dm_core.get_attitude_tier(-40)["name"], "wary")
+        self.assertEqual(self.dm_core.get_attitude_tier(0)["name"], "neutral")
+        self.assertEqual(self.dm_core.get_attitude_tier(40)["name"], "warm")
+        self.assertEqual(self.dm_core.get_attitude_tier(99)["name"], "friendly")
+        self.assertEqual(self.dm_core.get_attitude_tier(150)["name"], "devoted")
+
+    def test_get_attitude_tier_boundary_values_resolve_to_the_earlier_declared_tier(self):
+        # -100 sits on both "hostile" and "unfriendly"'s edge; declaration order (hostile
+        # first) breaks the tie, same convention as choose_behavior's first-match-wins.
+        self.assertEqual(self.dm_core.get_attitude_tier(-100)["name"], "hostile")
+        self.assertEqual(self.dm_core.get_attitude_tier(-60)["name"], "unfriendly")
+        self.assertEqual(self.dm_core.get_attitude_tier(100)["name"], "friendly")
+
+    def test_get_attitude_tier_clamps_values_beyond_the_nominal_range(self):
+        self.assertEqual(self.dm_core.get_attitude_tier(-500)["name"], "hostile")
+        self.assertEqual(self.dm_core.get_attitude_tier(500)["name"], "devoted")
+
+    def test_get_attitude_tier_returns_none_without_attitude_tier_data(self):
+        self.dm_core.rules["attitude_tier"] = []
+        self.assertIsNone(self.dm_core.get_attitude_tier(0))
+
+    def test_describe_attitude_mixes_tiers_per_axis(self):
+        # gladstone's undead override: disposition/trust/respect/obligation/intimacy = -100
+        # (hostile), confidence = 100 -- a genuine mix of extremes in one attitude array.
+        self.dm_core.entities["zombie"] = {"name": "zombie", "supertype": "undead"}
+
+        description = self.dm_core.describe_attitude("gladstone", "zombie")
+
+        self.assertIn("Attitude toward zombie:", description)
+        self.assertIn("wants them gone, one way or another", description)  # disposition: hostile
+        self.assertIn("treats them as an active threat", description)  # trust: hostile
+        self.assertIn("feels bold and confident around them", description)  # confidence: friendly (100 boundary)
+        self.assertIn("is repulsed by them", description)  # intimacy: hostile
+
+    def test_describe_attitude_at_the_top_of_the_nominal_range(self):
+        # gladstone's name override for "anne": all six axes at exactly 100 -- the shared
+        # boundary between "friendly" (60..100) and "devoted" (100..150), which resolves to
+        # "friendly" since it's declared first (same convention as the hostile/unfriendly case).
+        description = self.dm_core.describe_attitude("gladstone", "anne")
+        self.assertIn("is genuinely friendly toward them", description)
+        self.assertIn("trusts them readily, taking them at their word", description)
+
+    def test_describe_character_surfaces_attitude_for_a_pure_mechanics_entity(self):
+        # wolf has no description/qualities/memories/quotes -- describe_character("wolf") with
+        # no toward_name still returns "" (regression guard), but passing toward_name gives it
+        # something to say after all: its (default-neutral) attitude toward the player.
+        self.assertEqual(self.dm_core.describe_character("wolf"), "")
+
+        description = self.dm_core.describe_character("wolf", toward_name="gladstone")
+        self.assertIn("wolf -", description)
+        self.assertIn("Attitude toward gladstone:", description)
+        self.assertIn("feels nothing in particular toward them", description)
+
+    def test_describe_character_skips_attitude_toward_self(self):
+        description = self.dm_core.describe_character("wolf", toward_name="wolf")
+        self.assertEqual(description, "")
+
+    def test_scenario_roster_now_includes_previously_silent_entities(self):
+        # Before attitude phrasing existed, wolf contributed nothing to the roster (its
+        # describe_character was ""); now every scenario entity has at least an attitude line.
+        scenario_events = []
+        self.event_bus.subscribe("scenario_loaded", scenario_events.append)
+        DMCore(self.event_bus)  # default "arena" scenario: gladstone, wolf, wolf_2
+
+        characters = scenario_events[-1]["characters"]
+        self.assertTrue(any("wolf -" in c and "Attitude toward gladstone" in c for c in characters))
+
+    def test_defender_details_includes_attitude_during_combat(self):
+        round_events = []
+        self.event_bus.subscribe("round_resolved", round_events.append)
+
+        self.dm_core._on_action_detected({"skill": "blades", "input": "I attack the wolf"})
+
+        self.assertIn("Attitude toward gladstone:", round_events[0]["defender_details"])
+
+
+class TestSaveLoad(unittest.TestCase):
+    def setUp(self):
+        self.event_bus = EventBus()
+        self.dm_core = DMCore(self.event_bus)
+        self.slot_dirs = []
+
+    def tearDown(self):
+        for slot_dir in self.slot_dirs:
+            shutil.rmtree(slot_dir, ignore_errors=True)
+
+    def _track(self, slot_name):
+        # Registers a slot for cleanup in tearDown and hands back its name, so tests can
+        # write real files under Saves/ without leaving test artifacts behind afterward.
+        self.slot_dirs.append(self.dm_core._save_slot_dir(slot_name))
+        return slot_name
+
+    def _read_dm_state(self, slot_name):
+        with open(os.path.join(self.dm_core._save_slot_dir(slot_name), "dm_state.json")) as f:
+            return json.load(f)
+
+    def test_save_writes_a_diff_not_a_raw_entity_dump(self):
+        # Only the fields anything actually mutates at runtime should be saved -- not a dump
+        # of the whole template (ex: no "skills"/"equipped"/"max_hp" keys, which never change
+        # post-instancing today).
+        slot = self._track("test_save_writes_diff")
+        self.dm_core.save_game(slot)
+        data = self._read_dm_state(slot)
+
+        self.assertEqual(data["scenario_key"], "arena")
+        self.assertEqual(data["player_name"], "gladstone")
+        self.assertEqual(data["scenario_entities"], self.dm_core.scenario_entities)
+        gladstone_state = data["instances"]["gladstone"]
+        self.assertEqual(set(gladstone_state.keys()), {"hp", "active_conditions", "currency", "inventory"})
+
+    def test_save_captures_current_instance_state(self):
+        slot = self._track("test_save_captures_state")
+        self.dm_core.apply_damage("wolf", 10)
+        self.dm_core.transfer_currency("gladstone", "wolf", 20)
+        self.dm_core.save_game(slot)
+        data = self._read_dm_state(slot)
+
+        self.assertEqual(data["instances"]["wolf"]["hp"], 6)
+        self.assertEqual(data["instances"]["gladstone"]["currency"], 80)
+        self.assertEqual(data["instances"]["wolf"]["currency"], 20)
+
+    def test_load_restores_saved_state_over_further_changes(self):
+        slot = self._track("test_load_restores_state")
+        self.dm_core.apply_damage("wolf", 10)  # wolf at 6/16
+        self.dm_core.save_game(slot)
+
+        self.dm_core.apply_damage("wolf", 6)  # wolf now at 0/16, diverged further from the save
+        self.assertEqual(self.dm_core.get_current_hp("wolf"), 0)
+
+        self.dm_core.load_game(slot)
+
+        self.assertEqual(self.dm_core.get_current_hp("wolf"), 6)
+
+    def test_load_reinstantiates_from_current_templates_not_a_frozen_copy(self):
+        # self.entities holds templates and live instances under the same keys -- a
+        # single-occurrence instance like "wolf" overwrites self.entities["wolf"] the moment
+        # it's first instanced (see CLAUDE.md's "Scenario instancing"). load_game must re-run
+        # load_rules to get a genuinely fresh template, not just re-derive from whatever's
+        # currently sitting in self.entities (which would be this same mutated instance).
+        slot = self._track("test_load_reinstantiates_fresh")
+        self.dm_core.save_game(slot)
+
+        self.dm_core.entities["wolf"]["skills"]["brawling"]["dice"] = 999
+        self.dm_core.load_game(slot)
+
+        self.assertEqual(self.dm_core.entities["wolf"]["skills"]["brawling"]["dice"], 5)
+
+    def test_load_publishes_game_loaded_not_scenario_loaded(self):
+        slot = self._track("test_load_publishes_game_loaded")
+        self.dm_core.save_game(slot)
+
+        scenario_events = []
+        game_loaded_events = []
+        self.event_bus.subscribe("scenario_loaded", scenario_events.append)
+        self.event_bus.subscribe("game_loaded", game_loaded_events.append)
+
+        self.dm_core.load_game(slot)
+
+        # Not re-published on load -- LLMCore would otherwise narrate a brand-new opening
+        # scene every time a session resumes.
+        self.assertEqual(scenario_events, [])
+        self.assertEqual(len(game_loaded_events), 1)
+        self.assertEqual(game_loaded_events[0]["slot"], slot)
+        self.assertEqual(game_loaded_events[0]["name"], "The Arena")
+
+    def test_load_missing_slot_fails_safe_and_publishes_game_load_failed(self):
+        errors = []
+        failures = []
+        self.event_bus.subscribe("log_error", errors.append)
+        self.event_bus.subscribe("game_load_failed", failures.append)
+
+        self.dm_core.load_game("does_not_exist_slot")
+
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(failures[0]["reason"], "not_found")
+        self.assertTrue(errors)
+        self.assertEqual(self.dm_core.scenario_key, "arena")
+
+    def test_save_requested_and_load_requested_events_are_wired(self):
+        # Both NLPCore's text intercept and a GUI/Textual button publish these same events --
+        # this is the one code path both triggers converge on.
+        slot = self._track("test_events_wired")
+        self.event_bus.publish("save_requested", {"slot": slot})
+        self.assertTrue(os.path.exists(os.path.join(self.dm_core._save_slot_dir(slot), "dm_state.json")))
+
+        self.dm_core.apply_damage("wolf", 5)
+        self.event_bus.publish("load_requested", {"slot": slot})
+        self.assertEqual(self.dm_core.get_current_hp("wolf"), 16)
+
+    def test_save_requested_with_no_slot_is_ignored(self):
+        warnings = []
+        self.event_bus.subscribe("log_warning", warnings.append)
+
+        self.event_bus.publish("save_requested", {})
+
+        self.assertTrue(warnings)
+
+    def test_slot_name_cannot_escape_the_saves_directory(self):
+        saves_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Saves")
+        slot_dir = self.dm_core._save_slot_dir("../../evil")
+        self.assertEqual(os.path.dirname(slot_dir), saves_root)
+
+
+class TestLLMSaveLoad(unittest.TestCase):
+    def setUp(self):
+        self.event_bus = EventBus()
+        self.llm_core = LLMCore(self.event_bus)
+        self.slot_dirs = []
+
+    def tearDown(self):
+        for slot_dir in self.slot_dirs:
+            shutil.rmtree(slot_dir, ignore_errors=True)
+
+    def _track(self, slot_name):
+        self.slot_dirs.append(self.llm_core._save_slot_dir(slot_name))
+        return slot_name
+
+    def test_save_writes_context_window_and_scenario_bookkeeping(self):
+        slot = self._track("test_llm_save")
+        self.llm_core.context_window = [{"role": "user", "content": "I attack the wolf"}]
+        self.llm_core.scenario_name = "The Arena"
+        self.llm_core.scenario_description = "A large arena."
+        self.llm_core.scenario_characters = ["gladstone - A man"]
+
+        self.llm_core.save_game(slot)
+
+        with open(os.path.join(self.llm_core._save_slot_dir(slot), "llm_state.json")) as f:
+            data = json.load(f)
+        self.assertEqual(data["context_window"], self.llm_core.context_window)
+        self.assertEqual(data["scenario_name"], "The Arena")
+
+    def test_load_restores_context_window_silently_without_a_new_llm_call(self):
+        # Resuming a session must not trigger a background fetch / new narration -- that's
+        # what would make a resumed save reprint something like a fresh opening scene.
+        slot = self._track("test_llm_load_silent")
+        self.llm_core.context_window = [{"role": "assistant", "content": "The wolf snarls."}]
+        self.llm_core.scenario_name = "The Arena"
+        self.llm_core.save_game(slot)
+
+        self.llm_core.context_window = []
+        self.llm_core.scenario_name = ""
+
+        with patch("threading.Thread") as mock_thread:
+            self.llm_core.load_game(slot)
+            mock_thread.assert_not_called()
+
+        self.assertEqual(self.llm_core.context_window, [{"role": "assistant", "content": "The wolf snarls."}])
+        self.assertEqual(self.llm_core.scenario_name, "The Arena")
+
+    def test_load_missing_slot_logs_and_leaves_state_unchanged(self):
+        errors = []
+        self.event_bus.subscribe("log_error", errors.append)
+        self.llm_core.context_window = [{"role": "user", "content": "untouched"}]
+
+        self.llm_core.load_game("does_not_exist_slot")
+
+        self.assertTrue(errors)
+        self.assertEqual(self.llm_core.context_window, [{"role": "user", "content": "untouched"}])
+
+    def test_game_load_failed_narrates_without_altering_state(self):
+        self.llm_core.context_window = [{"role": "user", "content": "existing history"}]
+
+        self.event_bus.publish("game_load_failed", {"slot": "boss-fight", "reason": "not_found"})
+
+        prompt = self.llm_core.context_window[-1]["content"]
+        self.assertIn("boss-fight", prompt)
+        self.assertIn("no such", prompt.lower())
+
+    def test_save_requested_and_load_requested_events_are_wired(self):
+        slot = self._track("test_llm_events_wired")
+        self.llm_core.context_window = [{"role": "user", "content": "before save"}]
+        self.event_bus.publish("save_requested", {"slot": slot})
+
+        self.llm_core.context_window = [{"role": "user", "content": "after save, before load"}]
+        self.event_bus.publish("load_requested", {"slot": slot})
+
+        self.assertEqual(self.llm_core.context_window, [{"role": "user", "content": "before save"}])
+
+
 def lines_of(app, widget_id):
     return [str(line) for line in app.query_one(f"#{widget_id}", RichLog).lines]
 
@@ -1181,6 +1657,88 @@ async def test_inactive_tab_content_requires_activation_to_read_lines():
         await pilot.pause()
 
         assert any("a log line" in line for line in lines_of(app, "event_log"))
+
+
+@pytest.mark.asyncio
+async def test_save_button_publishes_save_requested_with_slot_name():
+    event_bus = EventBus()
+    app = TextualCore(event_bus)
+    received = []
+    event_bus.subscribe("save_requested", received.append)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.click("#slot_input")
+        await pilot.press(*"arenarun1")
+        # Focus + Enter rather than pilot.click("#save_button") -- the button's on-screen
+        # offset can land right at the edge of the default test terminal size and raise
+        # OutOfBounds, which focus-and-activate sidesteps entirely.
+        app.query_one("#save_button", Button).focus()
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert received == [{"slot": "arenarun1"}]
+
+
+@pytest.mark.asyncio
+async def test_load_button_publishes_load_requested_with_slot_name():
+    event_bus = EventBus()
+    app = TextualCore(event_bus)
+    received = []
+    event_bus.subscribe("load_requested", received.append)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.click("#slot_input")
+        await pilot.press(*"myslot")
+        app.query_one("#load_button", Button).focus()
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert received == [{"slot": "myslot"}]
+
+
+@pytest.mark.asyncio
+async def test_save_load_buttons_ignore_a_blank_slot_name():
+    event_bus = EventBus()
+    app = TextualCore(event_bus)
+    save_events = []
+    load_events = []
+    event_bus.subscribe("save_requested", save_events.append)
+    event_bus.subscribe("load_requested", load_events.append)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.query_one("#save_button", Button).focus()
+        await pilot.pause()
+        await pilot.press("enter")
+        app.query_one("#load_button", Button).focus()
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert save_events == []
+        assert load_events == []
+
+
+@pytest.mark.asyncio
+async def test_game_saved_loaded_and_load_failed_mirror_into_history():
+    event_bus = EventBus()
+    app = TextualCore(event_bus)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        event_bus.publish("game_saved", {"slot": "arena-run-1"})
+        event_bus.publish("game_loaded", {"slot": "arena-run-1"})
+        event_bus.publish("game_load_failed", {"slot": "no-such-slot", "reason": "not_found"})
+        await pilot.pause()
+
+        history = lines_of(app, "history")
+        assert any("Game saved as 'arena-run-1'" in line for line in history)
+        assert any("Game loaded from 'arena-run-1'" in line for line in history)
+        assert any("No save named 'no-such-slot' found" in line for line in history)
 
 
 if __name__ == "__main__":

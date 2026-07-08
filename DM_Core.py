@@ -1,4 +1,5 @@
 import copy
+import json
 import os
 import random
 import tomllib
@@ -46,23 +47,38 @@ class DMCore:
         # player-like entity stands in as the active player character.
         self.player_name = "gladstone"
         self.round_number = 0
+        # The filename passed to load_scenario_definition -- distinct from self.scenario's
+        # own "name" field (a display string, ex: "The Arena") -- kept so save_game/load_game
+        # know which scenarios/*.toml file a saved slot belongs to.
+        self.scenario_key = scenario_name
         self.load_rules(os.path.join("Rules", "Fantasy"))
         self.load_scenario_definition(scenario_name)
         self.load_scenario()
         self.event_bus.publish("log_info", "DMCore initialized.")
         self.event_bus.publish("rules_loaded", {"skills": self.skills, "entities": self.entities})
-        characters = [
-            description for description in (
-                self.describe_character(entity_name) for entity_name in self.scenario_entities
-            ) if description
-        ]
         self.event_bus.publish("scenario_loaded", {
             "name": self.scenario.get("name"),
             "description": self.scenario.get("description"),
-            "characters": characters,
+            "characters": self._describe_scenario_characters(),
         })
         self.event_bus.subscribe("action_detected", self._on_action_detected)
         self.event_bus.subscribe("item_interaction_detected", self._on_item_interaction_detected)
+        self.event_bus.subscribe("save_requested", self._on_save_requested)
+        self.event_bus.subscribe("load_requested", self._on_load_requested)
+
+    def _describe_scenario_characters(self):
+        """!
+        @brief Builds the "characters" roster (describe_character per scenario instance,
+               skipping entities with no descriptive data) shared by scenario_loaded's
+               initial payload and game_loaded's post-load payload.
+        @return A list of non-empty character description strings.
+        """
+        return [
+            description for description in (
+                self.describe_character(entity_name, toward_name=self.player_name)
+                for entity_name in self.scenario_entities
+            ) if description
+        ]
 
     def load_rules(self, rules_dir):
         base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -241,6 +257,26 @@ class DMCore:
                 reduction += self.roll_dice(armor_value.get("dice", 0), armor_value.get("pips", 0))
 
         return reduction
+
+    def get_vulnerability_bonus(self, defender_name, damage_tags):
+        """!
+        @brief Rolls the extra damage a defender's own vulnerability_value/vulnerability_tags
+               (ex: the fire elemental's vulnerability to "water") adds on a matching hit --
+               the mirror image of resistance_value/resistance_tags in get_damage_reduction,
+               just added to raw damage instead of subtracted. Innate to the entity only (no
+               equipped-item counterpart, unlike armor's resistance side); a static, tag-matched
+               trait rather than active_conditions' temporary state (see CLAUDE.md's
+               tags-vs-conditions note).
+        @param defender_name The name of the entity taking damage.
+        @param damage_tags The damage tags of the incoming attack (ex: ["water"]).
+        @return The rolled bonus damage, or 0 if no tag matches.
+        """
+        defender = self.entities.get(defender_name, {})
+        vulnerability_value = defender.get("vulnerability_value")
+        vulnerability_tags = defender.get("vulnerability_tags", [])
+        if vulnerability_value and any(tag in vulnerability_tags for tag in damage_tags):
+            return self.roll_dice(vulnerability_value.get("dice", 0), vulnerability_value.get("pips", 0))
+        return 0
 
     def is_immune_to(self, defender_name, damage_tags):
         """!
@@ -511,32 +547,40 @@ class DMCore:
     def calculate_damage(self, attacker_name, defender_name, ability):
         """!
         @brief Calculates and applies damage from an attacker's ability to a defender, including
-               immunity and resistance/armor reduction.
+               immunity, resistance/armor reduction, and vulnerability.
         @param attacker_name The name of the entity dealing damage.
         @param defender_name The name of the entity taking damage.
         @param ability A table with damage_value {dice, pips, bonus} and damage_tags, such as a weapon, spell, or innate ability.
-        @return A dict describing the raw damage, reduction, net damage, and the defender's remaining HP.
+        @return A dict describing the raw damage, reduction, vulnerability bonus, net damage, and the defender's remaining HP.
         """
         damage_value = ability.get("damage_value", {"dice": 0, "pips": 0, "bonus": 0})
         damage_tags = ability.get("damage_tags", [])
 
         raw_damage = self.resolve_damage_value(attacker_name, damage_value)
         if self.is_immune_to(defender_name, damage_tags):
+            # An absolute block -- a matching immunity negates the hit entirely, so
+            # vulnerability (which only matters once damage is actually getting through)
+            # never applies alongside it.
             reduction = raw_damage
+            vulnerability_bonus = 0
         else:
             reduction = self.get_damage_reduction(defender_name, damage_tags)
-        net_damage = max(0, raw_damage - reduction)
+            vulnerability_bonus = self.get_vulnerability_bonus(defender_name, damage_tags)
+        net_damage = max(0, raw_damage + vulnerability_bonus - reduction)
         remaining_hp = self.apply_damage(defender_name, net_damage)
 
         self.event_bus.publish(
             "log_info",
-            f"{attacker_name} deals {raw_damage} raw damage to {defender_name}, reduced by {reduction} -> {net_damage} net damage."
+            f"{attacker_name} deals {raw_damage} raw damage to {defender_name}"
+            f"{f' (+{vulnerability_bonus} vulnerability)' if vulnerability_bonus else ''}"
+            f", reduced by {reduction} -> {net_damage} net damage."
         )
         return {
             "attacker": attacker_name,
             "defender": defender_name,
             "raw_damage": raw_damage,
             "reduction": reduction,
+            "vulnerability_bonus": vulnerability_bonus,
             "net_damage": net_damage,
             "remaining_hp": remaining_hp,
         }
@@ -739,6 +783,61 @@ class DMCore:
             return best_skill
         return ability_skill[0] if ability_skill else None
 
+    def choose_behavior(self, entity_name):
+        """!
+        @brief Picks the first entry in an entity's [[entity.behavior]] list whose
+               requirements are currently met, in declaration order -- the same
+               {field, operator, value} requirement engine [[status]] already uses
+               (entity_matches_requirements), just read from "behavior" instead of
+               "status". Ex: creatures.toml's wolf has one behavior, "always attack
+               while hp_per_remain >= 0.01", so it keeps attacking until it's
+               effectively dead and then simply stops matching any behavior at all.
+        @param entity_name The name of the entity choosing a behavior.
+        @return The first matching behavior definition, or None if none match (or
+                the entity has no behavior list at all).
+        """
+        for behavior in self.entities.get(entity_name, {}).get("behavior", []):
+            if self.entity_matches_requirements(entity_name, behavior.get("requirements", [])):
+                return behavior
+        return None
+
+    def resolve_behavior_action(self, entity_name, target_name):
+        """!
+        @brief Resolves an entity's currently-chosen behavior as an opposed action against a
+               target. A behavior names a specific *action* (ex: creatures.toml's wolf names
+               "bite", one of its own abilities) rather than a bare skill -- reusing
+               resolve_named_ability + select_ability_skill, the exact same lookup the
+               player's own named-technique path (ex: "cleave") already uses, rather than
+               going through find_attack_ability's equipped-weapon-first priority. That
+               priority exists to disambiguate a skill name shared by multiple things; a
+               behavior already knows exactly which ability it means, so there's nothing
+               to disambiguate.
+        @param entity_name The name of the acting entity (ex: a wolf).
+        @param target_name The name of the entity being acted against (ex: the player).
+        @return The behavior's resolution result dict (same shape as resolve_opposed_action's,
+                plus "damage" on a successful hit), or None if no behavior currently matches
+                or its named action isn't actually one of the entity's own abilities.
+        """
+        behavior = self.choose_behavior(entity_name)
+        if behavior is None:
+            return None
+
+        action_name = behavior.get("action")
+        ability = self.resolve_named_ability(entity_name, action_name)
+        if ability is None:
+            self.event_bus.publish(
+                "log_warning", f"{entity_name}'s behavior names unknown action '{action_name}'."
+            )
+            return None
+
+        skill_name = self.select_ability_skill(entity_name, ability)
+        result = self.resolve_opposed_action(entity_name, skill_name, target_name)
+
+        if result["success"]:
+            result["damage"] = self.calculate_damage(entity_name, target_name, ability)
+
+        return result
+
     def _on_action_detected(self, data):
         """!
         @brief Event handler that resolves a detected player action, opposed by a scenario target if one exists,
@@ -785,7 +884,7 @@ class DMCore:
                 result["damage"] = self.calculate_damage(self.player_name, target_name, ability)
 
         if target_name:
-            defender_details = self.describe_character(target_name)
+            defender_details = self.describe_character(target_name, toward_name=self.player_name)
             if defender_details:
                 result["defender_details"] = defender_details
 
@@ -795,6 +894,14 @@ class DMCore:
         if in_combat:
             self.round_number += 1
             result["round"] = self.round_number
+            # The target gets to act back the same round, via its own [[entity.behavior]]
+            # (ex: a wolf biting back) -- this is what makes combat mutual instead of the
+            # player only ever being the one rolling to hit. A target with no matching
+            # behavior (no behavior data at all, or none of its requirements currently hold,
+            # ex: it's already at 0 HP) simply doesn't act.
+            enemy_result = self.resolve_behavior_action(target_name, self.player_name)
+            if enemy_result:
+                result["enemy_action"] = enemy_result
             self.event_bus.publish("round_resolved", result)
         else:
             self.event_bus.publish("action_resolved", result)
@@ -841,7 +948,7 @@ class DMCore:
             # Examining the container/creature itself, not something inside it -- there's
             # nothing to "take" about the target as a whole.
             if intent == "examine":
-                description = self.describe_character(target_name) or ""
+                description = self.describe_character(target_name, toward_name=self.player_name) or ""
                 resolved(True, description=description)
             else:
                 resolved(False, reason="not_takeable")
@@ -897,13 +1004,63 @@ class DMCore:
         disposition = self.get_attitude(entity_name, toward_name)[0]
         return disposition <= 0
 
-    def describe_character(self, entity_name):
+    def get_attitude_tier(self, value):
+        """!
+        @brief Finds the [[attitude_tier]] definition (rules.toml) whose minimum/maximum range
+               contains a single attitude axis value, clamped to [-150, 150] first -- headroom
+               past the nominal -100..100 range for whenever attitudes get modified at runtime
+               (nothing does yet), so an extreme value still resolves to the correct outermost
+               tier instead of matching nothing. Tiers are checked in TOML declaration order and
+               the first match wins, same convention as choose_behavior -- ex: a value of exactly
+               -100 sits on both "hostile"'s and "unfriendly"'s boundary, and resolves to
+               whichever is declared first (hostile).
+        @param value A single attitude axis value (ex: disposition).
+        @return The matching attitude_tier definition, or None if none match (ex: no
+                [[attitude_tier]] data is loaded at all).
+        """
+        clamped = max(-150, min(150, value))
+        for tier in self.rules.get("attitude_tier", []):
+            if tier.get("minimum", float("-inf")) <= clamped <= tier.get("maximum", float("inf")):
+                return tier
+        return None
+
+    def describe_attitude(self, entity_name, toward_name):
+        """!
+        @brief Translates entity_name's six-value attitude array toward toward_name (from
+               get_attitude) into prose via [[attitude_tier]] -- one phrase per axis, banded by
+               get_attitude_tier, rather than handing the LLM raw numbers it has no way to
+               calibrate ("38 disposition" means nothing to a language model; "is warm and
+               well-disposed toward them" does).
+        @param entity_name The name of the entity whose attitude is being described.
+        @param toward_name The name of the entity it's directed toward.
+        @return A prose fragment ("Attitude toward X: ..."), or "" if no attitude_tier data is
+                loaded (ex: a malformed rules.toml -- see load_rules' per-file try/except note).
+        """
+        axes = ("disposition", "trust", "confidence", "respect", "obligation", "intimacy")
+        values = self.get_attitude(entity_name, toward_name)
+        phrases = []
+        for axis, value in zip(axes, values):
+            tier = self.get_attitude_tier(value)
+            if tier and tier.get(axis):
+                phrases.append(tier[axis])
+
+        if not phrases:
+            return ""
+        return f"Attitude toward {toward_name}: " + ", ".join(phrases) + "."
+
+    def describe_character(self, entity_name, toward_name=None):
         """!
         @brief Builds a flavor-text description of an entity for narration prompts, out of its
                purely descriptive data (description, qualities, memories, quotes) rather than
                mechanical data (skills/dice), since this is meant to tell the LLM who someone is.
         @param entity_name The name of the entity to describe.
-        @return A formatted description string, or "" if the entity has no descriptive data.
+        @param toward_name If given (and different from entity_name), appends
+               describe_attitude(entity_name, toward_name) as an additional part -- ex: passing
+               self.player_name lets a "pure mechanics" entity like wolf, which otherwise has no
+               descriptive data at all, still surface something to the LLM (how hostile it is),
+               rather than contributing nothing to the roster/defender_details.
+        @return A formatted description string, or "" if the entity has no descriptive data
+                (and no attitude phrase was added).
         """
         entity = self.entities.get(entity_name, {})
         parts = []
@@ -924,6 +1081,11 @@ class DMCore:
         if quotes:
             parts.append("Known to say: " + "; ".join(f"\"{quote}\"" for quote in quotes))
 
+        if toward_name and toward_name != entity_name:
+            attitude = self.describe_attitude(entity_name, toward_name)
+            if attitude:
+                parts.append(attitude)
+
         if not parts:
             return ""
         return f"{entity_name} - " + " | ".join(parts)
@@ -937,3 +1099,139 @@ class DMCore:
             if instance_name != self.player_name:
                 return instance_name
         return None
+
+    def _save_slot_dir(self, slot_name):
+        """!
+        @brief Resolves a save slot name to its directory under Saves/. LLMCore computes this
+               same path independently (it has no reference to DMCore, by design -- the two
+               only ever communicate through events) and must be kept in sync with it, since
+               both write sibling files into the same slot directory.
+        @param slot_name The save slot's name, as given by the player.
+        @return The absolute directory path for this slot. os.path.basename strips any
+                path-separator components first, so a slot name can't escape Saves/ (ex: a
+                slot literally named "../../etc" resolves to Saves/etc, not outside Saves/).
+        """
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        safe_name = os.path.basename(slot_name.strip()) or "unnamed"
+        return os.path.join(base_dir, "Saves", safe_name)
+
+    def save_game(self, slot_name):
+        """!
+        @brief Writes this core's mechanical state to Saves/<slot_name>/dm_state.json -- a
+               diff from a fresh instantiation (round_number, scenario_entities, and each
+               instance's hp/active_conditions/currency/inventory), not a raw dump of
+               self.entities, which also holds every static template. Loading re-instantiates
+               fresh from Rules/Fantasy TOML and overlays this diff on top, so a save doesn't
+               freeze stale stats if templates are edited between sessions. LLMCore
+               independently saves its own sibling file (context_window) for the same slot --
+               see CLAUDE.md's "Saving and loading" section for why the two cores don't share
+               one combined file.
+        @param slot_name The save slot's name (used as a directory name under Saves/).
+        """
+        slot_dir = self._save_slot_dir(slot_name)
+        os.makedirs(slot_dir, exist_ok=True)
+        data = {
+            "version": 1,
+            "scenario_key": self.scenario_key,
+            "player_name": self.player_name,
+            "round_number": self.round_number,
+            "scenario_entities": self.scenario_entities,
+            "instances": {
+                name: {
+                    "hp": self.get_current_hp(name),
+                    "active_conditions": self.entities.get(name, {}).get("active_conditions", {}),
+                    "currency": self.entities.get(name, {}).get("currency", 0),
+                    "inventory": self.entities.get(name, {}).get("inventory", []),
+                }
+                for name in self.scenario_entities
+            },
+        }
+        with open(os.path.join(slot_dir, "dm_state.json"), "w") as f:
+            json.dump(data, f, indent=2)
+        self.event_bus.publish("log_info", f"Game saved to slot '{slot_name}'.")
+        # Distinct from the log_info line above (Debug-tab-only) -- GUI/Textual subscribe to
+        # this directly so a save gets a plain visible confirmation in the main history pane
+        # without spending an LLM call narrating something as mundane as "you saved the game."
+        self.event_bus.publish("game_saved", {"slot": slot_name})
+
+    def load_game(self, slot_name):
+        """!
+        @brief Restores mechanical state from Saves/<slot_name>/dm_state.json: re-reads every
+               Rules/Fantasy/*.toml template fresh via load_rules, then reloads the saved
+               scenario via the same load_scenario_definition/load_scenario path __init__
+               uses, then overlays each instance's saved hp/active_conditions/currency/
+               inventory on top. A saved instance with no matching entity after re-instancing
+               (ex: the scenario file changed) is skipped rather than crashing.
+
+               The load_rules call is not optional: self.entities holds both static templates
+               and live instances under the same keys (a single-occurrence instance like
+               "wolf" *overwrites* self.entities["wolf"] the moment load_scenario first runs --
+               see "Scenario instancing" in CLAUDE.md), so calling load_scenario() alone would
+               re-instance from whatever's currently sitting in self.entities, which after the
+               very first load is the *live, possibly-mutated instance*, not the pristine
+               template. Re-running load_rules first is what actually makes a resumed save
+               pick up current TOML stats rather than freezing stale in-memory ones.
+
+               Publishes "game_loaded" on success -- deliberately not "scenario_loaded", so
+               LLMCore restores its own saved state silently instead of narrating a brand-new
+               opening scene on every resume. Publishes "game_load_failed" if the slot doesn't
+               exist, so the player gets feedback rather than the request silently doing
+               nothing (same rule action_not_understood already follows for unmatched input).
+        @param slot_name The save slot's name to load.
+        """
+        path = os.path.join(self._save_slot_dir(slot_name), "dm_state.json")
+        if not os.path.exists(path):
+            self.event_bus.publish("log_error", f"No save slot named '{slot_name}'.")
+            self.event_bus.publish("game_load_failed", {"slot": slot_name, "reason": "not_found"})
+            return
+
+        with open(path, "r") as f:
+            data = json.load(f)
+
+        self.player_name = data.get("player_name", self.player_name)
+        self.round_number = data.get("round_number", 0)
+        self.scenario_key = data.get("scenario_key", self.scenario_key)
+        self.load_rules(os.path.join("Rules", "Fantasy"))
+        self.load_scenario_definition(self.scenario_key)
+        self.load_scenario()
+
+        for name, state in data.get("instances", {}).items():
+            entity = self.entities.get(name)
+            if entity is None:
+                continue
+            entity["hp"] = state.get("hp", entity.get("max_hp", 0))
+            entity["active_conditions"] = state.get("active_conditions", {})
+            entity["currency"] = state.get("currency", entity.get("currency", 0))
+            entity["inventory"] = state.get("inventory", entity.get("inventory", []))
+
+        self.event_bus.publish("log_info", f"Game loaded from slot '{slot_name}'.")
+        self.event_bus.publish("game_loaded", {
+            "slot": slot_name,
+            "name": self.scenario.get("name"),
+            "description": self.scenario.get("description"),
+            "characters": self._describe_scenario_characters(),
+        })
+
+    def _on_save_requested(self, data):
+        """!
+        @brief Event handler for a save request (from NLPCore's text intercept or a GUI/Textual
+               button, both publishing the same event) -- a missing/blank slot name just logs
+               a warning rather than saving to some default location unasked.
+        @param data The "save_requested" payload ({"slot": slot_name}).
+        """
+        slot_name = data.get("slot")
+        if not slot_name:
+            self.event_bus.publish("log_warning", "save_requested with no slot name; ignored.")
+            return
+        self.save_game(slot_name)
+
+    def _on_load_requested(self, data):
+        """!
+        @brief Event handler for a load request, mirroring _on_save_requested.
+        @param data The "load_requested" payload ({"slot": slot_name}).
+        """
+        slot_name = data.get("slot")
+        if not slot_name:
+            self.event_bus.publish("log_warning", "load_requested with no slot name; ignored.")
+            return
+        self.load_game(slot_name)

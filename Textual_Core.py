@@ -7,7 +7,7 @@
 
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal
-from textual.widgets import Input, RichLog, TabbedContent, TabPane
+from textual.widgets import Button, Input, RichLog, TabbedContent, TabPane
 
 
 class TextualCore(App):
@@ -17,6 +17,7 @@ class TextualCore(App):
 
     CSS = """
     Horizontal { height: 1fr; }
+    #save_row { height: 3; }
     """
 
     def __init__(self, event_bus):
@@ -34,6 +35,9 @@ class TextualCore(App):
         self.event_bus.subscribe("rules_loaded", self._on_rules_loaded)
         self.event_bus.subscribe("log_info", self._on_log_info)
         self.event_bus.subscribe("log_error", self._on_log_error)
+        self.event_bus.subscribe("game_saved", self._on_game_saved)
+        self.event_bus.subscribe("game_loaded", self._on_game_loaded)
+        self.event_bus.subscribe("game_load_failed", self._on_game_load_failed)
 
     def compose(self) -> ComposeResult:
         with Horizontal():
@@ -43,6 +47,13 @@ class TextualCore(App):
                     yield RichLog(id="debug_log", wrap=True)
                 with TabPane("Log", id="event_log_tab"):
                     yield RichLog(id="event_log", wrap=True)
+        # A slot-name field plus Save/Load buttons -- just another way to publish the same
+        # "save_requested"/"load_requested" events NLPCore's text intercept publishes (ex:
+        # "save as arena-run-1"), so DMCore/LLMCore handle it identically either way.
+        with Horizontal(id="save_row"):
+            yield Input(placeholder="Save slot name...", id="slot_input")
+            yield Button("Save", id="save_button")
+            yield Button("Load", id="load_button")
         yield Input(placeholder="Type an action and press Enter...", id="input_box")
 
     def on_mount(self) -> None:
@@ -59,12 +70,29 @@ class TextualCore(App):
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """!
         @brief Mirrors GUICore.submit_input: publishes the typed text and clears the field.
+               Only reacts to the main action input -- "slot_input" submits via the Save/Load
+               buttons instead, not by pressing Enter.
         """
+        if event.input.id != "input_box":
+            return
         text = event.value.strip()
         if not text:
             return
         event.input.value = ""
         self.event_bus.publish("user_input_submitted", text)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """!
+        @brief Mirrors GUICore.request_save/request_load: publishes "save_requested"/
+               "load_requested" with the slot-name input's current text.
+        """
+        if event.button.id not in ("save_button", "load_button"):
+            return
+        slot_name = self.query_one("#slot_input", Input).value.strip()
+        if not slot_name:
+            return
+        event_type = "save_requested" if event.button.id == "save_button" else "load_requested"
+        self.event_bus.publish(event_type, {"slot": slot_name})
 
     def call_safely(self, fn, *args):
         """!
@@ -104,6 +132,15 @@ class TextualCore(App):
 
     def _on_log_error(self, message):
         self.call_safely(self._write, "event_log", f"ERROR: {message}")
+
+    def _on_game_saved(self, data):
+        self.call_safely(self._write, "history", f"[System] Game saved as '{data.get('slot')}'.")
+
+    def _on_game_loaded(self, data):
+        self.call_safely(self._write, "history", f"[System] Game loaded from '{data.get('slot')}'.")
+
+    def _on_game_load_failed(self, data):
+        self.call_safely(self._write, "history", f"[System] No save named '{data.get('slot')}' found.")
 
 
 if __name__ == "__main__":

@@ -52,18 +52,37 @@ class GUICore:
         
         self.input_frame = tk.Frame(self.root)
         self.input_frame.pack(fill=tk.X, side=tk.BOTTOM, padx=5, pady=5)
-        
+
         self.input_entry = tk.Entry(self.input_frame)
         self.input_entry.pack(fill=tk.X, expand=True, side=tk.LEFT)
         self.input_entry.bind("<Return>", self.handle_input)
-        
+
         self.submit_button = tk.Button(self.input_frame, text="Submit", command=self.submit_input)
         self.submit_button.pack(side=tk.RIGHT, padx=(5, 0))
+
+        # A slot-name field plus Save/Load buttons -- deliberately just another way to publish
+        # the same "save_requested"/"load_requested" events NLPCore's text intercept publishes
+        # (ex: "save as arena-run-1"), not a separate mechanism. Sits above the input row so the
+        # main input stays the bottom-most, most-used control.
+        self.save_frame = tk.Frame(self.root)
+        self.save_frame.pack(fill=tk.X, side=tk.BOTTOM, padx=5)
+
+        self.slot_entry = tk.Entry(self.save_frame)
+        self.slot_entry.pack(fill=tk.X, expand=True, side=tk.LEFT)
+
+        self.load_button = tk.Button(self.save_frame, text="Load", command=self.request_load)
+        self.load_button.pack(side=tk.RIGHT, padx=(5, 0))
+
+        self.save_button = tk.Button(self.save_frame, text="Save", command=self.request_save)
+        self.save_button.pack(side=tk.RIGHT, padx=(5, 0))
 
         self.user_input = ""
         self.event_bus.publish("log_info", "GUICore initialized.")
         self.event_bus.subscribe("llm_response_ready", self.display_llm_response)
         self.event_bus.subscribe("rules_loaded", self.display_debug_info)
+        self.event_bus.subscribe("game_saved", self.display_game_saved)
+        self.event_bus.subscribe("game_loaded", self.display_game_loaded)
+        self.event_bus.subscribe("game_load_failed", self.display_game_load_failed)
 
     def start(self):
         self.root.mainloop()
@@ -87,6 +106,35 @@ class GUICore:
 
     def display_llm_response(self, text):
         self.append_to_history(f"{text}\n\n")
+
+    def request_save(self):
+        """!
+        @brief Publishes "save_requested" with the slot-name field's current text -- the same
+               event NLPCore's text intercept publishes for "save as <slot>", so DMCore/LLMCore
+               handle it identically regardless of which trigger fired it.
+        """
+        slot_name = self.slot_entry.get().strip()
+        if not slot_name:
+            return
+        self.event_bus.publish("save_requested", {"slot": slot_name})
+
+    def request_load(self):
+        """!
+        @brief Publishes "load_requested", mirroring request_save.
+        """
+        slot_name = self.slot_entry.get().strip()
+        if not slot_name:
+            return
+        self.event_bus.publish("load_requested", {"slot": slot_name})
+
+    def display_game_saved(self, data):
+        self.append_to_history(f"[System] Game saved as '{data.get('slot')}'.\n\n")
+
+    def display_game_loaded(self, data):
+        self.append_to_history(f"[System] Game loaded from '{data.get('slot')}'.\n\n")
+
+    def display_game_load_failed(self, data):
+        self.append_to_history(f"[System] No save named '{data.get('slot')}' found.\n\n")
 
     def display_party_status(self, health_data, inventory_data):
         """!

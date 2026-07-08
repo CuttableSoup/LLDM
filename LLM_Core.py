@@ -1,4 +1,5 @@
 import json
+import os
 import urllib.request
 import threading
 
@@ -24,6 +25,9 @@ class LLMCore:
         self.event_bus.subscribe("action_resolved", self.generate_response)
         self.event_bus.subscribe("action_not_understood", self.generate_clarification_response)
         self.event_bus.subscribe("item_interaction_resolved", self.generate_item_interaction_response)
+        self.event_bus.subscribe("save_requested", self._on_save_requested)
+        self.event_bus.subscribe("load_requested", self._on_load_requested)
+        self.event_bus.subscribe("game_load_failed", self.generate_load_failed_response)
 
     def perform_rag(self, query):
         """!
@@ -52,10 +56,14 @@ class LLMCore:
         self.event_bus.publish("log_info", "Generating NPC response.")
         return ""
 
-    def _describe_outcome(self, action_result):
+    def _describe_outcome(self, action_result, actor="the player"):
         """!
         @brief Builds the shared roll/damage description used by every narration prompt.
-        @param action_result A resolved action dict (from "action_resolved" or "round_resolved").
+        @param action_result A resolved action dict (from "action_resolved" or "round_resolved",
+               or an "enemy_action" sub-result resolved via a creature's own behavior).
+        @param actor Who performed this action, for the leading "X attempts" line -- defaults
+               to the player, but a creature's own behavior-driven action (ex: a wolf's bite)
+               passes its own name instead so the narration doesn't misattribute it.
         @return The outcome description as a string.
         """
         outcome = "succeeds" if action_result.get("success") else "fails"
@@ -89,8 +97,11 @@ class LLMCore:
         defender_details = action_result.get("defender_details")
         details_text = f"\n{defender_details}" if defender_details else ""
 
+        input_text = action_result.get("input")
+        attempt_line = f"{actor.capitalize()} attempts: \"{input_text}\"\n" if input_text else ""
+
         return (
-            f"The player attempts: \"{action_result.get('input', '')}\"\n"
+            f"{attempt_line}"
             f"Skill used: {action_result.get('skill')} "
             f"(rolled {action_result.get('roll')} vs difficulty {action_result.get('difficulty')}{opposition}) "
             f"- the action {outcome}.{damage_text}{loot_text}{details_text}"
@@ -127,9 +138,14 @@ class LLMCore:
         """
         self.event_bus.publish("log_info", f"Generating LLM response for combat round {action_result.get('round')}.")
 
+        enemy_action = action_result.get("enemy_action")
+        enemy_text = (
+            f"\n{self._describe_outcome(enemy_action, actor=action_result.get('defender', 'the creature'))}"
+            if enemy_action else ""
+        )
         prompt = (
             f"Combat round {action_result.get('round')}:\n"
-            f"{self._describe_outcome(action_result)}\n"
+            f"{self._describe_outcome(action_result)}{enemy_text}\n"
             f"Narrate the end of this combat round in 2-3 sentences as the Game Master."
         )
         self._queue_narration(prompt)
@@ -247,3 +263,103 @@ class LLMCore:
                 self.event_bus.publish("llm_response_ready", "System: Could not connect to the local LLM.")
 
         threading.Thread(target=fetch_from_llm, daemon=True).start()
+
+    def _save_slot_dir(self, slot_name):
+        """!
+        @brief Mirrors DMCore._save_slot_dir exactly. LLMCore has no reference to DMCore --
+               the two cores only ever talk through events -- so this small path helper is
+               deliberately duplicated here rather than shared, and must stay in sync with
+               DMCore's copy: both write sibling files into the same Saves/<slot_name>/
+               directory for a given slot.
+        @param slot_name The save slot's name, as given by the player.
+        @return The absolute directory path for this slot.
+        """
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        safe_name = os.path.basename(slot_name.strip()) or "unnamed"
+        return os.path.join(base_dir, "Saves", safe_name)
+
+    def save_game(self, slot_name):
+        """!
+        @brief Writes this core's own slice of a save slot -- the rolling narration
+               context_window plus scenario bookkeeping -- to
+               Saves/<slot_name>/llm_state.json. DMCore independently writes its own
+               dm_state.json sibling for the same slot (see CLAUDE.md's "Saving and loading"
+               for why this isn't one combined file).
+        @param slot_name The save slot's name (used as a directory name under Saves/).
+        """
+        slot_dir = self._save_slot_dir(slot_name)
+        os.makedirs(slot_dir, exist_ok=True)
+        data = {
+            "version": 1,
+            "context_window": self.context_window,
+            "scenario_name": self.scenario_name,
+            "scenario_description": self.scenario_description,
+            "scenario_characters": self.scenario_characters,
+        }
+        with open(os.path.join(slot_dir, "llm_state.json"), "w") as f:
+            json.dump(data, f, indent=2)
+        self.event_bus.publish("log_info", f"LLM narration state saved to slot '{slot_name}'.")
+
+    def load_game(self, slot_name):
+        """!
+        @brief Restores context_window/scenario bookkeeping from
+               Saves/<slot_name>/llm_state.json, silently -- no LLM call, no new narration --
+               so resuming a session doesn't reprint an opening-scene intro the way a genuine
+               "scenario_loaded" would. A missing file just logs and leaves current state
+               alone; DMCore's own load_game is what publishes "game_load_failed" for
+               narrating that to the player (see generate_load_failed_response), so this
+               doesn't duplicate that feedback.
+        @param slot_name The save slot's name to load.
+        """
+        path = os.path.join(self._save_slot_dir(slot_name), "llm_state.json")
+        if not os.path.exists(path):
+            self.event_bus.publish("log_error", f"No LLM narration state for slot '{slot_name}'.")
+            return
+
+        with open(path, "r") as f:
+            data = json.load(f)
+
+        self.context_window = data.get("context_window", [])
+        self.scenario_name = data.get("scenario_name", "")
+        self.scenario_description = data.get("scenario_description", "")
+        self.scenario_characters = data.get("scenario_characters", [])
+        self.event_bus.publish("log_info", f"LLM narration state loaded from slot '{slot_name}'.")
+
+    def _on_save_requested(self, data):
+        """!
+        @brief Event handler for a save request (from NLPCore's text intercept or a GUI/Textual
+               button, both publishing the same event as DMCore's own handler).
+        @param data The "save_requested" payload ({"slot": slot_name}).
+        """
+        slot_name = data.get("slot")
+        if not slot_name:
+            self.event_bus.publish("log_warning", "save_requested with no slot name; ignored.")
+            return
+        self.save_game(slot_name)
+
+    def _on_load_requested(self, data):
+        """!
+        @brief Event handler for a load request, mirroring _on_save_requested.
+        @param data The "load_requested" payload ({"slot": slot_name}).
+        """
+        slot_name = data.get("slot")
+        if not slot_name:
+            self.event_bus.publish("log_warning", "load_requested with no slot name; ignored.")
+            return
+        self.load_game(slot_name)
+
+    def generate_load_failed_response(self, data):
+        """!
+        @brief Narrates a brief in-character acknowledgment when a requested save slot doesn't
+               exist (DMCore's "game_load_failed") -- no roll, no state change, just feedback
+               so the request doesn't silently do nothing (same rule
+               generate_clarification_response already follows for unmatched input).
+        @param data The "game_load_failed" payload ({"slot": slot_name, "reason": ...}).
+        """
+        prompt = (
+            f"The player tried to load a save named \"{data.get('slot', '')}\", but no such "
+            f"save exists -- nothing was loaded, no state changed.\n"
+            f"Respond in-character as the Game Master in 1-2 sentences, acknowledging the "
+            f"failed attempt without inventing what the save might have contained."
+        )
+        self._queue_narration(prompt)

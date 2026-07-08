@@ -89,10 +89,12 @@ Inside `DMCore._on_action_detected`:
    (narrated once, as a round summary). Otherwise (no target, or a non-hostile target like a
    tavern NPC) it publishes immediately as `action_resolved` (narrated per skill use) — this
    is also the path a *dialogue* skill check (ex: `charisma`) takes against a friendly NPC.
-   Only one player action is resolved per call today (no enemy turn loop exists), so a
-   "round" is currently just one player action while a hostile target is present — the
-   `round_resolved` payload carries a single result, not a list, ready to extend if/when
-   multi-actor rounds are added.
+   Only one player action is resolved per call, so a "round" is one player action plus (if
+   the target has matching `[[entity.behavior]]` data) that same target's own counter-attack
+   — see "Entity behavior (enemy turns)" below. The `round_resolved` payload carries a single
+   player result (with the target's response nested as `enemy_action`, not a separate list),
+   ready to extend further if/when true multi-actor rounds (multiple live enemies each acting)
+   are added.
 
 ## Narration triggers
 
@@ -121,23 +123,56 @@ combat/action narration grounded (ex: still mentioning the arena's crowd and dir
 NPC's known backstory) turns after the intro message has scrolled out of the rolling
 100-message `context_window`, rather than relying on that one message alone.
 
-**Where the character roster comes from:** `DMCore.describe_character(entity_name)` (in
-`DM_Core.py`) builds a flavor-text line per entity out of purely descriptive TOML fields —
+**Where the character roster comes from:** `DMCore.describe_character(entity_name, toward_name=None)`
+(in `DM_Core.py`) builds a flavor-text line per entity out of purely descriptive TOML fields —
 `description`, `qualities`, `memories`, `quotes` — deliberately excluding mechanical data
 (skills/dice), since this is meant to tell the LLM *who* someone is, not how they roll.
-Entities with none of those fields (ex: `wolf`, which is pure mechanics) return `""` and are
-skipped. `DMCore.__init__` builds the `characters` list for every entity in
-`self.scenario_entities` and includes it in the `scenario_loaded` payload; `_on_action_detected`
-separately attaches `result["defender_details"] = describe_character(target_name)` per action,
-which `_describe_outcome` folds into the per-turn outcome text — belt-and-suspenders against
-the persistent roster ever being stale (ex: an NPC added to the scene after the intro fired,
-though nothing does that yet). Verified live: asking the tavern's `innkeeper` about her husband
-(her `memories` includes "Lost her husband to a bandit raid") produced narration referencing
-that loss unprompted — the data actually reaches and shapes generation, not just cosmetic
-plumbing.
+Entities with none of those fields (ex: `wolf`, which is pure mechanics) return `""` when
+called with no `toward_name` — but every call site actually passes `toward_name=player_name`
+(see "Attitude phrases" below), which gives even a purely-mechanical entity something to say
+(how it feels about the player), so in practice `wolf` does contribute a roster line today.
+`DMCore.__init__` builds the `characters` list for every entity in `self.scenario_entities` and
+includes it in the `scenario_loaded` payload; `_on_action_detected` separately attaches
+`result["defender_details"] = describe_character(target_name, toward_name=player_name)` per
+action, which `_describe_outcome` folds into the per-turn outcome text — belt-and-suspenders
+against the persistent roster ever being stale (ex: an NPC added to the scene after the intro
+fired, though nothing does that yet). Verified live: asking the tavern's `innkeeper` about her
+husband (her `memories` includes "Lost her husband to a bandit raid") produced narration
+referencing that loss unprompted — the data actually reaches and shapes generation, not just
+cosmetic plumbing.
 
 **Player is hardcoded** as `self.player_name = "gladstone"` — there's no party/character
 selection system yet.
+
+## Attitude phrases
+
+`get_attitude`'s six-value array (`disposition, trust, confidence, respect, obligation,
+intimacy`, each -100..100 nominally) is exactly the kind of thing an LLM can't calibrate on its
+own — `"38 disposition"` means nothing to it, but `"is warm and well-disposed toward them"`
+does. `[[attitude_tier]]` (`rules.toml`) is a small band table, same general shape as
+`[[range_modifier]]`: seven tiers (`hostile`, `unfriendly`, `wary`, `neutral`, `warm`,
+`friendly`, `devoted`), each a `{name, minimum, maximum}` range plus one phrase per axis.
+`DMCore.get_attitude_tier(value)` clamps the value to **[-150, 150]** first — headroom past the
+nominal -100..100 range for whenever attitudes get modified at runtime (nothing does yet, but
+the two outer tiers are already sized to absorb it: `hostile` is -150..-100, `devoted` is
+100..150, both 50 wide, vs. 40 for the five tiers in between) — then returns the first tier
+whose range contains it, in TOML declaration order. **A value sitting exactly on a shared
+boundary resolves to whichever tier is declared first** — ex: -100 matches `hostile` (declared
+before `unfriendly`), and 100 matches `friendly` (declared before `devoted`), not the tier you
+might assume from the number alone. Same convention as `choose_behavior`'s first-match-wins.
+
+`DMCore.describe_attitude(entity_name, toward_name)` calls `get_attitude` and looks up each of
+the six values against its own axis's phrase in the matching tier, joining them into one
+sentence (`"Attitude toward gladstone: is openly unfriendly toward them, is deeply suspicious
+of their motives, ..."`). Because `get_attitude` already returns a sensible default
+(`[0, 0, 0, 0, 0, 0]`, i.e. every axis lands in `neutral`) for any entity with no
+`[entity.attitudes]` table at all, this works for every entity, not just ones with authored
+attitude data — which is what lets `describe_character` fold it in as one more optional part,
+alongside description/qualities/memories/quotes, whenever a `toward_name` is given (skipped if
+`toward_name == entity_name`, since describing an entity's attitude toward itself is
+meaningless). `creatures.toml`'s `fire elemental`/`wolf` have no `[entity.attitudes]` block and
+never will need one just for this — they still surface a full six-axis "neutral" reading, which
+is honest (no attitude data *is* neutral) rather than nothing at all.
 
 ## Scenario instancing
 
@@ -175,6 +210,143 @@ named scenario file backs it (ex: `TestScenarioLoading`'s ad-hoc single-wolf sce
 
 **Known gap:** `_get_target_name()` always returns the *first* non-player instance. No
 targeting logic, no moving on when something dies, no band/range awareness yet.
+
+**`self.entities` holds templates and live instances under the same keys, and instancing
+overwrites the template slot.** For a single-occurrence entity (ex: `gladstone`, or the first
+`wolf` in a scenario with only one), `instance_name == template_name`, so
+`self.entities[instance_name] = instance` in `load_scenario()` replaces
+`self.entities["wolf"]` — the pristine TOML-loaded template — with the live, mutable instance.
+Only a *second* occurrence gets a distinct key (`wolf_2`) that doesn't collide with the
+template. This matters beyond just this section: `load_game` (see "Saving and loading") has
+to re-run `load_rules()` before re-instancing, precisely because calling `load_scenario()`
+alone would silently instance from whatever's currently sitting in `self.entities["wolf"]` —
+which, after the very first load, is this same live instance, not fresh disk data.
+
+## Saving and loading
+
+Two sibling JSON files per named save slot, `Saves/<slot_name>/dm_state.json` and
+`Saves/<slot_name>/llm_state.json`, each written and read independently by `DMCore` and
+`LLMCore` respectively. **This is deliberately not one combined file.** `LLMCore.context_window`
+(the rolling narration transcript) is the only piece of cross-core data a save needs, and
+`EventBus` is intentionally a pure fire-and-forget pub/sub bus with no request/response
+mechanism (`publish` discards callback return values) — extending it just for this, or giving
+`DMCore` a direct reference to `LLMCore`, would break the loose coupling the whole app is built
+on (every core today only ever talks to any other core through events). So instead, each core
+owns and persists its own slice under the same slot name, triggered by the same two events.
+
+**Trigger:** `save_requested`/`load_requested` (`{"slot": slot_name}`), published from two
+independent places that both funnel into the same handlers:
+- `NLPCore._detect_save_load_intent` — a prefix-stripping intercept (`SAVE_PREFIXES`/
+  `LOAD_PREFIXES` in `NLP_Core.py`), checked in `_on_user_input` *before* the examine/take
+  intercept and before skill matching (a slot name could otherwise contain a word like "take"
+  and misfire the item intercept). Unlike `map_to_item`'s embedding match, a slot name is
+  arbitrary player-chosen text with no catalog to match against, so it's extracted by prefix
+  stripping instead (`"save as arena-run-1"` → `("save", "arena-run-1")`). A prefix matching
+  with nothing following it (ex: bare `"save"`) returns `(None, None)` and falls through to
+  normal skill matching rather than saving to a blank name.
+- `GUICore`/`TextualCore`'s slot-name field plus Save/Load buttons — `request_save`/
+  `request_load` (Tkinter) and `on_button_pressed` (Textual) publish the exact same two events
+  with the field's current text. Neither UI does anything save/load-specific beyond that; all
+  the actual logic lives in `DMCore`/`LLMCore`'s handlers regardless of which trigger fired.
+
+**What `DMCore.save_game` writes** is a diff from a fresh instantiation, not a raw dump of
+`self.entities` (which also holds every static template — see the note above): `scenario_key`,
+`player_name`, `round_number`, `scenario_entities`, and per-instance
+`{hp, active_conditions, currency, inventory}` — the only fields anything in `DM_Core.py`
+actually mutates at runtime (`apply_damage`, `apply_condition`/`dismiss_condition`,
+`transfer_currency`, `transfer_item`). `equipped` and `band` are never saved because nothing
+mutates them post-instancing today.
+
+**What `DMCore.load_game` does:** re-runs `load_rules()` (fresh from every `Rules/Fantasy/*.toml`
+file — see why above), then the same `load_scenario_definition`/`load_scenario` path `__init__`
+uses, then overlays each saved instance's `hp`/`active_conditions`/`currency`/`inventory` on top
+of the freshly-instanced entities. A saved instance name with no match after re-instancing (ex:
+the scenario file's entity list changed since the save) is skipped rather than crashing. This
+means a resumed save picks up *current* TOML stats, not whatever was true when the save was
+made — buff a wolf's HP in TOML and an old save loading that wolf gets the buff for free.
+
+Publishes **`game_loaded`** on success — deliberately not `scenario_loaded`, which `LLMCore`
+treats as "narrate a brand-new opening scene." Reusing it would make every resume re-describe
+the tavern as if you'd just walked in. Publishes **`game_load_failed`** (`{"slot", "reason"}`)
+if the slot doesn't exist, so the player gets feedback rather than the request silently doing
+nothing — the same rule `action_not_understood` already follows for unmatched input.
+
+**What `LLMCore.save_game`/`load_game` do:** persist/restore `context_window` plus
+`scenario_name`/`scenario_description`/`scenario_characters`, entirely independently of
+`DMCore`'s own file. Loading is silent — no LLM call, no new narration queued — so resuming a
+session doesn't reprint an opening-scene intro. `LLMCore` also subscribes to
+`game_load_failed` (`generate_load_failed_response`) to narrate the failure in-character,
+since `DMCore`'s own load attempt already failed before publishing that event — there's
+nothing left to restore, just an acknowledgment to give the player.
+
+**Slot names can't escape `Saves/`.** Both cores' `_save_slot_dir` run the player-given slot
+name through `os.path.basename` first, so a slot literally named `"../../evil"` resolves to
+`Saves/evil`, never outside `Saves/`. The two path helpers are deliberately duplicated (not
+shared via an import) rather than coupling the two modules just for a three-line path
+computation — same reasoning as the one-file-per-core split above.
+
+## Entity behavior (enemy turns)
+
+Combat used to be entirely one-sided: the player rolled against a target's defense skill,
+but nothing ever rolled back. `[[entity.behavior]]` is a new per-entity table (creatures.toml's
+`wolf` is the first to have one) that fixes this with the same data-driven pattern as
+`[[status]]` rather than any hardcoded "monster AI":
+
+```toml
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "bite"
+```
+
+`DMCore.choose_behavior(entity_name)` walks an entity's `behavior` list **in declaration
+order** and returns the first entry whose `requirements` all currently hold — reusing
+`entity_matches_requirements` verbatim, the exact same `{field, operator, value}` engine
+`[[status]]` already used, rather than inventing a second one. This is also why a dying
+wolf needs no explicit "stop attacking" logic: `hp_per_remain >= 0.01` simply stops matching
+once its HP hits 0, same mechanism that lets `[[status]] name = "dead"` fire at
+`hp_per_remain == 0`. A future multi-behavior entity (ex: flee below some HP threshold,
+otherwise attack) is just more list entries evaluated top-down — no new code, only data.
+
+**A behavior names a specific `action`, not a bare skill.** `wolf`'s behavior names `"bite"`
+— one of its own `abilities` entries — the same way a player naming a technique directly
+(ex: "I cleave through them") resolves to an exact ability rather than a skill name (see
+"cleave" above). `DMCore.resolve_behavior_action(entity_name, target_name)` looks that action
+up via `resolve_named_ability(entity_name, action_name)` (ownership-gated: the name must
+match one of `entity_name`'s own abilities, logging a warning and returning `None` otherwise
+— ex: a typo'd action name fails safe rather than raising or rolling against nothing), then
+`select_ability_skill` to pick which skill to roll it with (handles a multi-skill ability's
+list the same way `cleave`'s `["blades","axes"]` is picked for the player). This deliberately
+reuses that exact pair of helpers instead of going through `find_attack_ability` — that
+function's equipped-weapon-first priority exists to disambiguate a skill name shared by
+several things, but a behavior already names the exact ability, so there's nothing to
+disambiguate. Resolved from there exactly like the player's path: `resolve_opposed_action`
+for the roll, then `calculate_damage` with the already-known ability on a success. Returns
+`None` if `choose_behavior` found nothing to do, or its named action isn't one of the
+entity's own abilities.
+
+**Wired into `_on_action_detected`'s existing combat branch, not a separate turn loop.**
+Right after a round's `round_number` increments, the target (if hostile) gets
+`resolve_behavior_action(target_name, self.player_name)` called on it; a non-`None` result is
+attached as `result["enemy_action"]` on the same `round_resolved` payload — deliberately not a
+second `round_resolved` publish, so every existing "one `round_resolved` per player action"
+assumption (tests, narration counting) still holds. A target with no `behavior` data at all
+(ex: `practice_dummy`, most ad-hoc test entities) just doesn't counter-attack, silently and
+without error — `enemy_action` is simply absent from the result, not present-but-empty.
+
+**`LLMCore._describe_outcome` takes an optional `actor` param now** (default `"the player"`)
+so the same roll/damage-description builder can narrate the enemy's swing without
+misattributing it — ex: `generate_round_response` calls it a second time with
+`actor=action_result["defender"]` for `enemy_action`. Also: the leading `"X attempts: ..."`
+line is now omitted entirely when there's no `"input"` key (a behavior-driven action has no
+free-text input the way a player's does), rather than printing an empty quoted string.
+
+**Known limitation, not yet addressed:** every hostile target counter-attacks the player
+specifically (`resolve_behavior_action(target_name, self.player_name)` is hardcoded), and only
+the single auto-selected `_get_target_name()` target ever acts — this only makes the existing
+one-attacker-one-defender loop mutual, it doesn't add multi-enemy turn order. Revisit once
+real targeting (see "Open threads") exists.
 
 ## Status/condition system
 
@@ -366,12 +538,26 @@ Two distinct mechanisms, easy to conflate since both gate on "does this entity h
   the original example (an attack's damage type vs. worn armor's resistances); this was
   generalized so an entity can carry its own innate `resistance_value`/`resistance_tags`
   (rolled, partial reduction — same shape and same `get_damage_reduction` call as armor, just
-  checked against the entity itself rather than its equipped items) and `immunity_tags` (an
+  checked against the entity itself rather than its equipped items), `immunity_tags` (an
   absolute, unrolled block — `is_immune_to` short-circuits `calculate_damage` to zero net
   damage regardless of the roll, matching notes.txt's "poison damage tagged so undead are
-  immune" example). `creatures.toml`'s `fire elemental` exercises both at once:
-  `immunity_tags = ["fire"]` (fire never gets through) alongside
-  `resistance_value`/`resistance_tags` covering physical damage types (reduced, not blocked).
+  immune" example), and now `vulnerability_value`/`vulnerability_tags` — the mirror image of
+  resistance: `get_vulnerability_bonus` rolls *extra* damage on a matching tag instead of
+  reducing it, added to `raw_damage` before reduction in `calculate_damage`. Entity-innate
+  only, same as resistance (no equipped-item vulnerability counterpart exists, unlike armor's
+  `armor_value`/`armor_tags` reduction side). `creatures.toml`'s `fire elemental` now exercises
+  all three at once: `immunity_tags = ["fire"]` (fire never gets through),
+  `resistance_value`/`resistance_tags` covering physical damage types (reduced, not blocked),
+  and `vulnerability_value`/`vulnerability_tags = ["water"]` (water hits harder). **Immunity
+  wins outright over vulnerability if a single attack's `damage_tags` somehow matched both** —
+  `calculate_damage` checks `is_immune_to` first and, if true, forces `vulnerability_bonus` to
+  0 rather than letting the two fight it out; immunity is an absolute block, not just a bigger
+  number in the same tug-of-war as resistance/vulnerability. `spells.toml`'s `splash flow`
+  (single-target, `damage_tags = ["water"]`, on `gladstone`'s own ability list alongside
+  `fireball`) is what actually exploits this — same "arcane" skill as fireball, so it's only
+  reachable by name via `resolve_named_ability` (see "cleave" below), never via
+  `find_attack_ability`'s skill-first lookup, which always resolves to whichever of the two is
+  listed first (`fireball`).
 - **Conditions** (`active_conditions`, `apply_condition`/`dismiss_condition`) are dynamic —
   gained and lost during play via triggers/tests (wound tiers, a chest's `"locked"`/`"jammed"`).
   Use a condition only for something that can plausibly change mid-scene (a spell granting
@@ -596,11 +782,36 @@ share one load rather than paying that cost twice) and `TestInnkeeperConversatio
   immediately via `action_resolved` (not batched into `round_resolved`) even for an attack
   skill, and a hostile target (`wolf`) still batches into `round_resolved` — a regression
   guard for the hostility-based branch. Also covers `describe_character` (includes
-  description/qualities/memories/quotes, empty for a pure-mechanics entity like `wolf`),
-  `scenario_loaded`'s `characters` roster, and `action_resolved`'s `defender_details`.
+  description/qualities/memories/quotes, empty for a pure-mechanics entity like `wolf` when no
+  `toward_name` is given), `scenario_loaded`'s `characters` roster, and `action_resolved`'s
+  `defender_details`.
+- `TestAttitudePhrases` — `get_attitude_tier`'s band selection (including the clamp beyond
+  ±150 and the declared-order tie-break at a shared boundary, ex: exactly `-100` resolves to
+  `hostile` not `unfriendly`), `describe_attitude` mixing tiers per axis in one call (gladstone's
+  undead override is hostile on five axes but `confidence = 100`, landing in `friendly`), and
+  `describe_character` actually surfacing an attitude line for a pure-mechanics entity like
+  `wolf` once `toward_name` is passed (self-attitude is skipped when `toward_name == entity_name`).
+- `TestSaveLoad` — `DMCore.save_game`/`load_game` against the real `Saves/` directory (each
+  test tracks and cleans up its own slot in `tearDown`, rather than leaving artifacts behind):
+  a save writes only the mutable-diff fields (asserted via an exact key-set check, not just
+  presence), restores saved HP over further in-session changes, re-derives from *current*
+  templates rather than a frozen copy (the load_rules-before-reinstancing behavior — see
+  "Saving and loading"), publishes `game_loaded` and never `scenario_loaded`, fails safe with
+  `game_load_failed` on a missing slot, and a slot name can't escape `Saves/` via `..`.
+- `TestLLMSaveLoad` — `LLMCore.save_game`/`load_game`: round-trips `context_window` plus
+  scenario bookkeeping, and — the one that actually matters — loading never spawns a
+  `threading.Thread` (asserted via `patch("threading.Thread")`), proving a resume queues no
+  new LLM call. Also covers `generate_load_failed_response`'s prompt shape.
+- Two new methods added to `TestNlpConfidenceThreshold`: `_detect_save_load_intent`'s prefix
+  parsing (including the bare-`"save"`-with-no-slot-name case correctly falling through) and a
+  full-pipeline check that `"save as <slot>"` publishes only `save_requested`, never
+  `action_detected`/`item_interaction_detected`.
 - The trailing `test_*` async functions (no class — plain `pytest.mark.asyncio`, mirroring
   the original `test_textual_core.py`) — see "Textual mirror" section above for what each
-  case guards against; these encode real gotchas, not just feature coverage.
+  case guards against; these encode real gotchas, not just feature coverage. Includes the
+  Save/Load button pair: clicking by CSS selector (`pilot.click("#save_button")`) can raise
+  `OutOfBounds` if the button's on-screen position lands at the edge of the default test
+  terminal size, so these focus the button and press Enter instead.
 
 A comprehensive-looking test suite is only useful if it stays committed — several of these
 were found deleted from disk mid-session in an earlier version of this repo (with no clear
@@ -613,7 +824,9 @@ Roughly in the order they came up, none started yet:
 - Automatic status dismissal (`dismiss_condition` exists and is manually wired for the locked
   chest, but nothing re-evaluates `[[status]]` requirements to auto-dismiss a condition whose
   trigger no longer holds — ex: healing back above a wound tier still leaves it applied).
-- Real targeting (multiple live enemies, band/range awareness, switching target on kill).
+- Real targeting (multiple live enemies, band/range awareness, switching target on kill) —
+  `[[entity.behavior]]` (see "Entity behavior") makes the single auto-selected target counter-
+  attack, but there's still no turn order or per-enemy behavior once more than one is present.
 - `enhance`'s variable condition design (skills/modifier parameterized per apply-site,
   mirroring how `damage_value` already works).
 - GUI `Party Status`/`Notes`/`Map` tabs have display methods but nothing publishes to them.

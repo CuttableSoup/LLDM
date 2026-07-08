@@ -17,6 +17,13 @@ TAKE_KEYWORDS = ("take ", "grab ", "pick up", "loot ")
 # (entity["currency"]), not an object-supertype entity with a name/description to embed.
 CURRENCY_SYNONYMS = ("gold", "coin", "currency", "money")
 
+# _detect_save_load_intent checks these ahead of everything else (item intent included --
+# a slot name could otherwise contain a word like "take" and misfire the item intercept).
+# Longest/most-specific prefix first in each tuple, since matching stops at the first hit and
+# a shorter prefix (ex: "save ") would otherwise swallow "game as " into the slot name.
+SAVE_PREFIXES = ("save game as ", "save as ", "save game ", "save ")
+LOAD_PREFIXES = ("load game as ", "load as ", "load game ", "load ")
+
 class NLPCore:
     """!
     @brief Main class handling the interpretation of natural language input.
@@ -51,6 +58,11 @@ class NLPCore:
         """
         processed = self.process_input(player_input)
 
+        save_load_intent, slot_name = self._detect_save_load_intent(processed)
+        if save_load_intent:
+            self.event_bus.publish(f"{save_load_intent}_requested", {"slot": slot_name})
+            return
+
         intent = self._detect_item_intent(processed)
         if intent:
             item_name, item_score = self.map_to_item(processed)
@@ -82,6 +94,30 @@ class NLPCore:
         if any(keyword in processed_text for keyword in TAKE_KEYWORDS):
             return "take"
         return None
+
+    def _detect_save_load_intent(self, processed_text):
+        """!
+        @brief Checks processed input for a "save"/"load" command, ahead of item and skill
+               matching -- a meta-command, not an in-fiction action, so it never should reach
+               either. Unlike map_to_item's embedding match, the slot name is arbitrary
+               player-chosen text with no catalog to match against, so it's extracted by
+               prefix-stripping instead (same style as process_input's own "i want to " etc.
+               prefix list).
+        @param processed_text The cleaned and processed player input.
+        @return (intent, slot_name) where intent is "save"/"load"/None. If a prefix matched
+                but nothing followed it (empty slot name), returns (None, None) instead --
+                falls through to normal skill matching rather than saving/loading to a blank
+                name.
+        """
+        for prefix in SAVE_PREFIXES:
+            if processed_text.startswith(prefix):
+                slot_name = processed_text[len(prefix):].strip()
+                return ("save", slot_name) if slot_name else (None, None)
+        for prefix in LOAD_PREFIXES:
+            if processed_text.startswith(prefix):
+                slot_name = processed_text[len(prefix):].strip()
+                return ("load", slot_name) if slot_name else (None, None)
+        return None, None
 
 
     def _add_phrases(self, all_phrases, indices, key, data):
