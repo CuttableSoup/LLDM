@@ -53,6 +53,8 @@ class NLPCore:
         self.skill_embeddings = None
         self.item_embeddings = None
         self.item_indices = []
+        self.target_embeddings = None
+        self.target_indices = []
         # Below this cosine-similarity score, treat the input as not matching any skill at
         # all rather than forcing it onto whatever phrase happened to score highest
         self.confidence_threshold = 0.5
@@ -97,7 +99,17 @@ class NLPCore:
 
         skill, score = self.map_to_action(processed)
         if skill:
-            self.event_bus.publish("action_detected", {"skill": skill, "score": score, "input": processed})
+            payload = {"skill": skill, "score": score, "input": processed}
+            # A confidently-matched creature name (ex: "attack the second wolf") is attached
+            # as a target hint alongside the matched skill -- unlike item/save-load intent,
+            # this never gates or replaces skill matching, it only enriches the same
+            # action_detected payload. DMCore is what actually decides whether to honor it
+            # (see _on_action_detected's explicit_target validation) -- matching here is
+            # global/scene-unaware, same division of labor as map_to_item.
+            target_name, target_score = self.map_to_target(processed)
+            if target_name:
+                payload["target"] = target_name
+            self.event_bus.publish("action_detected", payload)
         else:
             # Below confidence_threshold: publish this instead of staying silent, so the
             # player gets some response rather than the app appearing to stall.
@@ -241,6 +253,32 @@ class NLPCore:
 
         self.event_bus.publish("log_info", f"NLPCore: {len(item_phrases)} item phrases encoded for {len(set(item_indices))} items.")
 
+        # Also build creature-name embeddings, for explicit combat targeting (map_to_target) --
+        # the same pattern as item_phrases above, just over "creature" supertype entities
+        # instead of "object" ones, and excluding the player (gladstone is never a valid attack
+        # target). Global catalog, not scene-filtered -- DMCore is what checks the matched name
+        # is actually a live, hostile, in-scene entity before honoring it as current_target.
+        target_phrases = []
+        target_indices = []
+        for name, entity in entities_data.items():
+            if entity.get("supertype") != "creature" or entity.get("is_player"):
+                continue
+            target_phrases.append(name)
+            target_indices.append(name)
+            description = entity.get("description", "")
+            if description:
+                target_phrases.append(description)
+                target_indices.append(name)
+
+        if target_phrases:
+            self.target_embeddings = self.model.encode(target_phrases, convert_to_tensor=True)
+            self.target_indices = target_indices
+        else:
+            self.target_embeddings = None
+            self.target_indices = []
+
+        self.event_bus.publish("log_info", f"NLPCore: {len(target_phrases)} target phrases encoded for {len(set(target_indices))} creatures.")
+
     def process_input(self, player_input):
         """!
         @brief Processes the raw player input.
@@ -320,3 +358,32 @@ class NLPCore:
 
         self.event_bus.publish("log_info", f"Mapped input to item: {best_item} (Score: {best_score:.4f})")
         return best_item, best_score
+
+    def map_to_target(self, processed_text):
+        """!
+        @brief Maps the processed text to a specific creature's name using semantic similarity,
+               the same way map_to_item does for items but against target_embeddings/
+               target_indices (every non-player "creature" supertype entity, by name/description).
+               Ties between identically-named/described instances (ex: two plain "wolf"
+               instances sharing one template's text) resolve to whichever was declared first,
+               the same inherent limitation map_to_item already has for duplicate item names --
+               this isn't real multi-instance disambiguation (ex: "the wounded wolf").
+        @param processed_text The cleaned and processed player input.
+        @return A tuple of (entity_name, confidence_score); entity_name is None below
+                confidence_threshold or if no creature embeddings are loaded.
+        """
+        if self.target_embeddings is None:
+            return None, 0.0
+
+        input_embedding = self.model.encode(processed_text, convert_to_tensor=True)
+        cosine_scores = util.cos_sim(input_embedding, self.target_embeddings)[0]
+
+        best_phrase_idx = np.argmax(cosine_scores.cpu().numpy())
+        best_score = cosine_scores[best_phrase_idx].item()
+        best_target = self.target_indices[best_phrase_idx]
+
+        if best_score < self.confidence_threshold:
+            return None, best_score
+
+        self.event_bus.publish("log_info", f"Mapped input to target: {best_target} (Score: {best_score:.4f})")
+        return best_target, best_score

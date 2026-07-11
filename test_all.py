@@ -204,6 +204,40 @@ class TestNlpConfidenceThreshold(unittest.TestCase):
         self.assertIsNone(item_events[0]["item_name"])
         self.assertEqual(detected_actions, [])
 
+    def test_map_to_target_matches_a_named_creature(self):
+        # Global catalog match, same as map_to_item -- arena.toml's wolf_2/thane are both
+        # loaded (this class's shared dm_core boots the "arena" scenario).
+        target_name, score = self.nlp_core.map_to_target("attack wolf_2")
+        self.assertEqual(target_name, "wolf_2")
+        self.assertGreaterEqual(score, self.nlp_core.confidence_threshold)
+
+    def test_map_to_target_excludes_the_player(self):
+        # gladstone is is_player = true -- never a valid attack-target match, even though it's
+        # a "creature" supertype entity like everything else in the target catalog.
+        self.assertNotIn("gladstone", self.nlp_core.target_indices)
+
+    def test_full_pipeline_attack_names_a_target_that_redirects_current_target(self):
+        self.dm_core.current_target = "wolf"
+        detected_actions = []
+        self.event_bus.subscribe("action_detected", detected_actions.append)
+
+        self.event_bus.publish("user_input_submitted", "I attack wolf_2")
+
+        self.assertEqual(detected_actions[-1]["target"], "wolf_2")
+        self.assertEqual(self.dm_core.current_target, "wolf_2")
+
+    def test_full_pipeline_naming_a_non_hostile_entity_does_not_redirect_current_target(self):
+        # thane is a confident semantic match (it's a known creature entity), but it isn't
+        # hostile -- DMCore must reject the override rather than making an ally the target.
+        self.dm_core.current_target = "wolf"
+        detected_actions = []
+        self.event_bus.subscribe("action_detected", detected_actions.append)
+
+        self.event_bus.publish("user_input_submitted", "I attack thane")
+
+        self.assertEqual(detected_actions[-1]["target"], "thane")
+        self.assertEqual(self.dm_core.current_target, "wolf")
+
 
 class TestClarificationResponse(unittest.TestCase):
     def setUp(self):
