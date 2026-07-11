@@ -1,8 +1,8 @@
 """!
 @file Textual_Core.py
 @brief Mirrors the same event-bus output GUICore displays into a Textual interface, so the
-       app's behavior can be driven and inspected headlessly (via Textual's Pilot) for tests,
-       without needing a real Tkinter window.
+    app's behavior can be driven and inspected headlessly (via Textual's Pilot) for tests,
+    without needing a real Tkinter window.
 """
 
 from textual.app import App, ComposeResult
@@ -70,8 +70,8 @@ class TextualCore(App):
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """!
         @brief Mirrors GUICore.submit_input: publishes the typed text and clears the field.
-               Only reacts to the main action input -- "slot_input" submits via the Save/Load
-               buttons instead, not by pressing Enter.
+            Only reacts to the main action input -- "slot_input" submits via the Save/Load
+            buttons instead, not by pressing Enter.
         """
         if event.input.id != "input_box":
             return
@@ -84,7 +84,7 @@ class TextualCore(App):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """!
         @brief Mirrors GUICore.request_save/request_load: publishes "save_requested"/
-               "load_requested" with the slot-name input's current text.
+            "load_requested" with the slot-name input's current text.
         """
         if event.button.id not in ("save_button", "load_button"):
             return
@@ -97,7 +97,7 @@ class TextualCore(App):
     def call_safely(self, fn, *args):
         """!
         @brief Runs fn(*args) on the Textual app's own thread, whether called from that thread,
-               a foreign thread (ex: LLMCore's background fetch), or before the app has started.
+            a foreign thread (ex: LLMCore's background fetch), or before the app has started.
         """
         try:
             self.call_from_thread(fn, *args)

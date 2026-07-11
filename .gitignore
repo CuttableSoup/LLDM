@@ -1,3 +1,5 @@
 __pycache__
 GEMINI.md
 Saves/
+.vscode
+.pytest_cache

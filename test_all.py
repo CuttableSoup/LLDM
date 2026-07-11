@@ -15,7 +15,7 @@ from Event_Bus import EventBus
 from LLM_Core import LLMCore
 from NLP_Core import NLPCore
 from Textual_Core import TextualCore
-from textual.widgets import Button, RichLog, TabbedContent
+from textual.widgets import Button, Input, RichLog, TabbedContent
 
 
 def _lm_studio_reachable():
@@ -627,7 +627,7 @@ class TestDamageCalculation(unittest.TestCase):
         # nothing equipped matches "axes", so cleave surfaces via ability_matches_skill's
         # list-membership check.
         cleave = self.dm_core.find_attack_ability("gladstone", "axes")
-        self.assertIsNotNone(cleave)
+        assert cleave is not None
         self.assertEqual(cleave["name"], "cleave")
 
     @patch("random.randint", return_value=4)
@@ -655,20 +655,20 @@ class TestCombatLoop(unittest.TestCase):
     def test_find_attack_ability_prefers_equipped_weapon(self):
         # Gladstone has a longsword equipped in rhand, which uses the "blades" skill.
         ability = self.dm_core.find_attack_ability("gladstone", "blades")
-        self.assertIsNotNone(ability)
+        assert ability is not None
         self.assertEqual(ability["name"], "longsword")
 
     def test_find_attack_ability_falls_back_to_innate_ability(self):
         # No equipped weapon uses "brawling", so the innate "punch" ability should be found instead.
         ability = self.dm_core.find_attack_ability("gladstone", "brawling")
-        self.assertIsNotNone(ability)
+        assert ability is not None
         self.assertEqual(ability["name"], "punch")
 
     def test_find_attack_ability_resolves_name_referenced_spell(self):
         # Gladstone's abilities table names "fireball" rather than inlining it; find_attack_ability
         # must resolve that reference to the shared spells.toml entity to find "arcane"/damage_value.
         ability = self.dm_core.find_attack_ability("gladstone", "arcane")
-        self.assertIsNotNone(ability)
+        assert ability is not None
         self.assertEqual(ability["name"], "fireball")
         self.assertIs(ability, self.dm_core.entities["fireball"])
 
@@ -677,7 +677,7 @@ class TestCombatLoop(unittest.TestCase):
         # (skill-first lookup) always returns fireball, the earlier-listed entry -- splash flow
         # is reached the same way a player naming "cleave" directly is, via resolve_named_ability.
         splash_flow = self.dm_core.resolve_named_ability("gladstone", "splash flow")
-        self.assertIsNotNone(splash_flow)
+        assert splash_flow is not None
         self.assertIs(splash_flow, self.dm_core.entities["splash flow"])
         self.assertEqual(splash_flow["damage_tags"], ["water"])
 
@@ -818,7 +818,7 @@ class TestEntityBehavior(unittest.TestCase):
     def test_choose_behavior_matches_while_the_entity_is_alive(self):
         # creatures.toml's wolf: a single behavior, "always bite while hp_per_remain >= 0.01".
         behavior = self.dm_core.choose_behavior("wolf")
-        self.assertIsNotNone(behavior)
+        assert behavior is not None
         self.assertEqual(behavior["action"], "bite")
 
     def test_choose_behavior_returns_none_once_effectively_dead(self):
@@ -855,6 +855,7 @@ class TestEntityBehavior(unittest.TestCase):
         with patch("random.randint", return_value=4):
             result = self.dm_core.resolve_behavior_action("wolf", "target_dummy")
 
+        assert result is not None
         self.assertTrue(result["success"])
         self.assertEqual(result["skill"], "brawling")
         self.assertIn("damage", result)
@@ -1630,25 +1631,30 @@ class TestAttitudePhrases(unittest.TestCase):
         self.event_bus = EventBus()
         self.dm_core = DMCore(self.event_bus)
 
+    def _tier_name(self, value):
+        tier = self.dm_core.get_attitude_tier(value)
+        assert tier is not None
+        return tier["name"]
+
     def test_get_attitude_tier_selects_the_right_band(self):
-        self.assertEqual(self.dm_core.get_attitude_tier(-150)["name"], "hostile")
-        self.assertEqual(self.dm_core.get_attitude_tier(-99)["name"], "unfriendly")
-        self.assertEqual(self.dm_core.get_attitude_tier(-40)["name"], "wary")
-        self.assertEqual(self.dm_core.get_attitude_tier(0)["name"], "neutral")
-        self.assertEqual(self.dm_core.get_attitude_tier(40)["name"], "warm")
-        self.assertEqual(self.dm_core.get_attitude_tier(99)["name"], "friendly")
-        self.assertEqual(self.dm_core.get_attitude_tier(150)["name"], "devoted")
+        self.assertEqual(self._tier_name(-150), "hostile")
+        self.assertEqual(self._tier_name(-99), "unfriendly")
+        self.assertEqual(self._tier_name(-40), "wary")
+        self.assertEqual(self._tier_name(0), "neutral")
+        self.assertEqual(self._tier_name(40), "warm")
+        self.assertEqual(self._tier_name(99), "friendly")
+        self.assertEqual(self._tier_name(150), "devoted")
 
     def test_get_attitude_tier_boundary_values_resolve_to_the_earlier_declared_tier(self):
         # -100 sits on both "hostile" and "unfriendly"'s edge; declaration order (hostile
         # first) breaks the tie, same convention as choose_behavior's first-match-wins.
-        self.assertEqual(self.dm_core.get_attitude_tier(-100)["name"], "hostile")
-        self.assertEqual(self.dm_core.get_attitude_tier(-60)["name"], "unfriendly")
-        self.assertEqual(self.dm_core.get_attitude_tier(100)["name"], "friendly")
+        self.assertEqual(self._tier_name(-100), "hostile")
+        self.assertEqual(self._tier_name(-60), "unfriendly")
+        self.assertEqual(self._tier_name(100), "friendly")
 
     def test_get_attitude_tier_clamps_values_beyond_the_nominal_range(self):
-        self.assertEqual(self.dm_core.get_attitude_tier(-500)["name"], "hostile")
-        self.assertEqual(self.dm_core.get_attitude_tier(500)["name"], "devoted")
+        self.assertEqual(self._tier_name(-500), "hostile")
+        self.assertEqual(self._tier_name(500), "devoted")
 
     def test_get_attitude_tier_returns_none_without_attitude_tier_data(self):
         self.dm_core.rules["attitude_tier"] = []
@@ -2004,7 +2010,7 @@ async def test_typing_and_pressing_enter_publishes_and_echoes_input():
         assert received == ["attack the wolf"]
         assert any("> attack the wolf" in line for line in lines_of(app, "history"))
         # The input field clears after submitting, mirroring GUICore.submit_input.
-        assert app.query_one("#input_box").value == ""
+        assert app.query_one("#input_box", Input).value == ""
 
 
 @pytest.mark.asyncio
