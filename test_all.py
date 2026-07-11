@@ -259,12 +259,12 @@ class TestClarificationResponse(unittest.TestCase):
         round_result = {
             "round": 1, "skill": "athletics", "roll": 10, "difficulty": 0, "success": True,
             "defender": "wolf", "input": "I vault past the wolf",
-            "enemy_action": {
+            "turns": [{
                 "skill": "brawling", "roll": 9, "difficulty": 7, "success": True,
-                "defender": "gladstone", "opposing_skill": "blades",
+                "defender": "gladstone", "opposing_skill": "blades", "actor": "wolf",
                 "damage": {"attacker": "wolf", "defender": "gladstone", "raw_damage": 5,
                            "reduction": 0, "net_damage": 5, "remaining_hp": 31},
-            },
+            }],
         }
         self.event_bus.publish("round_resolved", round_result)
         prompt = self.llm_core.context_window[-1]["content"]
@@ -838,10 +838,11 @@ class TestEntityBehavior(unittest.TestCase):
             self.dm_core._on_action_detected({"skill": "athletics", "input": "I vault over the rubble"})
 
         result = self.resolved[-1]
-        self.assertIn("enemy_action", result)
-        enemy_result = result["enemy_action"]
-        self.assertEqual(enemy_result["skill"], "brawling")
-        self.assertEqual(enemy_result["defender"], "gladstone")
+        self.assertIn("turns", result)
+        turns_by_actor = {turn["actor"]: turn for turn in result["turns"]}
+        self.assertIn("wolf", turns_by_actor)
+        self.assertEqual(turns_by_actor["wolf"]["skill"], "brawling")
+        self.assertEqual(turns_by_actor["wolf"]["defender"], "gladstone")
 
     def test_target_without_behavior_data_does_not_counterattack(self):
         self.dm_core.entities["practice_dummy"] = {"name": "practice_dummy", "max_hp": 20, "skills": {}}
@@ -850,7 +851,64 @@ class TestEntityBehavior(unittest.TestCase):
 
         self.dm_core._on_action_detected({"skill": "athletics", "input": "I test my footing"})
 
-        self.assertNotIn("enemy_action", self.resolved[-1])
+        self.assertNotIn("turns", self.resolved[-1])
+
+    def test_ally_acts_alongside_enemy_in_the_same_round(self):
+        # arena.toml's thane has positive disposition toward gladstone (not hostile) but its
+        # own [[entity.behavior]] too -- it should attack current_target (the wolf) the same
+        # round the wolf attacks the player, proving allies pull their weight alongside enemies.
+        with patch("random.randint", return_value=4):
+            self.dm_core._on_action_detected({"skill": "athletics", "input": "I brace myself"})
+
+        turns_by_actor = {turn["actor"]: turn for turn in self.resolved[-1]["turns"]}
+        self.assertIn("thane", turns_by_actor)
+        self.assertEqual(turns_by_actor["thane"]["defender"], "wolf")
+        self.assertIn("wolf", turns_by_actor)
+        self.assertEqual(turns_by_actor["wolf"]["defender"], "gladstone")
+
+    def test_current_target_advances_to_next_hostile_when_current_dies(self):
+        self.dm_core.apply_damage("wolf", 999)
+        with patch("random.randint", return_value=1):
+            self.dm_core._on_action_detected({"skill": "athletics", "input": "I reposition"})
+        self.assertEqual(self.dm_core.current_target, "wolf_2")
+
+    def test_current_target_falls_back_to_a_living_ally_once_every_enemy_is_dead(self):
+        self.dm_core.apply_damage("wolf", 999)
+        self.dm_core.apply_damage("wolf_2", 999)
+        with patch("random.randint", return_value=1):
+            self.dm_core._on_action_detected({"skill": "athletics", "input": "I catch my breath"})
+        # Neither wolf is hostile-and-alive anymore, so current_target falls back to the first
+        # living non-player entity (thane) instead of staying pinned on a corpse -- and since
+        # thane isn't hostile, the *next* action resolves as action_resolved, not
+        # round_resolved, meaning combat has actually ended.
+        self.assertEqual(self.dm_core.current_target, "thane")
+
+    def test_choose_combat_target_returns_none_when_nothing_is_alive(self):
+        self.dm_core.apply_damage("wolf", 999)
+        self.dm_core.apply_damage("wolf_2", 999)
+        self.dm_core.apply_damage("thane", 999)
+        self.assertIsNone(self.dm_core._choose_combat_target())
+
+    def test_explicit_target_override_redirects_current_target(self):
+        self.dm_core._on_action_detected({
+            "skill": "athletics", "input": "I focus on the second wolf", "target": "wolf_2",
+        })
+        self.assertEqual(self.dm_core.current_target, "wolf_2")
+
+    def test_explicit_target_override_ignored_if_not_hostile(self):
+        # thane is a live scene entity, just not a hostile one -- naming it should not make it
+        # the player's combat target.
+        self.dm_core._on_action_detected({"skill": "athletics", "input": "...", "target": "thane"})
+        self.assertEqual(self.dm_core.current_target, "wolf")
+
+    def test_explicit_target_override_ignored_if_dead(self):
+        self.dm_core.apply_damage("wolf_2", 999)
+        self.dm_core._on_action_detected({"skill": "athletics", "input": "...", "target": "wolf_2"})
+        self.assertEqual(self.dm_core.current_target, "wolf")
+
+    def test_explicit_target_override_ignored_if_not_in_scene(self):
+        self.dm_core._on_action_detected({"skill": "athletics", "input": "...", "target": "fire elemental"})
+        self.assertEqual(self.dm_core.current_target, "wolf")
 
 
 class TestStatusEvaluation(unittest.TestCase):
@@ -930,10 +988,23 @@ class TestScenarioLoading(unittest.TestCase):
         self.dm_core = DMCore(self.event_bus)
 
     def test_duplicate_entities_get_unique_instance_names(self):
-        # scenario.toml lists gladstone once and wolf twice.
-        self.assertEqual(self.dm_core.scenario_entities, ["gladstone", "wolf", "wolf_2"])
+        # arena.toml lists gladstone once, wolf twice, and thane (an ally) once.
+        self.assertEqual(self.dm_core.scenario_entities, ["gladstone", "wolf", "wolf_2", "thane"])
         self.assertIn("wolf", self.dm_core.entities)
         self.assertIn("wolf_2", self.dm_core.entities)
+
+    def test_current_target_defaults_to_the_first_hostile_entity_skipping_allies(self):
+        # thane (non-hostile, an ally) is listed after both wolves in arena.toml, but even if
+        # it weren't, current_target must never default to an ally -- it's chosen by hostility,
+        # not by list position.
+        self.assertEqual(self.dm_core.current_target, "wolf")
+
+    def test_current_target_skips_an_ally_even_when_listed_first(self):
+        self.dm_core.scenario = {"entities": [
+            {"name": "thane", "band": 0}, {"name": "wolf", "band": 0},
+        ]}
+        self.dm_core.load_scenario()
+        self.assertEqual(self.dm_core.current_target, "wolf")
 
     def test_duplicate_instances_are_independent(self):
         self.dm_core.apply_damage("wolf", 10)
@@ -1660,6 +1731,20 @@ class TestSaveLoad(unittest.TestCase):
         self.dm_core.load_game(slot)
 
         self.assertEqual(self.dm_core.get_current_hp("wolf"), 6)
+
+    def test_load_restores_current_target_over_the_freshly_computed_default(self):
+        # load_scenario() (called from within load_game) resets current_target to its default
+        # (the first hostile-and-alive entity) before the saved value is overlaid on top --
+        # this proves the saved value actually wins, so resuming a fight keeps targeting
+        # whoever was actually being fought rather than snapping back to the default.
+        slot = self._track("test_load_restores_current_target")
+        self.dm_core.current_target = "wolf_2"
+        self.dm_core.save_game(slot)
+
+        self.dm_core.current_target = "wolf"
+        self.dm_core.load_game(slot)
+
+        self.assertEqual(self.dm_core.current_target, "wolf_2")
 
     def test_load_reinstantiates_from_current_templates_not_a_frozen_copy(self):
         # self.entities holds templates and live instances under the same keys -- a

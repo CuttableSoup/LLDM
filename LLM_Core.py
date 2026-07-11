@@ -134,19 +134,22 @@ class LLMCore:
     def generate_round_response(self, action_result):
         """!
         @brief Narrates the end of a combat round, instead of narrating every skill use mid-fight.
-        @param action_result The "round_resolved" payload (an action_resolved dict plus "round").
+        @param action_result The "round_resolved" payload (an action_resolved dict plus "round"
+               and, if anyone else acted this round, "turns" -- a list of every other
+               participant's resolved action, enemies and allies alike, each already tagged
+               with "actor" by DMCore._on_action_detected).
         """
         self.event_bus.publish("log_info", f"Generating LLM response for combat round {action_result.get('round')}.")
 
-        enemy_action = action_result.get("enemy_action")
-        enemy_text = (
-            f"\n{self._describe_outcome(enemy_action, actor=action_result.get('defender', 'the creature'))}"
-            if enemy_action else ""
+        turns_text = "".join(
+            f"\n{self._describe_outcome(turn, actor=turn.get('actor', 'the creature'))}"
+            for turn in action_result.get("turns", [])
         )
         prompt = (
             f"Combat round {action_result.get('round')}:\n"
-            f"{self._describe_outcome(action_result)}{enemy_text}\n"
-            f"Narrate the end of this combat round in 2-3 sentences as the Game Master."
+            f"{self._describe_outcome(action_result)}{turns_text}\n"
+            f"Narrate the end of this combat round in 2-3 sentences as the Game Master, "
+            f"covering both allies and enemies who acted."
         )
         self._queue_narration(prompt)
 

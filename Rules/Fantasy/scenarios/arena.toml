@@ -5,5 +5,6 @@ distance_multiplier = 3
 entities = [
     { name = "gladstone", band = 0 },
     { name = "wolf", band = 0 },
-    { name = "wolf", band = 0 }
+    { name = "wolf", band = 0 },
+    { name = "thane", band = 0 }
 ]

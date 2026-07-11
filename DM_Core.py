@@ -37,6 +37,11 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, RulesMixin, 
         self.scenario_entities = []
         self.rules = {}
         self.round_number = 0
+        # The player's persisted combat target -- distinct from _get_target_name()'s "first
+        # non-player entity" (which stays purely for non-combat interaction resolution, ex:
+        # the dungeon's chest or the tavern's innkeeper). Set for real by load_scenario()
+        # (via _choose_combat_target()) once entities/scenario are actually loaded below.
+        self.current_target = None
         # The filename passed to load_scenario_definition -- distinct from self.scenario's
         # own "name" field (a display string, ex: "The Arena") -- kept so save_game/load_game
         # know which scenarios/*.toml file a saved slot belongs to.
@@ -64,15 +69,19 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, RulesMixin, 
 
     def _on_action_detected(self, data):
         """!
-        @brief Event handler that resolves a detected player action, opposed by a scenario target if one exists,
-               and applies damage if the action hit with an attack ability. Combat (a target present that is
-               hostile toward the player) narrates once per round via "round_resolved"; everything else
-               (no target, or a non-hostile target like a tavern NPC) narrates immediately via "action_resolved".
-        @param data The action_detected payload from NLPCore ({skill, score, input}). "skill" is
-               usually a plain skill name, but may also be a named technique/spell the player
-               owns (ex: "cleave") -- resolve_named_ability/select_ability_skill are what
-               convert that into the skill it's actually rolled with, while keeping the named
-               ability itself to use directly for damage further down.
+        @brief Event handler that resolves a detected player action, opposed by the player's
+               current combat target if one exists, and applies damage if the action hit with
+               an attack ability. Combat (a target present that is hostile toward the player)
+               narrates once per round via "round_resolved"; everything else (no target, or a
+               non-hostile target like a tavern NPC) narrates immediately via "action_resolved".
+        @param data The action_detected payload from NLPCore ({skill, score, input, target?}).
+               "skill" is usually a plain skill name, but may also be a named technique/spell
+               the player owns (ex: "cleave") -- resolve_named_ability/select_ability_skill are
+               what convert that into the skill it's actually rolled with, while keeping the
+               named ability itself to use directly for damage further down. "target", if
+               present, is NLPCore's best-guess entity name match (see map_to_target) -- only
+               honored if it names a live, hostile, in-scene entity; otherwise the persisted
+               self.current_target is left alone.
         """
         skill_name = data.get("skill")
         if not skill_name:
@@ -82,7 +91,16 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, RulesMixin, 
         if named_ability:
             skill_name = self.select_ability_skill(self.player_name, named_ability) or skill_name
 
-        target_name = self._get_target_name()
+        explicit_target = data.get("target")
+        if (
+            explicit_target
+            and explicit_target in self.scenario_entities
+            and self.is_hostile(explicit_target, self.player_name)
+            and self.get_current_hp(explicit_target) > 0
+        ):
+            self.current_target = explicit_target
+
+        target_name = self.current_target
         test = self.entities.get(target_name, {}).get("test") if target_name else None
         via_test = False
         if test and self.is_test_available(target_name, test, skill_name):
@@ -124,14 +142,31 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, RulesMixin, 
         if in_combat:
             self.round_number += 1
             result["round"] = self.round_number
-            # The target gets to act back the same round, via its own [[entity.behavior]]
-            # (ex: a wolf biting back) -- this is what makes combat mutual instead of the
-            # player only ever being the one rolling to hit. A target with no matching
-            # behavior (no behavior data at all, or none of its requirements currently hold,
+            # Every other living entity in the scene gets to act this round, via its own
+            # [[entity.behavior]] -- not just target_name -- so combat is mutual (a wolf
+            # biting back) and allies pull their weight too (ex: thane striking whatever the
+            # player is currently fighting). A hostile entity attacks the player; a
+            # non-hostile one (an ally) attacks self.current_target instead. An entity with no
+            # matching behavior (no behavior data, or none of its requirements currently hold,
             # ex: it's already at 0 HP) simply doesn't act.
-            enemy_result = self.resolve_behavior_action(target_name, self.player_name)
-            if enemy_result:
-                result["enemy_action"] = enemy_result
+            turns = []
+            for entity_name in self.scenario_entities:
+                if entity_name == self.player_name:
+                    continue
+                opponent = self.player_name if self.is_hostile(entity_name, self.player_name) else self.current_target
+                if not opponent:
+                    continue
+                turn_result = self.resolve_behavior_action(entity_name, opponent)
+                if turn_result:
+                    turn_result["actor"] = entity_name
+                    turns.append(turn_result)
+            if turns:
+                result["turns"] = turns
+            # current_target only advances once, at the end of the round, if it died -- not
+            # interrupted mid-round by an earlier actor's kill (ex: an ally finishing it off
+            # before the round is even done resolving).
+            if self.current_target and self.get_current_hp(self.current_target) <= 0:
+                self.current_target = self._choose_combat_target()
             self.event_bus.publish("round_resolved", result)
         else:
             self.event_bus.publish("action_resolved", result)
@@ -272,5 +307,31 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, RulesMixin, 
         """
         for instance_name in self.scenario_entities:
             if instance_name != self.player_name:
+                return instance_name
+        return None
+
+    def _choose_combat_target(self):
+        """!
+        @brief Picks self.current_target: the first living, hostile-toward-the-player entity
+               in scenario_entities order. If none qualifies (ex: every wolf is dead, or
+               nothing in the scene was ever hostile -- the dungeon's chest, the tavern's
+               innkeeper), falls back to the first *living* non-player entity instead, so a
+               defeated enemy is never left as a stale target once combat is over -- unlike
+               _get_target_name(), which returns the first non-player entity unconditionally
+               (dead or not) and stays reserved for non-combat interaction resolution, where
+               that's always correct since a chest/NPC is never "defeated". Used both to set
+               the initial current_target (via load_scenario()) and to advance it once the
+               previous target dies (see _on_action_detected's end-of-round check).
+        @return The chosen entity name, or None if no non-player entity in the scenario is alive.
+        """
+        for instance_name in self.scenario_entities:
+            if instance_name == self.player_name:
+                continue
+            if self.is_hostile(instance_name, self.player_name) and self.get_current_hp(instance_name) > 0:
+                return instance_name
+        for instance_name in self.scenario_entities:
+            if instance_name == self.player_name:
+                continue
+            if self.get_current_hp(instance_name) > 0:
                 return instance_name
         return None

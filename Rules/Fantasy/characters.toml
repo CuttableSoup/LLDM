@@ -82,3 +82,36 @@ reflexes = { dice = 2, pips = 0 }
 strength = { dice = 2, pips = 0 }
 brawling = { dice = 2, pips = 0 }
 finesse = { dice = 3, pips = 0 }
+
+[[entity]]
+name = "thane"
+supertype = "creature"
+subtype = "humanoid"
+description = "A grizzled mercenary who fights at gladstone's side."
+
+max_hp = 24
+
+# Positive default disposition toward everyone is what makes is_hostile(thane, gladstone)
+# false -- combined with having its own [[entity.behavior]], that's what makes it act as an
+# ally rather than an enemy once combat starts (see DMCore._on_action_detected).
+[entity.attitudes]
+default = [ 40, 40, 40, 40, 40, 40 ]
+
+[entity.skills]
+blades = { dice = 4, pips = 0 }
+fortitude = { dice = 3, pips = 0 }
+dodge = { dice = 3, pips = 0 }
+
+[[entity.abilities]]
+name = "shortsword strike"
+supertype = "innate"
+subtype = "weapon"
+skill = "blades"
+damage_tags = [ "slashing" ]
+damage_value = { dice = 2, pips = 0, bonus = "user.strength_damage" }
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "shortsword strike"

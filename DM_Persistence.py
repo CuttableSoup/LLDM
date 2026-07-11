@@ -6,10 +6,11 @@ class PersistenceMixin:
     """!
     @brief Save/load persistence to Saves/<slot_name>/dm_state.json (DMCore mixin -- only ever
            composed into DMCore, never instantiated on its own; relies on
-           self.entities/self.event_bus/self.player_name/self.round_number/self.scenario_key/
-           self.scenario_entities/self.scenario, set up by DMCore.__init__). load_game/save_game
-           call back into RulesMixin's load_rules/load_scenario_definition/load_scenario and
-           StatusMixin's get_current_hp, mirroring DMCore.__init__'s own bootstrap sequence.
+           self.entities/self.event_bus/self.player_name/self.round_number/self.current_target/
+           self.scenario_key/self.scenario_entities/self.scenario, set up by DMCore.__init__).
+           load_game/save_game call back into RulesMixin's load_rules/load_scenario_definition/
+           load_scenario and StatusMixin's get_current_hp, mirroring DMCore.__init__'s own
+           bootstrap sequence.
     """
 
     def _save_slot_dir(self, slot_name):
@@ -47,6 +48,7 @@ class PersistenceMixin:
             "scenario_key": self.scenario_key,
             "player_name": self.player_name,
             "round_number": self.round_number,
+            "current_target": self.current_target,
             "scenario_entities": self.scenario_entities,
             "instances": {
                 name: {
@@ -115,6 +117,11 @@ class PersistenceMixin:
             entity["active_conditions"] = state.get("active_conditions", {})
             entity["currency"] = state.get("currency", entity.get("currency", 0))
             entity["inventory"] = state.get("inventory", entity.get("inventory", []))
+
+        # load_scenario() (above) already reset current_target to a freshly-computed default --
+        # overlay the saved value on top, same pattern as player_name, so a resumed fight keeps
+        # targeting whoever it was actually fighting rather than snapping back to the default.
+        self.current_target = data.get("current_target", self.current_target)
 
         self.event_bus.publish("log_info", f"Game loaded from slot '{slot_name}'.")
         self.event_bus.publish("game_loaded", {

@@ -130,4 +130,9 @@ class RulesMixin:
             self.entities[instance_name] = instance
             self.scenario_entities.append(instance_name)
 
+        # Keeps current_target in sync with scenario_entities on every load -- covers
+        # __init__, load_game, and ad-hoc test scenarios that reassign self.scenario directly
+        # and call load_scenario() again (see CLAUDE.md's "Scenario instancing").
+        self.current_target = self._choose_combat_target()
+
         self.event_bus.publish("log_info", f"Scenario loaded: {self.scenario_entities}")
