@@ -1,8 +1,12 @@
-class InventoryMixin:
+from DM_Types import DMCoreProtocol
+
+
+class InventoryMixin(DMCoreProtocol):
     """!
     @brief Inventory/currency transfer primitives (DMCore mixin -- only ever composed into
-           DMCore, never instantiated on its own; relies on self.entities/self.event_bus,
-           set up by DMCore.__init__).
+        DMCore, never instantiated on its own; relies on self.entities/self.event_bus,
+        set up by DMCore.__init__). Inherits DMCoreProtocol purely so type checkers can
+        resolve these shared attributes -- see DM_Types.py.
     """
 
     def transfer_currency(self, from_name, to_name, amount=None):
@@ -31,8 +35,8 @@ class InventoryMixin:
     def transfer_item(self, from_name, to_name, item_name):
         """!
         @brief Moves one occurrence of an item from one entity's inventory list to another's.
-               Duplicates (ex: three "health potion" entries) represent quantity, so only one
-               matching entry is removed per call.
+            Duplicates (ex: three "health potion" entries) represent quantity, so only one
+            matching entry is removed per call.
         @param from_name The name of the entity the item is taken from.
         @param to_name The name of the entity the item is given to.
         @param item_name The name of the item to move.
@@ -55,8 +59,8 @@ class InventoryMixin:
     def loot_entity(self, from_name, to_name):
         """!
         @brief Moves everything -- all currency and every inventory item -- from one entity to
-               another. Ex: taking a chest's contents once it's open (see apply_test_outcome's
-               "loot" key).
+            another. Ex: taking a chest's contents once it's open (see apply_test_outcome's
+            "loot" key).
         @param from_name The name of the entity being looted (ex: a chest).
         @param to_name The name of the entity receiving the loot (ex: the player).
         @return A {currency, items} summary of what actually moved, so callers (ex:

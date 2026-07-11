@@ -1,14 +1,18 @@
-class SocialMixin:
+from DM_Types import DMCoreProtocol
+
+
+class SocialMixin(DMCoreProtocol):
     """!
     @brief Attitudes and character/flavor-text description (DMCore mixin -- only ever composed
-           into DMCore, never instantiated on its own; relies on self.entities/self.rules,
-           set up by DMCore.__init__).
+        into DMCore, never instantiated on its own; relies on self.entities/self.rules,
+        set up by DMCore.__init__). Inherits DMCoreProtocol purely so type checkers can
+        resolve these shared attributes -- see DM_Types.py.
     """
 
     def get_attitude(self, entity_name, toward_name):
         """!
         @brief Resolves entity_name's six-value attitude array toward toward_name: a specific
-               name override, then a supertype override, then the entity's default.
+            name override, then a supertype override, then the entity's default.
         @param entity_name The name of the entity whose attitude is being read.
         @param toward_name The name of the entity being regarded.
         @return The [disposition, trust, confidence, respect, obligation, intimacy] attitude array.
@@ -29,11 +33,11 @@ class SocialMixin:
     def is_hostile(self, entity_name, toward_name):
         """!
         @brief Whether entity_name is hostile enough toward toward_name to be treated as a combat
-               target rather than a dialogue partner. An entity with no attitude data defaults to
-               neutral (0), which still counts as combat-ready; only a positive (Friendly-leaning)
-               disposition opts an entity out of combat routing. Inanimate objects (ex: a locked
-               chest) are never hostile regardless of attitude data -- they have no combat intent,
-               so a lockpicking attempt against one must not get batched into "round_resolved".
+            target rather than a dialogue partner. An entity with no attitude data defaults to
+            neutral (0), which still counts as combat-ready; only a positive (Friendly-leaning)
+            disposition opts an entity out of combat routing. Inanimate objects (ex: a locked
+            chest) are never hostile regardless of attitude data -- they have no combat intent,
+            so a lockpicking attempt against one must not get batched into "round_resolved".
         @param entity_name The name of the entity being checked.
         @param toward_name The name of the entity it might be hostile toward.
         @return True if disposition (the attitude array's first value) is 0 or negative.
@@ -46,13 +50,13 @@ class SocialMixin:
     def get_attitude_tier(self, value):
         """!
         @brief Finds the [[attitude_tier]] definition (rules.toml) whose minimum/maximum range
-               contains a single attitude axis value, clamped to [-150, 150] first -- headroom
-               past the nominal -100..100 range for whenever attitudes get modified at runtime
-               (nothing does yet), so an extreme value still resolves to the correct outermost
-               tier instead of matching nothing. Tiers are checked in TOML declaration order and
-               the first match wins, same convention as choose_behavior -- ex: a value of exactly
-               -100 sits on both "hostile"'s and "unfriendly"'s boundary, and resolves to
-               whichever is declared first (hostile).
+            contains a single attitude axis value, clamped to [-150, 150] first -- headroom
+            past the nominal -100..100 range for whenever attitudes get modified at runtime
+            (nothing does yet), so an extreme value still resolves to the correct outermost
+            tier instead of matching nothing. Tiers are checked in TOML declaration order and
+            the first match wins, same convention as choose_behavior -- ex: a value of exactly
+            -100 sits on both "hostile"'s and "unfriendly"'s boundary, and resolves to
+            whichever is declared first (hostile).
         @param value A single attitude axis value (ex: disposition).
         @return The matching attitude_tier definition, or None if none match (ex: no
                 [[attitude_tier]] data is loaded at all).
@@ -66,10 +70,10 @@ class SocialMixin:
     def describe_attitude(self, entity_name, toward_name):
         """!
         @brief Translates entity_name's six-value attitude array toward toward_name (from
-               get_attitude) into prose via [[attitude_tier]] -- one phrase per axis, banded by
-               get_attitude_tier, rather than handing the LLM raw numbers it has no way to
-               calibrate ("38 disposition" means nothing to a language model; "is warm and
-               well-disposed toward them" does).
+            get_attitude) into prose via [[attitude_tier]] -- one phrase per axis, banded by
+            get_attitude_tier, rather than handing the LLM raw numbers it has no way to
+            calibrate ("38 disposition" means nothing to a language model; "is warm and
+            well-disposed toward them" does).
         @param entity_name The name of the entity whose attitude is being described.
         @param toward_name The name of the entity it's directed toward.
         @return A prose fragment ("Attitude toward X: ..."), or "" if no attitude_tier data is
@@ -90,14 +94,14 @@ class SocialMixin:
     def describe_character(self, entity_name, toward_name=None):
         """!
         @brief Builds a flavor-text description of an entity for narration prompts, out of its
-               purely descriptive data (description, qualities, memories, quotes) rather than
-               mechanical data (skills/dice), since this is meant to tell the LLM who someone is.
+            purely descriptive data (description, qualities, memories, quotes) rather than
+            mechanical data (skills/dice), since this is meant to tell the LLM who someone is.
         @param entity_name The name of the entity to describe.
         @param toward_name If given (and different from entity_name), appends
-               describe_attitude(entity_name, toward_name) as an additional part -- ex: passing
-               self.player_name lets a "pure mechanics" entity like wolf, which otherwise has no
-               descriptive data at all, still surface something to the LLM (how hostile it is),
-               rather than contributing nothing to the roster/defender_details.
+            describe_attitude(entity_name, toward_name) as an additional part -- ex: passing
+            self.player_name lets a "pure mechanics" entity like wolf, which otherwise has no
+            descriptive data at all, still surface something to the LLM (how hostile it is),
+            rather than contributing nothing to the roster/defender_details.
         @return A formatted description string, or "" if the entity has no descriptive data
                 (and no attitude phrase was added).
         """

@@ -2,6 +2,8 @@ import copy
 import os
 import tomllib
 
+from DM_Types import DMCoreProtocol
+
 
 def scenario_file_path(scenario_name):
     """!
@@ -13,20 +15,22 @@ def scenario_file_path(scenario_name):
     return os.path.join(base_dir, "Rules", "Fantasy", "scenarios", f"{scenario_name}.toml")
 
 
-class RulesMixin:
+class RulesMixin(DMCoreProtocol):
     """!
     @brief TOML rules/entity loading and scenario instancing (DMCore mixin -- only ever
-           composed into DMCore, never instantiated on its own; relies on
-           self.skills/self.entities/self.rules/self.scenario/self.scenario_entities/
-           self.event_bus/self.player_name, set up by DMCore.__init__).
-           _describe_scenario_characters calls self.describe_character (SocialMixin).
+        composed into DMCore, never instantiated on its own; relies on
+        self.skills/self.entities/self.rules/self.scenario/self.scenario_entities/
+        self.event_bus/self.player_name, set up by DMCore.__init__).
+        _describe_scenario_characters calls self.describe_character (SocialMixin). Inherits
+        DMCoreProtocol purely so type checkers can resolve these shared attributes/
+        cross-mixin methods -- see DM_Types.py.
     """
 
     def _describe_scenario_characters(self):
         """!
         @brief Builds the "characters" roster (describe_character per scenario instance,
-               skipping entities with no descriptive data) shared by scenario_loaded's
-               initial payload and game_loaded's post-load payload.
+            skipping entities with no descriptive data) shared by scenario_loaded's
+            initial payload and game_loaded's post-load payload.
         @return A list of non-empty character description strings.
         """
         return [
@@ -65,7 +69,7 @@ class RulesMixin:
     def _resolve_player_name(self):
         """!
         @brief Finds the one entity template marked `is_player = true` (ex: characters.toml's
-               gladstone) and returns its name, to stand in as the active player character.
+            gladstone) and returns its name, to stand in as the active player character.
         @raises ValueError if no loaded entity template has `is_player = true` -- fatal on
                 purpose, same reasoning as load_scenario_definition's missing-scenario-file
                 check: silently falling back to some default here would let the rest of
@@ -81,9 +85,9 @@ class RulesMixin:
     def load_scenario_definition(self, scenario_name):
         """!
         @brief Reads a named scenario file from Rules/Fantasy/scenarios/ into self.scenario.
-               Scenarios live in their own subdirectory rather than the flat Rules/Fantasy/
-               scan in load_rules (which only keeps whichever [scenario] table it reads last),
-               so multiple named scenarios can coexist and one is selected explicitly by name.
+            Scenarios live in their own subdirectory rather than the flat Rules/Fantasy/
+            scan in load_rules (which only keeps whichever [scenario] table it reads last),
+            so multiple named scenarios can coexist and one is selected explicitly by name.
         @param scenario_name The scenario's filename without extension (ex: "arena", "tavern").
         @raises FileNotFoundError if no matching scenario file exists. Unlike load_rules'
                 blanket per-file try/except, a missing/malformed scenario is fatal on purpose:
@@ -103,8 +107,8 @@ class RulesMixin:
     def load_scenario(self):
         """!
         @brief Instantiates each entity listed in the scenario as its own independent copy of its
-               template, so duplicate creatures (ex: two wolves) get separate HP/conditions instead
-               of sharing the same template dict.
+            template, so duplicate creatures (ex: two wolves) get separate HP/conditions instead
+            of sharing the same template dict.
         """
         self.scenario_entities = []
         occurrence_counts = {}

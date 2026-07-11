@@ -138,11 +138,11 @@ class NLPCore:
     def _detect_save_load_intent(self, processed_text):
         """!
         @brief Checks processed input for a "save"/"load" command, ahead of item and skill
-               matching -- a meta-command, not an in-fiction action, so it never should reach
-               either. Unlike map_to_item's embedding match, the slot name is arbitrary
-               player-chosen text with no catalog to match against, so it's extracted by
-               prefix-stripping instead (same style as process_input's own "i want to " etc.
-               prefix list).
+            matching -- a meta-command, not an in-fiction action, so it never should reach
+            either. Unlike map_to_item's embedding match, the slot name is arbitrary
+            player-chosen text with no catalog to match against, so it's extracted by
+            prefix-stripping instead (same style as process_input's own "i want to " etc.
+            prefix list).
         @param processed_text The cleaned and processed player input.
         @return (intent, slot_name) where intent is "save"/"load"/None. If a prefix matched
                 but nothing followed it (empty slot name), returns (None, None) instead --
@@ -163,9 +163,9 @@ class NLPCore:
     def _add_phrases(self, all_phrases, indices, key, data):
         """!
         @brief Appends name/description/keyword phrases for one skill or technique/spell
-               entity to the shared phrase/index lists used to build a single embedding
-               matrix -- multiple phrases per entry avoid "dilution" from averaging
-               everything into one embedding.
+            entity to the shared phrase/index lists used to build a single embedding
+            matrix -- multiple phrases per entry avoid "dilution" from averaging
+            everything into one embedding.
         @param all_phrases The phrase list to append to.
         @param indices The parallel list of keys (one per phrase in all_phrases).
         @param key The skill or ability name these phrases resolve to on a match.
@@ -333,10 +333,10 @@ class NLPCore:
     def map_to_item(self, processed_text):
         """!
         @brief Maps the processed text to a specific item's name using semantic similarity,
-               the same way map_to_action does for skills but against item_embeddings/item_indices.
-               Currency is checked first as a fixed synonym list rather than semantically --
-               it's a plain "currency" integer field on entities, not an object-supertype entity
-               with a name/description of its own, so there's nothing to embed it against.
+            the same way map_to_action does for skills but against item_embeddings/item_indices.
+            Currency is checked first as a fixed synonym list rather than semantically --
+            it's a plain "currency" integer field on entities, not an object-supertype entity
+            with a name/description of its own, so there's nothing to embed it against.
         @param processed_text The cleaned and processed player input.
         @return A tuple of (item_name, confidence_score); item_name is None below confidence_threshold.
         """
@@ -362,12 +362,12 @@ class NLPCore:
     def map_to_target(self, processed_text):
         """!
         @brief Maps the processed text to a specific creature's name using semantic similarity,
-               the same way map_to_item does for items but against target_embeddings/
-               target_indices (every non-player "creature" supertype entity, by name/description).
-               Ties between identically-named/described instances (ex: two plain "wolf"
-               instances sharing one template's text) resolve to whichever was declared first,
-               the same inherent limitation map_to_item already has for duplicate item names --
-               this isn't real multi-instance disambiguation (ex: "the wounded wolf").
+            the same way map_to_item does for items but against target_embeddings/
+            target_indices (every non-player "creature" supertype entity, by name/description).
+            Ties between identically-named/described instances (ex: two plain "wolf"
+            instances sharing one template's text) resolve to whichever was declared first,
+            the same inherent limitation map_to_item already has for duplicate item names --
+            this isn't real multi-instance disambiguation (ex: "the wounded wolf").
         @param processed_text The cleaned and processed player input.
         @return A tuple of (entity_name, confidence_score); entity_name is None below
                 confidence_threshold or if no creature embeddings are loaded.

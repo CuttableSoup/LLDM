@@ -10,17 +10,17 @@ from DM_Status import StatusMixin
 class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, RulesMixin, PersistenceMixin):
     """!
     @brief Main class handling the core mechanics of the RPG system. The implementation is
-           composed from domain mixins in sibling files -- DM_Rules.py (rules/scenario
-           loading), DM_Combat.py (dice/damage/ability resolution), DM_Status.py (the
-           status/condition system and entity tests), DM_Inventory.py (currency/item
-           transfer), DM_Social.py (attitudes and character description), and
-           DM_Persistence.py (save/load) -- so that every dm_core.<method>(...) call site
-           throughout the codebase and test_all.py keeps working unchanged regardless of
-           which file actually defines a given method (Python's MRO flattens every mixin
-           method onto this one class). DM_Core.py itself is reduced to __init__ (boot
-           wiring) plus the two real event handlers, _on_action_detected and
-           _on_item_interaction_detected, and their direct helpers -- the pieces that
-           orchestrate calls across every mixin and don't belong to any single domain.
+        composed from domain mixins in sibling files -- DM_Rules.py (rules/scenario
+        loading), DM_Combat.py (dice/damage/ability resolution), DM_Status.py (the
+        status/condition system and entity tests), DM_Inventory.py (currency/item
+        transfer), DM_Social.py (attitudes and character description), and
+        DM_Persistence.py (save/load) -- so that every dm_core.<method>(...) call site
+        throughout the codebase and test_all.py keeps working unchanged regardless of
+        which file actually defines a given method (Python's MRO flattens every mixin
+        method onto this one class). DM_Core.py itself is reduced to __init__ (boot
+        wiring) plus the two real event handlers, _on_action_detected and
+        _on_item_interaction_detected, and their direct helpers -- the pieces that
+        orchestrate calls across every mixin and don't belong to any single domain.
     """
 
     def __init__(self, event_bus, scenario_name="arena"):
@@ -28,7 +28,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, RulesMixin, 
         @brief Initializes the DM core and loads system references.
         @param event_bus The central event bus instance.
         @param scenario_name Which scenario to load, matching a file in
-               Rules/Fantasy/scenarios/ (ex: "arena" loads scenarios/arena.toml).
+            Rules/Fantasy/scenarios/ (ex: "arena" loads scenarios/arena.toml).
         """
         self.event_bus = event_bus
         self.skills = {}
@@ -70,18 +70,18 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, RulesMixin, 
     def _on_action_detected(self, data):
         """!
         @brief Event handler that resolves a detected player action, opposed by the player's
-               current combat target if one exists, and applies damage if the action hit with
-               an attack ability. Combat (a target present that is hostile toward the player)
-               narrates once per round via "round_resolved"; everything else (no target, or a
-               non-hostile target like a tavern NPC) narrates immediately via "action_resolved".
+            current combat target if one exists, and applies damage if the action hit with
+            an attack ability. Combat (a target present that is hostile toward the player)
+            narrates once per round via "round_resolved"; everything else (no target, or a
+            non-hostile target like a tavern NPC) narrates immediately via "action_resolved".
         @param data The action_detected payload from NLPCore ({skill, score, input, target?}).
-               "skill" is usually a plain skill name, but may also be a named technique/spell
-               the player owns (ex: "cleave") -- resolve_named_ability/select_ability_skill are
-               what convert that into the skill it's actually rolled with, while keeping the
-               named ability itself to use directly for damage further down. "target", if
-               present, is NLPCore's best-guess entity name match (see map_to_target) -- only
-               honored if it names a live, hostile, in-scene entity; otherwise the persisted
-               self.current_target is left alone.
+            "skill" is usually a plain skill name, but may also be a named technique/spell
+            the player owns (ex: "cleave") -- resolve_named_ability/select_ability_skill are
+            what convert that into the skill it's actually rolled with, while keeping the
+            named ability itself to use directly for damage further down. "target", if
+            present, is NLPCore's best-guess entity name match (see map_to_target) -- only
+            honored if it names a live, hostile, in-scene entity; otherwise the persisted
+            self.current_target is left alone.
         """
         skill_name = data.get("skill")
         if not skill_name:
@@ -174,20 +174,20 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, RulesMixin, 
     def _on_item_interaction_detected(self, data):
         """!
         @brief Event handler for a free-text item-interaction match (see NLPCore.map_to_item):
-               "examine"/"take"/"give"/"trade" against a named item, or "open"/"close" against
-               the scene target itself. Deliberately bypasses the whole skill/dice system --
-               none of these warrant a roll. Publishes "item_interaction_resolved" either way,
-               with enough detail for narration to explain a miss (locked, closed, not present,
-               not takeable, ...) rather than staying silent.
+            "examine"/"take"/"give"/"trade" against a named item, or "open"/"close" against
+            the scene target itself. Deliberately bypasses the whole skill/dice system --
+            none of these warrant a roll. Publishes "item_interaction_resolved" either way,
+            with enough detail for narration to explain a miss (locked, closed, not present,
+            not takeable, ...) rather than staying silent.
 
-               "take"/"trade" move an item from the target to the player; "give" moves one from
-               the player to the target -- same transfer_item/transfer_currency primitives,
-               just with source/destination swapped. "trade" additionally charges the item's
-               TOML `value` as a price (denied outright if the player can't afford it, rather
-               than a partial payment). "examine" and "open"/"close" never move anything.
+            "take"/"trade" move an item from the target to the player; "give" moves one from
+            the player to the target -- same transfer_item/transfer_currency primitives,
+            just with source/destination swapped. "trade" additionally charges the item's
+            TOML `value` as a price (denied outright if the player can't afford it, rather
+            than a partial payment). "examine" and "open"/"close" never move anything.
         @param data The item_interaction_detected payload from NLPCore
-               ({intent, item_name, input, score}). "item_name" is None for "open"/"close",
-               which act on the scene target directly rather than a named item.
+            ({intent, item_name, input, score}). "item_name" is None for "open"/"close",
+            which act on the scene target directly rather than a named item.
         """
         intent = data.get("intent")
         item_name = data.get("item_name")
@@ -274,11 +274,11 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, RulesMixin, 
     def _resolve_open_close_intent(self, intent, target_name, resolved):
         """!
         @brief Handles "open"/"close" against the current scene target directly -- these act on
-               the container itself, not a named item inside it, so (unlike the other item
-               intents) they never go through map_to_item at all. Gated to subtype ==
-               "container" (ex: items.toml's chest) so aiming "open"/"close" at a creature or a
-               plain object with no openable nature fails safely instead of silently applying a
-               nonsensical condition to it.
+            the container itself, not a named item inside it, so (unlike the other item
+            intents) they never go through map_to_item at all. Gated to subtype ==
+            "container" (ex: items.toml's chest) so aiming "open"/"close" at a creature or a
+            plain object with no openable nature fails safely instead of silently applying a
+            nonsensical condition to it.
         @param intent "open" or "close".
         @param target_name The current scene target's name, or None if there isn't one.
         @param resolved The item_interaction_resolved publisher closure from the caller.
@@ -313,15 +313,15 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, RulesMixin, 
     def _choose_combat_target(self):
         """!
         @brief Picks self.current_target: the first living, hostile-toward-the-player entity
-               in scenario_entities order. If none qualifies (ex: every wolf is dead, or
-               nothing in the scene was ever hostile -- the dungeon's chest, the tavern's
-               innkeeper), falls back to the first *living* non-player entity instead, so a
-               defeated enemy is never left as a stale target once combat is over -- unlike
-               _get_target_name(), which returns the first non-player entity unconditionally
-               (dead or not) and stays reserved for non-combat interaction resolution, where
-               that's always correct since a chest/NPC is never "defeated". Used both to set
-               the initial current_target (via load_scenario()) and to advance it once the
-               previous target dies (see _on_action_detected's end-of-round check).
+            in scenario_entities order. If none qualifies (ex: every wolf is dead, or
+            nothing in the scene was ever hostile -- the dungeon's chest, the tavern's
+            innkeeper), falls back to the first *living* non-player entity instead, so a
+            defeated enemy is never left as a stale target once combat is over -- unlike
+            _get_target_name(), which returns the first non-player entity unconditionally
+            (dead or not) and stays reserved for non-combat interaction resolution, where
+            that's always correct since a chest/NPC is never "defeated". Used both to set
+            the initial current_target (via load_scenario()) and to advance it once the
+            previous target dies (see _on_action_detected's end-of-round check).
         @return The chosen entity name, or None if no non-player entity in the scenario is alive.
         """
         for instance_name in self.scenario_entities:

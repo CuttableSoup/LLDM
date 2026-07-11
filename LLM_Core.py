@@ -60,10 +60,10 @@ class LLMCore:
         """!
         @brief Builds the shared roll/damage description used by every narration prompt.
         @param action_result A resolved action dict (from "action_resolved" or "round_resolved",
-               or an "enemy_action" sub-result resolved via a creature's own behavior).
+            or an "enemy_action" sub-result resolved via a creature's own behavior).
         @param actor Who performed this action, for the leading "X attempts" line -- defaults
-               to the player, but a creature's own behavior-driven action (ex: a wolf's bite)
-               passes its own name instead so the narration doesn't misattribute it.
+            to the player, but a creature's own behavior-driven action (ex: a wolf's bite)
+            passes its own name instead so the narration doesn't misattribute it.
         @return The outcome description as a string.
         """
         outcome = "succeeds" if action_result.get("success") else "fails"
@@ -110,8 +110,8 @@ class LLMCore:
     def generate_scene_intro(self, scenario_data):
         """!
         @brief Narrates the opening scene once, when a scenario is loaded, and remembers the
-               scenario's name/description/characters so every later narration stays grounded
-               in the setting and who's actually present.
+            scenario's name/description/characters so every later narration stays grounded
+            in the setting and who's actually present.
         @param scenario_data The "scenario_loaded" payload ({name, description, characters}).
         """
         self.event_bus.publish("log_info", "Generating scenario intro narration.")
@@ -135,9 +135,9 @@ class LLMCore:
         """!
         @brief Narrates the end of a combat round, instead of narrating every skill use mid-fight.
         @param action_result The "round_resolved" payload (an action_resolved dict plus "round"
-               and, if anyone else acted this round, "turns" -- a list of every other
-               participant's resolved action, enemies and allies alike, each already tagged
-               with "actor" by DMCore._on_action_detected).
+            and, if anyone else acted this round, "turns" -- a list of every other
+            participant's resolved action, enemies and allies alike, each already tagged
+            with "actor" by DMCore._on_action_detected).
         """
         self.event_bus.publish("log_info", f"Generating LLM response for combat round {action_result.get('round')}.")
 
@@ -169,9 +169,9 @@ class LLMCore:
     def generate_clarification_response(self, data):
         """!
         @brief Narrates a brief in-character non-response when the player's input didn't match
-               any recognizable skill (below NLPCore's confidence_threshold), so the player gets
-               feedback instead of the app silently doing nothing (no dice roll, no event past
-               NLPCore) and appearing to have stalled.
+            any recognizable skill (below NLPCore's confidence_threshold), so the player gets
+            feedback instead of the app silently doing nothing (no dice roll, no event past
+            NLPCore) and appearing to have stalled.
         @param data The "action_not_understood" payload ({input, score}).
         """
         self.event_bus.publish("log_info", "Generating clarification response for unmatched input.")
@@ -187,13 +187,13 @@ class LLMCore:
     def generate_item_interaction_response(self, data):
         """!
         @brief Narrates an "examine"/"take"/"give"/"trade"/"open"/"close" attempt, resolved
-               with no dice roll (see DMCore._on_item_interaction_detected). "examine" only
-               ever describes; it's the deliberate alternative to items being auto-looted into
-               the player's inventory the moment a container opens (ex: a cursed weapon should
-               be seen and described before anyone decides to touch it).
+            with no dice roll (see DMCore._on_item_interaction_detected). "examine" only
+            ever describes; it's the deliberate alternative to items being auto-looted into
+            the player's inventory the moment a container opens (ex: a cursed weapon should
+            be seen and described before anyone decides to touch it).
         @param data The "item_interaction_resolved" payload ({intent, item_name, input, found,
-               description?, container?, reason?, amount?, price?}). "item_name" is None for
-               "open"/"close", which act on "container" (the scene target) directly.
+            description?, container?, reason?, amount?, price?}). "item_name" is None for
+            "open"/"close", which act on "container" (the scene target) directly.
         """
         intent = data.get("intent")
         self.event_bus.publish("log_info", f"Generating item interaction response ({intent}).")
@@ -310,10 +310,10 @@ class LLMCore:
     def _save_slot_dir(self, slot_name):
         """!
         @brief Mirrors DMCore._save_slot_dir exactly. LLMCore has no reference to DMCore --
-               the two cores only ever talk through events -- so this small path helper is
-               deliberately duplicated here rather than shared, and must stay in sync with
-               DMCore's copy: both write sibling files into the same Saves/<slot_name>/
-               directory for a given slot.
+            the two cores only ever talk through events -- so this small path helper is
+            deliberately duplicated here rather than shared, and must stay in sync with
+            DMCore's copy: both write sibling files into the same Saves/<slot_name>/
+            directory for a given slot.
         @param slot_name The save slot's name, as given by the player.
         @return The absolute directory path for this slot.
         """
@@ -324,10 +324,10 @@ class LLMCore:
     def save_game(self, slot_name):
         """!
         @brief Writes this core's own slice of a save slot -- the rolling narration
-               context_window plus scenario bookkeeping -- to
-               Saves/<slot_name>/llm_state.json. DMCore independently writes its own
-               dm_state.json sibling for the same slot (see CLAUDE.md's "Saving and loading"
-               for why this isn't one combined file).
+            context_window plus scenario bookkeeping -- to
+            Saves/<slot_name>/llm_state.json. DMCore independently writes its own
+            dm_state.json sibling for the same slot (see CLAUDE.md's "Saving and loading"
+            for why this isn't one combined file).
         @param slot_name The save slot's name (used as a directory name under Saves/).
         """
         slot_dir = self._save_slot_dir(slot_name)
@@ -346,12 +346,12 @@ class LLMCore:
     def load_game(self, slot_name):
         """!
         @brief Restores context_window/scenario bookkeeping from
-               Saves/<slot_name>/llm_state.json, silently -- no LLM call, no new narration --
-               so resuming a session doesn't reprint an opening-scene intro the way a genuine
-               "scenario_loaded" would. A missing file just logs and leaves current state
-               alone; DMCore's own load_game is what publishes "game_load_failed" for
-               narrating that to the player (see generate_load_failed_response), so this
-               doesn't duplicate that feedback.
+            Saves/<slot_name>/llm_state.json, silently -- no LLM call, no new narration --
+            so resuming a session doesn't reprint an opening-scene intro the way a genuine
+            "scenario_loaded" would. A missing file just logs and leaves current state
+            alone; DMCore's own load_game is what publishes "game_load_failed" for
+            narrating that to the player (see generate_load_failed_response), so this
+            doesn't duplicate that feedback.
         @param slot_name The save slot's name to load.
         """
         path = os.path.join(self._save_slot_dir(slot_name), "llm_state.json")
@@ -371,7 +371,7 @@ class LLMCore:
     def _on_save_requested(self, data):
         """!
         @brief Event handler for a save request (from NLPCore's text intercept or a GUI/Textual
-               button, both publishing the same event as DMCore's own handler).
+            button, both publishing the same event as DMCore's own handler).
         @param data The "save_requested" payload ({"slot": slot_name}).
         """
         slot_name = data.get("slot")
@@ -394,9 +394,9 @@ class LLMCore:
     def generate_load_failed_response(self, data):
         """!
         @brief Narrates a brief in-character acknowledgment when a requested save slot doesn't
-               exist (DMCore's "game_load_failed") -- no roll, no state change, just feedback
-               so the request doesn't silently do nothing (same rule
-               generate_clarification_response already follows for unmatched input).
+            exist (DMCore's "game_load_failed") -- no roll, no state change, just feedback
+            so the request doesn't silently do nothing (same rule
+            generate_clarification_response already follows for unmatched input).
         @param data The "game_load_failed" payload ({"slot": slot_name, "reason": ...}).
         """
         prompt = (

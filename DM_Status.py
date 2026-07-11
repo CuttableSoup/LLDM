@@ -1,3 +1,5 @@
+from DM_Types import DMCoreProtocol
+
 COMPARATORS = {
     ">": lambda actual, value: actual > value,
     "<": lambda actual, value: actual < value,
@@ -10,14 +12,16 @@ COMPARATORS = {
 }
 
 
-class StatusMixin:
+class StatusMixin(DMCoreProtocol):
     """!
     @brief HP, the status/condition system, and entity tests (DMCore mixin -- only ever
-           composed into DMCore, never instantiated on its own; relies on
-           self.entities/self.rules/self.event_bus/self.player_name, set up by
-           DMCore.__init__). entity_matches_requirements is also relied on by CombatMixin's
-           choose_behavior, which reuses this same {field, operator, value} requirement engine
-           for [[entity.behavior]] rather than duplicating it.
+        composed into DMCore, never instantiated on its own; relies on
+        self.entities/self.rules/self.event_bus/self.player_name, set up by
+        DMCore.__init__). entity_matches_requirements is also relied on by CombatMixin's
+        choose_behavior, which reuses this same {field, operator, value} requirement engine
+        for [[entity.behavior]] rather than duplicating it. Inherits DMCoreProtocol purely
+        so type checkers can resolve these shared attributes/cross-mixin methods -- see
+        DM_Types.py.
     """
 
     def get_current_hp(self, entity_name):
@@ -112,9 +116,9 @@ class StatusMixin:
     def dismiss_condition(self, entity_name, condition_name):
         """!
         @brief Removes a condition from an entity, if it's currently active. This is the
-               general-purpose counterpart to apply_condition -- ex: a chest's "locked"
-               condition, seeded from its template's [entity.conditions], gets dismissed via
-               apply_test_outcome's "dismiss_condition" key once its [entity.test] is passed.
+            general-purpose counterpart to apply_condition -- ex: a chest's "locked"
+            condition, seeded from its template's [entity.conditions], gets dismissed via
+            apply_test_outcome's "dismiss_condition" key once its [entity.test] is passed.
         @param entity_name The name of the entity losing the condition.
         @param condition_name The name of the condition to remove.
         @return True if the condition was present and removed, False otherwise.
@@ -137,9 +141,9 @@ class StatusMixin:
     def is_closed(self, entity_name):
         """!
         @brief Whether a container (ex: a chest) currently has the "closed" condition active.
-               Mirrors is_locked exactly. Absent from active_conditions means not closed (open)
-               by default, so any container with no [entity.conditions.closed] seeded in TOML
-               is unaffected -- only items.toml's chest opts into this today.
+            Mirrors is_locked exactly. Absent from active_conditions means not closed (open)
+            by default, so any container with no [entity.conditions.closed] seeded in TOML
+            is unaffected -- only items.toml's chest opts into this today.
         @param entity_name The name of the entity to check.
         @return True if "closed" is in the entity's active_conditions.
         """
@@ -148,14 +152,14 @@ class StatusMixin:
     def is_test_available(self, entity_name, test, skill_name):
         """!
         @brief Whether an entity's [entity.test] can currently be attempted with the given
-               skill. Gates the test on the entity's *current* active_conditions, not just
-               whether the skill matches -- without this, ex: an already-picked chest's
-               [entity.test] would keep re-triggering on repeat attempts (harmless only by
-               accident, since there'd be nothing left to loot), and a "jammed" condition
-               applied on a failed attempt would have no actual effect on future ones.
+            skill. Gates the test on the entity's *current* active_conditions, not just
+            whether the skill matches -- without this, ex: an already-picked chest's
+            [entity.test] would keep re-triggering on repeat attempts (harmless only by
+            accident, since there'd be nothing left to loot), and a "jammed" condition
+            applied on a failed attempt would have no actual effect on future ones.
         @param entity_name The name of the entity being tested (ex: a chest).
         @param test The entity's test table ({difficulty, skill, requires_condition,
-               blocks_if_condition, pass, fail}).
+            blocks_if_condition, pass, fail}).
         @param skill_name The skill the player is attempting to use.
         @return True if skill_name matches test["skill"], test["requires_condition"] (if set)
                 is currently active, and test["blocks_if_condition"] (if set) is not.
@@ -174,12 +178,12 @@ class StatusMixin:
     def apply_test_outcome(self, entity_name, outcome):
         """!
         @brief Applies the pass/fail consequence of an entity's [entity.test] (ex: a chest's
-               lock check), dispatching purely on which keys are present in outcome -- no
-               "action" enum needed. A key of "dismiss_condition" removes that condition; a key
-               of "condition" applies a new one (the same {condition, duration, dismiss} shape
-               [[status]]'s own apply/test.fail blocks already use); a truthy "loot" key hands
-               everything (currency + inventory) to the player via loot_entity. Any combination
-               can be present at once, or the whole outcome can be empty/omitted for no consequence.
+            lock check), dispatching purely on which keys are present in outcome -- no
+            "action" enum needed. A key of "dismiss_condition" removes that condition; a key
+            of "condition" applies a new one (the same {condition, duration, dismiss} shape
+            [[status]]'s own apply/test.fail blocks already use); a truthy "loot" key hands
+            everything (currency + inventory) to the player via loot_entity. Any combination
+            can be present at once, or the whole outcome can be empty/omitted for no consequence.
         @param entity_name The name of the entity the test was performed against.
         @param outcome The test's "pass" or "fail" table (or None/"" for no consequence).
         @return loot_entity's {currency, items} summary if "loot" applied, else None -- so the

@@ -1,21 +1,25 @@
 import random
 
+from DM_Types import DMCoreProtocol
 
-class CombatMixin:
+
+class CombatMixin(DMCoreProtocol):
     """!
     @brief Dice rolling, opposed skill checks, damage resolution, and ability/behavior lookup
-           (DMCore mixin -- only ever composed into DMCore, never instantiated on its own;
-           relies on self.entities/self.rules/self.skills/self.event_bus, set up by
-           DMCore.__init__). calculate_damage calls self.apply_damage (StatusMixin) to apply
-           the net damage and trigger on_damage statuses; choose_behavior calls
-           self.entity_matches_requirements (StatusMixin) to reuse the same
-           {field, operator, value} requirement engine [[status]] uses.
+        (DMCore mixin -- only ever composed into DMCore, never instantiated on its own;
+        relies on self.entities/self.rules/self.skills/self.event_bus, set up by
+        DMCore.__init__). calculate_damage calls self.apply_damage (StatusMixin) to apply
+        the net damage and trigger on_damage statuses; choose_behavior calls
+        self.entity_matches_requirements (StatusMixin) to reuse the same
+        {field, operator, value} requirement engine [[status]] uses. Inherits DMCoreProtocol
+        purely so type checkers can resolve these shared attributes/cross-mixin methods --
+        see DM_Types.py.
     """
 
     def resolve_bonus(self, attacker_name, bonus):
         """!
         @brief Resolves a damage_value's bonus field, which may be a flat number or a
-               "user.<rule>" reference (ex: "user.strength_damage") into a rules.toml formula.
+            "user.<rule>" reference (ex: "user.strength_damage") into a rules.toml formula.
         @param attacker_name The name of the entity dealing damage.
         @param bonus The bonus field from a damage_value table.
         @return The resolved flat bonus amount.
@@ -66,8 +70,8 @@ class CombatMixin:
     def resolve_weapon_reference(self, attacker_name, value, field):
         """!
         @brief Resolves a damage_value's dice/pips field when it's the "user.weapon.<field>"
-               indirection (ex: techniques.toml's cleave, whose damage scales with whatever
-               weapon the attacker currently has equipped, rather than a fixed amount).
+            indirection (ex: techniques.toml's cleave, whose damage scales with whatever
+            weapon the attacker currently has equipped, rather than a fixed amount).
         @param attacker_name The name of the entity dealing damage.
         @param value The dice or pips field from a damage_value table.
         @param field Which field this is ("dice" or "pips"), matched against "user.weapon.<field>".
@@ -84,11 +88,11 @@ class CombatMixin:
     def get_damage_reduction(self, defender_name, damage_tags):
         """!
         @brief Sums the rolled reduction against the given damage tags: the defender's own
-               innate resistance_value/resistance_tags (ex: a fire elemental's inherent
-               resistance to physical damage) plus the rolled armor value of any equipped
-               items that resist the same tags. Both are static, tag-matched traits of the
-               entity/item -- distinct from active_conditions, which represent temporary state
-               gained/lost during play (see CLAUDE.md's tags-vs-conditions note).
+            innate resistance_value/resistance_tags (ex: a fire elemental's inherent
+            resistance to physical damage) plus the rolled armor value of any equipped
+            items that resist the same tags. Both are static, tag-matched traits of the
+            entity/item -- distinct from active_conditions, which represent temporary state
+            gained/lost during play (see CLAUDE.md's tags-vs-conditions note).
         @param defender_name The name of the entity taking damage.
         @param damage_tags The damage tags of the incoming attack (ex: ["fire"]).
         @return The total damage reduction.
@@ -113,12 +117,12 @@ class CombatMixin:
     def get_vulnerability_bonus(self, defender_name, damage_tags):
         """!
         @brief Rolls the extra damage a defender's own vulnerability_value/vulnerability_tags
-               (ex: the fire elemental's vulnerability to "water") adds on a matching hit --
-               the mirror image of resistance_value/resistance_tags in get_damage_reduction,
-               just added to raw damage instead of subtracted. Innate to the entity only (no
-               equipped-item counterpart, unlike armor's resistance side); a static, tag-matched
-               trait rather than active_conditions' temporary state (see CLAUDE.md's
-               tags-vs-conditions note).
+            (ex: the fire elemental's vulnerability to "water") adds on a matching hit --
+            the mirror image of resistance_value/resistance_tags in get_damage_reduction,
+            just added to raw damage instead of subtracted. Innate to the entity only (no
+            equipped-item counterpart, unlike armor's resistance side); a static, tag-matched
+            trait rather than active_conditions' temporary state (see CLAUDE.md's
+            tags-vs-conditions note).
         @param defender_name The name of the entity taking damage.
         @param damage_tags The damage tags of the incoming attack (ex: ["water"]).
         @return The rolled bonus damage, or 0 if no tag matches.
@@ -133,9 +137,9 @@ class CombatMixin:
     def is_immune_to(self, defender_name, damage_tags):
         """!
         @brief Whether an entity's immunity_tags fully negate an incoming attack's damage tags
-               (ex: a fire elemental's immunity to "fire"). Distinct from resistance/armor, which
-               reduce damage by a rolled amount -- immunity is an absolute, tag-matched block,
-               mirroring notes.txt's "poison damage tagged so undead are immune" example.
+            (ex: a fire elemental's immunity to "fire"). Distinct from resistance/armor, which
+            reduce damage by a rolled amount -- immunity is an absolute, tag-matched block,
+            mirroring notes.txt's "poison damage tagged so undead are immune" example.
         @param defender_name The name of the entity taking damage.
         @param damage_tags The damage tags of the incoming attack (ex: ["fire"]).
         @return True if any damage tag matches the defender's immunity_tags.
@@ -146,7 +150,7 @@ class CombatMixin:
     def calculate_damage(self, attacker_name, defender_name, ability):
         """!
         @brief Calculates and applies damage from an attacker's ability to a defender, including
-               immunity, resistance/armor reduction, and vulnerability.
+            immunity, resistance/armor reduction, and vulnerability.
         @param attacker_name The name of the entity dealing damage.
         @param defender_name The name of the entity taking damage.
         @param ability A table with damage_value {dice, pips, bonus} and damage_tags, such as a weapon, spell, or innate ability.
@@ -262,10 +266,10 @@ class CombatMixin:
     def find_attack_ability(self, entity_name, skill_name):
         """!
         @brief Finds the entity's equipped weapon or innate ability that uses the given skill and deals damage.
-               An equipped weapon matching skill_name always wins over an ability/technique that
-               also matches it (ex: gladstone's plain longsword swing over "cleave", both usable
-               via "blades") -- there's no player-facing way to choose a technique over a basic
-               attack on the same skill yet; see CLAUDE.md's cleave note.
+            An equipped weapon matching skill_name always wins over an ability/technique that
+            also matches it (ex: gladstone's plain longsword swing over "cleave", both usable
+            via "blades") -- there's no player-facing way to choose a technique over a basic
+            attack on the same skill yet; see CLAUDE.md's cleave note.
         @param entity_name The name of the acting entity.
         @param skill_name The skill being used.
         @return The matching weapon/ability table (with damage_value and damage_tags), or None.
@@ -287,9 +291,9 @@ class CombatMixin:
     def ability_matches_skill(self, ability, skill_name):
         """!
         @brief Whether an ability/weapon's "skill" field matches the given skill name -- either
-               a single skill (ex: a weapon's own skill) or, for a multi-skill technique (ex:
-               techniques.toml's cleave, usable via either "blades" or "axes"), a list any one
-               of which counts as a match.
+            a single skill (ex: a weapon's own skill) or, for a multi-skill technique (ex:
+            techniques.toml's cleave, usable via either "blades" or "axes"), a list any one
+            of which counts as a match.
         @param ability The ability/weapon/spell/technique table to check.
         @param skill_name The skill being used.
         @return True if skill_name matches, directly or via list membership.
@@ -302,14 +306,14 @@ class CombatMixin:
     def resolve_ability(self, ability):
         """!
         @brief Resolves one entry from an entity's flat abilities list (mirroring how
-               "inventory" is a flat list of item names) to its definition table. An entry
-               is either a fully inlined table (ex: gladstone's "punch", wolf's "bite" --
-               innate abilities unique to that one entity, not shared anywhere else) or a
-               plain string naming a shared catalog entity (ex: gladstone's "fireball",
-               which points at the standalone spell defined once in spells.toml and looked
-               up here the same way equipped items are looked up by name via
-               self.entities). Keeps that shared data in one place instead of requiring
-               every caster to carry its own copy that can drift out of sync.
+            "inventory" is a flat list of item names) to its definition table. An entry
+            is either a fully inlined table (ex: gladstone's "punch", wolf's "bite" --
+            innate abilities unique to that one entity, not shared anywhere else) or a
+            plain string naming a shared catalog entity (ex: gladstone's "fireball",
+            which points at the standalone spell defined once in spells.toml and looked
+            up here the same way equipped items are looked up by name via
+            self.entities). Keeps that shared data in one place instead of requiring
+            every caster to carry its own copy that can drift out of sync.
         @param ability Either an ability/spell/technique table, or a string name to look up.
         @return The resolved ability table, or None if a string reference doesn't match
                 any loaded entity.
@@ -321,11 +325,11 @@ class CombatMixin:
     def resolve_named_ability(self, entity_name, ability_name):
         """!
         @brief Checks whether ability_name literally names one of entity_name's own abilities
-               (ex: NLPCore matched "I cleave through them" directly to the technique "cleave"
-               rather than the plain skill "blades" it happens to share with an equipped
-               weapon). This is what lets a named technique/spell win over
-               find_attack_ability's equipped-weapon-first priority -- the exact ability is
-               already known here, rather than inferred from a skill name afterward.
+            (ex: NLPCore matched "I cleave through them" directly to the technique "cleave"
+            rather than the plain skill "blades" it happens to share with an equipped
+            weapon). This is what lets a named technique/spell win over
+            find_attack_ability's equipped-weapon-first priority -- the exact ability is
+            already known here, rather than inferred from a skill name afterward.
         @param entity_name The name of the acting entity.
         @param ability_name The candidate ability name (ex: action_detected's "skill" field).
         @return The resolved ability table if entity_name actually has it, else None.
@@ -340,9 +344,9 @@ class CombatMixin:
     def select_ability_skill(self, entity_name, ability):
         """!
         @brief Picks which single skill to roll an ability with, when its "skill" field lists
-               multiple options (ex: cleave's ["blades", "axes"]) -- the entity's highest-rated
-               skill among them, using the same rating convention as get_opposing_skill
-               (dice*3 + pips). A single-string "skill" is returned unchanged.
+            multiple options (ex: cleave's ["blades", "axes"]) -- the entity's highest-rated
+            skill among them, using the same rating convention as get_opposing_skill
+            (dice*3 + pips). A single-string "skill" is returned unchanged.
         @param entity_name The name of the entity attempting the ability.
         @param ability The ability table.
         @return The resolved skill name to roll, or None if the ability has no skill at all.
@@ -369,12 +373,12 @@ class CombatMixin:
     def choose_behavior(self, entity_name):
         """!
         @brief Picks the first entry in an entity's [[entity.behavior]] list whose
-               requirements are currently met, in declaration order -- the same
-               {field, operator, value} requirement engine [[status]] already uses
-               (entity_matches_requirements), just read from "behavior" instead of
-               "status". Ex: creatures.toml's wolf has one behavior, "always attack
-               while hp_per_remain >= 0.01", so it keeps attacking until it's
-               effectively dead and then simply stops matching any behavior at all.
+            requirements are currently met, in declaration order -- the same
+            {field, operator, value} requirement engine [[status]] already uses
+            (entity_matches_requirements), just read from "behavior" instead of
+            "status". Ex: creatures.toml's wolf has one behavior, "always attack
+            while hp_per_remain >= 0.01", so it keeps attacking until it's
+            effectively dead and then simply stops matching any behavior at all.
         @param entity_name The name of the entity choosing a behavior.
         @return The first matching behavior definition, or None if none match (or
                 the entity has no behavior list at all).
@@ -387,19 +391,19 @@ class CombatMixin:
     def resolve_behavior_action(self, entity_name, target_name):
         """!
         @brief Resolves an entity's currently-chosen behavior as an opposed action against a
-               target. A behavior names a specific *action* (ex: creatures.toml's wolf names
-               "bite", one of its own abilities) rather than a bare skill -- reusing
-               resolve_named_ability + select_ability_skill, the exact same lookup the
-               player's own named-technique path (ex: "cleave") already uses, rather than
-               going through find_attack_ability's equipped-weapon-first priority. That
-               priority exists to disambiguate a skill name shared by multiple things; a
-               behavior already knows exactly which ability it means, so there's nothing
-               to disambiguate.
+            target. A behavior names a specific *action* (ex: creatures.toml's wolf names
+            "bite", one of its own abilities) rather than a bare skill -- reusing
+            resolve_named_ability + select_ability_skill, the exact same lookup the
+            player's own named-technique path (ex: "cleave") already uses, rather than
+            going through find_attack_ability's equipped-weapon-first priority. That
+            priority exists to disambiguate a skill name shared by multiple things; a
+            behavior already knows exactly which ability it means, so there's nothing
+            to disambiguate.
         @param entity_name The name of the acting entity (ex: a wolf).
         @param target_name The name of the entity being acted against (ex: the player).
         @return The behavior's resolution result dict (same shape as resolve_opposed_action's,
-                plus "damage" on a successful hit), or None if no behavior currently matches
-                or its named action isn't actually one of the entity's own abilities.
+            plus "damage" on a successful hit), or None if no behavior currently matches
+            or its named action isn't actually one of the entity's own abilities.
         """
         behavior = self.choose_behavior(entity_name)
         if behavior is None:

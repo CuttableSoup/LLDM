@@ -110,8 +110,8 @@ class GUICore:
     def request_save(self):
         """!
         @brief Publishes "save_requested" with the slot-name field's current text -- the same
-               event NLPCore's text intercept publishes for "save as <slot>", so DMCore/LLMCore
-               handle it identically regardless of which trigger fired it.
+            event NLPCore's text intercept publishes for "save as <slot>", so DMCore/LLMCore
+            handle it identically regardless of which trigger fired it.
         """
         slot_name = self.slot_entry.get().strip()
         if not slot_name:

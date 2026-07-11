@@ -1,24 +1,27 @@
 import json
 import os
 
+from DM_Types import DMCoreProtocol
 
-class PersistenceMixin:
+
+class PersistenceMixin(DMCoreProtocol):
     """!
     @brief Save/load persistence to Saves/<slot_name>/dm_state.json (DMCore mixin -- only ever
-           composed into DMCore, never instantiated on its own; relies on
-           self.entities/self.event_bus/self.player_name/self.round_number/self.current_target/
-           self.scenario_key/self.scenario_entities/self.scenario, set up by DMCore.__init__).
-           load_game/save_game call back into RulesMixin's load_rules/load_scenario_definition/
-           load_scenario and StatusMixin's get_current_hp, mirroring DMCore.__init__'s own
-           bootstrap sequence.
+        composed into DMCore, never instantiated on its own; relies on
+        self.entities/self.event_bus/self.player_name/self.round_number/self.current_target/
+        self.scenario_key/self.scenario_entities/self.scenario, set up by DMCore.__init__).
+        load_game/save_game call back into RulesMixin's load_rules/load_scenario_definition/
+        load_scenario and StatusMixin's get_current_hp, mirroring DMCore.__init__'s own
+        bootstrap sequence. Inherits DMCoreProtocol purely so type checkers can resolve
+        these shared attributes/cross-mixin methods -- see DM_Types.py.
     """
 
     def _save_slot_dir(self, slot_name):
         """!
         @brief Resolves a save slot name to its directory under Saves/. LLMCore computes this
-               same path independently (it has no reference to DMCore, by design -- the two
-               only ever communicate through events) and must be kept in sync with it, since
-               both write sibling files into the same slot directory.
+            same path independently (it has no reference to DMCore, by design -- the two
+            only ever communicate through events) and must be kept in sync with it, since
+            both write sibling files into the same slot directory.
         @param slot_name The save slot's name, as given by the player.
         @return The absolute directory path for this slot. os.path.basename strips any
                 path-separator components first, so a slot name can't escape Saves/ (ex: a
@@ -31,14 +34,14 @@ class PersistenceMixin:
     def save_game(self, slot_name):
         """!
         @brief Writes this core's mechanical state to Saves/<slot_name>/dm_state.json -- a
-               diff from a fresh instantiation (round_number, scenario_entities, and each
-               instance's hp/active_conditions/currency/inventory), not a raw dump of
-               self.entities, which also holds every static template. Loading re-instantiates
-               fresh from Rules/Fantasy TOML and overlays this diff on top, so a save doesn't
-               freeze stale stats if templates are edited between sessions. LLMCore
-               independently saves its own sibling file (context_window) for the same slot --
-               see CLAUDE.md's "Saving and loading" section for why the two cores don't share
-               one combined file.
+            diff from a fresh instantiation (round_number, scenario_entities, and each
+            instance's hp/active_conditions/currency/inventory), not a raw dump of
+            self.entities, which also holds every static template. Loading re-instantiates
+            fresh from Rules/Fantasy TOML and overlays this diff on top, so a save doesn't
+            freeze stale stats if templates are edited between sessions. LLMCore
+            independently saves its own sibling file (context_window) for the same slot --
+            see CLAUDE.md's "Saving and loading" section for why the two cores don't share
+            one combined file.
         @param slot_name The save slot's name (used as a directory name under Saves/).
         """
         slot_dir = self._save_slot_dir(slot_name)
@@ -71,26 +74,26 @@ class PersistenceMixin:
     def load_game(self, slot_name):
         """!
         @brief Restores mechanical state from Saves/<slot_name>/dm_state.json: re-reads every
-               Rules/Fantasy/*.toml template fresh via load_rules, then reloads the saved
-               scenario via the same load_scenario_definition/load_scenario path __init__
-               uses, then overlays each instance's saved hp/active_conditions/currency/
-               inventory on top. A saved instance with no matching entity after re-instancing
-               (ex: the scenario file changed) is skipped rather than crashing.
+            Rules/Fantasy/*.toml template fresh via load_rules, then reloads the saved
+            scenario via the same load_scenario_definition/load_scenario path __init__
+            uses, then overlays each instance's saved hp/active_conditions/currency/
+            inventory on top. A saved instance with no matching entity after re-instancing
+            (ex: the scenario file changed) is skipped rather than crashing.
 
-               The load_rules call is not optional: self.entities holds both static templates
-               and live instances under the same keys (a single-occurrence instance like
-               "wolf" *overwrites* self.entities["wolf"] the moment load_scenario first runs --
-               see "Scenario instancing" in CLAUDE.md), so calling load_scenario() alone would
-               re-instance from whatever's currently sitting in self.entities, which after the
-               very first load is the *live, possibly-mutated instance*, not the pristine
-               template. Re-running load_rules first is what actually makes a resumed save
-               pick up current TOML stats rather than freezing stale in-memory ones.
+            The load_rules call is not optional: self.entities holds both static templates
+            and live instances under the same keys (a single-occurrence instance like
+            "wolf" *overwrites* self.entities["wolf"] the moment load_scenario first runs --
+            see "Scenario instancing" in CLAUDE.md), so calling load_scenario() alone would
+            re-instance from whatever's currently sitting in self.entities, which after the
+            very first load is the *live, possibly-mutated instance*, not the pristine
+            template. Re-running load_rules first is what actually makes a resumed save
+            pick up current TOML stats rather than freezing stale in-memory ones.
 
-               Publishes "game_loaded" on success -- deliberately not "scenario_loaded", so
-               LLMCore restores its own saved state silently instead of narrating a brand-new
-               opening scene on every resume. Publishes "game_load_failed" if the slot doesn't
-               exist, so the player gets feedback rather than the request silently doing
-               nothing (same rule action_not_understood already follows for unmatched input).
+            Publishes "game_loaded" on success -- deliberately not "scenario_loaded", so
+            LLMCore restores its own saved state silently instead of narrating a brand-new
+            opening scene on every resume. Publishes "game_load_failed" if the slot doesn't
+            exist, so the player gets feedback rather than the request silently doing
+            nothing (same rule action_not_understood already follows for unmatched input).
         @param slot_name The save slot's name to load.
         """
         path = os.path.join(self._save_slot_dir(slot_name), "dm_state.json")
@@ -134,8 +137,8 @@ class PersistenceMixin:
     def _on_save_requested(self, data):
         """!
         @brief Event handler for a save request (from NLPCore's text intercept or a GUI/Textual
-               button, both publishing the same event) -- a missing/blank slot name just logs
-               a warning rather than saving to some default location unasked.
+            button, both publishing the same event) -- a missing/blank slot name just logs
+            a warning rather than saving to some default location unasked.
         @param data The "save_requested" payload ({"slot": slot_name}).
         """
         slot_name = data.get("slot")
