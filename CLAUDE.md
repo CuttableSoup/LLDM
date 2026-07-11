@@ -71,7 +71,10 @@ resolves it → either `round_resolved` (combat) or `action_resolved` (no combat
 narrates → `llm_response_ready` → GUI/Textual display it.
 
 Inside `DMCore._on_action_detected`:
-1. Picks a target via `_get_target_name()` — first non-player entry in `self.scenario_entities`.
+1. Resolves against `self.current_target` — the player's persisted combat target (see
+   "Targeting and multi-actor combat rounds" below), not a freshly-recomputed value. An
+   explicit `data["target"]` (from `NLPCore.map_to_target`) can redirect it first, if
+   confidently matched and validated.
 2. If there's a target, `resolve_opposed_action`: finds the defender's **highest-rated**
    matching skill from the attacker's skill's `opposes` list (rating = `dice*3 + pips`, since
    3 pips = 1 die per the D6 system), rolls it as the difficulty. No target/no matching skill
@@ -93,18 +96,19 @@ Inside `DMCore._on_action_detected`:
    (no attitudes data) and ad-hoc test entities like `practice_dummy` still batch into
    `round_resolved` without needing any attitude data added — only entities meant to be
    dialogue partners (ex: `npcs.toml`'s `innkeeper`, disposition `30`) need an explicit
-   positive default. There's still no removal of dead entities from `scenario_entities`
-   (a known gap noted below), so a hostile target already at 0 HP still counts as "in combat."
-   If in combat, `self.round_number` increments and the result publishes as `round_resolved`
-   (narrated once, as a round summary). Otherwise (no target, or a non-hostile target like a
-   tavern NPC) it publishes immediately as `action_resolved` (narrated per skill use) — this
-   is also the path a *dialogue* skill check (ex: `charisma`) takes against a friendly NPC.
-   Only one player action is resolved per call, so a "round" is one player action plus (if
-   the target has matching `[[entity.behavior]]` data) that same target's own counter-attack
-   — see "Entity behavior (enemy turns)" below. The `round_resolved` payload carries a single
-   player result (with the target's response nested as `enemy_action`, not a separate list),
-   ready to extend further if/when true multi-actor rounds (multiple live enemies each acting)
-   are added.
+   positive default. `scenario_entities` still never removes a dead entity (it stays in the
+   list forever, at 0 HP), but `current_target` itself is never left pointing at one past the
+   end of a round — see "Targeting and multi-actor combat rounds" below for how that's now
+   handled. If in combat, `self.round_number` increments and the result publishes as
+   `round_resolved` (narrated once, as a round summary). Otherwise (no target, or a
+   non-hostile target like a tavern NPC) it publishes immediately as `action_resolved`
+   (narrated per skill use) — this is also the path a *dialogue* skill check (ex: `charisma`)
+   takes against a friendly NPC. Only one player action is resolved per call, so a "round" is
+   one player action plus every other living scene entity's own turn (enemies attacking the
+   player, allies attacking `current_target`) — see "Entity behavior (enemy turns)" and
+   "Targeting and multi-actor combat rounds" below. The `round_resolved` payload carries the
+   single player result plus `"turns"`, a list of every other participant's resolved action
+   (each tagged with `"actor"`), covering allies and enemies alike in one round.
 
 ## Narration triggers
 
@@ -226,8 +230,11 @@ call `load_scenario()` again — it's not re-derived automatically. Tests that d
 named scenario file backs it (ex: `TestScenarioLoading`'s ad-hoc single-wolf scenarios in
 `test_all.py`) still just assign a plain dict rather than adding a new file under `scenarios/`.
 
-**Known gap:** `_get_target_name()` always returns the *first* non-player instance. No
-targeting logic, no moving on when something dies, no band/range awareness yet.
+`_get_target_name()` still always returns the *first* non-player instance — that's now
+deliberately reserved for non-combat interaction resolution (item interactions, entity tests
+against objects like the chest), which never needs hostility-awareness. Combat targeting
+itself moved to `self.current_target` (see "Targeting and multi-actor combat rounds"); no
+band/range awareness yet.
 
 **`self.entities` holds templates and live instances under the same keys, and instancing
 overwrites the template slot.** For a single-occurrence entity (ex: `gladstone`, or the first
@@ -345,26 +352,64 @@ for the roll, then `calculate_damage` with the already-known ability on a succes
 entity's own abilities.
 
 **Wired into `_on_action_detected`'s existing combat branch, not a separate turn loop.**
-Right after a round's `round_number` increments, the target (if hostile) gets
-`resolve_behavior_action(target_name, self.player_name)` called on it; a non-`None` result is
-attached as `result["enemy_action"]` on the same `round_resolved` payload — deliberately not a
-second `round_resolved` publish, so every existing "one `round_resolved` per player action"
-assumption (tests, narration counting) still holds. A target with no `behavior` data at all
-(ex: `practice_dummy`, most ad-hoc test entities) just doesn't counter-attack, silently and
-without error — `enemy_action` is simply absent from the result, not present-but-empty.
+Right after a round's `round_number` increments, every other living scene entity (not just
+`current_target`) gets `resolve_behavior_action(entity_name, opponent)` called on it, where
+`opponent` is the player (if the entity is hostile) or `current_target` (if not — see
+"Targeting and multi-actor combat rounds" below). Non-`None` results are collected into
+`result["turns"]` on the same `round_resolved` payload — deliberately not one publish per
+actor, so every existing "one `round_resolved` per player action" assumption (tests, narration
+counting) still holds. An entity with no `behavior` data at all (ex: `practice_dummy`, most
+ad-hoc test entities) just doesn't act, silently and without error — it's simply absent from
+`turns`, which itself is absent entirely (not present-but-empty) when nobody else acted.
 
 **`LLMCore._describe_outcome` takes an optional `actor` param now** (default `"the player"`)
-so the same roll/damage-description builder can narrate the enemy's swing without
-misattributing it — ex: `generate_round_response` calls it a second time with
-`actor=action_result["defender"]` for `enemy_action`. Also: the leading `"X attempts: ..."`
-line is now omitted entirely when there's no `"input"` key (a behavior-driven action has no
-free-text input the way a player's does), rather than printing an empty quoted string.
+so the same roll/damage-description builder can narrate any other participant's action without
+misattributing it — ex: `generate_round_response` calls it once per entry in `turns`, with
+`actor=turn["actor"]`. Also: the leading `"X attempts: ..."` line is now omitted entirely when
+there's no `"input"` key (a behavior-driven action has no free-text input the way a player's
+does), rather than printing an empty quoted string.
 
-**Known limitation, not yet addressed:** every hostile target counter-attacks the player
-specifically (`resolve_behavior_action(target_name, self.player_name)` is hardcoded), and only
-the single auto-selected `_get_target_name()` target ever acts — this only makes the existing
-one-attacker-one-defender loop mutual, it doesn't add multi-enemy turn order. Revisit once
-real targeting (see "Open threads") exists.
+## Targeting and multi-actor combat rounds
+
+`self.current_target` is the player's persisted combat target — distinct from
+`_get_target_name()`, which stays reserved for non-combat interaction resolution (item
+interactions, entity tests) and is untouched by any of this. `_choose_combat_target()` (in
+`DM_Core.py`, alongside `_get_target_name()`) picks it: the first living, hostile-toward-the-
+player entity in `scenario_entities` order, falling back to the first *living* non-player
+entity if nothing hostile remains (ex: every wolf dead, only the ally left), and finally to
+`None` if nothing is alive at all. `RulesMixin.load_scenario()` calls it at the end of every
+load — `__init__`, `load_game`, and any ad-hoc test scenario reassignment — so `current_target`
+never drifts out of sync with `scenario_entities`.
+
+**Ally vs. enemy is derived, not a new TOML field.** An entity is an enemy (attacks the player)
+if `is_hostile(entity, player_name)`; otherwise, if it has its own `[[entity.behavior]]` data,
+it's treated as an ally and attacks `current_target` instead. `creatures.toml`'s `wolf`/`fire
+elemental` and `characters.toml`'s `gladstone` all have an `[entity.allies]`/`[entity.enemies]`
+table (`name = [...]`/`supertype = [...]`) — **this is unused, dead data, not read by any code,
+and deliberately not what ally/enemy routing uses.** `characters.toml`'s `thane` (a mercenary
+fighting at gladstone's side in the `arena` scenario) is the reference ally: positive
+`[entity.attitudes] default` disposition toward everyone (so `is_hostile(thane, gladstone)` is
+false) plus its own `bite`-shaped `[[entity.behavior]]`/`[[entity.abilities]]` pair is the
+entire recipe — no special-casing anywhere in the resolution code.
+
+**`current_target` only advances once, at the end of the round, if it died** — not interrupted
+mid-round by an earlier actor's kill (ex: an ally finishing off the target before the round's
+own narration is even built). Everyone who acts that round (player included) resolves against
+whichever target was current at the *start* of the round.
+
+**Explicit player-driven targeting** comes from `NLPCore.map_to_target(processed_text)`, the
+same embedding-match pattern as `map_to_item` — a second global index built in
+`_on_rules_loaded`, this time over every non-player `"creature"` supertype entity's
+name/description. `_on_user_input` runs it *alongside* skill matching (not as a gate the way
+item/save-load intent are): a matched skill's `action_detected` payload gets an extra
+`"target"` field when `map_to_target` clears `confidence_threshold`, attached to the *same*
+event rather than published separately. `_on_action_detected` only honors it if the name is
+actually in `scenario_entities`, hostile toward the player, and alive — same "matching is
+global, DMCore checks scene-relevance" division of labor `map_to_item` already established.
+Naming a confidently-matched but non-hostile entity (ex: "I attack thane") is silently ignored
+rather than making an ally the target. Like `map_to_item`, this has no real multi-instance
+disambiguation — "the wolf" ties break to whichever instance was declared first, since two
+plain `wolf` instances share identical name/description text to embed.
 
 ## Status/condition system
 
@@ -894,13 +939,15 @@ Roughly in the order they came up, none started yet:
 - Automatic status dismissal (`dismiss_condition` exists and is manually wired for the locked
   chest, but nothing re-evaluates `[[status]]` requirements to auto-dismiss a condition whose
   trigger no longer holds — ex: healing back above a wound tier still leaves it applied).
-- Real targeting (multiple live enemies, band/range awareness, switching target on kill) —
-  `[[entity.behavior]]` (see "Entity behavior") makes the single auto-selected target counter-
-  attack, but there's still no turn order or per-enemy behavior once more than one is present.
 - `enhance`'s variable condition design (skills/modifier parameterized per apply-site,
   mirroring how `damage_value` already works).
 - GUI `Party Status`/`Notes`/`Map` tabs have display methods but nothing publishes to them.
-- No `requirements.txt` / dependency manifest.
-- **Movement/positioning on a battle grid** — flagged as important once band/range targeting
-  (see "Real targeting" above) exists, but not started; no `move`/`go` keyword exists anywhere
+- **Movement/positioning on a battle grid** — its prerequisite (real targeting — see
+  "Targeting and multi-actor combat rounds") now exists, but band/range-aware difficulty and
+  actual movement are still separate, un-started work; no `move`/`go` keyword exists anywhere
   yet, unlike `examine`/`take`/`give`/`trade`/`open`/`close`.
+- True initiative/turn order within a combat round — every participant currently resolves in
+  `scenario_entities` declaration order, not any kind of priority/speed system.
+- Real multi-instance target disambiguation (ex: "the wounded wolf" vs. "the other one") —
+  `map_to_target` is a flat semantic match with the same duplicate-name limitation
+  `map_to_item` already has.
