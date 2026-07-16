@@ -84,6 +84,12 @@ class LLMCore:
         else:
             damage_text = ""
 
+        # Set only by DMCore._resolve_item_test on a passed check whose outcome had a truthy
+        # "reveal" key (ex: the cursed dagger's arcane check) -- the item's own "tags", handed
+        # over only now that a real roll actually earned them, never before.
+        revealed = action_result.get("revealed")
+        revealed_text = f" The check reveals: {', '.join(revealed)}." if revealed else ""
+
         loot = action_result.get("loot")
         if loot:
             gained = []
@@ -104,7 +110,7 @@ class LLMCore:
             f"{attempt_line}"
             f"Skill used: {action_result.get('skill')} "
             f"(rolled {action_result.get('roll')} vs difficulty {action_result.get('difficulty')}{opposition}) "
-            f"- the action {outcome}.{damage_text}{loot_text}{details_text}"
+            f"- the action {outcome}.{damage_text}{revealed_text}{loot_text}{details_text}"
         )
 
     def generate_scene_intro(self, scenario_data):
@@ -222,17 +228,35 @@ class LLMCore:
                 f"Narrate a brief, in-character explanation in 1-2 sentences as the Game Master."
             )
         elif intent == "examine":
+            # "revealed" is only ever set once DMCore.is_identified(item_name) is true (a
+            # passed [entity.test], ex: an arcane check) -- a plain look never carries it, so
+            # a hidden property (ex: the cursed dagger's curse) only ever reaches this prompt
+            # after a real roll actually earned it.
+            revealed = data.get("revealed")
+            revealed_text = f" Known properties: {', '.join(revealed)}." if revealed else ""
             prompt = (
                 f"The player examines \"{item_name}\".\n"
-                f"Description: {data.get('description', '')}\n"
+                f"Description: {data.get('description', '')}{revealed_text}\n"
                 f"Narrate what they observe in 2-3 sentences as the Game Master. This is only "
                 f"looking -- nothing is taken, moved, or changed."
             )
         elif intent == "open":
-            prompt = (
-                f"The player opens {container}.\n"
-                f"Narrate this in 1-2 sentences as the Game Master."
-            )
+            # Real contents (see DMCore._resolve_open_close_intent), never mechanical data --
+            # without this the LLM had nothing to narrate from and invented plausible-sounding
+            # treasure instead of what's actually inside.
+            contents = data.get("contents") or []
+            if contents:
+                contents_text = "; ".join(contents)
+                prompt = (
+                    f"The player opens {container}, revealing: {contents_text}.\n"
+                    f"Narrate this in 1-2 sentences as the Game Master, describing only what's "
+                    f"actually there -- don't invent anything else."
+                )
+            else:
+                prompt = (
+                    f"The player opens {container}, and it's empty.\n"
+                    f"Narrate this in 1-2 sentences as the Game Master."
+                )
         elif intent == "close":
             prompt = (
                 f"The player closes {container}.\n"

@@ -3,6 +3,8 @@
 @brief Receives and processes player input using semantic similarity.
 """
 
+import re
+
 import numpy as np
 from sentence_transformers import SentenceTransformer, util
 
@@ -36,6 +38,15 @@ CURRENCY_SYNONYMS = ("gold", "coin", "currency", "money")
 SAVE_PREFIXES = ("save game as ", "save as ", "save game ", "save ")
 LOAD_PREFIXES = ("load game as ", "load as ", "load game ", "load ")
 
+# map_to_action's alternate-phrasing candidates: markers that introduce a topic clause rather
+# than describing the action itself (ex: "...about the road" in "have you heard anything about
+# the road"). Truncating at the first one found gives a second, less-diluted candidate to score
+# against the same skill-phrase bank -- see the confidence-threshold dilution gotcha in
+# NLP_Core.py's module notes. Mirrors process_input's own prefix-stripping convention rather
+# than a full parse.
+TOPIC_CLAUSE_MARKERS = (" about ", " regarding ", " concerning ", " if ", " whether ", " that ")
+CLAUSE_SEPARATORS = ("--", "?", ",", ";", ":")
+
 class NLPCore:
     """!
     @brief Main class handling the interpretation of natural language input.
@@ -58,6 +69,12 @@ class NLPCore:
         # Below this cosine-similarity score, treat the input as not matching any skill at
         # all rather than forcing it onto whatever phrase happened to score highest
         self.confidence_threshold = 0.5
+        # A literal keyword hit (see _match_by_keyword) is independent evidence from the
+        # semantic score, so it's allowed to rescue a match that misses confidence_threshold
+        # on every phrasing tried -- but the matched skill's own best embedding score still has
+        # to clear this much lower floor, so a coincidental keyword collision on an otherwise
+        # unrelated sentence doesn't get accepted on keyword evidence alone.
+        self.keyword_fallback_floor = 0.2
         
         # Subscribe to rules_loaded event to build embeddings
         self.event_bus.subscribe("rules_loaded", self._on_rules_loaded)
@@ -253,15 +270,22 @@ class NLPCore:
 
         self.event_bus.publish("log_info", f"NLPCore: {len(item_phrases)} item phrases encoded for {len(set(item_indices))} items.")
 
-        # Also build creature-name embeddings, for explicit combat targeting (map_to_target) --
-        # the same pattern as item_phrases above, just over "creature" supertype entities
-        # instead of "object" ones, and excluding the player (gladstone is never a valid attack
-        # target). Global catalog, not scene-filtered -- DMCore is what checks the matched name
-        # is actually a live, hostile, in-scene entity before honoring it as current_target.
+        # Also build target-name embeddings, for explicit targeting (map_to_target) -- the same
+        # pattern as item_phrases above, just over two kinds of entity: every non-player
+        # "creature" (for combat retargeting), plus every entity carrying its own
+        # [entity.test] regardless of supertype (ex: items.toml's "cursed dagger", for an
+        # item-level skill check like an arcane curse-detection attempt -- see
+        # DMCore._resolve_item_test_target). A test-bearing entity opts into being targetable
+        # this way purely by having the data; nothing else about it changes. Global catalog,
+        # not scene-filtered -- DMCore is what checks the matched name is actually reachable
+        # (a live, hostile, in-scene creature for combat; a reachable, testable item otherwise)
+        # before honoring it.
         target_phrases = []
         target_indices = []
         for name, entity in entities_data.items():
-            if entity.get("supertype") != "creature" or entity.get("is_player"):
+            if entity.get("is_player"):
+                continue
+            if entity.get("supertype") != "creature" and not entity.get("test"):
                 continue
             target_phrases.append(name)
             target_indices.append(name)
@@ -277,7 +301,7 @@ class NLPCore:
             self.target_embeddings = None
             self.target_indices = []
 
-        self.event_bus.publish("log_info", f"NLPCore: {len(target_phrases)} target phrases encoded for {len(set(target_indices))} creatures.")
+        self.event_bus.publish("log_info", f"NLPCore: {len(target_phrases)} target phrases encoded for {len(set(target_indices))} targetable entities.")
 
     def process_input(self, player_input):
         """!
@@ -298,9 +322,64 @@ class NLPCore:
         self.event_bus.publish("log_info", f"Processing player input: {player_input} -> {processed_text}")
         return processed_text
 
+    def _generate_match_candidates(self, processed_text):
+        """!
+        @brief Builds alternate, less-diluted phrasings of the player's input to re-score
+            against the same skill-phrase bank as the full sentence. A long sentence with a
+            trailing topic clause (ex: "...about the road") or a leading aside (ex: "I'm
+            sorry -- ...") pools toward that clause's own semantics in the whole-sentence
+            embedding and away from the terse imperative skill phrases, which is what drops
+            genuinely-actionable input below confidence_threshold (see the dilution gotcha in
+            this file's module notes). Cheap and heuristic on purpose -- mirrors
+            process_input's own prefix-stripping convention rather than a full parse.
+        @param processed_text The cleaned and processed player input.
+        @return A list of candidate strings to score, always including the original text
+            first (deduplicated, order-preserving).
+        """
+        candidates = [processed_text]
+
+        for marker in TOPIC_CLAUSE_MARKERS:
+            index = processed_text.find(marker)
+            if index > 0:
+                candidates.append(processed_text[:index].strip())
+
+        for separator in CLAUSE_SEPARATORS:
+            if separator in processed_text:
+                for clause in processed_text.split(separator):
+                    clause = clause.strip()
+                    if clause:
+                        candidates.append(clause)
+
+        seen = set()
+        unique_candidates = []
+        for candidate in candidates:
+            if candidate not in seen:
+                seen.add(candidate)
+                unique_candidates.append(candidate)
+        return unique_candidates
+
+    def _match_by_keyword(self, processed_text):
+        """!
+        @brief Checks processed_text for a literal, whole-word hit against any skill's own
+            skills.toml keyword list -- the fallback map_to_action reaches for once every
+            phrasing candidate has scored below confidence_threshold semantically. Word
+            boundaries matter here (ex: skill "artistry"'s keyword "art" must not match inside
+            "start"); a multi-word keyword (ex: "black market") matches as the exact phrase.
+        @param processed_text The cleaned and processed player input.
+        @return The first matching skill's name in skills.toml declaration order, or None.
+        """
+        for name, skill in self.skills_data.items():
+            for keyword in skill.get("keywords", []):
+                if re.search(rf"\b{re.escape(keyword)}\b", processed_text):
+                    return name
+        return None
+
     def map_to_action(self, processed_text):
         """!
         @brief Maps the processed text to a specific skill or action using semantic similarity.
+            Tries several phrasings of the input (see _generate_match_candidates) against the
+            full skill-phrase bank in one batched call, and falls back to a literal keyword hit
+            (see _match_by_keyword) if every phrasing still misses confidence_threshold.
         @param processed_text The cleaned and processed player input.
         @return A tuple of (skill_name, confidence_score).
         """
@@ -308,27 +387,46 @@ class NLPCore:
             self.event_bus.publish("log_error", "NLPCore: Skill embeddings not initialized.")
             return None, 0.0
 
-        # Encode the player input
-        input_embedding = self.model.encode(processed_text, convert_to_tensor=True)
+        candidates = self._generate_match_candidates(processed_text)
+        candidate_embeddings = self.model.encode(candidates, convert_to_tensor=True)
 
-        # Compute cosine similarity between input and ALL phrases
-        cosine_scores = util.cos_sim(input_embedding, self.all_embeddings)[0]
-
-        # Find the best match among all phrases
-        best_phrase_idx = np.argmax(cosine_scores.cpu().numpy())
-        best_score = cosine_scores[best_phrase_idx].item()
+        # cosine_scores is (num_candidates x num_phrases) -- the best (candidate, phrase) pair
+        # anywhere in the matrix wins, so a topic-stripped or clause-split phrasing can win over
+        # the full sentence without needing to know in advance which one will score highest.
+        cosine_scores = util.cos_sim(candidate_embeddings, self.all_embeddings).cpu().numpy()
+        best_candidate_idx, best_phrase_idx = np.unravel_index(np.argmax(cosine_scores), cosine_scores.shape)
+        best_score = cosine_scores[best_candidate_idx, best_phrase_idx].item()
         best_skill = self.skill_indices[best_phrase_idx]
 
-        if best_score < self.confidence_threshold:
-            self.event_bus.publish(
-                "log_info",
-                f"Best match was {best_skill} (Score: {best_score:.4f}), below confidence "
-                f"threshold ({self.confidence_threshold}) - no skill triggered."
-            )
-            return None, best_score
+        if best_score >= self.confidence_threshold:
+            matched_candidate = candidates[best_candidate_idx]
+            if matched_candidate != processed_text:
+                self.event_bus.publish(
+                    "log_info",
+                    f"Mapped input to action: {best_skill} via alternate phrasing "
+                    f"\"{matched_candidate}\" (Score: {best_score:.4f})"
+                )
+            else:
+                self.event_bus.publish("log_info", f"Mapped input to action: {best_skill} via best phrase (Score: {best_score:.4f})")
+            return best_skill, best_score
 
-        self.event_bus.publish("log_info", f"Mapped input to action: {best_skill} via best phrase (Score: {best_score:.4f})")
-        return best_skill, best_score
+        keyword_skill = self._match_by_keyword(processed_text)
+        if keyword_skill:
+            skill_phrase_positions = [i for i, name in enumerate(self.skill_indices) if name == keyword_skill]
+            keyword_score = cosine_scores[:, skill_phrase_positions].max().item()
+            if keyword_score >= self.keyword_fallback_floor:
+                self.event_bus.publish(
+                    "log_info",
+                    f"Mapped input to action: {keyword_skill} via keyword fallback (Score: {keyword_score:.4f})"
+                )
+                return keyword_skill, keyword_score
+
+        self.event_bus.publish(
+            "log_info",
+            f"Best match was {best_skill} (Score: {best_score:.4f}), below confidence "
+            f"threshold ({self.confidence_threshold}) - no skill triggered."
+        )
+        return None, best_score
 
     def map_to_item(self, processed_text):
         """!
@@ -361,16 +459,20 @@ class NLPCore:
 
     def map_to_target(self, processed_text):
         """!
-        @brief Maps the processed text to a specific creature's name using semantic similarity,
+        @brief Maps the processed text to a specific entity's name using semantic similarity,
             the same way map_to_item does for items but against target_embeddings/
-            target_indices (every non-player "creature" supertype entity, by name/description).
-            Ties between identically-named/described instances (ex: two plain "wolf"
-            instances sharing one template's text) resolve to whichever was declared first,
-            the same inherent limitation map_to_item already has for duplicate item names --
-            this isn't real multi-instance disambiguation (ex: "the wounded wolf").
+            target_indices -- every non-player "creature" (for combat retargeting) plus every
+            entity carrying its own [entity.test] regardless of supertype (ex: "cursed
+            dagger", for an item-level skill check). Matching itself doesn't distinguish the
+            two kinds of match; DMCore is what decides whether a returned name is a combat
+            redirect or an item-test target based on what the entity actually is. Ties between
+            identically-named/described instances (ex: two plain "wolf" instances sharing one
+            template's text) resolve to whichever was declared first, the same inherent
+            limitation map_to_item already has for duplicate item names -- this isn't real
+            multi-instance disambiguation (ex: "the wounded wolf").
         @param processed_text The cleaned and processed player input.
         @return A tuple of (entity_name, confidence_score); entity_name is None below
-                confidence_threshold or if no creature embeddings are loaded.
+                confidence_threshold or if no target embeddings are loaded.
         """
         if self.target_embeddings is None:
             return None, 0.0

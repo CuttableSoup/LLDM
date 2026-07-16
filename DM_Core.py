@@ -79,9 +79,10 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, RulesMixin, 
             the player owns (ex: "cleave") -- resolve_named_ability/select_ability_skill are
             what convert that into the skill it's actually rolled with, while keeping the
             named ability itself to use directly for damage further down. "target", if
-            present, is NLPCore's best-guess entity name match (see map_to_target) -- only
-            honored if it names a live, hostile, in-scene entity; otherwise the persisted
-            self.current_target is left alone.
+            present, is NLPCore's best-guess entity name match (see map_to_target) -- honored
+            as an item-test target (see _resolve_item_test_target) if it names a reachable,
+            testable item; otherwise as a combat redirect if it names a live, hostile,
+            in-scene entity; otherwise the persisted self.current_target is left alone.
         """
         skill_name = data.get("skill")
         if not skill_name:
@@ -92,6 +93,19 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, RulesMixin, 
             skill_name = self.select_ability_skill(self.player_name, named_ability) or skill_name
 
         explicit_target = data.get("target")
+
+        # A named item (ex: "the cursed dagger") with its own [entity.test], reached one level
+        # deeper than the scene itself (already in the player's inventory, or sitting in an
+        # unlocked/open container) -- resolved as its own flat check, never as a combat
+        # redirect, since inspecting an item isn't an attack. Checked first, ahead of combat
+        # targeting, since the two are mutually exclusive outcomes for the same explicit_target.
+        item_test_target = self._resolve_item_test_target(explicit_target, skill_name)
+        if item_test_target:
+            result = self._resolve_item_test(item_test_target, skill_name)
+            result["input"] = data.get("input")
+            self.event_bus.publish("action_resolved", result)
+            return
+
         if (
             explicit_target
             and explicit_target in self.scenario_entities
@@ -257,7 +271,11 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, RulesMixin, 
 
         if intent == "examine":
             description = self.entities.get(item_name, {}).get("description", "")
-            resolved(True, description=description, container=target_name)
+            # A plain look never surfaces a hidden property (ex: the cursed dagger's curse) --
+            # only once is_identified is true (a passed [entity.test], ex: an arcane check)
+            # does examining it start including what that check actually revealed.
+            revealed = list(self.entities.get(item_name, {}).get("tags", [])) if self.is_identified(item_name) else []
+            resolved(True, description=description, container=target_name, revealed=revealed)
         elif intent == "trade":
             price = self.entities.get(item_name, {}).get("value", 0)
             buyer_currency = self.entities.get(self.player_name, {}).get("currency", 0)
@@ -292,13 +310,85 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, RulesMixin, 
                 resolved(False, reason="already_open", container=target_name)
                 return
             self.dismiss_condition(target_name, "closed")
-        else:
-            if self.is_closed(target_name):
-                resolved(False, reason="already_closed", container=target_name)
-                return
-            self.apply_condition(target_name, "closed", duration="permanent", dismiss="")
+            # Real contents, not a guess: each item's own describe_character() output (its
+            # flavor description only -- the same purely-descriptive, no-mechanical-data
+            # field selection describe_character already uses for entities) -- never its
+            # "tags"/damage_value/etc., so a cursed item's actual curse tag is never handed
+            # to the LLM here. Without this, "open the chest" had nothing to narrate from and
+            # invented plausible-sounding treasure instead of the real contents.
+            contents = [
+                description for description in (
+                    self.describe_character(item_name)
+                    for item_name in self.entities.get(target_name, {}).get("inventory", [])
+                )
+                if description
+            ]
+            resolved(True, container=target_name, contents=contents)
+            return
 
+        if self.is_closed(target_name):
+            resolved(False, reason="already_closed", container=target_name)
+            return
+        self.apply_condition(target_name, "closed", duration="permanent", dismiss="")
         resolved(True, container=target_name)
+
+    def _resolve_item_test_target(self, target_name, skill_name):
+        """!
+        @brief Resolves target_name to an item entity whose own [entity.test] accepts
+            skill_name, if that item is actually reachable right now -- either already in the
+            player's own inventory, or sitting in the current scene target's inventory (and
+            that container isn't locked or closed). This is what lets a skill check be aimed
+            at something one level *deeper* than the scene itself (ex: "I check the dagger for
+            curses" with arcane, once it's inside the chest or already picked up) -- a
+            scene-level target's own [entity.test] (ex: the chest's own lock) was already
+            reachable via self.current_target before this existed; this only closes the gap
+            for an item *contained* by the scene, not the scene target itself.
+        @param target_name NLPCore's best-guess entity name match (see map_to_target), or None.
+        @param skill_name The skill the player is attempting to use.
+        @return target_name itself if it resolves to a reachable, testable item for this
+                skill, else None.
+        """
+        if not target_name:
+            return None
+        test = self.entities.get(target_name, {}).get("test")
+        if not test or not self.is_test_available(target_name, test, skill_name):
+            return None
+
+        if target_name in self.entities.get(self.player_name, {}).get("inventory", []):
+            return target_name
+
+        container_name = self._get_target_name()
+        if (
+            container_name
+            and not self.is_locked(container_name)
+            and not self.is_closed(container_name)
+            and target_name in self.entities.get(container_name, {}).get("inventory", [])
+        ):
+            return target_name
+
+        return None
+
+    def _resolve_item_test(self, item_name, skill_name):
+        """!
+        @brief Resolves a flat [entity.test] check against a reachable item (see
+            _resolve_item_test_target) -- the item-level counterpart to _on_action_detected's
+            own scene-target test branch, kept as a separate path since an item is never a
+            combat target (no round, no defender_details, no damage).
+        @param item_name The item entity's name (already confirmed reachable/testable by
+            _resolve_item_test_target).
+        @param skill_name The skill the player is attempting to use.
+        @return A resolve_action-shaped result dict, plus "revealed" (the item's own "tags"
+                list) if the check passed and its outcome had a truthy "reveal" key.
+        """
+        test = self.entities[item_name]["test"]
+        result = self.resolve_action(self.player_name, skill_name, test.get("difficulty", 0))
+        result["defender"] = item_name
+        result["opposing_skill"] = None
+        outcome = test.get("pass") if result["success"] else test.get("fail")
+        self.apply_test_outcome(item_name, outcome)
+        if self.is_identified(item_name):
+            result["revealed"] = list(self.entities[item_name].get("tags", []))
+        return result
 
     def _get_target_name(self):
         """!

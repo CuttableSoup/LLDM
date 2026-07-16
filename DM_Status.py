@@ -149,6 +149,16 @@ class StatusMixin(DMCoreProtocol):
         """
         return "closed" in self.entities.get(entity_name, {}).get("active_conditions", {})
 
+    def is_identified(self, entity_name):
+        """!
+        @brief Whether an entity (ex: the cursed dagger) has had a hidden property revealed by
+            a passed [entity.test] whose outcome had a truthy "reveal" key (ex: an arcane
+            check). Mirrors is_locked/is_closed exactly.
+        @param entity_name The name of the entity to check.
+        @return True if "identified" is in the entity's active_conditions.
+        """
+        return "identified" in self.entities.get(entity_name, {}).get("active_conditions", {})
+
     def is_test_available(self, entity_name, test, skill_name):
         """!
         @brief Whether an entity's [entity.test] can currently be attempted with the given
@@ -178,10 +188,14 @@ class StatusMixin(DMCoreProtocol):
     def apply_test_outcome(self, entity_name, outcome):
         """!
         @brief Applies the pass/fail consequence of an entity's [entity.test] (ex: a chest's
-            lock check), dispatching purely on which keys are present in outcome -- no
-            "action" enum needed. A key of "dismiss_condition" removes that condition; a key
-            of "condition" applies a new one (the same {condition, duration, dismiss} shape
-            [[status]]'s own apply/test.fail blocks already use); a truthy "loot" key hands
+            lock check, or an item's own hidden-property check), dispatching purely on which
+            keys are present in outcome -- no "action" enum needed. A key of
+            "dismiss_condition" removes that condition; a key of "condition" applies a new one
+            (the same {condition, duration, dismiss} shape [[status]]'s own apply/test.fail
+            blocks already use); a truthy "reveal" key applies the permanent "identified"
+            condition (ex: the cursed dagger's arcane check) -- it doesn't say *what* was
+            revealed, that's read back off the entity's own data (ex: its "tags" field) by
+            whoever narrates it, once is_identified is true; a truthy "loot" key hands
             everything (currency + inventory) to the player via loot_entity. Any combination
             can be present at once, or the whole outcome can be empty/omitted for no consequence.
         @param entity_name The name of the entity the test was performed against.
@@ -200,6 +214,8 @@ class StatusMixin(DMCoreProtocol):
                 entity_name, condition_name,
                 duration=outcome.get("duration"), dismiss=outcome.get("dismiss"),
             )
+        if outcome.get("reveal"):
+            self.apply_condition(entity_name, "identified", duration="permanent", dismiss="")
         if outcome.get("loot"):
             return self.loot_entity(entity_name, self.player_name)
         return None

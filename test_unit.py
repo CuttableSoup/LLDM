@@ -3,9 +3,7 @@ import json
 import os
 import shutil
 import threading
-import time
 import unittest
-import urllib.request
 from unittest.mock import patch
 
 import pytest
@@ -16,14 +14,6 @@ from LLM_Core import LLMCore
 from NLP_Core import NLPCore
 from Textual_Core import TextualCore
 from textual.widgets import Button, Input, RichLog, TabbedContent
-
-
-def _lm_studio_reachable():
-    try:
-        urllib.request.urlopen("http://127.0.0.1:1234/v1/models", timeout=2)
-        return True
-    except Exception:
-        return False
 
 
 class TestGameBoot(unittest.TestCase):
@@ -60,12 +50,30 @@ class TestGameBoot(unittest.TestCase):
 
 class TestNlpConfidenceThreshold(unittest.TestCase):
     # setUpClass (not setUp) so the slow sentence-transformers load only happens once for
-    # both test methods in this class.
+    # every test method in this class, not once per method.
     @classmethod
     def setUpClass(cls):
         cls.event_bus = EventBus()
         cls.nlp_core = NLPCore(cls.event_bus)
         cls.dm_core = DMCore(cls.event_bus)
+
+    def setUp(self):
+        # cls.dm_core is shared across every test in this class (setUpClass, not setUp) to
+        # avoid paying the slow model load repeatedly -- but several methods trigger *real*
+        # combat against the scenario's wolf/wolf_2 (ex: test_clear_action_still_triggers_
+        # above_threshold's "I attack with my sword"), so without a reset, HP damage
+        # accumulated silently across nominally-independent tests in alphabetical execution
+        # order. That's what made test_full_pipeline_naming_a_non_hostile_entity_does_not_
+        # redirect_current_target occasionally flaky: two earlier tests' real combat rounds
+        # could leave "wolf" already dead by the time it ran, flipping current_target to
+        # "wolf_2" out from under an assertion that never expected combat history to matter.
+        # Re-running the same load_rules/load_scenario_definition/load_scenario sequence
+        # __init__ and load_game both use resets every mutable field (hp, active_conditions,
+        # currency, inventory, round_number, current_target) back to a pristine "arena" load
+        # before each test method, without re-paying for a new NLPCore/model load.
+        self.dm_core.load_rules(os.path.join("Rules", "Fantasy"))
+        self.dm_core.load_scenario_definition(self.dm_core.scenario_key)
+        self.dm_core.load_scenario()
 
     def test_low_confidence_input_triggers_no_skill(self):
         # A greeting with no real skill/action content shouldn't be forced onto whatever
@@ -91,6 +99,40 @@ class TestNlpConfidenceThreshold(unittest.TestCase):
 
         self.assertEqual(len(detected_actions), 1)
         self.assertEqual(detected_actions[0]["skill"], "blades")
+        self.assertGreaterEqual(detected_actions[0]["score"], self.nlp_core.confidence_threshold)
+
+    def test_keyword_fallback_rescues_a_below_threshold_literal_keyword_hit(self):
+        # "bargain" isn't a keyword for anything, but "cost" is a literal keyword of
+        # "appraise" (skills.toml) and the full sentence never clears confidence_threshold on
+        # its own (~0.30 in practice) -- _match_by_keyword is what rescues this, gated on
+        # appraise's own best embedding score (still ~0.30) clearing the much lower
+        # keyword_fallback_floor rather than being accepted on keyword evidence alone.
+        detected_actions = []
+        self.event_bus.subscribe("action_detected", detected_actions.append)
+
+        self.event_bus.publish("user_input_submitted", "I'll bargain with her over the cost of supper")
+
+        self.assertEqual(len(detected_actions), 1)
+        self.assertEqual(detected_actions[0]["skill"], "appraise")
+        self.assertLess(detected_actions[0]["score"], self.nlp_core.confidence_threshold)
+        self.assertGreaterEqual(detected_actions[0]["score"], self.nlp_core.keyword_fallback_floor)
+
+    def test_alternate_phrasing_candidate_rescues_a_diluted_sentence(self):
+        # The full sentence pools toward "harvest festival plans" and never clears
+        # confidence_threshold, but _generate_match_candidates also tries the text truncated
+        # at " regarding " ("talk"), which matches charisma's own bare "talk" keyword phrase
+        # almost exactly -- this is the dilution gotcha (see NLP_Core.py's module notes)
+        # actually getting fixed by a less-diluted candidate, not by the keyword fallback.
+        detected_actions = []
+        self.event_bus.subscribe("action_detected", detected_actions.append)
+
+        self.event_bus.publish(
+            "user_input_submitted",
+            "I want to talk about something regarding the harvest festival plans",
+        )
+
+        self.assertEqual(len(detected_actions), 1)
+        self.assertEqual(detected_actions[0]["skill"], "charisma")
         self.assertGreaterEqual(detected_actions[0]["score"], self.nlp_core.confidence_threshold)
 
     def test_detect_item_intent_examine_vs_take_vs_neither(self):
@@ -330,85 +372,6 @@ class TestClarificationResponse(unittest.TestCase):
         prompt = self.llm_core.context_window[-1]["content"]
         self.assertIn("locked", prompt)
         self.assertIn("no roll involved", prompt)
-
-
-@unittest.skipUnless(_lm_studio_reachable(), "LM Studio not reachable at http://127.0.0.1:1234")
-class TestInnkeeperConversation(unittest.TestCase):
-    """!
-    @brief End-to-end conversation test against a real, running LM Studio -- the only way to
-           actually verify the LLM uses fed context (scenario setting, character roster,
-           per-turn defender_details) rather than just checking the prompt shape. Skipped
-           entirely (not failed) when LM Studio isn't reachable, so the rest of the suite
-           stays fast and network-independent.
-    """
-
-    def setUp(self):
-        self.event_bus = EventBus()
-        self.responses = []
-        self.event_bus.subscribe("llm_response_ready", self.responses.append)
-
-        self.nlp_core = NLPCore(self.event_bus)
-        self.llm_core = LLMCore(self.event_bus)
-        self.dm_core = DMCore(self.event_bus, scenario_name="tavern")
-
-        self._wait_for_responses(1)  # the scene intro, fired during DMCore.__init__
-
-    def _wait_for_responses(self, count, timeout=30):
-        deadline = time.time() + timeout
-        while len(self.responses) < count and time.time() < deadline:
-            time.sleep(0.2)
-        self.assertGreaterEqual(
-            len(self.responses), count,
-            f"Timed out waiting for the {count}th LLM response (LM Studio may be slow/unloaded).",
-        )
-
-    def _say(self, player_input):
-        self.event_bus.publish("user_input_submitted", player_input)
-        self._wait_for_responses(len(self.responses) + 1)
-        return self.responses[-1]
-
-    def test_full_conversation_with_innkeeper(self):
-        # NLPCore's confidence_threshold turns out to reject almost any naturally-phrased
-        # social action once it names a topic ("...about the road", "...her husband" etc.
-        # dilute the sentence embedding) -- only near-bare keyword phrasing like "charm her"
-        # reliably clears it for "charisma". So this conversation deliberately mixes both
-        # real paths a player will actually hit: one turn that clears the threshold (genuine
-        # action_resolved + defender_details) and natural follow-ups that don't (routed to
-        # action_not_understood's clarification response instead). Both should stay coherent
-        # and grounded, since the persistent system-message roster covers either path.
-        action_events = []
-        round_events = []
-        self.event_bus.subscribe("action_resolved", action_events.append)
-        self.event_bus.subscribe("round_resolved", round_events.append)
-
-        turns = [
-            "I try to charm her",  # verified: scores ~0.60 on "charisma", clears the threshold
-            "Have you heard anything about trouble on the road?",  # verified: ~0.41, below it
-            "I'm sorry -- what happened to your husband?",  # verified: ~0.32, below it
-        ]
-        transcript = []
-        for player_input in turns:
-            response = self._say(player_input)
-            transcript.append((player_input, response))
-            self.assertTrue(response.strip())
-            self.assertNotIn("Could not connect to the local LLM", response)
-
-        print("\n=== Innkeeper conversation transcript ===")
-        for player_input, response in transcript:
-            print(f"> {player_input}\n{response}\n")
-
-        # A friendly NPC's dialogue should never batch into combat-round narration, and the
-        # one turn that did resolve as a real action should be about the innkeeper specifically.
-        self.assertEqual(round_events, [])
-        self.assertEqual(len(action_events), 1)
-        self.assertEqual(action_events[0]["defender"], "innkeeper")
-        self.assertIn("innkeeper", action_events[0]["defender_details"])
-
-        # Deliberately NOT asserting on exact narrative content past this point (ex: that the
-        # husband question's response literally says "bandit"/"husband") -- a real run showed
-        # the LLM can convey her grief ("a deep, painful sadness... vague sigh") without ever
-        # using those words, so a keyword check on live LLM output is just flaky, not a real
-        # regression signal. The printed transcript above is how this actually gets verified.
 
 
 class TestOpposedResolution(unittest.TestCase):
@@ -1190,6 +1153,15 @@ class TestLockedChest(unittest.TestCase):
             {"locked": {"duration": "permanent"}, "closed": {"duration": "permanent"}},
         )
 
+    def test_apply_test_outcome_reveal_key_applies_identified(self):
+        self.assertFalse(self.dm_core.is_identified("chest"))
+        self.dm_core.apply_test_outcome("chest", {"reveal": True})
+        self.assertTrue(self.dm_core.is_identified("chest"))
+
+    def test_apply_test_outcome_without_reveal_key_leaves_it_unidentified(self):
+        self.dm_core.apply_test_outcome("chest", {"dismiss_condition": "locked"})
+        self.assertFalse(self.dm_core.is_identified("chest"))
+
 
 class TestItemInteraction(unittest.TestCase):
     def setUp(self):
@@ -1240,6 +1212,45 @@ class TestItemInteraction(unittest.TestCase):
         self.assertIn("runes", result["description"])
         self.assertNotIn("cursed dagger", self.dm_core.entities["gladstone"]["inventory"])
         self.assertIn("cursed dagger", self.dm_core.entities["chest"]["inventory"])
+        # Never leaked before a real check earns it -- see TestItemTargetedSkillCheck for the
+        # arcane check that's actually supposed to reveal this.
+        self.assertEqual(result["revealed"], [])
+        self.assertNotIn("cursed", result["description"])
+
+    def test_examine_surfaces_revealed_tags_once_identified(self):
+        self._unlock_the_chest()
+        self._open_the_chest()
+        self.dm_core.apply_condition("cursed dagger", "identified", duration="permanent", dismiss="")
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "examine", "item_name": "cursed dagger", "input": "I examine the cursed dagger",
+        })
+
+        result = self.resolved[-1]
+        self.assertEqual(result["revealed"], ["cursed"])
+
+    def test_open_reveals_real_contents_without_mechanical_data(self):
+        # This is what actually fixes the chest hallucinating invented treasure -- LLMCore
+        # now has the real inventory to narrate from instead of nothing at all. Built from
+        # describe_character (flavor description only) -- exactly its output and nothing
+        # more, so items.toml's "tags" field (["cursed"]) is never separately appended, even
+        # though the item's own *name* happens to contain the word "cursed" regardless.
+        self._unlock_the_chest()
+        self.dm_core._on_item_interaction_detected({
+            "intent": "open", "item_name": None, "input": "I open the chest",
+        })
+        result = self.resolved[-1]
+        self.assertTrue(result["found"])
+        self.assertEqual(result["contents"], [self.dm_core.describe_character("cursed dagger")])
+        self.assertNotIn("tags", result["contents"][0])
+
+    def test_open_an_empty_container_reports_empty_contents(self):
+        self._unlock_the_chest()
+        self.dm_core.entities["chest"]["inventory"] = []
+        self.dm_core._on_item_interaction_detected({
+            "intent": "open", "item_name": None, "input": "I open the chest",
+        })
+        self.assertEqual(self.resolved[-1]["contents"], [])
 
     def test_take_transfers_the_item(self):
         self._unlock_the_chest()
@@ -1299,6 +1310,91 @@ class TestItemInteraction(unittest.TestCase):
         result = self.resolved[-1]
         self.assertFalse(result["found"])
         self.assertEqual(result["reason"], "not_takeable")
+
+
+class TestItemTargetedSkillCheck(unittest.TestCase):
+    """!
+    @brief items.toml's "cursed dagger" carries its own [entity.test] (difficulty=8,
+        skill=["arcane"], pass.reveal=true) -- the first entity whose test is reached one
+        level *deeper* than the scene itself (an item inside a container, or already in the
+        player's inventory), via DMCore._resolve_item_test_target/_resolve_item_test rather
+        than the pre-existing current_target-based test path a scene entity like the chest
+        already used. Exercised at the DMCore level (a synthetic action_detected payload,
+        same convention TestLockedChest already uses) -- NLPCore actually producing this
+        target/skill pairing from free text is covered live in test_integration.py, since it
+        needs a real dice roll to demonstrate the reveal actually reaching a real narration.
+    """
+
+    def setUp(self):
+        self.event_bus = EventBus()
+        self.action_events = []
+        self.round_events = []
+        self.event_bus.subscribe("action_resolved", self.action_events.append)
+        self.event_bus.subscribe("round_resolved", self.round_events.append)
+        self.dm_core = DMCore(self.event_bus, scenario_name="dungeon")
+        self.dm_core.dismiss_condition("chest", "locked")
+        self.dm_core.dismiss_condition("chest", "closed")
+
+    def _check_the_dagger(self, roll_result):
+        self.dm_core.roll_dice = lambda dice, pips: roll_result
+        self.dm_core._on_action_detected({
+            "skill": "arcane", "target": "cursed dagger", "input": "I check the dagger for curses",
+        })
+
+    def test_unreachable_item_is_not_a_test_target(self):
+        # Still inside a locked, closed chest -- nothing to detect requirements the item's
+        # own test would otherwise accept.
+        self.dm_core.entities["chest"]["active_conditions"] = {"locked": {"duration": "permanent"}}
+        self.assertIsNone(self.dm_core._resolve_item_test_target("cursed dagger", "arcane"))
+
+    def test_item_in_an_open_container_is_reachable(self):
+        self.assertEqual(self.dm_core._resolve_item_test_target("cursed dagger", "arcane"), "cursed dagger")
+
+    def test_item_already_in_player_inventory_is_reachable(self):
+        self.dm_core.transfer_item("chest", "gladstone", "cursed dagger")
+        self.assertEqual(self.dm_core._resolve_item_test_target("cursed dagger", "arcane"), "cursed dagger")
+
+    def test_wrong_skill_does_not_match_the_items_test(self):
+        # "blades" isn't in the dagger's test.skill (["arcane"]) -- not a test target at all,
+        # same as any other skill against an entity whose test doesn't list it.
+        self.assertIsNone(self.dm_core._resolve_item_test_target("cursed dagger", "blades"))
+
+    def test_successful_check_reveals_tags_and_marks_identified(self):
+        self._check_the_dagger(roll_result=8)  # clears the dagger's own test difficulty (8)
+
+        self.assertEqual(self.round_events, [])  # inspecting an item is never combat
+        result = self.action_events[-1]
+        self.assertTrue(result["success"])
+        self.assertEqual(result["defender"], "cursed dagger")
+        self.assertIsNone(result["opposing_skill"])
+        self.assertEqual(result["revealed"], ["cursed"])
+        self.assertTrue(self.dm_core.is_identified("cursed dagger"))
+
+    def test_failed_check_reveals_nothing(self):
+        self._check_the_dagger(roll_result=1)  # well under the dagger's own test difficulty (8)
+
+        result = self.action_events[-1]
+        self.assertFalse(result["success"])
+        self.assertNotIn("revealed", result)
+        self.assertFalse(self.dm_core.is_identified("cursed dagger"))
+
+    def test_identified_item_blocks_a_repeat_check(self):
+        # blocks_if_condition="identified" -- once known, re-checking it is pointless and
+        # falls through to whatever an ordinary "arcane" action against current_target would
+        # do instead, exactly like the chest's own "jammed"/"locked" gating.
+        self._check_the_dagger(roll_result=8)
+        self.assertTrue(self.dm_core.is_identified("cursed dagger"))
+
+        self.assertIsNone(self.dm_core._resolve_item_test_target("cursed dagger", "arcane"))
+
+    def test_item_test_never_advances_round_number_or_touches_current_target(self):
+        starting_target = self.dm_core.current_target
+        starting_round = self.dm_core.round_number
+
+        self._check_the_dagger(roll_result=8)
+
+        self.assertEqual(self.dm_core.round_number, starting_round)
+        self.assertEqual(self.dm_core.current_target, starting_target)
 
 
 class TestOpenClose(unittest.TestCase):

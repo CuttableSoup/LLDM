@@ -97,3 +97,17 @@ bulk = 1
 value = 5
 [entity.skills]
 fortitude = { dice = 2, pips = 0 }
+
+# An arcane check against the item itself (not the chest/scene it's sitting in) -- reachable
+# once the dagger is either in the player's own inventory or sitting in an unlocked, open
+# container (see DMCore._resolve_item_test_target). blocks_if_condition stops a repeat check
+# from re-rolling something already known. "reveal" (apply_test_outcome) marks it "identified"
+# but doesn't itself say *what* was revealed -- narration reads that back off the entity's own
+# "tags" field once identified, rather than duplicating it here.
+[entity.test]
+difficulty = 8
+skill = [ "arcane" ]
+blocks_if_condition = "identified"
+
+[entity.test.pass]
+reveal = true
