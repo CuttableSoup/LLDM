@@ -6,6 +6,6 @@ sentence-transformers==5.1.2
 numpy==2.3.3
 textual==8.2.8
 
-# Test suite (test_all.py)
+# Test suite (test_unit.py)
 pytest==8.4.1
 pytest-asyncio==1.4.0

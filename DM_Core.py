@@ -163,6 +163,8 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, RulesMixin, 
             # non-hostile one (an ally) attacks self.current_target instead. An entity with no
             # matching behavior (no behavior data, or none of its requirements currently hold,
             # ex: it's already at 0 HP) simply doesn't act.
+            # TODO: no initiative/turn order -- every participant resolves in scenario_entities
+            # declaration order, not any kind of priority/speed system.
             turns = []
             for entity_name in self.scenario_entities:
                 if entity_name == self.player_name:

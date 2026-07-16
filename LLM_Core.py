@@ -279,6 +279,10 @@ class LLMCore:
                 f"Narrate this in 1-2 sentences as the Game Master."
             )
         elif intent == "trade":
+            # TODO: this phrasing reads oddly when the seller is an inanimate container (ex:
+            # a chest reused as an ad-hoc shop) -- a live run narrated the purchase as refused
+            # ("the stout object remains utterly inert...") even though the transfer
+            # mechanically succeeded. Not yet fixed.
             prompt = (
                 f"The player pays {data.get('price', 0)} currency to {container} in exchange "
                 f"for \"{item_name}\".\n"

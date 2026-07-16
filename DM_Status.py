@@ -191,8 +191,8 @@ class StatusMixin(DMCoreProtocol):
             lock check, or an item's own hidden-property check), dispatching purely on which
             keys are present in outcome -- no "action" enum needed. A key of
             "dismiss_condition" removes that condition; a key of "condition" applies a new one
-            (the same {condition, duration, dismiss} shape [[status]]'s own apply/test.fail
-            blocks already use); a truthy "reveal" key applies the permanent "identified"
+            (the same {condition, duration, dismiss} shape [[status]]'s own "apply" block
+            already uses); a truthy "reveal" key applies the permanent "identified"
             condition (ex: the cursed dagger's arcane check) -- it doesn't say *what* was
             revealed, that's read back off the entity's own data (ex: its "tags" field) by
             whoever narrates it, once is_identified is true; a truthy "loot" key hands
@@ -227,6 +227,9 @@ class StatusMixin(DMCoreProtocol):
         @param trigger The trigger name to evaluate (ex: "on_damage").
         @return The list of status definitions that were applied.
         """
+        # TODO: this only ever applies conditions, never dismisses one whose requirements have
+        # stopped holding (ex: healing back above a wound tier still leaves it applied).
+        # dismiss_condition already exists as the removal primitive; nothing calls it from here.
         matched_statuses = self.get_applicable_statuses(entity_name, trigger)
         for status in matched_statuses:
             apply_block = status.get("apply")

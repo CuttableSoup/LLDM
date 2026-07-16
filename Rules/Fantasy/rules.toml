@@ -69,7 +69,6 @@ requirements = [
     { field = "hp_per_remain", operator = "<=", value = 0.19 },
 ]
 apply = { condition = "incapacitated", duration = "permanent", dismiss = "" }
-test = { difficulty = 15, skill = ["fortitude", "willpower"], pass = "", fail = { condition = "unconscious", duration = "scene", dismiss = "" } }
 description = "Multiple fracture; laceration in vital area; heavy concussion."
 
 [[status]]
@@ -80,7 +79,6 @@ requirements = [
     { field = "hp_per_remain", operator = "<=", value = 0.09 },
 ]
 apply = { condition = "unconscious", duration = "scene", dismiss = "" }
-test = { difficulty = 15, skill = ["fortitude"], pass = "", fail = { condition = "dead", duration = "permanent", dismiss = "" } }
 description = "Multiple internal injuries."
 
 [[status]]
@@ -92,6 +90,9 @@ requirements = [
 apply = { condition = "dead", duration = "permanent", dismiss = "resurrection" }
 description = "Broken neck; punctured lung; eviscerated."
 
+# TODO: the "enhance" buff technique (removed from characters.toml, deferred) needs a
+# condition whose skills/modifier are variable per apply-site, like damage_value already is,
+# rather than fixed as below. Not designed yet.
 [[condition]]
 name = "stunned"
 modifier = { dice = -1, pips = 0, bonus = 0 }

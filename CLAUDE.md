@@ -33,44 +33,32 @@ during `__init__`, so everything that needs it must already be subscribed).
   dilution), then cosine-matches player input against all phrases. On `user_input_submitted`,
   publishes `action_detected` with the best-matching skill + score — but only if that score
   clears `self.confidence_threshold` (`0.5`); below it, `map_to_action` returns `(None, score)`,
-  and `_on_user_input` publishes `action_not_understood` instead (ex: "Hey there innkeeper"
-  used to map to "artistry" at a 0.32 score and roll a real skill check against a greeting).
-  It also separately matches free text against item names (`map_to_item`) for "examine"/"take"
-  — see "Examining and taking items" below; that path runs *before* skill matching and, if it
-  fires, skips it entirely for that input.
+  and `_on_user_input` publishes `action_not_understood` instead. It also separately matches
+  free text against item names (`map_to_item`) for "examine"/"take" — see "Examining and
+  taking items" below; that path runs *before* skill matching and, if it fires, skips it
+  entirely for that input.
   **Don't let a low-confidence input fall through to complete silence** — with nothing
   subscribed to `action_not_understood`, the player types something, nothing ever happens, and
   it looks exactly like the app hung. `LLMCore` subscribing to it (below) is what closes that
   loop; if you ever add a *new* no-match branch here, wire its feedback the same way.
-  **Gotcha found while building `TestInnkeeperConversation`:** the 0.5 threshold rejects
-  almost any *naturally-phrased* social action, not just true non-actions — adding any topic
-  ("...about the road", "...her husband") dilutes the whole-sentence embedding enough to drop
-  it below 0.5, even for genuinely-social phrasing. Only near-bare keyword phrasing (ex: "I
-  try to charm her" → processed to "charm her" → ~0.60 on `charisma`) reliably cleared it
-  before this was addressed.
-  **Partially fixed** by two additions to `map_to_action`, both scoped to skill matching only
-  (not `map_to_item`/`map_to_target`): `_generate_match_candidates` builds a handful of
-  alternate, less-diluted phrasings of the same input (truncated at a topic-clause marker like
-  `" about "`/`" regarding "`, or split on punctuation like `"--"`/`"?"`/`","`) and scores all
-  of them against the skill-phrase bank in one batched call, taking the best `(candidate,
-  phrase)` pair anywhere in the matrix rather than only ever trying the full sentence.
+  **The 0.5 threshold rejects most naturally-phrased social input**, not just true
+  non-actions — adding any topic clause to a sentence dilutes the whole-sentence embedding
+  enough to drop it below 0.5 even when the phrasing is genuinely social. Two mitigations in
+  `map_to_action`, both scoped to skill matching only (not `map_to_item`/`map_to_target`):
+  `_generate_match_candidates` builds alternate, less-diluted phrasings of the same input
+  (truncated at a topic-clause marker like `" about "`/`" regarding "`, or split on
+  punctuation) and scores all of them against the skill-phrase bank, taking the best
+  `(candidate, phrase)` pair rather than only ever trying the full sentence.
   `_match_by_keyword` is a second, independent fallback: if every candidate still misses
   `confidence_threshold`, a literal whole-word hit against the matched skill's own
   `skills.toml` `keywords` list can still rescue it — gated on that skill's own best embedding
-  score (already computed above, across every candidate) clearing the much lower
-  `keyword_fallback_floor` (`0.2`), so a coincidental keyword collision on an unrelated
-  sentence doesn't get accepted on keyword evidence alone. This is enough to turn some
-  previously-rejected phrasings into real matches (ex: "I persuade her to open up about the
-  bandit raid" now resolves to `charisma` via the keyword fallback on "persuade"; "I want to
-  talk about something regarding the harvest festival plans" resolves via the candidate
-  `"talk"` scoring ~1.0 against charisma's own bare `"talk"` keyword phrase) — but it's not a
-  full fix. A phrasing with no literal keyword and no candidate that scores well on its own
-  (ex: "Have you heard anything about trouble on the road?", still ~0.48; "I'm sorry — what
-  happened to your husband?", still ~0.37 — both still below 0.5) still falls through to
-  `action_not_understood`. See `TestNlpConfidenceThreshold`'s
+  score clearing the much lower `keyword_fallback_floor` (`0.2`), so a coincidental keyword
+  collision on an unrelated sentence doesn't get accepted on keyword evidence alone. **Not a
+  full fix** — a phrasing with no literal keyword and no candidate that scores well on its own
+  still falls through to `action_not_understood`. See `TestNlpConfidenceThreshold`'s
   `test_keyword_fallback_rescues_a_below_threshold_literal_keyword_hit` and
   `test_alternate_phrasing_candidate_rescues_a_diluted_sentence` for the mechanism in
-  isolation, and `TestInnkeeperConversation` for what still doesn't clear it in practice.
+  isolation.
 - **`LLM_Core.py`** — posts to LM Studio's OpenAI-compatible `/v1/chat/completions` on a
   background thread, rolling 100-message context window. Subscribes to four narration
   triggers rather than raw input — see "Narration triggers" below.
@@ -87,11 +75,10 @@ during `__init__`, so everything that needs it must already be subscribed).
 resolves it → either `round_resolved` (combat) or `action_resolved` (no combat) → `LLMCore`
 narrates → `llm_response_ready` → GUI/Textual display it.
 
-Inside `DMCore._on_action_detected`:
+Inside `DMCore._on_action_detected` (see its own docstring in `DM_Core.py` for the full
+parameter/target-redirect contract):
 1. Resolves against `self.current_target` — the player's persisted combat target (see
-   "Targeting and multi-actor combat rounds" below), not a freshly-recomputed value. An
-   explicit `data["target"]` (from `NLPCore.map_to_target`) can redirect it first, if
-   confidently matched and validated.
+   "Targeting and multi-actor combat rounds" below), not a freshly-recomputed value.
 2. If there's a target, `resolve_opposed_action`: finds the defender's **highest-rated**
    matching skill from the attacker's skill's `opposes` list (rating = `dice*3 + pips`, since
    3 pips = 1 die per the D6 system), rolls it as the difficulty. No target/no matching skill
@@ -167,10 +154,7 @@ includes it in the `scenario_loaded` payload; `_on_action_detected` separately a
 `result["defender_details"] = describe_character(target_name, toward_name=player_name)` per
 action, which `_describe_outcome` folds into the per-turn outcome text — belt-and-suspenders
 against the persistent roster ever being stale (ex: an NPC added to the scene after the intro
-fired, though nothing does that yet). Verified live: asking the tavern's `innkeeper` about her
-husband (her `memories` includes "Lost her husband to a bandit raid") produced narration
-referencing that loss unprompted — the data actually reaches and shapes generation, not just
-cosmetic plumbing.
+fired, though nothing does that yet).
 
 **Player is still effectively singular** — there's no party/character selection system yet —
 but `self.player_name` is no longer a bare string literal. `_resolve_player_name()` (in
@@ -342,31 +326,12 @@ requirements = [
 action = "bite"
 ```
 
-`DMCore.choose_behavior(entity_name)` walks an entity's `behavior` list **in declaration
-order** and returns the first entry whose `requirements` all currently hold — reusing
-`entity_matches_requirements` verbatim, the exact same `{field, operator, value}` engine
-`[[status]]` already used, rather than inventing a second one. This is also why a dying
-wolf needs no explicit "stop attacking" logic: `hp_per_remain >= 0.01` simply stops matching
-once its HP hits 0, same mechanism that lets `[[status]] name = "dead"` fire at
-`hp_per_remain == 0`. A future multi-behavior entity (ex: flee below some HP threshold,
+`DMCore.choose_behavior(entity_name)` and `resolve_behavior_action(entity_name, target_name)`
+(both in `DM_Combat.py`) do the actual selection and resolution — see their docstrings for the
+declaration-order matching, why a behavior names a specific `action` rather than a bare skill,
+and why this reuses `resolve_named_ability`/`select_ability_skill` instead of
+`find_attack_ability`. A future multi-behavior entity (ex: flee below some HP threshold,
 otherwise attack) is just more list entries evaluated top-down — no new code, only data.
-
-**A behavior names a specific `action`, not a bare skill.** `wolf`'s behavior names `"bite"`
-— one of its own `abilities` entries — the same way a player naming a technique directly
-(ex: "I cleave through them") resolves to an exact ability rather than a skill name (see
-"cleave" above). `DMCore.resolve_behavior_action(entity_name, target_name)` looks that action
-up via `resolve_named_ability(entity_name, action_name)` (ownership-gated: the name must
-match one of `entity_name`'s own abilities, logging a warning and returning `None` otherwise
-— ex: a typo'd action name fails safe rather than raising or rolling against nothing), then
-`select_ability_skill` to pick which skill to roll it with (handles a multi-skill ability's
-list the same way `cleave`'s `["blades","axes"]` is picked for the player). This deliberately
-reuses that exact pair of helpers instead of going through `find_attack_ability` — that
-function's equipped-weapon-first priority exists to disambiguate a skill name shared by
-several things, but a behavior already names the exact ability, so there's nothing to
-disambiguate. Resolved from there exactly like the player's path: `resolve_opposed_action`
-for the roll, then `calculate_damage` with the already-known ability on a success. Returns
-`None` if `choose_behavior` found nothing to do, or its named action isn't one of the
-entity's own abilities.
 
 **Wired into `_on_action_detected`'s existing combat branch, not a separate turn loop.**
 Right after a round's `round_number` increments, every other living scene entity (not just
@@ -378,55 +343,46 @@ actor, so every existing "one `round_resolved` per player action" assumption (te
 counting) still holds. An entity with no `behavior` data at all (ex: `practice_dummy`, most
 ad-hoc test entities) just doesn't act, silently and without error — it's simply absent from
 `turns`, which itself is absent entirely (not present-but-empty) when nobody else acted.
-
-**`LLMCore._describe_outcome` takes an optional `actor` param now** (default `"the player"`)
-so the same roll/damage-description builder can narrate any other participant's action without
-misattributing it — ex: `generate_round_response` calls it once per entry in `turns`, with
-`actor=turn["actor"]`. Also: the leading `"X attempts: ..."` line is now omitted entirely when
-there's no `"input"` key (a behavior-driven action has no free-text input the way a player's
-does), rather than printing an empty quoted string.
+`LLMCore._describe_outcome` takes an optional `actor` param (see its docstring in
+`LLM_Core.py`) so `generate_round_response` can narrate each `turns` entry without
+misattributing it to the player.
 
 ## Targeting and multi-actor combat rounds
 
 `self.current_target` is the player's persisted combat target — distinct from
 `_get_target_name()`, which stays reserved for non-combat interaction resolution (item
 interactions, entity tests) and is untouched by any of this. `_choose_combat_target()` (in
-`DM_Core.py`, alongside `_get_target_name()`) picks it: the first living, hostile-toward-the-
-player entity in `scenario_entities` order, falling back to the first *living* non-player
-entity if nothing hostile remains (ex: every wolf dead, only the ally left), and finally to
-`None` if nothing is alive at all. `RulesMixin.load_scenario()` calls it at the end of every
-load — `__init__`, `load_game`, and any ad-hoc test scenario reassignment — so `current_target`
-never drifts out of sync with `scenario_entities`.
+`DM_Core.py`, alongside `_get_target_name()`) picks it — see its docstring for the exact
+fallback order. `RulesMixin.load_scenario()` calls it at the end of every load — `__init__`,
+`load_game`, and any ad-hoc test scenario reassignment — so `current_target` never drifts out
+of sync with `scenario_entities`.
 
-**Ally vs. enemy is derived, not a new TOML field.** An entity is an enemy (attacks the player)
+**Ally vs. enemy is derived, not a TOML field.** An entity is an enemy (attacks the player)
 if `is_hostile(entity, player_name)`; otherwise, if it has its own `[[entity.behavior]]` data,
 it's treated as an ally and attacks `current_target` instead. `creatures.toml`'s `wolf`/`fire
-elemental` and `characters.toml`'s `gladstone` all have an `[entity.allies]`/`[entity.enemies]`
-table (`name = [...]`/`supertype = [...]`) — **this is unused, dead data, not read by any code,
-and deliberately not what ally/enemy routing uses.** `characters.toml`'s `thane` (a mercenary
-fighting at gladstone's side in the `arena` scenario) is the reference ally: positive
-`[entity.attitudes] default` disposition toward everyone (so `is_hostile(thane, gladstone)` is
-false) plus its own `bite`-shaped `[[entity.behavior]]`/`[[entity.abilities]]` pair is the
-entire recipe — no special-casing anywhere in the resolution code.
+elemental` and `characters.toml`'s `gladstone` used to each carry an `[entity.allies]`/
+`[entity.enemies]` table (`name = [...]`/`supertype = [...]`) that no code ever read — removed
+as dead data. `characters.toml`'s `thane` (a mercenary fighting at gladstone's side in the
+`arena` scenario) is the reference ally: positive `[entity.attitudes] default` disposition
+toward everyone (so `is_hostile(thane, gladstone)` is false) plus its own `bite`-shaped
+`[[entity.behavior]]`/`[[entity.abilities]]` pair is the entire recipe — no special-casing
+anywhere in the resolution code.
 
 **`current_target` only advances once, at the end of the round, if it died** — not interrupted
 mid-round by an earlier actor's kill (ex: an ally finishing off the target before the round's
 own narration is even built). Everyone who acts that round (player included) resolves against
 whichever target was current at the *start* of the round.
 
-**Explicit player-driven targeting** comes from `NLPCore.map_to_target(processed_text)`, the
-same embedding-match pattern as `map_to_item` — a second global index built in
-`_on_rules_loaded`, this time over every non-player `"creature"` supertype entity's
-name/description. `_on_user_input` runs it *alongside* skill matching (not as a gate the way
+**Explicit player-driven targeting** comes from `NLPCore.map_to_target(processed_text)` — see
+its docstring in `NLP_Core.py` for the matching mechanism and the multi-instance-disambiguation
+limitation. `_on_user_input` runs it *alongside* skill matching (not as a gate the way
 item/save-load intent are): a matched skill's `action_detected` payload gets an extra
 `"target"` field when `map_to_target` clears `confidence_threshold`, attached to the *same*
 event rather than published separately. `_on_action_detected` only honors it if the name is
 actually in `scenario_entities`, hostile toward the player, and alive — same "matching is
 global, DMCore checks scene-relevance" division of labor `map_to_item` already established.
 Naming a confidently-matched but non-hostile entity (ex: "I attack thane") is silently ignored
-rather than making an ally the target. Like `map_to_item`, this has no real multi-instance
-disambiguation — "the wolf" ties break to whichever instance was declared first, since two
-plain `wolf` instances share identical name/description text to embed.
+rather than making an ally the target.
 
 ## Status/condition system
 
@@ -442,11 +398,11 @@ Each status has:
   attribute (`supertype`, `subtype`, etc.). This replaced an earlier, less general
   `{minimum, maximum}` / `include` / `exclude` shape — fully collapsed into one mechanism now.
 - `apply` — `{condition, duration, dismiss}`. `condition` names an entry in `[[condition]]`.
-- `test` — `{difficulty, skill, pass, fail}` (ex: "incapacitated"/"mortal" test
-  fortitude/willpower to see if the entity falls unconscious or dies). **Still unused/dead
-  data** — nothing in `DMCore`'s implementation reads a status's `test` field. Don't confuse this with the
-  unrelated, *actually wired up* `[entity.test]` (see "Entity tests" below), which only shares
-  the field name and general "difficulty/skill/pass/fail" shape by design, not any code path.
+  ("incapacitated"/"mortal" used to also carry a `test = {difficulty, skill, pass, fail}` field
+  meant to roll fortitude/willpower to see if the entity falls unconscious or dies, but nothing
+  in `DMCore`'s implementation ever read a status's `test` field — removed as dead data. Don't
+  confuse this history with the unrelated, *actually wired up* `[entity.test]`, see "Entity
+  tests" below, which only ever shared the field name and general shape, not any code path.)
 
 `evaluate_statuses` finds every status matching a trigger whose requirements the entity
 currently meets and calls `apply_condition`, which stores it in `entity["active_conditions"]`.
@@ -461,22 +417,23 @@ dict(instance.get("conditions", {}))`), so **every instance has `active_conditio
 from creation** (an empty `{}` if the template declared none) rather than only appearing the
 first time `apply_condition` runs.
 
-**`dismiss_condition(entity_name, condition_name)`** is the general-purpose removal primitive
-this enabled — `del`s the entry from `active_conditions` if present, log-and-no-ops otherwise.
-First real use: a locked chest's `"locked"` condition is dismissed via `apply_test_outcome` on
-a successful `[entity.test]` check (see "Entity tests" below).
+**`dismiss_condition(entity_name, condition_name)`** (see its docstring in `DM_Status.py`) is
+the general-purpose removal primitive this enabled. First real use: a locked chest's `"locked"`
+condition is dismissed via `apply_test_outcome` on a successful `[entity.test]` check (see
+"Entity tests" below).
 
-**Known gap still open (by design, not yet asked for):** this only added a *manual* removal
-primitive — nothing automatically re-evaluates and dismisses a status-driven condition when its
-`requirements` stop holding. An entity taking sustained damage still accumulates every wound
-tier it passed through (`wounded` + `incapacitated` both present) rather than replacing the
-previous one; healing wouldn't clear `wounded` either. `dismiss_condition` would be the right
-tool to build that with, it's just not wired to anything HP-related yet.
+**Known gap (`# TODO` in `DM_Status.py`'s `evaluate_statuses`):** this only added a *manual*
+removal primitive — nothing automatically re-evaluates and dismisses a status-driven condition
+when its `requirements` stop holding. An entity taking sustained damage still accumulates every
+wound tier it passed through (`wounded` + `incapacitated` both present) rather than replacing
+the previous one; healing wouldn't clear `wounded` either. `dismiss_condition` would be the
+right tool to build that with, it's just not wired to anything HP-related yet.
 
-**Deferred:** the `enhance` ability (a buff technique) was removed from `characters.toml` —
-"that's a later thing." We'd discussed making its condition's `skills`/`modifier` variable
-per-use (like `damage_value` already is) rather than fixed in `[[condition]]`, but didn't
-build it. Pick that up when `enhance` comes back.
+**Deferred (`# TODO` in `rules.toml` above the `[[condition]]` table):** the `enhance` ability
+(a buff technique) was removed from `characters.toml` — "that's a later thing." We'd discussed
+making its condition's `skills`/`modifier` variable per-use (like `damage_value` already is)
+rather than fixed in `[[condition]]`, but didn't build it. Pick that up when `enhance` comes
+back.
 
 ## Entity tests
 
@@ -506,15 +463,13 @@ set, that condition must *not* be active (ex: `"jammed"` — once applied by a f
 further pick attempts can ever succeed via this test again). **Without this gating, an
 already-opened chest would silently re-run the test (and re-loot, harmless only by accident
 since there'd be nothing left) on every repeat attempt, and a `"jammed"` condition applied on
-failure would have zero actual effect** — it was purely narrative flavor until this was added
-(verified live: re-picking an unlocked/jammed chest now resolves at difficulty `0` via the
-ordinary opposed path instead of re-running the `12`-difficulty test).
+failure would have zero actual effect** — it was purely narrative flavor until this was added.
 
 Whichever of `test["pass"]`/`test["fail"]` matches the outcome is handed to
 **`apply_test_outcome(entity_name, outcome)`**, which dispatches purely on which keys are
 present (no "action" enum): `dismiss_condition` removes that condition, `condition` applies a
-new one (the exact `{condition, duration, dismiss}` shape `[[status]]`'s own `apply`/`test.fail`
-blocks already use). A truthy `loot` key would hand everything on the target to
+new one (the exact `{condition, duration, dismiss}` shape `[[status]]`'s own `apply` block
+already uses). A truthy `loot` key would hand everything on the target to
 `self.player_name` via `loot_entity` in one shot (see "Inventory/currency transfer" below) —
 **this primitive still exists and works, but the chest no longer uses it** (see "Examining and
 taking items" below for why: opening a container must not force its contents into the player's
@@ -559,33 +514,20 @@ entity to need this: its own `[entity.test]` (`difficulty = 8`, `skill = ["arcan
 check — not a passive `"examine"` — actually confirm it's cursed. The same mechanism is meant
 for a future "search for traps" check on some other entity; nothing about it is dagger-specific.
 
-**`NLPCore.map_to_target` now matches two different kinds of entity into the same index,
-undifferentiated at match time:** every non-player `"creature"` (the original combat-retargeting
-behavior) *plus* every entity carrying its own `[entity.test]`, regardless of supertype (ex: the
-cursed dagger, an `"object"`). A test-bearing entity becomes targetable purely by having that
-data — nothing else changes about it, and nothing needs updating in `NLPCore` to add another one
-later. Matching is still global and scene-blind, same division of labor `map_to_item` already
-established; `DMCore` is what decides whether a returned name is a live, hostile, in-scene
-creature (combat redirect) or a reachable, testable item (see below) — the two are mutually
-exclusive outcomes for the same match, checked in that order.
+`NLPCore.map_to_target` matches this into the same index as combat targets — see its docstring
+in `NLP_Core.py` for how the two kinds of match stay undifferentiated at match time, and why
+that's fine (`DMCore` is what decides whether a returned name is a combat redirect or a
+reachable, testable item — the two are mutually exclusive outcomes for the same match, checked
+in that order below).
 
-**`DMCore._resolve_item_test_target(target_name, skill_name)`** is the new item-reachability
-check, tried *before* combat-target redirection in `_on_action_detected` (inspecting an item
-is never an attack, so it must never fall into `round_resolved`/damage/`current_target`
-machinery). It resolves `target_name` to itself only if: its own `test` accepts `skill_name`
-(`is_test_available`, the exact same gate the chest's lock already used); and it's actually
-reachable — either already in `self.player_name`'s own `inventory`, or sitting in the *current
-scene target's* `inventory` **and** that container isn't locked or closed (the same gates
-`_on_item_interaction_detected` already enforces for reaching a container's contents, checked
-independently here since this path never goes through that handler at all). Anything else
-(wrong skill, still locked away, not present anywhere reachable) returns `None` and the input
-falls through to whatever it would otherwise have resolved as — ex: `"blades"` against a
-hostile target still routes to ordinary combat, unaffected. **`DMCore._resolve_item_test`**
-then resolves the flat check exactly like the chest's own (`resolve_action` at the test's
-`difficulty`, `apply_test_outcome` on whichever of `pass`/`fail` matched) and returns a
-`resolve_action`-shaped result with `"defender"` set to the item's own name and
-`"opposing_skill"` `None` (a flat check, not opposed) — `_on_action_detected` publishes this
-straight to `action_resolved`, never batching it into a round.
+**`DMCore._resolve_item_test_target`/`_resolve_item_test`** (see their docstrings in
+`DM_Core.py`) do the reachability check and flat-difficulty resolution, tried *before*
+combat-target redirection in `_on_action_detected` (inspecting an item is never an attack, so
+it must never fall into `round_resolved`/damage/`current_target` machinery). Anything that
+doesn't resolve (wrong skill, still locked away, not present anywhere reachable) falls through
+to whatever the input would otherwise have resolved as — ex: `"blades"` against a hostile
+target still routes to ordinary combat, unaffected. A successful resolution publishes straight
+to `action_resolved`, never batching it into a round.
 
 **`apply_test_outcome` gained a fourth dispatch key: a truthy `"reveal"`** applies the new,
 permanent `"identified"` condition (`is_identified(entity_name)` mirrors `is_locked`/
@@ -598,37 +540,29 @@ renders that as `" The check reveals: cursed."` in the narration prompt — grou
 that actually happened, never handed to the LLM speculatively. `_on_item_interaction_detected`'s
 `"examine"` branch was extended the same way: a plain look **never** includes `"revealed"`
 unless `is_identified` is already true, so the curse only ever surfaces in narration *after* a
-real arcane check earned it, not on a first glance. Verified live end-to-end (`test_integration.py`'s
-`TestChestSagaConversation` — see "Testing" below): the arcane check's own narration read
-"...confirming that the weapon is protected by powerful, malevolent magic," and examining the
-dagger *afterward* read "...confirming its cursed nature" — grounded in the real roll, not
-volunteered on the first look.
+real arcane check earned it, not on a first glance.
 
 **`blocks_if_condition = "identified"`** is what stops a repeat check from being pointless (or
 from re-triggering `apply_test_outcome` a second time) — the exact same pattern the chest's own
 `"jammed"` already used to permanently block a repeat lockpick. Once identified, the same skill
 name against the same item just falls through to whatever an ordinary action would resolve to
-instead (ex: `"arcane"` against `current_target` if it happens to also be a spell-casting skill
-gladstone owns — confirmed directly against real `DMCore`: this correctly fell through to
-casting `fireball` at the chest, completely unrelated pre-existing behavior, not a bug in this
-feature).
+instead (ex: `"arcane"` against `current_target` falls through to casting `fireball` at the
+chest if that also happens to be gladstone's spell-casting skill — unrelated pre-existing
+behavior, not a bug in this feature).
 
-**Known gap, found live and not yet fixed:** the obvious phrasing "I identify the dagger" does
-**not** reach the arcane check at all. `map_to_target` correctly resolves `"cursed dagger"`
-(0.72), but `map_to_action` resolves the skill to `"polearms"` (0.51) instead of `"arcane"` —
-"identify" is a literal `appraise` keyword (skills.toml), yet the whole-sentence embedding
-still favored an unrelated skill over either `appraise` or `arcane`. Since `"polearms"` isn't
-in the dagger's `test.skill`, `_resolve_item_test_target` correctly declines it (not a bug in
-this feature's own logic) and the turn falls through to a harmless no-op action against
-`current_target` (the chest) — `is_identified` stays `False`. **The live LLM response papered
-over this silently**: with no roll and no real result to narrate from, it invented a confident
-identification anyway ("...it is an ancient piece... clearly ceremonial rather than
-functional...") that directly contradicts the dagger's own established description (glowing,
-shifting runes) and never mentions the curse — a hallucination in the same family as the
-`"open the chest"` one this session already fixed, except here the underlying mechanism *would
-have worked* if the skill had matched. Same root cause as the `"blades"`-keyword collision
-above (a keyword-driven skill dominating an unrelated whole-sentence embedding match) — not
-yet addressed for this specific phrasing.
+**Known gap (`# TODO` in `NLP_Core.py`'s `map_to_action`):** the obvious phrasing "I identify
+the dagger" does **not** reach the arcane check at all. `map_to_target` correctly resolves
+`"cursed dagger"` (0.72), but `map_to_action` resolves the skill to `"polearms"` (0.51) instead
+of `"arcane"` — "identify" is a literal `appraise` keyword (skills.toml), yet the
+whole-sentence embedding still favored an unrelated skill over either `appraise` or `arcane`.
+Since `"polearms"` isn't in the dagger's `test.skill`, `_resolve_item_test_target` correctly
+declines it (not a bug in this feature's own logic) and the turn falls through to a harmless
+no-op action against `current_target` (the chest) — `is_identified` stays `False`. **The live
+LLM response papers over this silently**: with no roll and no real result to narrate from, it
+will invent a confident-sounding identification instead, contradicting the dagger's own
+established description — the underlying mechanism *would* work if the skill had matched.
+Same root cause as the `_match_by_keyword` gotcha above (a keyword-driven skill dominating an
+unrelated whole-sentence embedding match) — not yet addressed for this specific phrasing.
 
 ## Inventory/currency transfer
 
@@ -647,10 +581,10 @@ Three general-purpose methods on `DMCore`, none lock/chest-specific:
 
 `_on_action_detected` still attaches a `loot_entity` result as `result["loot"]` when
 `apply_test_outcome`'s `loot` key fires, and `LLM_Core._describe_outcome` turns that into
-`" The player gains: 20 currency."` in the prompt (verified live: an earlier version of this
-that omitted this had the LLM *inventing* contents — "a silver key and leather-bound journal" —
-for a chest that only ever held currency). This machinery is what "Examining and taking items"
-(below) now calls directly instead, per-item, rather than all-at-once via `loot`.
+`" The player gains: 20 currency."` in the prompt — without this, the LLM has nothing real to
+narrate a chest's contents from and will invent plausible-sounding treasure instead. This
+machinery is what "Examining and taking items" (below) now calls directly instead, per-item,
+rather than all-at-once via `loot`.
 
 ## Examining and taking items
 
@@ -716,18 +650,13 @@ roll. Six intents share one pipeline:
   string per item in the container's `inventory` (its flavor description only, the same
   purely-descriptive field selection `describe_character` already uses for entities — never
   `tags`/`damage_value`/etc., so a cursed item's actual curse tag is never handed over here).
-  Without this, `LLMCore` had nothing to narrate the opening from and would invent
-  plausible-sounding treasure instead of what's actually inside (verified live: an early
-  version narrated a silver key, a stack of documents, and an obsidian shard for a chest that
-  only ever held one cursed dagger). `"close"` never attaches `contents` — there's nothing new
-  to reveal by shutting something.
+  Without this, `LLMCore` has nothing to narrate the opening from and will invent
+  plausible-sounding treasure instead of what's actually inside. `"close"` never attaches
+  `contents` — there's nothing new to reveal by shutting something.
 - **`LLMCore.generate_item_interaction_response`** narrates it — explicitly telling the LLM
   `"nothing is taken, moved, or changed"` for a found `"examine"`, so it doesn't imply a transfer
-  that didn't happen. Verified live: examining `items.toml`'s `"cursed dagger"` (added specifically
-  to exercise this) describes its glowing runes without adding it anywhere; a separate `"take"`
-  afterward is what actually moves it, narrated as its own distinct moment. Since `item_name` is
-  `None` for `"open"`/`"close"`, the prompt-building falls back to `container` (the target's own
-  name) wherever it would otherwise quote the item.
+  that didn't happen. Since `item_name` is `None` for `"open"`/`"close"`, the prompt-building
+  falls back to `container` (the target's own name) wherever it would otherwise quote the item.
 
 **Known gap, deliberately out of scope for now:** movement/positioning on a battle grid is
 anticipated as the next interaction verb once band/range targeting exists (see "Open threads"),
@@ -785,41 +714,22 @@ it inside `entity.equipped` instead of `entity` itself, with no parse error to c
 Referencing `"cleave"` this way is what makes `techniques.toml`'s `cleave` entity reachable via
 `resolve_ability` at all.
 
-**`cleave` is now fully wired, both of its previous gaps fixed:**
-- Its `skill = [ "blades", "axes" ]` is a *list* (either skill can trigger it), unlike every
-  other ability/weapon's single-string `skill`. `find_attack_ability` used to compare with
-  plain `==`, which a list can never satisfy; it now delegates to `ability_matches_skill`,
-  which checks list membership when `skill` is a list and falls back to `==` otherwise (so
-  ordinary single-skill weapons/abilities are unaffected).
-- Its `damage_value = { dice = "user.weapon.dice", pips = "user.weapon.pips", bonus =
-  "user.strength_damage" }` means cleave's damage scales with whatever weapon the attacker
-  currently has equipped rather than a fixed amount. `resolve_damage_value` now runs both
-  `dice` and `pips` through the new `resolve_weapon_reference`, which resolves that exact
-  string via the new `get_equipped_weapon` (first equipped item with a `damage_value`,
-  mirroring `find_attack_ability`'s own equipped-item scan) and degrades to `0` if nothing's
-  equipped — never raises either way.
+**`techniques.toml`'s `cleave` exercises two things nothing else does:** a multi-skill
+`skill = [ "blades", "axes" ]` list (either triggers it) and weapon-scaled damage
+(`"user.weapon.dice"`/`"user.weapon.pips"` instead of a fixed amount). The mechanism is fully
+documented at its own definitions, not restated here — see the docstrings of
+`ability_matches_skill`, `resolve_weapon_reference`, and `resolve_damage_value` in
+`DM_Combat.py`.
 
-**Choosing a technique over a basic attack on the same skill is solved above NLPCore's
-matching, not inside `find_attack_ability`.** `find_attack_ability` still checks equipped
-weapon before abilities and still can't return `cleave` for a bare `"blades"` skill_name --
-that priority is unchanged and, on its own, unfixable (there's no way to tell "attack" and
-"cleave" apart once both have collapsed to the same skill name). Instead, `NLPCore` embeds
-every `supertype in ("technique", "spell")` entity (`cleave`, `fireball`) into the *same*
-phrase space as skills (`_on_rules_loaded`, alongside the skill-phrase loop -- both now go
-through the shared `_add_phrases` helper). A player naming a technique directly (ex: "I cleave
-through them") can therefore come back from `map_to_action` as `"cleave"` instead of
-`"blades"` in the first place. `DMCore._on_action_detected` then calls the new
-`resolve_named_ability(self.player_name, skill_name)`, which checks whether `skill_name`
-literally names one of the player's own abilities (gating this on ownership -- matching itself
-is global/name-only, same as `map_to_item`, so this is what stops a monster's technique name
-from being usable just because the model matched it). If it does, `select_ability_skill`
-picks the player's best-rated skill among the technique's list (`cleave`'s
-`["blades", "axes"]` -> `"blades"` for gladstone, same dice*3+pips rating convention as
-`get_opposing_skill`) for the actual roll, and the already-known ability is used directly for
-damage -- `find_attack_ability` is never even called in this path, so its priority never
-gets a chance to pick the wrong one. A bare skill match (ex: "blades" itself) takes the
-original path unchanged, since `resolve_named_ability` only ever matches an actual ability
-name, never a skill name.
+**Choosing a technique over a basic attack on the same skill is solved above `NLPCore`'s
+matching, not inside `find_attack_ability`.** `NLPCore` embeds every
+`supertype in ("technique", "spell")` entity into the same phrase space as skills, so naming
+one directly (ex: "I cleave through them") can come back from `map_to_action` as `"cleave"`
+instead of `"blades"` in the first place; `DMCore._on_action_detected` then routes a matched
+ability name through `resolve_named_ability`/`select_ability_skill` instead of
+`find_attack_ability` — see those two docstrings in `DM_Combat.py` for the ownership-gating and
+skill-selection details. A bare skill match (ex: "blades" itself) is unaffected, since
+`resolve_named_ability` only ever matches an actual ability name, never a skill name.
 
 ## Data/TOML conventions worth knowing
 
@@ -841,21 +751,14 @@ name, never a skill name.
   `[strength_damage]` → `skill`, `divisor`). String `dice`/`pips` (like `techniques.toml`'s
   `"user.weapon.dice"`, meant to reference the attacker's equipped weapon) are **not**
   resolved — they degrade to 0 rather than crash. Nothing currently exercises that path.
-- Real data bugs found and fixed along the way (in case similar ones lurk elsewhere):
-  `creatures.toml`'s wolf had `[skills]`/`[abilities]` as top-level tables instead of
-  `[entity.skills]`/`[entity.abilities]`, silently loading with zero skills. `characters.toml`
-  equipped a `"shortsword"` that didn't exist in `items.toml` (only `"longsword"` did) — fixed
-  independently by the user mid-session. A duplicate `duration` key in one TOML inline table
-  made `rules.toml` fail to parse entirely (caught silently by `load_rules`'s per-file
-  try/except, so nothing crashed — it just silently loaded with less data than expected).
-  **Lesson:** `load_rules`'s blanket exception handling means a malformed TOML file fails
-  *quietly*. If rule data seems to be missing, check for a parse error before assuming logic
-  is wrong.
+- **`load_rules`'s blanket per-file exception handling means a malformed TOML file fails
+  *quietly*** — a parse error (ex: a duplicate key in one inline table) doesn't crash, it just
+  silently loads that file with less data than expected. If rule data seems to be missing,
+  check for a parse error before assuming the logic is wrong.
 
 ## LLM integration
 
-Endpoint is LM Studio's OpenAI-compatible API. Verified live against `google/gemma-4-e4b`.
-Two gotchas specific to LM Studio:
+Endpoint is LM Studio's OpenAI-compatible API. Two gotchas specific to LM Studio:
 - `/v1/models` lists models in its *catalog*, not what's currently loaded into memory — a
   chat completion can still 400 with `"No models loaded"` even though `/v1/models` shows one.
   If narration suddenly stops working, check whether the model actually needs reloading
@@ -896,292 +799,59 @@ specifically so the whole app can be driven and asserted on headlessly (`app.run
    waiting for that same loop to run its scheduled callback. Cost about 10 minutes to
    diagnose; don't repeat it.
 
-`textual` and `pytest-asyncio` are installed but not yet in a `requirements.txt` (there isn't
-one yet, dependencies are just installed ad hoc: `sentence-transformers`, `numpy`, `textual`,
-`pytest`, `pytest-asyncio`).
-
 ## Testing
 
-Two files. `test_unit.py` — ~89 tests across thirteen `unittest.TestCase` classes plus the
-Textual mirror's standalone `pytest.mark.asyncio` functions (all previously separate
-`test_*.py` files, combined into one on request) — is entirely fast and network-independent:
-everything in it either runs in well under a second or, for `TestGameBoot` and
-`TestNlpConfidenceThreshold` (both load the real `sentence-transformers` model, ~15-20s each
-— `TestNlpConfidenceThreshold` uses `setUpClass` instead of `setUp` so its eighteen test
-methods share one load rather than paying that cost eighteen times), still needs nothing
-beyond what's on disk. **Gotcha found the hard way:** sharing `cls.dm_core` across every
-method in that class (via `setUpClass`) also shares its *mutable* state — several methods
-trigger real, unseeded combat against the same `wolf`/`wolf_2`, so HP damage was silently
-accumulating across nominally-independent tests in alphabetical execution order, occasionally
-leaving `wolf` already dead by the time a later test (`test_full_pipeline_naming_a_non_
-hostile_entity_does_not_redirect_current_target`) assumed it was alive and asserted on
-`current_target`. Fixed with a `setUp` (not `setUpClass`) that re-runs `load_rules`/
-`load_scenario_definition`/`load_scenario` — the same three calls `load_game` and `__init__`
-both use — resetting every mutable field (hp, active_conditions, currency, inventory,
-round_number, current_target) back to a pristine "arena" load before each test method,
-without re-paying for a new `NLPCore`/model load. Verified clean across 8 isolated reruns of
-the class plus repeated full-suite runs after the fix, versus intermittent failures (including
-one in complete isolation) before it.
+Two files, split so `test_unit.py` never has a network dependency, not even a skippable one:
+- **`test_unit.py`** — fast, offline `unittest.TestCase` classes covering dice/damage
+  resolution, statuses, scenario loading, the locked chest and its `[entity.test]`/item-test
+  machinery, examine/take/give/trade/open/close, inventory transfer, NPC dialogue, attitude
+  phrases, save/load, and the Textual mirror's own `pytest.mark.asyncio` functions.
+  `TestGameBoot` and `TestNlpConfidenceThreshold` load the real `sentence-transformers` model
+  (~15-20s); the latter uses `setUpClass` so its many methods share one load. **Gotcha:**
+  sharing `cls.dm_core` across every method in a `setUpClass`-based class also shares its
+  *mutable* state — several methods trigger real, unseeded combat against the same
+  `wolf`/`wolf_2`, so HP damage silently accumulated across nominally-independent tests in
+  alphabetical order and occasionally left `wolf` dead by the time a later test assumed it was
+  alive. Fixed with a `setUp` (not `setUpClass`) that re-runs `load_rules`/
+  `load_scenario_definition`/`load_scenario` before each test method to reset every mutable
+  field, without re-paying for a new model load. If you ever add `setUpClass`-shared state to
+  a test class again, check whether any test method mutates it.
+- **`test_integration.py`** — every test that needs a real, running LM Studio
+  (`TestInnkeeperConversation` and its Textual counterpart, `TestArenaCombatConversation`,
+  `TestChestSagaConversation`, `TestChestTradeConversation`, `TestSaveAndResumeConversation`).
+  Each is gated on a private `_lm_studio_reachable()` check so they all skip together, not
+  fail, when nothing's listening on `127.0.0.1:1234`. `python -m pytest -q` picks up both
+  files; `python -m pytest -q test_unit.py` alone runs the fast, offline subset.
 
-`test_integration.py` holds every test that needs a real, running LM Studio: `TestInnkeeperConversation`
-and its Textual counterpart `test_innkeeper_dialogue_through_textual` (see below, ~20-40s each),
-plus `TestArenaCombatConversation`, `TestChestSagaConversation`, `TestChestTradeConversation`, and
-`TestSaveAndResumeConversation` — split into their own file specifically so `test_unit.py` never
-has a network dependency, not even a skippable one. Every one of them is gated on the same
-`_lm_studio_reachable()` check (a private copy in each file — the same "small enough to duplicate"
-call `_save_slot_dir` already made, rather than adding a cross-file import just for this), so
-they all skip together, not fail, when nothing's listening on `127.0.0.1:1234`. Shared
-`_LivePipelineTestCase` base class provides `_boot()`/`_say()`/`_wait_for_responses()` for the
-TestCase-based ones. `python -m pytest -q` picks up both files (expect a few minutes total); run
-`python -m pytest -q test_unit.py` alone for the fast, offline subset.
-
-- `TestGameBoot` — original integration smoke test (boot → skill match).
-- `TestNlpConfidenceThreshold` — a low-confidence input (a plain greeting) triggers no
-  `action_detected` at all (but does publish `action_not_understood`), while a clear action
-  still triggers `action_detected` at/above `NLPCore.confidence_threshold`. Also covers the
-  confidence-threshold dilution fix in isolation (see the `NLP_Core.py` gotcha above):
-  `test_keyword_fallback_rescues_a_below_threshold_literal_keyword_hit` (a literal
-  `skills.toml` keyword hit rescues a sentence that never clears `confidence_threshold` on its
-  own) and `test_alternate_phrasing_candidate_rescues_a_diluted_sentence` (a topic-clause-
-  stripped candidate scores well above threshold even though the full sentence doesn't);
-  `_detect_item_intent` (all six verbs, including `"pick the lock"` vs `"pick up X"`'s
-  collision guard — a real `user_input_submitted` of `"I pick the lock"` still produces
-  `action_detected` for `finesse`, never `item_interaction_detected` — and `"close combat"` vs
-  `"close the chest"`'s equivalent guard for `blades`), a full-pipeline check that a known item
-  name (`"cursed dagger"`) is matched regardless of which scenario is currently active (matching
-  is global; DMCore is what checks scene-relevance), a full-pipeline check that `"open"` never
-  calls `map_to_item` at all (`item_name` stays `None`), and a check that none of `appraise`'s
-  own keywords accidentally trigger the trade intercept.
-- `TestClarificationResponse` — `action_not_understood` queues a prompt describing what the
-  player said with no roll/damage shape in it (checked via `llm_core.context_window`
-  immediately after publish, since `_queue_narration` appends synchronously before spawning
-  the network fetch thread — no need to wait on or mock LM Studio for this). Also covers
-  `_describe_outcome` directly (a `result["loot"]` of `{"currency": 20, "items": []}` produces
-  `"20 currency"` in the text, and no loot present omits the "gains" text entirely) and
-  `generate_item_interaction_response`'s three prompt shapes (found-examine explicitly says
-  nothing was taken; found-take on the `"currency"` sentinel names the amount, not the literal
-  word "currency"; not-found explains the denial reason).
-- `TestInnkeeperConversation` (`test_integration.py`, not `test_unit.py` — see "Testing" above
-  for why the two files are split) — one of two tests that hit a real, running LM Studio (the
-  other is `test_innkeeper_dialogue_through_textual`, same file, see the Textual section below;
-  both guarded by a module-level `_lm_studio_reachable()` check — `@unittest.skipUnless` here,
-  `@pytest.mark.skipif` there — so both *skip* rather than fail when nothing's listening on
-  `127.0.0.1:1234`). Boots the full `NLPCore`→`LLMCore`→`DMCore`
-  pipeline against the `tavern` scenario and drives a real 3-turn conversation with the
-  `innkeeper` via `user_input_submitted` (not by hand-constructing `action_detected` payloads),
-  printing the transcript. One turn ("I try to charm her") is phrased to clear
-  `confidence_threshold` and resolve as a genuine `charisma` action (asserted: exactly one `action_resolved`, never
-  `round_resolved`, `defender_details` present); the other two are natural follow-ups that
-  route through `action_not_understood` instead (see the `NLP_Core.py` gotcha above) — both
-  are asserted non-empty/non-error. **Deliberately does not** assert on exact narrative content
-  (ex: that the husband question literally says "bandit"/"husband") — an early version did,
-  and it failed on a real run where the LLM conveyed her grief ("a deep, painful sadness...
-  vague sigh") without ever using those words. Live LLM phrasing isn't a reliable regression
-  signal; the printed transcript is how this actually gets verified (read it when the test
-  runs, don't just trust the green checkmark).
-- `test_innkeeper_dialogue_through_textual` (`test_integration.py`, same file as the above) —
-  the Textual counterpart: the real `NLPCore`/`LLMCore`/`DMCore` pipeline wired up alongside
-  `TextualCore`, driven by actual keystrokes into `#input_box` (not a direct
-  `event_bus.publish`) for the same three-turn tavern conversation. Where
-  `TestInnkeeperConversation` asserts on internal event payloads, this one asserts on the
-  player-facing surface instead — each turn's echoed input and the real LLM narration that
-  follows both actually land in the History `RichLog`, waited for via polling
-  `llm_response_ready`'s count rather than a fixed sleep (LM Studio's response time isn't
-  constant), with the same `round_events == []` / exactly-one-`charisma`-`action_resolved`-
-  against-`innkeeper` regression guard. Prints the full rendered History pane as its
-  transcript, same "read it when the test runs" philosophy.
-- `TestArenaCombatConversation` (`test_integration.py`) — combat's counterpart to the three
-  dialogue tests above: the real pipeline driving several rounds of the `arena` scenario via
-  literal attack input, checking round narration and turn structure hold up through a live LLM
-  rather than just the mechanics (already exhaustively unit-tested with no LLM at all by
-  `TestCombatLoop`/`TestEntityBehavior`). `roll_dice` is genuinely random here, so assertions
-  are tolerant of actual dice outcomes — checking that round events fire and thane (the ally)
-  always gets an opponent, not who wins or loses any individual roll.
-- `TestChestSagaConversation` (`test_integration.py`) — the dungeon chest's full lifecycle
-  (locked → picked → opened → **arcane-checked** → examined → taken) via literal input,
-  checking real LLM narration lands at each step and actually matches the underlying state
-  change. Two real rolls happen, in order: the lockpick (gladstone's finesse, 3 dice, vs. the
-  chest's flat difficulty 12) and the dagger's own arcane curse-detection check (2 dice vs.
-  difficulty 8) — both seeded (`random.seed(13)` → `[3, 3, 6]` = 12, then `[6, 2]` = 8, both
-  passes) since left to real chance the lockpick alone fails roughly 3 times out of 4,
-  permanently jamming the chest before the saga can ever reach "take" — a `tearDown` reseeds
-  from OS entropy afterward so the deterministic seed doesn't leak into any other test sharing
-  the same process-wide `random` module (found the hard way: it silently made an unrelated
-  `test_unit.py` combat roll deterministic before this was added). **The arcane-check turn's
-  exact phrasing matters more than usual:** "dagger" is itself a literal `"blades"` keyword
-  (skills.toml), which dominated skill matching hard enough that several natural phrasings
-  (ex: "I check the dagger for curses") actually resolved to `"blades"`, not `"arcane"` —
-  `"I channel arcane mana into the dagger"` is what reliably clears `confidence_threshold` on
-  `"arcane"` instead, with `map_to_target` separately resolving `"cursed dagger"` from the same
-  sentence (see "Item-targeted skill checks" above). **Verified live end-to-end**, LM Studio
-  narrating each step in turn: `"open the chest"` correctly described the one real item inside
-  (no invented treasure); the arcane check's own narration conveyed a real magical backlash
-  ("the channeled mana to sputter and recoil... confirming that the weapon is protected by
-  powerful, malevolent magic"); examining the dagger *afterward* explicitly named its "cursed
-  nature," something the pre-check `"open"`/`"examine"` narration never did. **While reading an
-  earlier live run's transcript (before this fix), found a real narration-grounding gap in
-  `LLM_Core.py`, since fixed and reverified:**
-  `"open the chest"`'s prompt used to never tell the LLM what's actually inside, so it
-  invented plausible-sounding treasure instead of the real cursed dagger — fixed by attaching
-  real `contents` to the resolved event (see "Examining and taking items" above).
-- `TestChestTradeConversation` (`test_integration.py`) — a real "buy" attempt against the same
-  chest reused as an ad-hoc shop (same convention `TestGiveAndTrade`'s unit tests already use),
-  checking both the affordability gate's denial and a successful purchase narrate coherently
-  and actually move currency/inventory. Bypasses lockpicking in `setUp` (`dismiss_condition`
-  called directly, not a real pick attempt — that state machine is
-  `TestChestSagaConversation`'s job) and needs no seeded randomness, since trading itself never
-  rolls dice. **Second narration-grounding gap found here:** the successful-purchase prompt
-  ("the player pays currency to {container}") reads oddly to the LLM when the seller is an
-  inanimate chest — a live run narrated the purchase as *refused* ("the stout object remains
-  utterly inert, offering no mechanism for payment") even though the transfer mechanically
-  succeeded; also not yet fixed.
-- `TestSaveAndResumeConversation` (`test_integration.py`) — simulates an actual app restart,
-  not just a `save_game`/`load_game` round-trip: session A drives a real conversation and
-  saves via a literal typed `"save as <slot>"` command (exercising `NLPCore`'s own
-  `_detect_save_load_intent`, not `DMCore.save_game` called directly, which is all
-  `TestSaveLoad`/`TestLLMSaveLoad` in `test_unit.py` ever do), then session B — an entirely
-  separate `EventBus`/`NLPCore`/`LLMCore`/`DMCore`, standing in for a fresh process — resumes
-  it via a literal `"load <slot>"` command and keeps talking. Costs roughly double a normal
-  test here (the slow model load happens once per session) — the honest price of actually
-  simulating two processes instead of reusing state under the hood.
-- `TestOpposedResolution` — highest-rated opposing skill selection, pips counting toward the
-  rating, no-match-defaults-to-zero.
-- `TestDamageCalculation` — bonus resolution (flat/rule-reference/unknown), damage reduction
-  by tag, HP floor at zero, two full `calculate_damage` runs.
-- `TestCombatLoop` — `find_attack_ability` (equipped weapon > innate fallback > none),
-  miss-does-nothing, hit-applies-damage, non-attack-skill-never-damages, no-target publishes
-  `action_resolved` (not `round_resolved`), scenario load publishes `scenario_loaded` once, a
-  missing scenario name raises `FileNotFoundError` instead of starting with no scenario data.
-- `TestStatusEvaluation` — hp% requirement matching, trigger filtering, in/not_in,
-  unknown-operator-fails-safe, auto-apply on damage, tier-accumulation (documented gap, not
-  a bug).
-- `TestScenarioLoading` — duplicate-name disambiguation, instance independence, `entity_id`,
-  band assignment, unknown-entity-in-scenario doesn't crash.
-- `TestLockedChest` — boots `DMCore(event_bus, scenario_name="dungeon")` (`items.toml`'s
-  `chest`): starts locked (`is_locked` true, seeded from `[entity.conditions.locked]`), never
-  hostile despite having no attitude data, `strength` (not in the chest's `test.skill`) falls
-  through to the ordinary opposed path and gets resisted by its `fortitude` (5 dice) rather than
-  the `[entity.test]` difficulty, a failed `finesse` pick leaves it locked *and* applies the
-  permanent `"jammed"` condition (`test.fail`), a successful one dismisses `"locked"` **without**
-  auto-transferring anything (`result` has no `"loot"` key, `chest`'s `currency`/`inventory`
-  untouched — see "Examining and taking items"), a repeat pick attempt on an already-open chest
-  falls through to the ordinary path (difficulty `0`) instead of re-running the test
-  (`requires_condition`), a `"jammed"` chest permanently refuses further pick attempts the same
-  way (`blocks_if_condition`), `dismiss_condition` no-ops (returns `False`) for a condition
-  that isn't present, `apply_test_outcome` no-ops for an empty/`None` outcome, and a truthy
-  `"reveal"` key applies `"identified"` (`is_identified`) while an outcome without it leaves
-  the entity unidentified.
-- `TestItemInteraction` — `DMCore._on_item_interaction_detected` against the dungeon's chest
-  (holding `items.toml`'s `"cursed dagger"` plus `currency = 20`): blocked entirely while locked
-  (`reason: "locked"`), `"examine"` returns the item's description without touching either
-  entity's `inventory`, `"take"` actually calls `transfer_item`, the `"currency"` sentinel uses
-  `transfer_currency`/an amount-only description instead of `transfer_item`, an absent item
-  reports `reason: "not_present"`, examining the container itself (`item_name == target_name`)
-  uses `describe_character`, and taking the container itself reports `reason: "not_takeable"`.
-  Also covers the new `"closed"` gate: contents are blocked (`reason: "closed"`) once
-  unlocked-but-not-yet-opened, via a shared `_open_the_chest` helper other tests call before
-  reaching in. **`"examine"`'s `"revealed"` field** is empty (and the description never
-  contains `"cursed"`) before any check has identified the item, and matches the entity's own
-  `"tags"` once `apply_condition`d `"identified"` directly. **`"open"`'s `"contents"` field**
-  is exactly `describe_character(item_name)` per item (no mechanical data, see "Examining and
-  taking items"), and an empty container reports `contents: []` rather than omitting the key.
-- `TestItemTargetedSkillCheck` — `DMCore._resolve_item_test_target`/`_resolve_item_test`
-  against the dungeon's cursed dagger (see "Item-targeted skill checks"): unreachable while
-  still inside a locked/closed chest, reachable once the container's open, reachable once
-  already in the player's own inventory, a skill not in the item's own `test.skill` doesn't
-  match at all, a successful check (`roll_dice` overridden, same convention `TestLockedChest`
-  already uses) reveals `["cursed"]` and marks it identified, a failed one reveals nothing,
-  `blocks_if_condition = "identified"` blocks a repeat check once identified, and an item-test
-  action never touches `round_number`/`current_target` (inspecting an item is never combat).
-- `TestOpenClose` — `DMCore._resolve_open_close_intent` against the dungeon's chest: starts
-  closed (seeded from `[entity.conditions.closed]`), blocked by `"locked"` first, `"open"`
-  dismisses `"closed"` once unlocked, repeat `"open"`/`"close"` on an already-open/closed chest
-  fails safe (`reason: "already_open"`/`"already_closed"`) instead of re-toggling, `"close"`
-  re-applies the condition and re-blocks contents access, and both fail safe with `reason:
-  "not_openable"` against a non-`"container"` subtype (ex: the tavern's `innkeeper`) or no
-  target at all.
-- `TestGiveAndTrade` — `"give"` moves an item or all currency from the player to the target
-  (tavern's `innkeeper`, a living recipient unlike the dungeon's chest); an item the player
-  doesn't actually have reports `reason: "not_present"`; no target at all reports `reason:
-  "no_recipient"`. `"trade"` charges the item's TOML `value` (dungeon's `chest` reused as an
-  ad-hoc "shop"), moving currency *and* the item only together, never partially — an
-  unaffordable price is denied outright (`reason: "cant_afford"`) with both sides left
-  untouched; trading for the `"currency"` sentinel itself is rejected (`reason:
-  "not_takeable"`) since buying gold with gold is meaningless.
-- `TestInventoryTransfer` — `transfer_currency` (moves all by default, clamps to what's
-  available, no-ops for a missing entity), `transfer_item` (moves exactly one matching entry
-  out of a duplicate-containing `inventory` list, returns `False` if absent), and `loot_entity`
-  (sweeps currency + every inventory item in one call, returning a `{currency, items}` summary).
-- `TestNpcDialogue` — boots `DMCore(event_bus, scenario_name="tavern")` (`npcs.toml`'s
-  `innkeeper`): a non-hostile NPC's `is_hostile` reads false, talking to them narrates
-  immediately via `action_resolved` (not batched into `round_resolved`) even for an attack
-  skill, and a hostile target (`wolf`) still batches into `round_resolved` — a regression
-  guard for the hostility-based branch. Also covers `describe_character` (includes
-  description/qualities/memories/quotes, empty for a pure-mechanics entity like `wolf` when no
-  `toward_name` is given), `scenario_loaded`'s `characters` roster, and `action_resolved`'s
-  `defender_details`.
-- `TestAttitudePhrases` — `get_attitude_tier`'s band selection (including the clamp beyond
-  ±150 and the declared-order tie-break at a shared boundary, ex: exactly `-100` resolves to
-  `hostile` not `unfriendly`), `describe_attitude` mixing tiers per axis in one call (gladstone's
-  undead override is hostile on five axes but `confidence = 100`, landing in `friendly`), and
-  `describe_character` actually surfacing an attitude line for a pure-mechanics entity like
-  `wolf` once `toward_name` is passed (self-attitude is skipped when `toward_name == entity_name`).
-- `TestSaveLoad` — `DMCore.save_game`/`load_game` against the real `Saves/` directory (each
-  test tracks and cleans up its own slot in `tearDown`, rather than leaving artifacts behind):
-  a save writes only the mutable-diff fields (asserted via an exact key-set check, not just
-  presence), restores saved HP over further in-session changes, re-derives from *current*
-  templates rather than a frozen copy (the load_rules-before-reinstancing behavior — see
-  "Saving and loading"), publishes `game_loaded` and never `scenario_loaded`, fails safe with
-  `game_load_failed` on a missing slot, and a slot name can't escape `Saves/` via `..`.
-- `TestLLMSaveLoad` — `LLMCore.save_game`/`load_game`: round-trips `context_window` plus
-  scenario bookkeeping, and — the one that actually matters — loading never spawns a
-  `threading.Thread` (asserted via `patch("threading.Thread")`), proving a resume queues no
-  new LLM call. Also covers `generate_load_failed_response`'s prompt shape.
-- Two new methods added to `TestNlpConfidenceThreshold`: `_detect_save_load_intent`'s prefix
-  parsing (including the bare-`"save"`-with-no-slot-name case correctly falling through) and a
-  full-pipeline check that `"save as <slot>"` publishes only `save_requested`, never
-  `action_detected`/`item_interaction_detected`.
-- The trailing `test_*` async functions (no class — plain `pytest.mark.asyncio`, mirroring
-  the original `test_textual_core.py`) — see "Textual mirror" section above for what each
-  case guards against; these encode real gotchas, not just feature coverage. Includes the
-  Save/Load button pair: clicking by CSS selector (`pilot.click("#save_button")`) can raise
-  `OutOfBounds` if the button's on-screen position lands at the edge of the default test
-  terminal size, so these focus the button and press Enter instead. Every test here drives
-  `TextualCore` in isolation with synthetic `event_bus.publish` calls, keeping this file
-  network-independent — the one full-stack Textual test that boots the real pipeline and needs
-  a running LM Studio, `test_innkeeper_dialogue_through_textual`, lives in `test_integration.py`
-  instead (see above, right after `TestInnkeeperConversation`).
-
-A comprehensive-looking test suite is only useful if it stays committed — several of these
-were found deleted from disk mid-session in an earlier version of this repo (with no clear
-cause) and had to be restored from git history or recreated from conversation history. Worth
-a `git status` gut-check if test results seem to regress unexpectedly.
+Lessons worth keeping in mind when touching either file:
+- **Don't assert on exact live-LLM narrative content.** `TestInnkeeperConversation` used to
+  assert the husband-loss question's response contained specific words and failed on a real
+  run where the LLM conveyed her grief without ever using them. Assert structure (which events
+  fired, non-empty/non-error) and read the printed transcript by hand when the test runs — a
+  green checkmark alone isn't a reliable content signal.
+- **Seeded randomness in one test can leak into another via the process-wide `random`
+  module.** `TestChestSagaConversation` seeds `random` so its two rolls (lockpick, arcane
+  check) land as passes instead of failing most of the time; its `tearDown` reseeds from OS
+  entropy afterward specifically because an earlier version leaked the deterministic seed into
+  an unrelated `test_unit.py` combat roll.
+- **A Textual `pilot.click()` on a button near the test terminal's edge can raise
+  `OutOfBounds`.** The Save/Load button tests focus the button and press Enter instead of
+  clicking by CSS selector.
+- **A comprehensive-looking suite is only useful if it stays committed** — several test files
+  were found deleted from disk mid-session in an earlier version of this repo (no clear cause)
+  and had to be restored from git history. Worth a `git status` gut-check if results seem to
+  regress unexpectedly.
+- **One live narration-grounding gap found via `TestChestTradeConversation` (`# TODO` in
+  `LLM_Core.py`'s trade prompt):** the successful-purchase prompt reads oddly when the seller
+  is an inanimate chest — a live run narrated the purchase as refused even though the transfer
+  mechanically succeeded.
 
 ## Open threads / natural next steps
 
-Roughly in the order they came up, none started yet:
-- Automatic status dismissal (`dismiss_condition` exists and is manually wired for the locked
-  chest, but nothing re-evaluates `[[status]]` requirements to auto-dismiss a condition whose
-  trigger no longer holds — ex: healing back above a wound tier still leaves it applied).
-- `enhance`'s variable condition design (skills/modifier parameterized per apply-site,
-  mirroring how `damage_value` already works).
-- GUI `Party Status`/`Notes`/`Map` tabs have display methods but nothing publishes to them.
-- **Movement/positioning on a battle grid** — its prerequisite (real targeting — see
-  "Targeting and multi-actor combat rounds") now exists, but band/range-aware difficulty and
-  actual movement are still separate, un-started work; no `move`/`go` keyword exists anywhere
-  yet, unlike `examine`/`take`/`give`/`trade`/`open`/`close`.
-- True initiative/turn order within a combat round — every participant currently resolves in
-  `scenario_entities` declaration order, not any kind of priority/speed system.
-- Real multi-instance target disambiguation (ex: "the wounded wolf" vs. "the other one") —
-  `map_to_target` is a flat semantic match with the same duplicate-name limitation
-  `map_to_item` already has.
-- **Item-targeted skill checks work, but natural phrasing keeps losing to keyword collisions
-  elsewhere in `skills.toml`** (see "Item-targeted skill checks" above) — "I identify the
-  dagger" resolves to `"polearms"`, not `"arcane"`, so the arcane check never fires and the
-  live LLM narrates a confident-sounding identification anyway with nothing real behind it.
-  Same root cause the NLP confidence-threshold work already ran into (`_generate_match_
-  candidates`/`_match_by_keyword` claw back some of this for skill *matching* in general, but
-  neither rescues this specific case — the winning candidate is a different skill entirely,
-  not a below-threshold miss on the right one). Not started: whether the fix belongs in
-  `skills.toml`'s keyword lists, in the matching mechanism, or in gating narration on
-  `via_test`/a real result existing before letting the LLM claim something was identified.
+Tracked as `# TODO:` comments at their actual call sites, not as a list here — a prose list
+like this drifts out of sync with the code the moment either one changes underneath it. Grep
+the codebase for `TODO` to find every open item (auto status dismissal in `DM_Status.py`,
+`enhance`'s deferred condition design in `rules.toml`, the unpublished GUI Party/Notes/Map tabs
+in `GUI_Core.py`, movement/positioning in `NLP_Core.py`, initiative/turn order in `DM_Core.py`,
+multi-instance target disambiguation and the item-identify keyword collision both in
+`NLP_Core.py`, and the chest-as-shop trade narration gap in `LLM_Core.py`).

@@ -53,12 +53,6 @@ undead = [ -100, -100, 100, -100, -100, -100 ]
 [[entity.attitudes.name]]
 anne = [ 100, 100, 100, 100, 100, 100 ]
 
-[entity.allies]
-name = [ "anne" ]
-
-[entity.enemies]
-supertype = [ "undead" ]
-
 [entity.qualities]
 body = "athletic"
 eye = "brown"

@@ -30,16 +30,19 @@ class GUICore:
         self.notebook.pack(fill=tk.BOTH, expand=True)
         self.main_paned.add(self.right_frame, minsize=300)
         
+        # TODO: Party Status/Notes/Map tabs below have display methods (display_party_status,
+        # display_notes, render_combat_field) but nothing in DMCore/LLMCore publishes an event
+        # that calls them yet.
         self.party_tab = tk.Frame(self.notebook)
         self.party_text = tk.Text(self.party_tab, wrap=tk.WORD)
         self.party_text.pack(fill=tk.BOTH, expand=True)
         self.notebook.add(self.party_tab, text="Party Status")
-        
+
         self.notes_tab = tk.Frame(self.notebook)
         self.notes_text = tk.Text(self.notes_tab, wrap=tk.WORD)
         self.notes_text.pack(fill=tk.BOTH, expand=True)
         self.notebook.add(self.notes_tab, text="Notes")
-        
+
         self.map_tab = tk.Frame(self.notebook)
         self.map_text = tk.Text(self.map_tab, wrap=tk.NONE)
         self.map_text.pack(fill=tk.BOTH, expand=True)

@@ -5,9 +5,6 @@ subtype = "animal"
 
 max_hp = 16
 
-[entity.allies]
-name = [ "wolf" ]
-
 [[entity.abilities]]
 name = "bite"
 supertype = "innate"
@@ -54,9 +51,6 @@ resistance_tags = [ "physical", "piercing", "bludgeoning", "slashing" ]
 # reduction, on a matching tag -- a fire elemental takes extra damage from water.
 vulnerability_value = { dice = 2, pips = 0 }
 vulnerability_tags = [ "water" ]
-
-[entity.allies]
-name = [ "fire elemental" ]
 
 [[entity.abilities]]
 name = "flame touch"
