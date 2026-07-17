@@ -197,6 +197,26 @@ class CombatMixin(DMCoreProtocol):
         """
         return sum(random.randint(1, 6) for _ in range(max(dice, 0))) + pips
 
+    def roll_initiative(self, entity_name):
+        """!
+        @brief Rolls an entity's initiative for turn ordering: every skill named in rules.toml's
+            [[initiative]] list (today, dodge + observation) has its dice/pips pooled together
+            and rolled once -- not compared statically via the dice*3+pips rating convention
+            get_opposing_skill/select_ability_skill use, since initiative is meant to vary
+            round to round rather than just rank a fixed pair of skills. A skill the entity
+            lacks defaults to the same untrained 1D/0 pips resolve_action already defaults to.
+        @param entity_name The name of the entity rolling initiative.
+        @return The rolled initiative total.
+        """
+        entity_skills = self.entities.get(entity_name, {}).get("skills", {})
+        dice = 0
+        pips = 0
+        for term in self.rules.get("initiative", []):
+            stats = entity_skills.get(term.get("skill"), {"dice": 1, "pips": 0})
+            dice += stats.get("dice", 0)
+            pips += stats.get("pips", 0)
+        return self.roll_dice(dice, pips)
+
     def resolve_action(self, entity_name, skill_name, difficulty=0):
         """!
         @brief Resolves the outcome of an entity using a skill against a difficulty.

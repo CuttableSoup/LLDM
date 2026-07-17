@@ -347,6 +347,32 @@ ad-hoc test entities) just doesn't act, silently and without error — it's simp
 `LLM_Core.py`) so `generate_round_response` can narrate each `turns` entry without
 misattributing it to the player.
 
+## Initiative and turn order
+
+`rules.toml`'s `[[initiative]]` is a list of terms (today, `dodge` and `observation`), the same
+list-of-terms shape `[[status]]` already uses so a third contributing skill later is just
+another entry, no code change. `DMCore.roll_initiative(entity_name)` (`DM_Combat.py`) pools
+every named skill's dice/pips together and rolls the combined pool **once per round** — not the
+`dice*3 + pips` static rating `get_opposing_skill`/`select_ability_skill` use to rank a fixed
+pair of skills, since initiative is meant to vary round to round. A skill the entity lacks
+defaults to the same untrained 1D/0 pips `resolve_action` already defaults to (ex: nothing in
+`Rules/Fantasy` currently defines `observation` on a combatant, so every fight rolls it
+untrained).
+
+**Initiative only orders presentation, not resolution.** Every actor's action in a round is
+still resolved independently against the state at the *start* of the round (see "Targeting and
+multi-actor combat rounds" below — a round is a snapshot, not a sequential simulation where an
+earlier actor's outcome could change a later actor's roll or target). `_on_action_detected`
+rolls `self.roll_initiative(self.player_name)` into `result["initiative"]` and, per non-player
+actor, into that actor's own entry in `result["turns"]`, then sorts `turns` by initiative
+descending before publishing `round_resolved` — so both the narration order (`turns` is read in
+list order by `LLMCore.generate_round_response`) and any future UI reflect who actually acted
+first that round, closing the gap the old `# TODO: no initiative/turn order` comment described.
+The player's own outcome is still narrated first in the prompt regardless of their rolled
+initiative — restructuring that would mean deferring the player's own dice rolls until their
+turn came up in the sorted order, which conflicts with the round being a fixed snapshot (see
+above) and wasn't part of this change.
+
 ## Targeting and multi-actor combat rounds
 
 `self.current_target` is the player's persisted combat target — distinct from
@@ -852,6 +878,6 @@ Tracked as `# TODO:` comments at their actual call sites, not as a list here —
 like this drifts out of sync with the code the moment either one changes underneath it. Grep
 the codebase for `TODO` to find every open item (auto status dismissal in `DM_Status.py`,
 `enhance`'s deferred condition design in `rules.toml`, the unpublished GUI Party/Notes/Map tabs
-in `GUI_Core.py`, movement/positioning in `NLP_Core.py`, initiative/turn order in `DM_Core.py`,
+in `GUI_Core.py`, movement/positioning in `NLP_Core.py`,
 multi-instance target disambiguation and the item-identify keyword collision both in
 `NLP_Core.py`, and the chest-as-shop trade narration gap in `LLM_Core.py`).

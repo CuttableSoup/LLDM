@@ -162,9 +162,11 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, RulesMixin, 
             # player is currently fighting). A hostile entity attacks the player; a
             # non-hostile one (an ally) attacks self.current_target instead. An entity with no
             # matching behavior (no behavior data, or none of its requirements currently hold,
-            # ex: it's already at 0 HP) simply doesn't act.
-            # TODO: no initiative/turn order -- every participant resolves in scenario_entities
-            # declaration order, not any kind of priority/speed system.
+            # ex: it's already at 0 HP) simply doesn't act. Every actor's outcome is still
+            # resolved independently against the state at the start of the round (see the
+            # current_target note below) -- initiative only orders how the round is presented,
+            # it doesn't make an earlier actor's roll affect a later one's.
+            result["initiative"] = self.roll_initiative(self.player_name)
             turns = []
             for entity_name in self.scenario_entities:
                 if entity_name == self.player_name:
@@ -175,8 +177,10 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, RulesMixin, 
                 turn_result = self.resolve_behavior_action(entity_name, opponent)
                 if turn_result:
                     turn_result["actor"] = entity_name
+                    turn_result["initiative"] = self.roll_initiative(entity_name)
                     turns.append(turn_result)
             if turns:
+                turns.sort(key=lambda turn: turn["initiative"], reverse=True)
                 result["turns"] = turns
             # current_target only advances once, at the end of the round, if it died -- not
             # interrupted mid-round by an earlier actor's kill (ex: an ally finishing it off

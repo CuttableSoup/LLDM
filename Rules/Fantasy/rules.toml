@@ -129,6 +129,16 @@ modifier = { dice = 0, pips = 0, bonus = 0 }
 skill = "strength"
 divisor = 2
 
+# Each entry contributes one skill's dice/pips to the combined initiative pool DMCore.roll_initiative
+# rolls once per round for turn ordering -- "dodge + observation" today, but a third contributing
+# skill later is just another entry, no code change needed (same list-of-terms pattern [[status]]
+# already uses).
+[[initiative]]
+skill = "dodge"
+
+[[initiative]]
+skill = "observation"
+
 # Translates a get_attitude() axis value (-150..150, clamped) into prose for narration --
 # see DMCore.get_attitude_tier/describe_attitude. Checked in declaration order; a value sitting
 # exactly on a shared boundary (ex: -100, between "hostile" and "unfriendly") resolves to

@@ -864,6 +864,37 @@ class TestEntityBehavior(unittest.TestCase):
         self.assertIn("wolf", turns_by_actor)
         self.assertEqual(turns_by_actor["wolf"]["defender"], "gladstone")
 
+    def test_roll_initiative_pools_dodge_and_untrained_observation(self):
+        # wolf has dodge 6D/0 pips and no observation skill at all -- rules.toml's [[initiative]]
+        # still pools it in at the same untrained 1D/0 pips resolve_action defaults missing
+        # skills to, for a combined 7D pool.
+        with patch("random.randint", return_value=4):
+            initiative = self.dm_core.roll_initiative("wolf")
+        self.assertEqual(initiative, 28)
+
+    def test_round_resolved_attaches_initiative_to_player_and_every_turn(self):
+        with patch("random.randint", return_value=4):
+            self.dm_core._on_action_detected({"skill": "athletics", "input": "I brace myself"})
+
+        result = self.resolved[-1]
+        self.assertIn("initiative", result)
+        for turn in result["turns"]:
+            self.assertIn("initiative", turn)
+
+    def test_turns_are_ordered_by_initiative_descending(self):
+        # arena.toml's default scene has two wolves plus thane. Both wolves share dodge (6D) +
+        # untrained observation (1D) = 7D, outrolling thane's dodge (3D) + untrained observation
+        # (1D) = 4D once every die lands the same (patched to 4) -- so both wolves (tied,
+        # stable-sorted in their original declaration order) sort ahead of thane in "turns".
+        with patch("random.randint", return_value=4):
+            self.dm_core._on_action_detected({"skill": "athletics", "input": "I brace myself"})
+
+        turns = self.resolved[-1]["turns"]
+        self.assertEqual([turn["actor"] for turn in turns], ["wolf", "wolf_2", "thane"])
+        self.assertEqual(turns[0]["initiative"], 28)
+        self.assertEqual(turns[1]["initiative"], 28)
+        self.assertGreater(turns[0]["initiative"], turns[2]["initiative"])
+
     def test_current_target_advances_to_next_hostile_when_current_dies(self):
         self.dm_core.apply_damage("wolf", 999)
         with patch("random.randint", return_value=1):
