@@ -5,6 +5,7 @@
 sentence-transformers==5.1.2
 numpy==2.3.3
 textual==8.2.8
+pypdf==6.14.2
 
 # Test suite (test_unit.py)
 pytest==8.4.1

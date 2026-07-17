@@ -3,19 +3,30 @@ import os
 import urllib.request
 import threading
 
+from LLM_Rag import RagIndex
+
 class LLMCore:
     """!
     @brief Main class for handling the local LLM.
     """
 
-    def __init__(self, event_bus):
+    def __init__(self, event_bus, rag_source_dir=None):
         """!
         @brief Initializes the LLM core and loads necessary models.
         @param event_bus The central event bus instance.
+        @param rag_source_dir Overrides RagIndex's default Settings/Fantasy/ source directory.
+            Exists mainly so tests can point this at a directory with no PDFs (skipping the
+            real sourcebook build entirely -- see RagIndex._build's early return) instead of
+            every LLMCore() in the test suite kicking off a real, potentially minutes-long
+            index build against whatever's actually in Settings/Fantasy/.
         """
         self.event_bus = event_bus
         self.event_bus.publish("log_info", "LLMCore initialized.")
         self.api_url = "http://127.0.0.1:1234/v1/chat/completions"
+        # Builds itself on a background thread (see RagIndex.__init__) -- perform_rag returns
+        # no context at all until it's ready, rather than blocking LLMCore's own boot on
+        # potentially minutes of first-time PDF extraction/embedding.
+        self.rag_index = RagIndex(event_bus, source_dir=rag_source_dir)
         self.context_window = []
         self.scenario_name = ""
         self.scenario_description = ""
@@ -31,12 +42,21 @@ class LLMCore:
 
     def perform_rag(self, query):
         """!
-        @brief Retrieves augmented generation data from the sourcebook.
-        @param query The search query.
-        @return The context retrieved from the sourcebook.
+        @brief Retrieves the sourcebook passages most relevant to query, formatted for
+            grounding a narration prompt. Delegates the actual embedding/matching to
+            self.rag_index (see LLM_Rag.py) -- this method's only job is turning that raw
+            (chunk, score) list into prompt-ready text, or "" if there's nothing to add
+            (index not ready yet, or nothing cleared the confidence threshold).
+        @param query The search query -- in practice, the narration prompt itself (see
+            _queue_narration), since a full prompt embeds just as well as a hand-picked
+            keyword query and needs no per-call-site plumbing to construct.
+        @return The retrieved context as a string, or "" if there's nothing to add.
         """
-        self.event_bus.publish("log_info", f"Performing RAG for query: {query}")
-        return ""
+        matches = self.rag_index.query(query)
+        if not matches:
+            return ""
+        self.event_bus.publish("log_info", f"RAG retrieved {len(matches)} chunk(s) for query.")
+        return "\n".join(f"({chunk['source']} p.{chunk['page']}) {chunk['text']}" for chunk, _score in matches)
 
     def update_context(self, last_turn_actions, conversations):
         """!
@@ -135,7 +155,9 @@ class LLMCore:
             f"{self.scenario_description}{characters_text}\n"
             f"Narrate the opening scene in 2-3 sentences as the Game Master."
         )
-        self._queue_narration(prompt)
+        # No player input exists yet for this one -- the scenario's own name/description is
+        # already a clean, undiluted query (see _queue_narration's rag_query docstring).
+        self._queue_narration(prompt, rag_query=f"{self.scenario_name} {self.scenario_description}")
 
     def generate_round_response(self, action_result):
         """!
@@ -157,7 +179,7 @@ class LLMCore:
             f"Narrate the end of this combat round in 2-3 sentences as the Game Master, "
             f"covering both allies and enemies who acted."
         )
-        self._queue_narration(prompt)
+        self._queue_narration(prompt, rag_query=action_result.get("input"))
 
     def generate_response(self, action_result):
         """!
@@ -170,7 +192,7 @@ class LLMCore:
             f"{self._describe_outcome(action_result)}\n"
             f"Narrate the outcome in 2-3 sentences as the Game Master."
         )
-        self._queue_narration(prompt)
+        self._queue_narration(prompt, rag_query=action_result.get("input"))
 
     def generate_clarification_response(self, data):
         """!
@@ -188,7 +210,10 @@ class LLMCore:
             f"Respond in-character as the Game Master in 1-2 sentences: acknowledge what they "
             f"said without resolving any roll"
         )
-        self._queue_narration(prompt)
+        # This is the single most common place a player asks a genuine lore question (ex: "tell
+        # me about Brevoy") that doesn't map to any skill -- exactly why the bare input, not the
+        # boilerplate-padded prompt above, has to be what's queried (see _queue_narration).
+        self._queue_narration(prompt, rag_query=data.get("input"))
 
     def generate_item_interaction_response(self, data):
         """!
@@ -293,23 +318,58 @@ class LLMCore:
                 f"The player takes \"{item_name}\" and adds it to their own inventory.\n"
                 f"Narrate this in 1-2 sentences as the Game Master."
             )
-        self._queue_narration(prompt)
+        self._queue_narration(prompt, rag_query=data.get("input"))
 
-    def _queue_narration(self, prompt):
+    def _build_system_message(self, rag_query):
+        """!
+        @brief Builds the per-request system message: the standing GM framing plus whatever's
+            specific to this exact request (scenario setting/characters, retrieved sourcebook
+            lore) -- none of which is ever stored in context_window (see _queue_narration).
+            Split out from _queue_narration as its own method purely so it's directly testable
+            without mocking the network call.
+        @param rag_query The text to retrieve sourcebook lore against (see perform_rag) --
+            deliberately *not* always the full narration prompt (see _queue_narration's
+            rag_query param for why).
+        @return The complete system message string for this one request.
+        """
+        system_message = "You are the Game Master."
+        if self.scenario_description:
+            system_message += f" Setting: \"{self.scenario_name}\" - {self.scenario_description}"
+        if self.scenario_characters:
+            system_message += " Characters: " + " | ".join(self.scenario_characters)
+
+        # Retrieved fresh per request from this specific prompt, not stored in context_window --
+        # otherwise every future turn would replay every past turn's lore excerpts too, quickly
+        # bloating the rolling window (see CLAUDE.md's "Narration triggers" for why setting/
+        # characters already follow this same per-request-only pattern instead of being stored).
+        rag_context = self.perform_rag(rag_query)
+        if rag_context:
+            system_message += (
+                "\nReference lore from the campaign sourcebook, relevant to this moment "
+                f"(use only what applies; don't contradict it):\n{rag_context}"
+            )
+        return system_message
+
+    def _queue_narration(self, prompt, rag_query=None):
         """!
         @brief Appends a narration prompt to the rolling context window and fetches the LLM's response in the background.
         @param prompt The user-role prompt describing what just happened.
+        @param rag_query What to retrieve sourcebook lore against -- defaults to prompt itself,
+            but every call site that has the player's own raw input handy (ex:
+            generate_clarification_response) passes that instead. A full narration prompt is
+            padded with GM framing/roll-result boilerplate ("Narrate the outcome in 2-3
+            sentences...", "no dice were rolled", etc.) that dilutes its sentence embedding
+            enough to drop a genuinely lore-relevant query below RagIndex's confidence
+            threshold -- the exact same dilution problem NLPCore's own map_to_action already
+            has to work around (see NLP_Core.py's module notes) -- so the bare player input,
+            when available, is a meaningfully better query than the full prompt.
         """
         self.context_window.append({"role": "user", "content": prompt})
 
         if len(self.context_window) > 100:
             self.context_window = self.context_window[-100:]
 
-        system_message = "You are the Game Master."
-        if self.scenario_description:
-            system_message += f" Setting: \"{self.scenario_name}\" - {self.scenario_description}"
-        if self.scenario_characters:
-            system_message += " Characters: " + " | ".join(self.scenario_characters)
+        system_message = self._build_system_message(rag_query if rag_query else prompt)
 
         def fetch_from_llm():
             data = {

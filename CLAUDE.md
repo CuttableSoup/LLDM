@@ -794,6 +794,89 @@ Endpoint is LM Studio's OpenAI-compatible API. Two gotchas specific to LM Studio
   Studio's just-in-time loading auto-load the model on demand — discussed as a robustness
   improvement, not yet made.
 
+## RAG / sourcebook grounding
+
+`LLM_Rag.py`'s `RagIndex` implements `LLMCore.perform_rag` for real (previously a stub that
+always returned `""` — notes.txt named this as a core pillar from the start, but nothing built
+it until now). It indexes every `*.pdf` under `Settings/Fantasy/` (today, just `Inner Sea World
+Guide.pdf`, a 322-page Pathfinder campaign-setting sourcebook) generically, the same "scan a
+directory, no per-file registration" convention `load_rules` already uses for `Rules/Fantasy/*.toml`
+— dropping in a second sourcebook needs no code change. `Settings/` (like `Saves/`) is entirely
+gitignored; the sourcebook PDF and its derived cache are both local-only, never committed.
+
+**Extraction is genuinely slow, and must never block boot.** `pypdf` extracting this specific
+book's 322 pages took ~2.7s/page in testing (~14 minutes for the whole book) — likely the
+PDF's own embedded-font/kerning complexity, not a `pypdf` defect generally. `RagIndex.__init__`
+kicks off `_build()` on a daemon background thread and returns immediately; `query()` returns
+`[]` (and `perform_rag` returns `""`) until `self.ready` is `True`, so a narration request that
+lands before the first build finishes just gets no lore that turn — never a block, never an
+exception. Once built, the chunks (`{source, page, text}`) and their embeddings are cached to
+`Settings/Fantasy/.rag_cache/<hash>.{chunks.json,embeddings.npy}`, keyed by a hash of every
+source PDF's path/size/mtime (`_cache_key`) so an edited or added PDF invalidates the cache
+automatically. A warm-cache reload costs only the `SentenceTransformer` load (~5s), not
+re-extraction — this is what makes RAG practical to leave on for every request.
+
+**Chunking is sentence-bounded, not paragraph-bounded.** `pypdf`'s `extract_text()` reflects
+the PDF's own line-wrap layout (roughly one newline per typeset line), not real paragraph
+breaks, so splitting on blank lines is unreliable across both dense body-text pages and sparse
+map/table pages in this corpus. `_chunk_page_text` normalizes whitespace, splits on sentence
+punctuation, and greedily packs sentences into chunks capped at `MAX_CHUNK_WORDS` (180) — under
+`all-MiniLM-L6-v2`'s ~256-token window, so no chunk silently loses its tail to truncation.
+Chunks under `MIN_CHUNK_WORDS` (40) are dropped entirely — mainly map pages, which extract to a
+handful of scattered place-name labels with no coherent lore to retrieve.
+
+**Retrieval is per-request, not persisted into `context_window`.** `LLMCore._build_system_message`
+(the piece of `_queue_narration` split out purely so it's directly testable without mocking the
+network call) calls `perform_rag(rag_query)` and appends whatever comes back to that one
+request's system message, the same "computed fresh every request, never stored" pattern the
+scenario setting/character roster already use (see "Narration triggers") and for the same
+reason: storing retrieved lore *in* `context_window` would replay every past turn's excerpts on
+every future turn too, growing unboundedly against the rolling 100-message cap. `perform_rag`
+itself only formats the raw `(chunk, score)` list `RagIndex.query` returns into
+`"(source p.N) text"` lines; below `confidence_threshold` (`0.3`, mirroring
+`NLPCore.confidence_threshold`'s "no match beats a bad match" principle) a query returns no
+chunks at all rather than the closest chunk of an unrelated bunch.
+
+**The RAG query is deliberately *not* always the full narration prompt — this was a real bug,
+caught by `test_integration.py`'s live `TestRagGroundedNarration` failing on the first real run.**
+The full prompt for, say, `generate_clarification_response` is padded with GM-instruction
+boilerplate ("This didn't match any recognizable action or skill check - no dice were rolled.
+Respond in-character...") around the player's actual words. Embedding that whole block dilutes
+its cosine similarity enough to fall *below* `confidence_threshold` even for an obviously
+lore-relevant question — measured directly against the real book: the bare input "What do you
+know about the nation of Brevoy?" scored 0.636 against the matching chunk, but the full
+constructed clarification prompt for the same question scored only 0.286, just under the 0.3
+threshold. This is the exact same dilution failure mode `NLP_Core.py`'s module notes already
+document for `map_to_action`'s whole-sentence skill matching — same root cause (an embedding of
+a longer, instruction-padded string loses precision on the one clause that actually matters),
+independently rediscovered here. The fix: `_queue_narration(prompt, rag_query=None)` takes an
+optional second parameter, and every call site that has the player's own raw input on hand
+(`generate_round_response`/`generate_response`'s `action_result.get("input")`,
+`generate_clarification_response`/`generate_item_interaction_response`'s `data.get("input")`)
+passes that instead of letting `rag_query` fall back to the full `prompt`.
+`generate_scene_intro` (no player input exists yet) passes `f"{scenario_name} {scenario_description}"`
+instead — still undiluted, just not player-sourced. Only `generate_load_failed_response` has
+no better query available and falls back to its own (harmless, since a failed-load
+acknowledgment was never going to semantically match sourcebook lore anyway) full prompt.
+
+**Test-suite cost is deliberately isolated.** `RagIndex` is instantiated unconditionally inside
+`LLMCore.__init__`, so every `LLMCore(event_bus)` in `test_unit.py` would otherwise kick off a
+real, potentially 14-minute index build the moment the real sourcebook PDF is present on disk.
+`LLMCore.__init__` takes an optional `rag_source_dir` purely so tests can point it at a real
+directory with no PDFs in it (`Rules/Fantasy/`) — `_build`'s very first check is "any PDFs
+here?", so this skips even the `SentenceTransformer` load, not just the extraction. Both
+pre-existing `LLMCore`-instantiating test classes (`TestClarificationResponse`,
+`TestLLMSaveLoad`) were updated to pass this; `test_unit.py`'s own `TestRagIndex`/
+`TestLlmPerformRag` test `RagIndex`'s mechanics (chunking, caching, query ranking) and
+`LLMCore.perform_rag`/`_build_system_message`'s wiring directly, via a `FakeRagIndex` stub and
+hand-fed chunks — neither ever touches the real, gitignored sourcebook PDF, so the offline
+suite stays fast and portable to a machine that doesn't have it. `test_integration.py`'s
+`TestRagGroundedNarration` is the one place the real end-to-end chain (real PDF → real cache →
+real LM Studio call) gets exercised, gated on both LM Studio reachability *and* the index
+actually being `ready` within a short wait — skipped, not failed, on a machine that hasn't
+warmed the cache yet, the same "skip on missing precondition" convention every other
+integration test already follows.
+
 ## Textual mirror (headless testing)
 
 `Textual_Core.py` subscribes to the same events `GUI_Core` displays and adds its own `Input`

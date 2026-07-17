@@ -139,6 +139,52 @@ class TestInnkeeperConversation(_LivePipelineTestCase):
 
 
 @unittest.skipUnless(_lm_studio_reachable(), "LM Studio not reachable at http://127.0.0.1:1234")
+class TestRagGroundedNarration(_LivePipelineTestCase):
+    """!
+    @brief Verifies the real, end-to-end RAG pipeline (Settings/Fantasy/*.pdf -> RagIndex's
+        extraction/chunking/embedding -> LLMCore.perform_rag's per-request retrieval) actually
+        fires against a live LLM request -- test_unit.py's TestRagIndex/TestLlmPerformRag cover
+        each piece in isolation with fakes, but this is the only way to confirm the whole chain
+        is wired together correctly, the same reasoning TestInnkeeperConversation gives for why
+        a live LM Studio conversation test earns its keep alongside the offline suite.
+
+        Skipped (not failed) if the index isn't built/cached yet -- the first build takes
+        minutes against the real sourcebook (see CLAUDE.md's "RAG / sourcebook grounding"),
+        and this suite must never become flaky just because a fresh machine hasn't warmed the
+        cache. Run test_unit.py or boot the app once beforehand to warm it.
+    """
+    scenario_name = "tavern"
+
+    def setUp(self):
+        self._boot()
+        if not self._wait_for_rag_ready(timeout=15):
+            self.skipTest("RAG index not built/cached yet -- run the app once to warm the cache.")
+
+    def _wait_for_rag_ready(self, timeout):
+        deadline = time.time() + timeout
+        while time.time() < deadline and not self.llm_core.rag_index.ready:
+            time.sleep(0.5)
+        return self.llm_core.rag_index.ready
+
+    def test_lore_relevant_input_triggers_a_real_rag_retrieval(self):
+        # perform_rag runs synchronously inside _queue_narration, before the network call --
+        # so a "RAG retrieved" log_info fires whether or not the LLM call itself succeeds,
+        # making this a clean signal that retrieval actually happened (not a proxy for the
+        # LLM's eventual wording, which this deliberately never asserts on -- see
+        # TestInnkeeperConversation's own note on why that's the wrong thing to check).
+        log_messages = []
+        self.event_bus.subscribe("log_info", log_messages.append)
+
+        response = self._say("What do you know about the nation of Brevoy?")
+
+        self.assertTrue(response.strip())
+        self.assertTrue(
+            any("RAG retrieved" in message for message in log_messages),
+            "Expected a lore-relevant question to retrieve at least one sourcebook chunk.",
+        )
+
+
+@unittest.skipUnless(_lm_studio_reachable(), "LM Studio not reachable at http://127.0.0.1:1234")
 class TestArenaCombatConversation(_LivePipelineTestCase):
     """!
     @brief Dialogue's combat counterpart: real NLPCore/DMCore/LLMCore driving several rounds

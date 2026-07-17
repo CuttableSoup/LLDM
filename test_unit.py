@@ -2,15 +2,19 @@ import asyncio
 import json
 import os
 import shutil
+import tempfile
 import threading
 import unittest
 from unittest.mock import patch
 
+import numpy as np
 import pytest
+from sentence_transformers import SentenceTransformer
 
 from DM_Core import DMCore
 from Event_Bus import EventBus
 from LLM_Core import LLMCore
+from LLM_Rag import RagIndex
 from NLP_Core import NLPCore
 from Textual_Core import TextualCore
 from textual.widgets import Button, Input, RichLog, TabbedContent
@@ -284,7 +288,11 @@ class TestNlpConfidenceThreshold(unittest.TestCase):
 class TestClarificationResponse(unittest.TestCase):
     def setUp(self):
         self.event_bus = EventBus()
-        self.llm_core = LLMCore(self.event_bus)
+        # rag_source_dir points at a real directory with no PDFs in it, so RagIndex's
+        # background build returns immediately (see LLMCore.__init__'s docstring) instead of
+        # every test here kicking off a real, potentially minutes-long index build against
+        # whatever's actually in Settings/Fantasy/.
+        self.llm_core = LLMCore(self.event_bus, rag_source_dir=os.path.join("Rules", "Fantasy"))
 
     def test_unmatched_input_queues_a_clarification_prompt_not_a_dice_roll(self):
         # _queue_narration appends to context_window synchronously before spawning the
@@ -1986,7 +1994,11 @@ class TestSaveLoad(unittest.TestCase):
 class TestLLMSaveLoad(unittest.TestCase):
     def setUp(self):
         self.event_bus = EventBus()
-        self.llm_core = LLMCore(self.event_bus)
+        # rag_source_dir points at a real directory with no PDFs in it, so RagIndex's
+        # background build returns immediately (see LLMCore.__init__'s docstring) instead of
+        # every test here kicking off a real, potentially minutes-long index build against
+        # whatever's actually in Settings/Fantasy/.
+        self.llm_core = LLMCore(self.event_bus, rag_source_dir=os.path.join("Rules", "Fantasy"))
         self.slot_dirs = []
 
     def tearDown(self):
@@ -2057,6 +2069,196 @@ class TestLLMSaveLoad(unittest.TestCase):
         self.event_bus.publish("load_requested", {"slot": slot})
 
         self.assertEqual(self.llm_core.context_window, [{"role": "user", "content": "before save"}])
+
+
+class FakeRagIndex:
+    """!
+    @brief Duck-typed stand-in for LLM_Rag.RagIndex's query() method, so LLMCore-level tests
+        (perform_rag formatting, _build_system_message wiring) don't need a real PDF/model --
+        that mechanism is covered on its own by TestRagIndex below.
+    """
+
+    def __init__(self, matches):
+        self.matches = matches
+
+    def query(self, text, top_k=None, confidence_threshold=None):
+        return self.matches
+
+
+class TestLlmPerformRag(unittest.TestCase):
+    def setUp(self):
+        self.event_bus = EventBus()
+        self.llm_core = LLMCore(self.event_bus, rag_source_dir=os.path.join("Rules", "Fantasy"))
+
+    def test_perform_rag_returns_empty_string_with_no_matches(self):
+        self.llm_core.rag_index = FakeRagIndex([])
+        self.assertEqual(self.llm_core.perform_rag("what is Brevoy"), "")
+
+    def test_perform_rag_formats_matches_with_source_and_page(self):
+        self.llm_core.rag_index = FakeRagIndex([
+            ({"source": "Inner Sea World Guide", "page": 23, "text": "Brevoy is a nation of two rival houses."}, 0.57),
+            ({"source": "Inner Sea World Guide", "page": 24, "text": "House Orlovsky and House Surtova vie for the throne."}, 0.48),
+        ])
+        context = self.llm_core.perform_rag("what is Brevoy")
+        self.assertIn("Brevoy is a nation of two rival houses.", context)
+        self.assertIn("(Inner Sea World Guide p.23)", context)
+        self.assertIn("House Orlovsky and House Surtova vie for the throne.", context)
+
+    def test_build_system_message_includes_rag_context_when_present(self):
+        self.llm_core.rag_index = FakeRagIndex([
+            ({"source": "Inner Sea World Guide", "page": 23, "text": "Brevoy is a nation of two rival houses."}, 0.57),
+        ])
+        system_message = self.llm_core._build_system_message("The player asks about Brevoy.")
+        self.assertIn("Reference lore from the campaign sourcebook", system_message)
+        self.assertIn("Brevoy is a nation of two rival houses.", system_message)
+
+    def test_build_system_message_omits_rag_section_with_no_matches(self):
+        self.llm_core.rag_index = FakeRagIndex([])
+        system_message = self.llm_core._build_system_message("I attack the wolf.")
+        self.assertNotIn("Reference lore", system_message)
+
+    def test_queue_narration_never_persists_rag_context_into_context_window(self):
+        # Retrieved fresh into the per-request system message each time (see
+        # _build_system_message), not stored in context_window -- otherwise every future turn
+        # would replay every past turn's lore excerpts too, ballooning the rolling window.
+        self.llm_core.rag_index = FakeRagIndex([
+            ({"source": "Inner Sea World Guide", "page": 23, "text": "Brevoy is a nation of two rival houses."}, 0.57),
+        ])
+        self.llm_core._queue_narration("The player asks about Brevoy.")
+        stored_prompt = self.llm_core.context_window[-1]["content"]
+        self.assertNotIn("Brevoy is a nation of two rival houses", stored_prompt)
+        self.assertEqual(stored_prompt, "The player asks about Brevoy.")
+
+
+class TestRagIndex(unittest.TestCase):
+    """!
+    @brief Tests LLM_Rag.RagIndex's own mechanics directly -- chunking, caching, and
+        nearest-neighbor query ranking -- independent of any real PDF (see
+        test_chunking_and_caching_use_no_model_or_pdf) or a real SentenceTransformer model
+        where one's actually needed (see setUpClass), never the real, gitignored Settings/
+        sourcebook itself: that file may not exist on every machine this suite runs on, and
+        even when it does, processing it fully takes minutes (see CLAUDE.md).
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        # Paying SentenceTransformer's ~15-20s load once for the whole class, the same
+        # setUpClass pattern TestNlpConfidenceThreshold/TestGameBoot already use.
+        cls.index = RagIndex.__new__(RagIndex)
+        cls.index.event_bus = EventBus()
+        cls.index.model = SentenceTransformer("all-MiniLM-L6-v2")
+
+    def setUp(self):
+        # Fresh per test -- these are cheap, in-memory attributes, not the shared model.
+        self.index = self.__class__.index
+        self.index.top_k = 3
+        self.index.confidence_threshold = 0.3
+        self.index.chunks = []
+        self.index.chunk_embeddings = None
+        self.index.ready = False
+
+    def test_chunk_page_text_splits_long_text_into_word_bounded_chunks(self):
+        sentence = "The dragon flies over the mountain peak. "
+        long_text = sentence * 40  # ~320 words, well past MAX_CHUNK_WORDS (180)
+        chunks = self.index._chunk_page_text(long_text)
+        self.assertGreater(len(chunks), 1)
+        for chunk in chunks:
+            self.assertLessEqual(len(chunk.split()), 180)
+
+    def test_chunk_page_text_drops_fragments_below_the_minimum(self):
+        self.assertEqual(self.index._chunk_page_text("Vigil. Castle Firrine."), [])
+
+    def test_chunk_page_text_returns_nothing_for_empty_input(self):
+        self.assertEqual(self.index._chunk_page_text(""), [])
+        self.assertEqual(self.index._chunk_page_text("   \n  "), [])
+
+    def test_extract_chunks_tags_each_chunk_with_its_source_and_page(self):
+        class FakePage:
+            def __init__(self, text):
+                self._text = text
+
+            def extract_text(self):
+                return self._text
+
+        class FakeReader:
+            def __init__(self, path):
+                filler = "word " * 60
+                self.pages = [FakePage(f"Page one lore. {filler}"), FakePage(f"Page two lore. {filler}")]
+
+        with patch("LLM_Rag.PdfReader", FakeReader):
+            chunks = self.index._extract_chunks(["scratch/fake_book.pdf"])
+
+        self.assertTrue(all(chunk["source"] == "fake_book" for chunk in chunks))
+        self.assertEqual({chunk["page"] for chunk in chunks}, {1, 2})
+
+    def test_cache_round_trips_chunks_and_embeddings(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            self.index.cache_dir = tmp_dir
+            chunks = [{"source": "book", "page": 1, "text": "Some lore text."}]
+            embeddings = np.array([[0.1, 0.2, 0.3]], dtype=np.float32)
+            self.index._save_cache("fakekey", chunks, embeddings)
+
+            loaded_chunks, loaded_embeddings = self.index._load_cache("fakekey")
+            self.assertEqual(loaded_chunks, chunks)
+            np.testing.assert_array_almost_equal(loaded_embeddings, embeddings)
+
+    def test_load_cache_returns_none_when_nothing_cached(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            self.index.cache_dir = tmp_dir
+            chunks, embeddings = self.index._load_cache("no-such-key")
+            self.assertIsNone(chunks)
+            self.assertIsNone(embeddings)
+
+    def test_cache_key_changes_when_a_source_file_changes(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = os.path.join(tmp_dir, "book.pdf")
+            with open(path, "wb") as f:
+                f.write(b"original content")
+            key_before = self.index._cache_key([path])
+
+            with open(path, "wb") as f:
+                f.write(b"edited content, different size")
+            key_after = self.index._cache_key([path])
+
+            self.assertNotEqual(key_before, key_after)
+
+    def test_query_returns_nothing_before_the_index_is_ready(self):
+        self.index.ready = False
+        self.assertEqual(self.index.query("anything"), [])
+
+    def test_query_ranks_the_closest_chunk_first_and_respects_the_threshold(self):
+        chunks = [
+            {"source": "book", "page": 1, "text": "Brevoy is a cold northern nation of two rival houses."},
+            {"source": "book", "page": 2, "text": "The chef seasons the soup with fresh basil and garlic."},
+            {"source": "book", "page": 3, "text": "House Orlovsky and House Surtova both claim Brevoy's throne."},
+        ]
+        embeddings = self.index.model.encode([c["text"] for c in chunks], convert_to_numpy=True)
+        norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+        self.index.chunks = chunks
+        self.index.chunk_embeddings = embeddings / norms
+        self.index.ready = True
+
+        results = self.index.query("Tell me about the rival houses of Brevoy", top_k=2)
+
+        self.assertGreater(len(results), 0)
+        self.assertLessEqual(len(results), 2)
+        top_chunk, top_score = results[0]
+        self.assertIn(top_chunk["page"], (1, 3))
+        for _chunk, score in results:
+            self.assertGreaterEqual(score, self.index.confidence_threshold)
+
+    def test_query_returns_nothing_for_an_unrelated_query_above_threshold(self):
+        chunks = [
+            {"source": "book", "page": 1, "text": "Brevoy is a cold northern nation of two rival houses."},
+        ]
+        embeddings = self.index.model.encode([c["text"] for c in chunks], convert_to_numpy=True)
+        norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+        self.index.chunks = chunks
+        self.index.chunk_embeddings = embeddings / norms
+        self.index.ready = True
+
+        results = self.index.query("How do I bake a chocolate cake", confidence_threshold=0.6)
+        self.assertEqual(results, [])
 
 
 def lines_of(app, widget_id):
