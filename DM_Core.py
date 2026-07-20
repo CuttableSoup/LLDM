@@ -76,6 +76,11 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             an attack ability. Combat (a target present that is hostile toward the player)
             narrates once per round via "round_resolved"; everything else (no target, or a
             non-hostile target like a tavern NPC) narrates immediately via "action_resolved".
+            The body below is a thin sequencer over the phase helpers just under it
+            (_resolve_action_skill, _try_item_test_action, _apply_target_redirect,
+            _resolve_roll, _apply_damage_if_hit, _attach_defender_details,
+            _resolve_combat_round) -- each one is independently callable/testable the same
+            way every other dm_core.<method>(...) call site already is.
         @param data The action_detected payload from NLPCore ({skill, score, input, target?}).
             "skill" is usually a plain skill name, but may also be a named technique/spell
             the player owns (ex: "cleave") -- resolve_named_ability/select_ability_skill are
@@ -89,25 +94,74 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         skill_name = data.get("skill")
         if not skill_name:
             return
+        skill_name, named_ability = self._resolve_action_skill(skill_name)
 
+        explicit_target = data.get("target")
+        item_result = self._try_item_test_action(explicit_target, skill_name, data.get("input"))
+        if item_result is not None:
+            self.event_bus.publish("action_resolved", item_result)
+            return
+
+        self._apply_target_redirect(explicit_target)
+        target_name = self.current_target
+
+        result, ability, via_test = self._resolve_roll(skill_name, named_ability, target_name)
+        self._apply_damage_if_hit(result, skill_name, named_ability, ability, target_name, via_test)
+        self._attach_defender_details(result, target_name)
+        result["input"] = data.get("input")
+
+        if target_name is not None and self.is_hostile(target_name, self.player_name):
+            self._resolve_combat_round(result)
+            self.event_bus.publish("round_resolved", result)
+        else:
+            self.event_bus.publish("action_resolved", result)
+
+    def _resolve_action_skill(self, skill_name):
+        """!
+        @brief Resolves a matched action name down to the skill it's actually rolled with.
+            skill_name is usually already a plain skill name, but may instead name a
+            technique/spell the player owns (ex: "cleave") -- resolve_named_ability/
+            select_ability_skill convert that into the skill it rolls against, while keeping
+            the named ability itself so the damage step further down uses it directly
+            instead of re-deriving a generic weapon/innate ability.
+        @param skill_name The skill or ability name from the action_detected payload.
+        @return (skill_name, named_ability) -- named_ability is None if skill_name was
+            already a plain skill.
+        """
         named_ability = self.resolve_named_ability(self.player_name, skill_name)
         if named_ability:
             skill_name = self.select_ability_skill(self.player_name, named_ability) or skill_name
+        return skill_name, named_ability
 
-        explicit_target = data.get("target")
-
-        # A named item (ex: "the cursed dagger") with its own [entity.test], reached one level
-        # deeper than the scene itself (already in the player's inventory, or sitting in an
-        # unlocked/open container) -- resolved as its own flat check, never as a combat
-        # redirect, since inspecting an item isn't an attack. Checked first, ahead of combat
-        # targeting, since the two are mutually exclusive outcomes for the same explicit_target.
+    def _try_item_test_action(self, explicit_target, skill_name, input_text):
+        """!
+        @brief Tries to resolve explicit_target as a named item one level deeper than the
+            scene itself (ex: "the cursed dagger" already in inventory, or sitting in an
+            unlocked/open container), reached via its own [entity.test] rather than as a
+            combat redirect -- inspecting an item is never an attack. Checked ahead of combat
+            targeting since the two are mutually exclusive outcomes for the same
+            explicit_target.
+        @param explicit_target NLPCore's best-guess target name (map_to_target), or None.
+        @param skill_name The skill being used, already resolved from any named ability.
+        @param input_text The player's raw input, attached to the result for narration.
+        @return A publish-ready action_resolved result dict, or None if explicit_target isn't
+            a reachable, testable item.
+        """
         item_test_target = self._resolve_item_test_target(explicit_target, skill_name)
-        if item_test_target:
-            result = self._resolve_item_test(item_test_target, skill_name)
-            result["input"] = data.get("input")
-            self.event_bus.publish("action_resolved", result)
-            return
+        if not item_test_target:
+            return None
+        result = self._resolve_item_test(item_test_target, skill_name)
+        result["input"] = input_text
+        return result
 
+    def _apply_target_redirect(self, explicit_target):
+        """!
+        @brief Honors an explicit, NLP-matched target as a combat redirect -- only if it
+            names a live, hostile, in-scene entity. Naming a confidently-matched but
+            non-hostile entity (ex: an ally) is silently ignored rather than making it the
+            target; leaves self.current_target untouched if explicit_target doesn't qualify.
+        @param explicit_target NLPCore's best-guess target name (map_to_target), or None.
+        """
         if (
             explicit_target
             and explicit_target in self.scenario_entities
@@ -116,7 +170,19 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         ):
             self.current_target = explicit_target
 
-        target_name = self.current_target
+    def _resolve_roll(self, skill_name, named_ability, target_name):
+        """!
+        @brief Rolls the actual check for this action: a flat difficulty check against the
+            target's own [entity.test] if one applies (ex: a chest's lock), a range-gated
+            opposed check against a live combat target, or an untargeted resolve_action if
+            there's no target at all.
+        @param skill_name The skill being used, already resolved from any named ability.
+        @param named_ability The resolved ability entity (technique/spell), or None.
+        @param target_name self.current_target, or None.
+        @return (result, ability, via_test) -- ability is the attack ability resolved for the
+            roll, if any, needed again by _apply_damage_if_hit; via_test is True if this was a
+            flat [entity.test] check, which must never also roll bonus weapon damage.
+        """
         test = self.entities.get(target_name, {}).get("test") if target_name else None
         via_test = False
         ability = None
@@ -154,64 +220,80 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
                 result = self.resolve_opposed_action(self.player_name, skill_name, target_name)
         else:
             result = self.resolve_action(self.player_name, skill_name)
+        return result, ability, via_test
 
+    def _apply_damage_if_hit(self, result, skill_name, named_ability, ability, target_name, via_test):
+        """!
+        @brief Rolls and attaches bonus weapon/ability damage if the roll succeeded against a
+            target and wasn't a flat [entity.test] check -- a test-path success (ex: a
+            lockpick) must never also roll bonus weapon damage even if skill_name happens to
+            match an equipped weapon/ability (ex: a future finesse-based dagger matching the
+            chest's finesse-skill lock test).
+        @param result The roll result from _resolve_roll, mutated in place with "damage" if hit.
+        @param skill_name The skill being used, already resolved from any named ability.
+        @param named_ability The resolved ability entity (technique/spell), or None.
+        @param ability The attack ability from _resolve_roll, if already resolved there --
+            only the test/no-target branches leave it None, in which case it's re-derived here.
+        @param target_name self.current_target, or None.
+        @param via_test True if the roll was a flat [entity.test] check.
+        """
         if result["success"] and target_name and not via_test:
-            # A test-path success (ex: a lockpick) is a flat difficulty check, not an attack --
-            # it must never also roll bonus weapon damage even if skill_name happens to match
-            # an equipped weapon/ability (ex: a future finesse-based dagger matching the chest's
-            # finesse-skill lock test). ability is already resolved from the elif branch above
-            # in the common case; only the test/no-target branches (where it's never needed)
-            # leave it None.
             if ability is None:
                 ability = named_ability or self.find_attack_ability(self.player_name, skill_name)
             if ability:
                 result["damage"] = self.calculate_damage(self.player_name, target_name, ability)
 
+    def _attach_defender_details(self, result, target_name):
+        """!
+        @brief Attaches defender flavor text to the result -- belt-and-suspenders against the
+            persistent character roster (see scenario_loaded's "characters" payload) ever
+            being stale.
+        @param result The roll result, mutated in place with "defender_details" if
+            describe_character returns anything.
+        @param target_name self.current_target, or None.
+        """
         if target_name:
             defender_details = self.describe_character(target_name, toward_name=self.player_name)
             if defender_details:
                 result["defender_details"] = defender_details
 
-        result["input"] = data.get("input")
-
-        in_combat = target_name is not None and self.is_hostile(target_name, self.player_name)
-        if in_combat:
-            self.round_number += 1
-            result["round"] = self.round_number
-            # Every other living entity in the scene gets to act this round, via its own
-            # [[entity.behavior]] -- not just target_name -- so combat is mutual (a wolf
-            # biting back) and allies pull their weight too (ex: thane striking whatever the
-            # player is currently fighting). A hostile entity attacks the player; a
-            # non-hostile one (an ally) attacks self.current_target instead. An entity with no
-            # matching behavior (no behavior data, or none of its requirements currently hold,
-            # ex: it's already at 0 HP) simply doesn't act. Every actor's outcome is still
-            # resolved independently against the state at the start of the round (see the
-            # current_target note below) -- initiative only orders how the round is presented,
-            # it doesn't make an earlier actor's roll affect a later one's.
-            result["initiative"] = self.roll_initiative(self.player_name)
-            turns = []
-            for entity_name in self.scenario_entities:
-                if entity_name == self.player_name:
-                    continue
-                opponent = self.player_name if self.is_hostile(entity_name, self.player_name) else self.current_target
-                if not opponent:
-                    continue
-                turn_result = self.resolve_behavior_action(entity_name, opponent)
-                if turn_result:
-                    turn_result["actor"] = entity_name
-                    turn_result["initiative"] = self.roll_initiative(entity_name)
-                    turns.append(turn_result)
-            if turns:
-                turns.sort(key=lambda turn: turn["initiative"], reverse=True)
-                result["turns"] = turns
-            # current_target only advances once, at the end of the round, if it died -- not
-            # interrupted mid-round by an earlier actor's kill (ex: an ally finishing it off
-            # before the round is even done resolving).
-            if self.current_target and self.get_current_hp(self.current_target) <= 0:
-                self.current_target = self._choose_combat_target()
-            self.event_bus.publish("round_resolved", result)
-        else:
-            self.event_bus.publish("action_resolved", result)
+    def _resolve_combat_round(self, result):
+        """!
+        @brief Runs every other living scene entity's own turn this round -- not just
+            self.current_target -- so combat is mutual (a wolf biting back) and allies pull
+            their weight too (ex: thane striking whatever the player is currently fighting).
+            A hostile entity attacks the player; a non-hostile one (an ally) attacks
+            self.current_target instead. An entity with no matching behavior (no behavior
+            data, or none of its requirements currently hold, ex: it's already at 0 HP) simply
+            doesn't act. Every actor's outcome is still resolved independently against the
+            state at the start of the round -- initiative only orders how the round is
+            presented, it doesn't make an earlier actor's roll affect a later one's.
+        @param result The player's own roll result, mutated in place with "round",
+            "initiative", and "turns".
+        """
+        self.round_number += 1
+        result["round"] = self.round_number
+        result["initiative"] = self.roll_initiative(self.player_name)
+        turns = []
+        for entity_name in self.scenario_entities:
+            if entity_name == self.player_name:
+                continue
+            opponent = self.player_name if self.is_hostile(entity_name, self.player_name) else self.current_target
+            if not opponent:
+                continue
+            turn_result = self.resolve_behavior_action(entity_name, opponent)
+            if turn_result:
+                turn_result["actor"] = entity_name
+                turn_result["initiative"] = self.roll_initiative(entity_name)
+                turns.append(turn_result)
+        if turns:
+            turns.sort(key=lambda turn: turn["initiative"], reverse=True)
+            result["turns"] = turns
+        # current_target only advances once, at the end of the round, if it died -- not
+        # interrupted mid-round by an earlier actor's kill (ex: an ally finishing it off
+        # before the round is even done resolving).
+        if self.current_target and self.get_current_hp(self.current_target) <= 0:
+            self.current_target = self._choose_combat_target()
 
     def _on_item_interaction_detected(self, data):
         """!
