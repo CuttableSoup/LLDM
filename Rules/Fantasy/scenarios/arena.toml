@@ -1,10 +1,14 @@
 [scenario]
 name = "The Arena"
 description = "A large arena. Dried blood spatters paint the dirt. The crowd demands to be entertained."
-distance_multiplier = 3
+# Walled combat ring -- enclosed = true, so retreat is capped at band "bands" rather than
+# unbounded (see DM_Movement.py's "Movement and range"). 4 bands gives room to kite before
+# hitting the wall.
+bands = 4
+enclosed = true
 entities = [
-    { name = "gladstone", band = 0 },
-    { name = "wolf", band = 0 },
-    { name = "wolf", band = 0 },
-    { name = "thane", band = 0 }
+    { name = "gladstone", band = 1 },
+    { name = "wolf", band = 1 },
+    { name = "wolf", band = 1 },
+    { name = "thane", band = 1 }
 ]

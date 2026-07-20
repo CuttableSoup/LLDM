@@ -26,6 +26,15 @@ GIVE_KEYWORDS = ("give ", "hand over", "offer ")
 TRADE_KEYWORDS = ("trade ", "buy ", "purchase ")
 OPEN_KEYWORDS = ("open the ", "open it")
 CLOSE_KEYWORDS = ("close the ", "close it", "shut the ", "shut it")
+# Movement/positioning (see DM_Movement.py) -- like open/close, these act on the whole scene
+# rather than a named item, so no map_to_item lookup ever runs for them either. Phrases, not
+# bare "move ", since a bare word would swallow unrelated skill phrasing the same way a bare
+# "close " would have (see the module note above) -- none of these collide with any
+# skills.toml keyword list. Deliberately no "close the distance" here even though it's a
+# natural phrasing -- CLOSE_KEYWORDS' "close the " is checked first (see _detect_item_intent)
+# and would swallow it as a "close" intent instead.
+ADVANCE_KEYWORDS = ("advance", "move closer", "approach", "move toward", "move in", "step closer")
+RETREAT_KEYWORDS = ("retreat", "back away", "back off", "fall back", "step back", "withdraw", "move away")
 
 # map_to_item checks these before any embedding match -- currency is a plain integer field
 # (entity["currency"]), not an object-supertype entity with a name/description to embed.
@@ -95,10 +104,11 @@ class NLPCore:
             return
 
         intent = self._detect_item_intent(processed)
-        if intent in ("open", "close"):
+        if intent in ("open", "close", "advance", "retreat"):
             # These act on the current scene target directly (ex: "open the chest" opens
-            # *the* chest, not some named item inside it) -- no item name to resolve at all,
-            # so map_to_item never runs for them.
+            # *the* chest, not some named item inside it), or on the scene as a whole (ex:
+            # "advance" moves relative to every living entity, not one named item) -- no item
+            # name to resolve at all, so map_to_item never runs for them.
             self.event_bus.publish("item_interaction_detected", {
                 "intent": intent, "item_name": None, "input": processed, "score": None,
             })
@@ -136,7 +146,7 @@ class NLPCore:
         """!
         @brief Checks processed input for an item-interaction verb, ahead of skill matching.
         @param processed_text The cleaned and processed player input.
-        @return "examine", "take", "give", "trade", "open", "close", or None.
+        @return "examine", "take", "give", "trade", "open", "close", "advance", "retreat", or None.
         """
         if any(keyword in processed_text for keyword in EXAMINE_KEYWORDS):
             return "examine"
@@ -150,9 +160,10 @@ class NLPCore:
             return "open"
         if any(keyword in processed_text for keyword in CLOSE_KEYWORDS):
             return "close"
-        # TODO: movement/positioning on a battle grid is the anticipated next intent here (no
-        # "move"/"go" keyword exists yet) -- blocked on band/range-aware difficulty, which
-        # current_target-based targeting doesn't provide today.
+        if any(keyword in processed_text for keyword in ADVANCE_KEYWORDS):
+            return "advance"
+        if any(keyword in processed_text for keyword in RETREAT_KEYWORDS):
+            return "retreat"
         return None
 
     def _detect_save_load_intent(self, processed_text):

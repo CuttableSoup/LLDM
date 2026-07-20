@@ -172,9 +172,9 @@ template has `is_player = true`, not a runtime selection UI.
 `get_attitude`'s six-value array (`disposition, trust, confidence, respect, obligation,
 intimacy`, each -100..100 nominally) is exactly the kind of thing an LLM can't calibrate on its
 own — `"38 disposition"` means nothing to it, but `"is warm and well-disposed toward them"`
-does. `[[attitude_tier]]` (`rules.toml`) is a small band table, same general shape as
-`[[range_modifier]]`: seven tiers (`hostile`, `unfriendly`, `wary`, `neutral`, `warm`,
-`friendly`, `devoted`), each a `{name, minimum, maximum}` range plus one phrase per axis.
+does. `[[attitude_tier]]` (`rules.toml`) is a small band table: seven tiers (`hostile`,
+`unfriendly`, `wary`, `neutral`, `warm`, `friendly`, `devoted`), each a `{name, minimum,
+maximum}` range plus one phrase per axis.
 `DMCore.get_attitude_tier(value)` clamps the value to **[-150, 150]** first — headroom past the
 nominal -100..100 range for whenever attitudes get modified at runtime (nothing does yet, but
 the two outer tiers are already sized to absorb it: `hostile` is -150..-100, `devoted` is
@@ -215,7 +215,8 @@ with an empty `self.scenario` used to let `LLMCore` narrate an opening scene wit
 name/description, which the LLM would happily hallucinate (ex: a "featureless gray void")
 with zero indication anything had gone wrong. `load_scenario()` then turns the scenario's
 entity list into independent instances: deep-copies each named template, tags it with its
-scenario `band`, and disambiguates duplicates (`wolf`, `wolf_2`, ...) so two wolves don't
+scenario-authored starting `band` (see "Movement and range", including the player's own entry,
+which now gets one too), and disambiguates duplicates (`wolf`, `wolf_2`, ...) so two wolves don't
 share one HP pool. Each instance also gets its own `entity_id` field matching its unique key,
 so identity travels with the dict itself, not just the `self.entities` lookup key.
 
@@ -234,8 +235,8 @@ named scenario file backs it (ex: `TestScenarioLoading`'s ad-hoc single-wolf sce
 `_get_target_name()` still always returns the *first* non-player instance — that's now
 deliberately reserved for non-combat interaction resolution (item interactions, entity tests
 against objects like the chest), which never needs hostility-awareness. Combat targeting
-itself moved to `self.current_target` (see "Targeting and multi-actor combat rounds"); no
-band/range awareness yet.
+itself moved to `self.current_target` (see "Targeting and multi-actor combat rounds");
+distance/range awareness for it is now real (see "Movement and range").
 
 **`self.entities` holds templates and live instances under the same keys, and instancing
 overwrites the template slot.** For a single-occurrence entity (ex: `gladstone`, or the first
@@ -278,10 +279,11 @@ independent places that both funnel into the same handlers:
 **What `DMCore.save_game` writes** is a diff from a fresh instantiation, not a raw dump of
 `self.entities` (which also holds every static template — see the note above): `scenario_key`,
 `player_name`, `round_number`, `scenario_entities`, and per-instance
-`{hp, active_conditions, currency, inventory}` — the only fields anything in `DMCore`'s
-implementation actually mutates at runtime (`apply_damage`, `apply_condition`/`dismiss_condition`,
-`transfer_currency`, `transfer_item`). `equipped` and `band` are never saved because nothing
-mutates them post-instancing today.
+`{hp, active_conditions, currency, inventory, band}` — the only fields anything in
+`DMCore`'s implementation actually mutates at runtime (`apply_damage`,
+`apply_condition`/`dismiss_condition`, `transfer_currency`, `transfer_item`,
+`advance_or_retreat`/`move_entity` — see "Movement and range"). `equipped` is never saved
+because nothing mutates it post-instancing today.
 
 **What `DMCore.load_game` does:** re-runs `load_rules()` (fresh from every `Rules/Fantasy/*.toml`
 file — see why above), then the same `load_scenario_definition`/`load_scenario` path `__init__`
@@ -409,6 +411,104 @@ actually in `scenario_entities`, hostile toward the player, and alive — same "
 global, DMCore checks scene-relevance" division of labor `map_to_item` already established.
 Naming a confidently-matched but non-hostile entity (ex: "I attack thane") is silently ignored
 rather than making an ally the target.
+
+## Movement and range
+
+`DM_Movement.py`'s `MovementMixin` gives every scenario entity — **the player included** — an
+objective `band`: a 1-indexed position on the scenario's own band line. This is the third and
+current design, after two earlier ones were built, tested, and then deliberately discarded in
+conversation before this one; grep git history / the session transcript if you want the full
+reasoning trail. In order: (1) notes.txt's original five fixed range bands (`[-2,-1,0,+1,+2]`,
+player party in the negative ones, enemy party in the positive), never implemented; (2) a
+triangularly-widening band scheme (band 1 = 1 unit wide, band 2 = 2 units, ...) that died
+because a flat movement-speed number had no coherent way to cross a variable-width band; (3) a
+one-dimensional continuous distance track, anchored at the player (player always at 0, everyone
+else stored as *distance from the player*) — this one was actually built, tested, and live-
+verified working, then torn out anyway once it became clear the anchor-relative design made two
+enemies always equidistant from each other by construction (never independently "closer" or
+"farther" from one another, only from the player). Objective bands fix that: every entity's
+`band` is a real position, not a relative offset, so `get_distance_between(a, b)` is just their
+two band numbers subtracted, and two entities in different bands are genuinely at different
+range from each other, not just from the player.
+
+**Moving is deterministic, not a skill roll, and flat-rate.** An entity's `speed` (a flat
+per-entity field, same category as `hp`/`currency`; unset defaults to `1`, "unless otherwise
+specified") is how many bands it can shift per move action — not a distance-in-units budget.
+Only the player can actually choose to move today, via `advance_or_retreat(direction)`; nothing
+else does yet (see the "known gap" below). Critically, **only the player's own band changes** —
+`advance`/`retreat` never touches any other entity's stored position. But because every gap is
+computed from both sides' band numbers, moving the player still changes their distance to
+*everyone* in the scene, and not always in the same direction: retreating from `current_target`
+(the entity the direction is computed relative to) can carry the player *toward* a different
+entity sitting on the opposite side of them, closing that gap even though "retreat" was the
+command. That emergent result is the entire reason the anchor-relative design (attempt 3, above)
+was rejected — it could never produce this, since every other entity moved in lockstep with the
+player there. **Tie-break, and a bug it caught:** if `current_target` is already in the same
+band (gap 0), "advance" is a no-op (nothing closer to get to); "retreat" prefers moving to a
+higher band number, falling back to a lower one only if higher is already blocked. That fallback
+isn't decorative — the first version always preferred lower, which meant retreating while
+engaged at band 1 of an enclosed room (already at the floor) silently did nothing on every
+attempt, caught by driving the real NLP pipeline by hand, not by any unit test.
+
+**A room's own `bands` count is also its wall, unless it says otherwise.** Every scenario now
+declares `bands` (int, minimum 1) and `enclosed` (bool), replacing the old, entirely unused
+`distance_multiplier` field. `move_entity`'s floor is always band 1; its ceiling is the
+scenario's own `bands` count, but *only* when `enclosed` is true (the default if the field is
+missing — safer to assume walls than to silently allow infinite retreat). `enclosed = false`
+(ex: the new `field` scenario) removes the ceiling entirely, and that absence *is* the escape
+mechanism — nothing else models fleeing the scene. Once the gap to every attacker's `range`
+is exceeded, nothing can touch the fleeing entity anymore, which is what getting away means.
+Live-verified: retreating 10 times in the open field scenario reached band 13 of a nominally
+6-band room, at which point a melee attempt against the abandoned wolf correctly came back
+`"out_of_range"`.
+
+**Reached via the same item-interaction pipeline as open/close, not the skill/dice system.**
+`NLPCore._detect_item_intent` recognizes `ADVANCE_KEYWORDS`/`RETREAT_KEYWORDS` and publishes
+`item_interaction_detected` with `item_name: None`, exactly like "open"/"close" — no
+`map_to_item` lookup, since there's no item to resolve. **Known, accepted ambiguity:** "close
+the distance" is *not* in `ADVANCE_KEYWORDS`, because `CLOSE_KEYWORDS`' `"close the "` is
+checked first and would swallow it as a "close" intent instead. `DMCore._on_item_interaction_detected`
+handles `"advance"`/`"retreat"` before the `is_locked` gate other intents go through — a locked
+chest must never stop the player from repositioning, since movement has nothing to do with
+reaching a container's contents.
+
+**Range is a single number now, in bands, and it's a pure reachability gate — no accuracy
+modifier.** An earlier version of this also had `[[range_modifier]]` in `rules.toml`:
+point-blank/short/medium/long tiers, each with its own `{dice, pips, bonus}` difficulty swing.
+That table is gone (removed, not just unused — the "no modifiers, keep it simple" decision
+that replaced it made it dead data, same as any other design-superseded TOML). Every
+weapon/spell/ability now carries a plain `range` int (in bands): absent defaults to `0`.
+`is_in_range(attacker, defender, ability)` returns `True` unconditionally when `ability` is
+`None` (ex: a `charisma` check — nothing physical to be out of reach of), otherwise checks
+`get_distance_between(attacker, defender) <= ability.get("range", 0)`:
+- **Melee only works in the same band as the target** (`range` absent or `0`) — an explicit
+  design rule, not a default that happened to fall out of something else. `items.toml`'s
+  `longsword` carries no `range` field at all; neither does any innate unarmed ability (a
+  bite, a punch) or `techniques.toml`'s `cleave` (explicit `range = 0`, since it shares
+  blades/axes' own reach rather than a separate weapon range).
+- **One deliberate exception: reach weapons.** `items.toml`'s `spear` (`skill = "polearms"`,
+  `range = 1`) can hit one band beyond plain melee — a strict superset of `range = 0` (gap 0
+  *or* 1), not a replacement for it.
+- **A genuinely ranged weapon or spell gets its own band count.** `items.toml`'s `long bow`
+  (`range = 6`) and `spells.toml`'s `fireball`/`splash flow` (`range = 5`) reach however far
+  their own data says, uniformly — no accuracy difference between a shot at band-gap 1 and
+  band-gap 6, unlike the removed tiered version.
+
+**`_on_action_detected` resolves the acting ability *before* rolling, not just for damage
+afterward as before**, so `is_in_range` can gate the roll itself: `False` means the roll never
+happens at all (`result["reason"] = "out_of_range"`, `roll`/`difficulty` stay `None`); `True`
+proceeds to a completely ordinary `resolve_opposed_action` call with no distance-related
+parameter at all now (the difficulty-modifier plumbing from the previous design was reverted
+along with removing `[[range_modifier]]`). The same `ability` reference is reused for the
+damage step afterward rather than looked up twice. `resolve_behavior_action` (creature/ally
+turns) is range-checked identically, returning `None` (the same "did nothing this turn" outcome
+as no matching behavior at all) if its chosen action is out of reach.
+
+**Known gap, deliberate:** creature/ally behavior never chooses to move — `choose_behavior`
+(see its own `# TODO` in `DM_Combat.py`) only ever picks an *attack*, never "close the distance
+first." A ranged combatant that starts out of its own weapon's reach (nothing does today; every
+scenario's starting `band` puts everyone together) simply can't act until the player advances.
+Teaching `[[entity.behavior]]` to move is the natural next step, not part of this pass.
 
 ## Status/condition system
 
@@ -684,9 +784,11 @@ roll. Six intents share one pipeline:
   that didn't happen. Since `item_name` is `None` for `"open"`/`"close"`, the prompt-building
   falls back to `container` (the target's own name) wherever it would otherwise quote the item.
 
-**Known gap, deliberately out of scope for now:** movement/positioning on a battle grid is
-anticipated as the next interaction verb once band/range targeting exists (see "Open threads"),
-but nothing here — not even a `move`/`go` keyword — attempts it yet.
+**Movement landed as a seventh/eighth pair of intents, `"advance"`/`"retreat"`** — see "Movement
+and range" for the full mechanism (three design attempts, only the last one kept). Not a battle
+grid (considered and deliberately rejected — no map UI or coordinate-aware NLP exists, and
+wasn't worth building for this); just two more `item_name: None` intents through this same
+pipeline, exactly like `"open"`/`"close"`.
 
 ## Tags vs. conditions
 
@@ -961,6 +1063,6 @@ Tracked as `# TODO:` comments at their actual call sites, not as a list here —
 like this drifts out of sync with the code the moment either one changes underneath it. Grep
 the codebase for `TODO` to find every open item (auto status dismissal in `DM_Status.py`,
 `enhance`'s deferred condition design in `rules.toml`, the unpublished GUI Party/Notes/Map tabs
-in `GUI_Core.py`, movement/positioning in `NLP_Core.py`,
+in `GUI_Core.py`, creature/ally behavior never choosing to move in `DM_Combat.py`,
 multi-instance target disambiguation and the item-identify keyword collision both in
 `NLP_Core.py`, and the chest-as-shop trade narration gap in `LLM_Core.py`).

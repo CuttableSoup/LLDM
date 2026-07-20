@@ -265,7 +265,10 @@ class CombatMixin(DMCoreProtocol):
 
     def resolve_opposed_action(self, attacker_name, skill_name, defender_name):
         """!
-        @brief Resolves a skill roll opposed by a defending entity's matching skill.
+        @brief Resolves a skill roll opposed by a defending entity's matching skill. Range
+            (see DM_Movement.py's is_in_range) is checked by the caller *before* this is
+            reached at all -- it's a pure reachability gate now, not a difficulty modifier,
+            so nothing here needs to know about distance.
         @param attacker_name The name of the acting entity.
         @param skill_name The skill being used by the attacker.
         @param defender_name The name of the opposing entity.
@@ -399,6 +402,10 @@ class CombatMixin(DMCoreProtocol):
             "status". Ex: creatures.toml's wolf has one behavior, "always attack
             while hp_per_remain >= 0.01", so it keeps attacking until it's
             effectively dead and then simply stops matching any behavior at all.
+        # TODO: a behavior only ever names an attack, never movement -- an entity whose chosen
+        # action is out of range (see resolve_behavior_action/get_range_modifier) just does
+        # nothing that turn rather than closing the distance first. No scenario today starts a
+        # ranged combatant out of its own weapon's reach, so this costs nothing in practice yet.
         @param entity_name The name of the entity choosing a behavior.
         @return The first matching behavior definition, or None if none match (or
                 the entity has no behavior list at all).
@@ -419,11 +426,20 @@ class CombatMixin(DMCoreProtocol):
             priority exists to disambiguate a skill name shared by multiple things; a
             behavior already knows exactly which ability it means, so there's nothing
             to disambiguate.
+
+            Range-checked exactly like the player's own attacks (see is_in_range in
+            DM_Movement.py) -- an entity whose only action is out of reach from target_name
+            (ex: a wolf whose bite is melee-only, and the player has retreated out of its
+            band) simply doesn't act this round, the same "no behavior currently matches"
+            outcome as having no behavior data at all. Nothing here makes the entity move to
+            close the distance instead -- see DM_Movement.py's module docstring for why
+            that's a deliberate follow-up, not part of this pass.
         @param entity_name The name of the acting entity (ex: a wolf).
         @param target_name The name of the entity being acted against (ex: the player).
         @return The behavior's resolution result dict (same shape as resolve_opposed_action's,
-            plus "damage" on a successful hit), or None if no behavior currently matches
-            or its named action isn't actually one of the entity's own abilities.
+            plus "damage" on a successful hit), or None if no behavior currently matches,
+            its named action isn't actually one of the entity's own abilities, or its target
+            is currently out of range.
         """
         behavior = self.choose_behavior(entity_name)
         if behavior is None:
@@ -435,6 +451,9 @@ class CombatMixin(DMCoreProtocol):
             self.event_bus.publish(
                 "log_warning", f"{entity_name}'s behavior names unknown action '{action_name}'."
             )
+            return None
+
+        if not self.is_in_range(entity_name, target_name, ability):
             return None
 
         skill_name = self.select_ability_skill(entity_name, ability)

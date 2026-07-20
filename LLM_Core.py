@@ -86,6 +86,20 @@ class LLMCore:
             passes its own name instead so the narration doesn't misattribute it.
         @return The outcome description as a string.
         """
+        # Set only by DMCore._on_action_detected/resolve_behavior_action when get_range_modifier
+        # (DM_Movement.py) says the target is too far away for this weapon/ability to reach at
+        # all -- no roll was attempted (unlike every other outcome this builds a line for), so
+        # this is worded as a distance problem rather than a missed attack.
+        if action_result.get("reason") == "out_of_range":
+            defender = action_result.get("defender")
+            input_text = action_result.get("input")
+            attempt_line = f"{actor.capitalize()} attempts: \"{input_text}\"\n" if input_text else ""
+            return (
+                f"{attempt_line}"
+                f"Skill used: {action_result.get('skill')} -- {defender or 'the target'} is too far "
+                f"away to reach with this right now, so no roll is attempted."
+            )
+
         outcome = "succeeds" if action_result.get("success") else "fails"
         defender = action_result.get("defender")
         opposing_skill = action_result.get("opposing_skill")
@@ -217,14 +231,16 @@ class LLMCore:
 
     def generate_item_interaction_response(self, data):
         """!
-        @brief Narrates an "examine"/"take"/"give"/"trade"/"open"/"close" attempt, resolved
-            with no dice roll (see DMCore._on_item_interaction_detected). "examine" only
-            ever describes; it's the deliberate alternative to items being auto-looted into
-            the player's inventory the moment a container opens (ex: a cursed weapon should
-            be seen and described before anyone decides to touch it).
+        @brief Narrates an "examine"/"take"/"give"/"trade"/"open"/"close"/"advance"/"retreat"
+            attempt, resolved with no dice roll (see DMCore._on_item_interaction_detected).
+            "examine" only ever describes; it's the deliberate alternative to items being
+            auto-looted into the player's inventory the moment a container opens (ex: a
+            cursed weapon should be seen and described before anyone decides to touch it).
         @param data The "item_interaction_resolved" payload ({intent, item_name, input, found,
-            description?, container?, reason?, amount?, price?}). "item_name" is None for
-            "open"/"close", which act on "container" (the scene target) directly.
+            description?, container?, reason?, amount?, price?, moved?}). "item_name" is None
+            for "open"/"close"/"advance"/"retreat", which act on the scene directly rather
+            than a named item; "moved" (advance/retreat only) is advance_or_retreat's own
+            list of {entity, before, after} distance changes.
         """
         intent = data.get("intent")
         self.event_bus.publish("log_info", f"Generating item interaction response ({intent}).")
@@ -287,6 +303,32 @@ class LLMCore:
                 f"The player closes {container}.\n"
                 f"Narrate this in 1-2 sentences as the Game Master."
             )
+        elif intent in ("advance", "retreat"):
+            # "moved" is advance_or_retreat's own {entity, before, after} list (DM_Movement.py)
+            # -- real band-gap numbers already earned by the player's own movement, never
+            # invented. Only the player's own band actually changes (see DM_Movement.py's
+            # module note), so the effect on any two entities isn't necessarily the same
+            # direction -- retreating from current_target can close the gap to something else
+            # entirely, which is why this doesn't claim a uniform "moves away from everyone".
+            moved = data.get("moved") or []
+            if moved:
+                movement_text = "; ".join(
+                    f"{entry['entity']} ({entry['before']} -> {entry['after']} bands away)" for entry in moved
+                )
+                verb = "advances" if intent == "advance" else "retreats"
+                prompt = (
+                    f"The player {verb}, changing how many bands away everyone present now is: "
+                    f"{movement_text}.\n"
+                    f"Narrate this brief repositioning in 1-2 sentences as the Game Master -- if "
+                    f"the numbers show the player got closer to one but farther from another, "
+                    f"that's real, not a mistake."
+                )
+            else:
+                prompt = (
+                    f"The player tries to {intent}, but there's no one else here for it to matter "
+                    f"against.\n"
+                    f"Narrate this in 1-2 sentences as the Game Master."
+                )
         elif item_name == "currency":
             if intent == "give":
                 prompt = (

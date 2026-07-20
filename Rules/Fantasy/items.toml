@@ -4,11 +4,28 @@ supertype = "object"
 subtype = "weapon"
 skill = "blades"
 max_hp = 10
-ranges = { short = 0 }
+# No "range" field at all -- melee, usable only in the same band as the target (see
+# DM_Movement.py's "Movement and range"; is_in_range treats a missing range as 0).
 damage_value = { dice = 1, pips = 2, bonus = "strength_damage" }
 damage_tags = [ "slashing" ]
 bulk = 1
 value = 15
+[entity.skills]
+fortitude = { dice = 3, pips = 0 }
+
+[[entity]]
+name = "spear"
+supertype = "object"
+subtype = "weapon"
+skill = "polearms"
+max_hp = 8
+# Reach weapon -- usable one band beyond plain melee (see DM_Movement.py's "Movement and
+# range"), the one deliberate exception to "melee only works in the same band as the target".
+range = 1
+damage_value = { dice = 1, pips = 1, bonus = "strength_damage" }
+damage_tags = [ "piercing" ]
+bulk = 1
+value = 12
 [entity.skills]
 fortitude = { dice = 3, pips = 0 }
 
@@ -18,7 +35,10 @@ supertype = "object"
 subtype = "weapon"
 skill = "missiles"
 max_hp = 5
-ranges = { short = 10, medium = 100, long = 250 }
+# In bands, not meters -- reaches every band a typical room/field has (see the "bands"
+# scenario field), same "no per-tier accuracy modifier, just in-range-or-not" rule every
+# ranged ability follows now.
+range = 6
 damage_value = { dice = 2, pips = 2, bonus = 0 }
 damage_tags = [ "piercing" ]
 bulk = 1

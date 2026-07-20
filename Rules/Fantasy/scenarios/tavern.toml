@@ -1,8 +1,9 @@
 [scenario]
 name = "The Rusty Tankard"
 description = "A cozy tavern. A fire crackles in the hearth while a few locals nurse their drinks."
-distance_multiplier = 1
+bands = 2
+enclosed = true
 entities = [
-    { name = "gladstone", band = 0 },
-    { name = "innkeeper", band = 0 }
+    { name = "gladstone", band = 1 },
+    { name = "innkeeper", band = 1 }
 ]

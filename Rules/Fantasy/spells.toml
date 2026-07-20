@@ -5,7 +5,9 @@ subtype = "evocation"
 description = "Hurl a bolt of arcane fire that bursts into flame on impact."
 skill = "arcane"
 difficulty = 10
-range = { minimum = 0, maximum = 60 }
+# In bands now, not meters -- same single-number range every weapon/ability uses (see
+# DM_Movement.py's "Movement and range").
+range = 5
 targets = { number = 1, aoe = 5 }
 damage_value = { dice = 5, pips = 0, bonus = 0 }
 damage_tags = [ "fire" ]
@@ -17,7 +19,7 @@ subtype = "evocation"
 description = "Conjure a sudden torrent of water and slam it into a single target."
 skill = "arcane"
 difficulty = 10
-range = { minimum = 0, maximum = 60 }
+range = 5
 targets = { number = 1, aoe = 0 }
 damage_value = { dice = 4, pips = 0, bonus = 0 }
 damage_tags = [ "water" ]

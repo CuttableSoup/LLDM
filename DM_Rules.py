@@ -126,7 +126,10 @@ class RulesMixin(DMCoreProtocol):
 
             instance = copy.deepcopy(template)
             instance["entity_id"] = instance_name
-            instance["band"] = entry.get("band")
+            # Objective, 1-indexed band position (see DM_Movement.py) -- every entity gets
+            # one, the player included, so gaps are computed the same way for everyone.
+            # Defaults to band 1 for any entry that doesn't specify one.
+            instance["band"] = entry.get("band", 1)
             # "conditions" is the template's starting state (ex: a chest's [entity.conditions.locked]);
             # "active_conditions" is the per-instance runtime dict apply_condition/dismiss_condition
             # mutate, so it must start as its own copy rather than sharing the template's dict.

@@ -1,27 +1,3 @@
-[[range_modifier]]
-name = "point blank"
-minimum = 0
-maximum = 3
-modifier = { dice = 0, pips = 0, bonus = -5 }
-
-[[range_modifier]]
-name = "short"
-minimum = 3
-maximum = "short"
-modifier = { dice = 0, pips = 0, bonus = 0 }
-
-[[range_modifier]]
-name = "medium"
-minimum = "short"
-maximum = "medium"
-modifier = { dice = 0, pips = 0, bonus = 5 }
-
-[[range_modifier]]
-name = "long"
-minimum = "medium"
-maximum = "long"
-modifier = { dice = 0, pips = 0, bonus = 10 }
-
 [[status]]
 name = "bruised"
 trigger = "on_damage"

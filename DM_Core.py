@@ -2,18 +2,20 @@ import os
 
 from DM_Combat import CombatMixin
 from DM_Inventory import InventoryMixin
+from DM_Movement import MovementMixin
 from DM_Persistence import PersistenceMixin
 from DM_Rules import RulesMixin, scenario_file_path
 from DM_Social import SocialMixin
 from DM_Status import StatusMixin
 
-class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, RulesMixin, PersistenceMixin):
+class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixin, RulesMixin, PersistenceMixin):
     """!
     @brief Main class handling the core mechanics of the RPG system. The implementation is
         composed from domain mixins in sibling files -- DM_Rules.py (rules/scenario
         loading), DM_Combat.py (dice/damage/ability resolution), DM_Status.py (the
         status/condition system and entity tests), DM_Inventory.py (currency/item
-        transfer), DM_Social.py (attitudes and character description), and
+        transfer), DM_Social.py (attitudes and character description), DM_Movement.py
+        (distance tracking, advance/retreat, range-based difficulty), and
         DM_Persistence.py (save/load) -- so that every dm_core.<method>(...) call site
         throughout the codebase and test_all.py keeps working unchanged regardless of
         which file actually defines a given method (Python's MRO flattens every mixin
@@ -117,13 +119,16 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, RulesMixin, 
         target_name = self.current_target
         test = self.entities.get(target_name, {}).get("test") if target_name else None
         via_test = False
+        ability = None
         if test and self.is_test_available(target_name, test, skill_name):
             via_test = True
             # An entity's own [entity.test] (ex: a chest's lock) is a flat difficulty check,
             # not an opposed roll -- it doesn't compete via the attacker's skill's `opposes`
-            # list the way a creature's defense does. Any *other* skill against this same
-            # target (ex: forcing the chest with "strength") still falls through to the normal
-            # opposed-skill path below, e.g. resolved against its "fortitude" if it has one.
+            # list the way a creature's defense does, and isn't subject to range either (you
+            # have to be adjacent to a chest to be interacting with its lock at all). Any
+            # *other* skill against this same target (ex: forcing the chest with "strength")
+            # still falls through to the normal opposed-skill path below, e.g. resolved
+            # against its "fortitude" if it has one.
             result = self.resolve_action(self.player_name, skill_name, test.get("difficulty", 0))
             result["defender"] = target_name
             result["opposing_skill"] = None
@@ -132,7 +137,21 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, RulesMixin, 
             if loot and (loot["currency"] or loot["items"]):
                 result["loot"] = loot
         elif target_name:
-            result = self.resolve_opposed_action(self.player_name, skill_name, target_name)
+            # Looked up before rolling (not just for damage afterward, as before) so distance
+            # can gate the attack roll itself -- is_in_range (DM_Movement.py) is a pure
+            # reachability check, not a difficulty modifier (see its own module note for why
+            # that per-tier accuracy idea was dropped). A skill with no matching ability
+            # (ex: "charisma") always comes back in range (nothing physical to be out of
+            # reach of), so this never gates a non-combat opposed check.
+            ability = named_ability or self.find_attack_ability(self.player_name, skill_name)
+            if not self.is_in_range(self.player_name, target_name, ability):
+                result = {
+                    "entity": self.player_name, "skill": skill_name, "roll": None, "difficulty": None,
+                    "success": False, "defender": target_name, "opposing_skill": None,
+                    "reason": "out_of_range",
+                }
+            else:
+                result = self.resolve_opposed_action(self.player_name, skill_name, target_name)
         else:
             result = self.resolve_action(self.player_name, skill_name)
 
@@ -140,8 +159,11 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, RulesMixin, 
             # A test-path success (ex: a lockpick) is a flat difficulty check, not an attack --
             # it must never also roll bonus weapon damage even if skill_name happens to match
             # an equipped weapon/ability (ex: a future finesse-based dagger matching the chest's
-            # finesse-skill lock test).
-            ability = named_ability or self.find_attack_ability(self.player_name, skill_name)
+            # finesse-skill lock test). ability is already resolved from the elif branch above
+            # in the common case; only the test/no-target branches (where it's never needed)
+            # leave it None.
+            if ability is None:
+                ability = named_ability or self.find_attack_ability(self.player_name, skill_name)
             if ability:
                 result["damage"] = self.calculate_damage(self.player_name, target_name, ability)
 
@@ -194,9 +216,11 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, RulesMixin, 
     def _on_item_interaction_detected(self, data):
         """!
         @brief Event handler for a free-text item-interaction match (see NLPCore.map_to_item):
-            "examine"/"take"/"give"/"trade" against a named item, or "open"/"close" against
-            the scene target itself. Deliberately bypasses the whole skill/dice system --
-            none of these warrant a roll. Publishes "item_interaction_resolved" either way,
+            "examine"/"take"/"give"/"trade" against a named item, "open"/"close" against
+            the scene target itself, or "advance"/"retreat" against the whole scene.
+            Deliberately bypasses the whole skill/dice system -- none of these warrant a
+            roll (see DM_Movement.py's module docstring for why movement specifically is
+            deterministic, not a check). Publishes "item_interaction_resolved" either way,
             with enough detail for narration to explain a miss (locked, closed, not present,
             not takeable, ...) rather than staying silent.
 
@@ -204,10 +228,12 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, RulesMixin, 
             the player to the target -- same transfer_item/transfer_currency primitives,
             just with source/destination swapped. "trade" additionally charges the item's
             TOML `value` as a price (denied outright if the player can't afford it, rather
-            than a partial payment). "examine" and "open"/"close" never move anything.
+            than a partial payment). "examine" and "open"/"close" never move anything;
+            "advance"/"retreat" move every living scenario entity's distance at once (see
+            advance_or_retreat in DM_Movement.py), not just one target.
         @param data The item_interaction_detected payload from NLPCore
-            ({intent, item_name, input, score}). "item_name" is None for "open"/"close",
-            which act on the scene target directly rather than a named item.
+            ({intent, item_name, input, score}). "item_name" is None for "open"/"close" and
+            "advance"/"retreat", all of which act on the scene directly rather than a named item.
         """
         intent = data.get("intent")
         item_name = data.get("item_name")
@@ -218,6 +244,15 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, RulesMixin, 
             self.event_bus.publish("item_interaction_resolved", {
                 "intent": intent, "item_name": item_name, "input": input_text, "found": found, **extra,
             })
+
+        if intent in ("advance", "retreat"):
+            # Unlike everything else this handler resolves, this isn't about target_name/
+            # the locked gate at all -- see advance_or_retreat's own docstring (DM_Movement.py)
+            # for why it shifts every living scenario entity's distance at once rather than
+            # just the current target.
+            moved = self.advance_or_retreat(intent)
+            resolved(True, moved=moved)
+            return
 
         if target_name and self.is_locked(target_name):
             resolved(False, reason="locked", container=target_name)

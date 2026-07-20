@@ -11,6 +11,10 @@ currency = 100
 max_bulk = 5
 weight = 150
 exp = 100
+# No explicit "speed" -- defaults to 1 band per "advance"/"retreat" action (see
+# DM_Movement.py), same as every other entity "unless otherwise specified". Only the player
+# actually moves today (creature/ally behavior doesn't choose to close distance -- see
+# DM_Movement.py's module notes for why that's a deliberate follow-up, not part of this pass).
 
 inventory = [
     "longsword",

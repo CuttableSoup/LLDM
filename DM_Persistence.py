@@ -35,7 +35,7 @@ class PersistenceMixin(DMCoreProtocol):
         """!
         @brief Writes this core's mechanical state to Saves/<slot_name>/dm_state.json -- a
             diff from a fresh instantiation (round_number, scenario_entities, and each
-            instance's hp/active_conditions/currency/inventory), not a raw dump of
+            instance's hp/active_conditions/currency/inventory/band), not a raw dump of
             self.entities, which also holds every static template. Loading re-instantiates
             fresh from Rules/Fantasy TOML and overlays this diff on top, so a save doesn't
             freeze stale stats if templates are edited between sessions. LLMCore
@@ -59,6 +59,7 @@ class PersistenceMixin(DMCoreProtocol):
                     "active_conditions": self.entities.get(name, {}).get("active_conditions", {}),
                     "currency": self.entities.get(name, {}).get("currency", 0),
                     "inventory": self.entities.get(name, {}).get("inventory", []),
+                    "band": self.get_band(name),
                 }
                 for name in self.scenario_entities
             },
@@ -120,6 +121,7 @@ class PersistenceMixin(DMCoreProtocol):
             entity["active_conditions"] = state.get("active_conditions", {})
             entity["currency"] = state.get("currency", entity.get("currency", 0))
             entity["inventory"] = state.get("inventory", entity.get("inventory", []))
+            entity["band"] = state.get("band", entity.get("band", 1))
 
         # load_scenario() (above) already reset current_target to a freshly-computed default --
         # overlay the saved value on top, same pattern as player_name, so a resumed fight keeps

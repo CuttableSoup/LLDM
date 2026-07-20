@@ -235,6 +235,25 @@ class TestNlpConfidenceThreshold(unittest.TestCase):
         # "close " keyword would have swallowed this before skill matching ever ran.
         self.assertIsNone(self.nlp_core._detect_item_intent("I fight in close combat"))
 
+    def test_detect_item_intent_recognizes_advance_and_retreat(self):
+        self.assertEqual(self.nlp_core._detect_item_intent("I advance toward the wolf"), "advance")
+        self.assertEqual(self.nlp_core._detect_item_intent("move closer"), "advance")
+        self.assertEqual(self.nlp_core._detect_item_intent("I approach the wolf"), "advance")
+        self.assertEqual(self.nlp_core._detect_item_intent("I retreat"), "retreat")
+        self.assertEqual(self.nlp_core._detect_item_intent("back away slowly"), "retreat")
+        self.assertEqual(self.nlp_core._detect_item_intent("fall back"), "retreat")
+
+    def test_close_the_distance_still_resolves_to_close_not_advance(self):
+        # A known, accepted ambiguity -- CLOSE_KEYWORDS' "close the " wins over this natural
+        # phrasing (see ADVANCE_KEYWORDS' own module note). Documented here so a future
+        # reader doesn't mistake it for an oversight.
+        self.assertEqual(self.nlp_core._detect_item_intent("close the distance"), "close")
+
+    def test_advance_retreat_keywords_do_not_misfire_on_unrelated_input(self):
+        # None of ADVANCE_KEYWORDS/RETREAT_KEYWORDS should collide with ordinary skill phrasing.
+        self.assertIsNone(self.nlp_core._detect_item_intent("I ask the innkeeper about the road"))
+        self.assertIsNone(self.nlp_core._detect_item_intent("I attack the wolf with my sword"))
+
     def test_full_pipeline_open_bypasses_item_name_matching(self):
         # "open"/"close" act on the scene target directly -- map_to_item should never even
         # run for them, so item_name is always None regardless of what's actually present.
@@ -249,6 +268,16 @@ class TestNlpConfidenceThreshold(unittest.TestCase):
         self.assertEqual(item_events[0]["intent"], "open")
         self.assertIsNone(item_events[0]["item_name"])
         self.assertEqual(detected_actions, [])
+
+    def test_full_pipeline_advance_bypasses_item_name_matching(self):
+        item_events = []
+        self.event_bus.subscribe("item_interaction_detected", item_events.append)
+
+        self.event_bus.publish("user_input_submitted", "I advance toward the wolf")
+
+        self.assertEqual(len(item_events), 1)
+        self.assertEqual(item_events[0]["intent"], "advance")
+        self.assertIsNone(item_events[0]["item_name"])
 
     def test_map_to_target_matches_a_named_creature(self):
         # Global catalog match, same as map_to_item -- arena.toml's wolf_2/thane are both
@@ -691,7 +720,7 @@ class TestCombatLoop(unittest.TestCase):
         # use that exact ability instead -- proven here by asserting find_attack_ability is
         # never even called.
         self.dm_core.entities["practice_dummy"] = {"name": "practice_dummy", "max_hp": 20, "skills": {}}
-        self.dm_core.scenario = {"entities": [{"name": "practice_dummy", "band": 0}]}
+        self.dm_core.scenario = {"entities": [{"name": "practice_dummy", "band": 1}]}
         self.dm_core.load_scenario()
 
         with patch.object(self.dm_core, "find_attack_ability", wraps=self.dm_core.find_attack_ability) as spy:
@@ -719,7 +748,7 @@ class TestCombatLoop(unittest.TestCase):
     def test_successful_attack_applies_damage_to_the_target(self):
         # Give the player an opponent with no matching opposing skill, so the attack auto-succeeds (difficulty 0).
         self.dm_core.entities["practice_dummy"] = {"name": "practice_dummy", "max_hp": 20, "skills": {}}
-        self.dm_core.scenario = {"entities": [{"name": "practice_dummy", "band": 0}]}
+        self.dm_core.scenario = {"entities": [{"name": "practice_dummy", "band": 1}]}
         self.dm_core.load_scenario()
 
         with patch("random.randint", return_value=3):
@@ -738,7 +767,7 @@ class TestCombatLoop(unittest.TestCase):
     def test_non_attack_skill_never_applies_damage(self):
         # "athletics" has no equipped weapon or innate ability tied to it, so no damage should occur even on a hit.
         self.dm_core.entities["practice_dummy"] = {"name": "practice_dummy", "max_hp": 20, "skills": {}}
-        self.dm_core.scenario = {"entities": [{"name": "practice_dummy", "band": 0}]}
+        self.dm_core.scenario = {"entities": [{"name": "practice_dummy", "band": 1}]}
         self.dm_core.load_scenario()
 
         self.dm_core._on_action_detected({"skill": "athletics", "input": "I climb the wall"})
@@ -751,7 +780,7 @@ class TestCombatLoop(unittest.TestCase):
         # narrate immediately via "action_resolved", not get batched as a combat round.
         action_events = []
         self.event_bus.subscribe("action_resolved", action_events.append)
-        self.dm_core.scenario = {"entities": [{"name": "gladstone", "band": 0}]}
+        self.dm_core.scenario = {"entities": [{"name": "gladstone", "band": 1}]}
         self.dm_core.load_scenario()
 
         self.dm_core._on_action_detected({"skill": "athletics", "input": "I climb the wall"})
@@ -777,6 +806,230 @@ class TestCombatLoop(unittest.TestCase):
         # one, ex: a "featureless gray void", with no indication anything had gone wrong).
         with self.assertRaises(FileNotFoundError):
             DMCore(EventBus(), scenario_name="does_not_exist")
+
+
+class TestMovementAndRange(unittest.TestCase):
+    def setUp(self):
+        self.event_bus = EventBus()
+        self.resolved = []
+        self.event_bus.subscribe("round_resolved", self.resolved.append)
+        self.event_bus.subscribe("action_resolved", self.resolved.append)
+        self.dm_core = DMCore(self.event_bus)  # arena: bands=4, enclosed=true, everyone starts band 1
+
+    # --- get_band / get_distance_between --------------------------------------------------
+
+    def test_every_entity_including_player_has_an_objective_band(self):
+        # Deliberately not a "player is always 0" special case anymore -- see DM_Movement.py's
+        # module note on why an earlier anchor-relative version was rejected.
+        self.dm_core.entities["gladstone"]["band"] = 3
+        self.assertEqual(self.dm_core.get_band("gladstone"), 3)
+
+    def test_get_band_defaults_to_one_when_unset(self):
+        del self.dm_core.entities["wolf"]["band"]
+        self.assertEqual(self.dm_core.get_band("wolf"), 1)
+
+    def test_get_distance_between_computes_the_gap(self):
+        self.dm_core.entities["gladstone"]["band"] = 2
+        self.dm_core.entities["wolf"]["band"] = 4
+        self.dm_core.entities["wolf_2"]["band"] = 1
+        self.assertEqual(self.dm_core.get_distance_between("gladstone", "wolf"), 2)
+        self.assertEqual(self.dm_core.get_distance_between("wolf", "wolf_2"), 3)
+
+    # --- move_entity: floor, and enclosed-vs-open ceiling ----------------------------------
+
+    def test_move_entity_clamps_at_band_one_floor(self):
+        self.dm_core.entities["wolf"]["band"] = 2
+        self.assertEqual(self.dm_core.move_entity("wolf", -5), 1)
+
+    def test_move_entity_applies_to_the_player_too(self):
+        # No more "no-op for the player" special case -- the player is a normal movable
+        # entity like everyone else now.
+        self.dm_core.entities["gladstone"]["band"] = 2
+        self.assertEqual(self.dm_core.move_entity("gladstone", 1), 3)
+
+    def test_move_entity_caps_at_the_rooms_band_count_when_enclosed(self):
+        self.assertTrue(self.dm_core.scenario.get("enclosed"))
+        self.assertEqual(self.dm_core.scenario.get("bands"), 4)
+        self.dm_core.entities["wolf"]["band"] = 4
+        self.assertEqual(self.dm_core.move_entity("wolf", 5), 4)  # hit the wall, stayed put
+
+    def test_move_entity_is_unbounded_when_not_enclosed(self):
+        field = DMCore(EventBus(), scenario_name="field")  # bands=6, enclosed=false
+        field.entities["wolf"]["band"] = 6
+        self.assertEqual(field.move_entity("wolf", 20), 26)  # no ceiling at all -- can flee
+
+    # --- advance_or_retreat: direction is toward/away from current_target ------------------
+
+    def test_advance_moves_the_player_toward_current_target(self):
+        self.assertEqual(self.dm_core.current_target, "wolf")
+        self.dm_core.entities["gladstone"]["band"] = 1
+        self.dm_core.entities["wolf"]["band"] = 4
+
+        self.dm_core.advance_or_retreat("advance")
+
+        self.assertEqual(self.dm_core.get_band("gladstone"), 2)  # moved one band toward wolf
+
+    def test_retreat_moves_the_player_away_from_current_target(self):
+        self.dm_core.entities["gladstone"]["band"] = 2
+        self.dm_core.entities["wolf"]["band"] = 4
+
+        self.dm_core.advance_or_retreat("retreat")
+
+        self.assertEqual(self.dm_core.get_band("gladstone"), 1)  # moved away from wolf
+
+    def test_retreating_from_one_enemy_can_close_the_gap_to_another(self):
+        # The headline reason objective bands replaced the earlier player-anchored model:
+        # current_target (wolf) is "ahead" of the player, wolf_2 is "behind" -- retreating
+        # from wolf necessarily moves toward wolf_2, since both share the same line and only
+        # the player's own band actually moves.
+        self.dm_core.entities["gladstone"]["band"] = 3
+        self.dm_core.entities["wolf"]["band"] = 4  # current_target, ahead
+        self.dm_core.entities["wolf_2"]["band"] = 1  # behind
+
+        moved = self.dm_core.advance_or_retreat("retreat")
+
+        self.assertEqual(self.dm_core.get_band("gladstone"), 2)
+        wolf_entry = next(e for e in moved if e["entity"] == "wolf")
+        wolf_2_entry = next(e for e in moved if e["entity"] == "wolf_2")
+        self.assertEqual(wolf_entry, {"entity": "wolf", "before": 1, "after": 2})  # farther
+        self.assertEqual(wolf_2_entry, {"entity": "wolf_2", "before": 2, "after": 1})  # closer
+
+    def test_advance_retreat_is_a_noop_with_no_current_target(self):
+        self.dm_core.current_target = None
+        self.assertEqual(self.dm_core.advance_or_retreat("advance"), [])
+
+    def test_advance_skips_dead_entities_from_the_moved_report(self):
+        self.dm_core.entities["gladstone"]["band"] = 3
+        self.dm_core.entities["wolf"]["band"] = 4
+        self.dm_core.entities["wolf_2"]["hp"] = 0
+        self.dm_core.entities["wolf_2"]["band"] = 1
+
+        moved = self.dm_core.advance_or_retreat("advance")
+
+        self.assertNotIn("wolf_2", {entry["entity"] for entry in moved})
+
+    # --- is_in_range -------------------------------------------------------------------
+
+    def test_is_in_range_is_always_true_for_non_attack_actions(self):
+        self.assertTrue(self.dm_core.is_in_range("gladstone", "wolf", None))
+
+    def test_melee_only_works_in_the_same_band_as_the_target(self):
+        # The explicit design rule this whole redesign was built around -- a longsword has
+        # no "range" field at all, so is_in_range must default that to 0.
+        longsword = self.dm_core.entities["longsword"]
+        self.dm_core.entities["wolf"]["band"] = 1
+        self.assertTrue(self.dm_core.is_in_range("gladstone", "wolf", longsword))
+        self.dm_core.entities["wolf"]["band"] = 2
+        self.assertFalse(self.dm_core.is_in_range("gladstone", "wolf", longsword))
+
+    def test_innate_ability_with_no_range_data_is_also_melee_only(self):
+        bite = self.dm_core.resolve_named_ability("wolf", "bite")
+        self.dm_core.entities["wolf"]["band"] = 3
+        self.assertFalse(self.dm_core.is_in_range("wolf", "gladstone", bite))
+
+    def test_reach_weapon_works_one_band_beyond_melee(self):
+        spear = self.dm_core.entities["spear"]
+        self.dm_core.entities["wolf"]["band"] = 1
+        self.assertTrue(self.dm_core.is_in_range("gladstone", "wolf", spear))  # gap 0
+        self.dm_core.entities["wolf"]["band"] = 2
+        self.assertTrue(self.dm_core.is_in_range("gladstone", "wolf", spear))  # gap 1, reach
+        self.dm_core.entities["wolf"]["band"] = 3
+        self.assertFalse(self.dm_core.is_in_range("gladstone", "wolf", spear))  # gap 2, too far
+
+    def test_ranged_weapon_reaches_its_own_declared_band_count(self):
+        long_bow = self.dm_core.entities["long bow"]  # range = 6
+        self.dm_core.entities["wolf"]["band"] = 7  # gap 6
+        self.assertTrue(self.dm_core.is_in_range("gladstone", "wolf", long_bow))
+        self.dm_core.entities["wolf"]["band"] = 8  # gap 7
+        self.assertFalse(self.dm_core.is_in_range("gladstone", "wolf", long_bow))
+
+    def test_spell_reaches_its_own_declared_band_count(self):
+        fireball = self.dm_core.entities["fireball"]  # range = 5
+        self.dm_core.entities["wolf"]["band"] = 6  # gap 5
+        self.assertTrue(self.dm_core.is_in_range("gladstone", "wolf", fireball))
+        self.dm_core.entities["wolf"]["band"] = 7  # gap 6
+        self.assertFalse(self.dm_core.is_in_range("gladstone", "wolf", fireball))
+
+    # --- integration through _on_action_detected / resolve_behavior_action ---------------
+
+    def test_out_of_range_attack_is_denied_without_a_roll(self):
+        self.dm_core.entities["wolf"]["band"] = 3  # longsword needs gap 0
+
+        self.dm_core._on_action_detected({"skill": "blades", "input": "I attack with my sword"})
+
+        result = self.resolved[-1]
+        self.assertFalse(result["success"])
+        self.assertEqual(result["reason"], "out_of_range")
+        self.assertIsNone(result["roll"])
+        self.assertNotIn("damage", result)
+
+    def test_in_range_ranged_attack_still_resolves_and_can_hit(self):
+        self.dm_core.entities["gladstone"]["equipped"]["rhand"] = "long bow"
+        self.dm_core.entities["wolf"]["band"] = 4  # gap 3, well within long bow's range=6
+
+        with patch("random.randint", return_value=6):
+            self.dm_core._on_action_detected({"skill": "missiles", "input": "I fire an arrow"})
+
+        result = self.resolved[-1]
+        self.assertNotEqual(result.get("reason"), "out_of_range")
+        self.assertIn("roll", result)
+
+    def test_resolve_behavior_action_returns_none_when_out_of_range(self):
+        self.dm_core.entities["wolf"]["band"] = 3  # bite needs gap 0 with gladstone at band 1
+
+        result = self.dm_core.resolve_behavior_action("wolf", "gladstone")
+
+        self.assertIsNone(result)
+
+    # --- _on_item_interaction_detected("advance"/"retreat") -------------------------------
+
+    def test_item_interaction_advance_moves_the_player_and_publishes_moved(self):
+        item_events = []
+        self.event_bus.subscribe("item_interaction_resolved", item_events.append)
+        self.dm_core.entities["gladstone"]["band"] = 1
+        self.dm_core.entities["wolf"]["band"] = 4
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "advance", "item_name": None, "input": "I advance", "score": None,
+        })
+
+        result = item_events[-1]
+        self.assertTrue(result["found"])
+        self.assertIsNone(result["item_name"])
+        self.assertEqual(self.dm_core.get_band("gladstone"), 2)
+        wolf_entry = next(e for e in result["moved"] if e["entity"] == "wolf")
+        self.assertEqual(wolf_entry, {"entity": "wolf", "before": 3, "after": 2})
+
+    def test_item_interaction_advance_is_not_blocked_by_a_locked_container(self):
+        # Unlike take/give/trade, movement never routes through the is_locked gate -- a
+        # locked chest in the scene must never stop the player from repositioning.
+        dungeon = DMCore(EventBus(), scenario_name="dungeon")
+        item_events = []
+        dungeon.event_bus.subscribe("item_interaction_resolved", item_events.append)
+        self.assertTrue(dungeon.is_locked("chest"))
+
+        dungeon._on_item_interaction_detected({
+            "intent": "retreat", "item_name": None, "input": "I back away", "score": None,
+        })
+
+        self.assertTrue(item_events[-1]["found"])
+
+    # --- save/load persists band ------------------------------------------------------------
+
+    def test_advance_or_retreat_is_saved_and_restored(self):
+        self.dm_core.entities["gladstone"]["band"] = 1
+        self.dm_core.entities["wolf"]["band"] = 4
+        self.dm_core.advance_or_retreat("advance")
+        band_before = self.dm_core.get_band("gladstone")
+
+        self.dm_core.save_game("test_movement_save")
+        self.dm_core.entities["gladstone"]["band"] = 1  # mutate away from the saved value
+        self.dm_core.load_game("test_movement_save")
+
+        self.assertEqual(self.dm_core.get_band("gladstone"), band_before)
+
+        import shutil
+        shutil.rmtree(self.dm_core._save_slot_dir("test_movement_save"), ignore_errors=True)
 
 
 class TestEntityBehavior(unittest.TestCase):
@@ -852,7 +1105,7 @@ class TestEntityBehavior(unittest.TestCase):
 
     def test_target_without_behavior_data_does_not_counterattack(self):
         self.dm_core.entities["practice_dummy"] = {"name": "practice_dummy", "max_hp": 20, "skills": {}}
-        self.dm_core.scenario = {"entities": [{"name": "practice_dummy", "band": 0}]}
+        self.dm_core.scenario = {"entities": [{"name": "practice_dummy", "band": 1}]}
         self.dm_core.load_scenario()
 
         self.dm_core._on_action_detected({"skill": "athletics", "input": "I test my footing"})
@@ -1038,7 +1291,7 @@ class TestScenarioLoading(unittest.TestCase):
 
     def test_current_target_skips_an_ally_even_when_listed_first(self):
         self.dm_core.scenario = {"entities": [
-            {"name": "thane", "band": 0}, {"name": "wolf", "band": 0},
+            {"name": "thane", "band": 1}, {"name": "wolf", "band": 1},
         ]}
         self.dm_core.load_scenario()
         self.assertEqual(self.dm_core.current_target, "wolf")
@@ -1057,15 +1310,15 @@ class TestScenarioLoading(unittest.TestCase):
 
     def test_instances_carry_their_scenario_band(self):
         self.dm_core.scenario = {"entities": [
-            {"name": "wolf", "band": -1},
             {"name": "wolf", "band": 2},
+            {"name": "wolf", "band": 5},
         ]}
         self.dm_core.load_scenario()
-        self.assertEqual(self.dm_core.entities["wolf"]["band"], -1)
-        self.assertEqual(self.dm_core.entities["wolf_2"]["band"], 2)
+        self.assertEqual(self.dm_core.entities["wolf"]["band"], 2)
+        self.assertEqual(self.dm_core.entities["wolf_2"]["band"], 5)
 
     def test_unknown_entity_in_scenario_is_skipped_not_crashed(self):
-        self.dm_core.scenario = {"entities": [{"name": "griffin", "band": 0}]}
+        self.dm_core.scenario = {"entities": [{"name": "griffin", "band": 1}]}
         self.dm_core.load_scenario()
         self.assertEqual(self.dm_core.scenario_entities, [])
 
@@ -1074,7 +1327,7 @@ class TestScenarioLoading(unittest.TestCase):
         self.assertEqual(target, "wolf")
 
     def test_reloading_scenario_resets_instances(self):
-        self.dm_core.scenario = {"entities": [{"name": "wolf", "band": 0}]}
+        self.dm_core.scenario = {"entities": [{"name": "wolf", "band": 1}]}
         self.dm_core.load_scenario()
         self.assertEqual(self.dm_core.scenario_entities, ["wolf"])
 
@@ -1506,7 +1759,7 @@ class TestOpenClose(unittest.TestCase):
     def test_open_close_on_a_non_container_fails_safe(self):
         # innkeeper (tavern.toml) is subtype "humanoid", not "container" -- opening/closing
         # a person must fail safely rather than silently applying a nonsensical condition.
-        self.dm_core.scenario = {"entities": [{"name": "gladstone", "band": 0}, {"name": "innkeeper", "band": 0}]}
+        self.dm_core.scenario = {"entities": [{"name": "gladstone", "band": 1}, {"name": "innkeeper", "band": 1}]}
         self.dm_core.load_scenario()
 
         self._open()
@@ -1516,7 +1769,7 @@ class TestOpenClose(unittest.TestCase):
         self.assertEqual(result["reason"], "not_openable")
 
     def test_open_close_with_no_target_fails_safe(self):
-        self.dm_core.scenario = {"entities": [{"name": "gladstone", "band": 0}]}
+        self.dm_core.scenario = {"entities": [{"name": "gladstone", "band": 1}]}
         self.dm_core.load_scenario()
 
         self._open()
@@ -1564,7 +1817,7 @@ class TestGiveAndTrade(unittest.TestCase):
         self.assertEqual(result["reason"], "not_present")
 
     def test_give_with_no_target_reports_no_recipient(self):
-        self.dm_core.scenario = {"entities": [{"name": "gladstone", "band": 0}]}
+        self.dm_core.scenario = {"entities": [{"name": "gladstone", "band": 1}]}
         self.dm_core.load_scenario()
 
         self.dm_core._on_item_interaction_detected({
@@ -1577,7 +1830,7 @@ class TestGiveAndTrade(unittest.TestCase):
     def test_trade_charges_the_items_toml_value_and_moves_it_to_the_player(self):
         # dungeon.toml's chest holds "cursed dagger" (value = 5); tavern's innkeeper has
         # neither, so build an ad-hoc scenario reusing the chest as a "shop" for this test.
-        self.dm_core.scenario = {"entities": [{"name": "gladstone", "band": 0}, {"name": "chest", "band": 0}]}
+        self.dm_core.scenario = {"entities": [{"name": "gladstone", "band": 1}, {"name": "chest", "band": 1}]}
         self.dm_core.load_scenario()
         self.dm_core.dismiss_condition("chest", "locked")
         self.dm_core.dismiss_condition("chest", "closed")
@@ -1596,7 +1849,7 @@ class TestGiveAndTrade(unittest.TestCase):
         self.assertNotIn("cursed dagger", self.dm_core.entities["chest"]["inventory"])
 
     def test_trade_denied_outright_when_the_player_cant_afford_it(self):
-        self.dm_core.scenario = {"entities": [{"name": "gladstone", "band": 0}, {"name": "chest", "band": 0}]}
+        self.dm_core.scenario = {"entities": [{"name": "gladstone", "band": 1}, {"name": "chest", "band": 1}]}
         self.dm_core.load_scenario()
         self.dm_core.dismiss_condition("chest", "locked")
         self.dm_core.dismiss_condition("chest", "closed")
@@ -1720,8 +1973,8 @@ class TestNpcDialogue(unittest.TestCase):
         # Sanity check the branch didn't regress combat routing for an actually hostile target.
         self.dm_core.scenario = {
             "entities": [
-                { "name": "gladstone", "band": 0 },
-                { "name": "wolf", "band": 0 },
+                { "name": "gladstone", "band": 1 },
+                { "name": "wolf", "band": 1 },
             ],
         }
         self.dm_core.load_scenario()
@@ -1882,7 +2135,9 @@ class TestSaveLoad(unittest.TestCase):
         self.assertEqual(data["player_name"], "gladstone")
         self.assertEqual(data["scenario_entities"], self.dm_core.scenario_entities)
         gladstone_state = data["instances"]["gladstone"]
-        self.assertEqual(set(gladstone_state.keys()), {"hp", "active_conditions", "currency", "inventory"})
+        self.assertEqual(
+            set(gladstone_state.keys()), {"hp", "active_conditions", "currency", "inventory", "band"}
+        )
 
     def test_save_captures_current_instance_state(self):
         slot = self._track("test_save_captures_state")

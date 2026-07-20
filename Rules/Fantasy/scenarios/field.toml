@@ -1,0 +1,12 @@
+[scenario]
+name = "The Open Field"
+description = "Rolling grassland stretches to the horizon under a gray sky. A lone wolf stalks through the tall grass, watching."
+# Unenclosed -- unlike the arena/tavern/dungeon, retreat here is never capped at "bands" (see
+# DM_Movement.py's "Movement and range"). Something can actually get away by outrunning
+# whatever's chasing it, which an enclosed room can never allow.
+bands = 6
+enclosed = false
+entities = [
+    { name = "gladstone", band = 1 },
+    { name = "wolf", band = 3 }
+]
