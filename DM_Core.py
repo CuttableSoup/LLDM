@@ -1,4 +1,5 @@
 import os
+import re
 
 from DM_Combat import CombatMixin
 from DM_Inventory import InventoryMixin
@@ -140,7 +141,11 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             unlocked/open container), reached via its own [entity.test] rather than as a
             combat redirect -- inspecting an item is never an attack. Checked ahead of combat
             targeting since the two are mutually exclusive outcomes for the same
-            explicit_target.
+            explicit_target. If skill_name doesn't qualify against the target's own test,
+            tries _rescue_item_test_skill before giving up -- see its docstring for why the
+            naively NLP-matched skill can be wrong here specifically (ex: "identify the
+            dagger" resolving to "blades" purely because the item's own name collides with
+            an unrelated skill's keyword).
         @param explicit_target NLPCore's best-guess target name (map_to_target), or None.
         @param skill_name The skill being used, already resolved from any named ability.
         @param input_text The player's raw input, attached to the result for narration.
@@ -148,11 +153,48 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             a reachable, testable item.
         """
         item_test_target = self._resolve_item_test_target(explicit_target, skill_name)
+        if item_test_target is None:
+            rescued_skill = self._rescue_item_test_skill(explicit_target, skill_name, input_text)
+            if rescued_skill:
+                item_test_target = self._resolve_item_test_target(explicit_target, rescued_skill)
+                skill_name = rescued_skill
         if not item_test_target:
             return None
         result = self._resolve_item_test(item_test_target, skill_name)
         result["input"] = input_text
         return result
+
+    def _rescue_item_test_skill(self, target_name, skill_name, input_text):
+        """!
+        @brief A literal-keyword-only second opinion for an item-test target whose naively
+            matched skill_name doesn't qualify against its own [entity.test] -- ex: "identify
+            the dagger" resolves skill_name to "blades" in NLPCore's general embedding match,
+            purely because the item's own name collides with blades' "dagger" keyword
+            (skills.toml). NLPCore's map_to_action already has its own keyword-fallback
+            mechanism for the general case, but it only ever competes with the *whole* skill
+            corpus -- here the field is already narrowed to one entity's own declared
+            test["skill"] list, so a plain literal check is enough and never needs to touch
+            the embedding matcher at all. That's what keeps this safe: it can't misfire the
+            way a second semantic pass could (ex: it correctly stays silent for "attack with
+            my dagger", which has no literal arcane-keyword support at all, unlike "identify
+            the dagger" or "is this dagger cursed").
+        @param target_name The entity possibly carrying a [entity.test].
+        @param skill_name The skill NLPCore already resolved -- if this already qualifies,
+            nothing needs rescuing.
+        @param input_text The player's raw input.
+        @return An alternate skill name from the entity's own test["skill"] list with literal
+            keyword support, or None.
+        """
+        test = self.entities.get(target_name, {}).get("test") if target_name else None
+        if not test or not input_text or self.is_test_available(target_name, test, skill_name):
+            return None
+        for candidate_skill in test.get("skill", []):
+            if candidate_skill == skill_name:
+                continue
+            keywords = self.skills.get(candidate_skill, {}).get("keywords", [])
+            if any(re.search(rf"\b{re.escape(keyword)}\b", input_text) for keyword in keywords):
+                return candidate_skill
+        return None
 
     def _apply_target_redirect(self, explicit_target):
         """!

@@ -134,7 +134,7 @@ specializations = ["elven", "dwarven", "ancient scripts"]
 [[skill]]
 name = "arcane"
 description = "Knowledge and practical use of magic."
-keywords = ["magic", "spellcasting", "supernatural", "wizard", "sorcery", "spell", "cast", "mana", "ritual"]
+keywords = ["magic", "spellcasting", "supernatural", "wizard", "sorcery", "spell", "cast", "mana", "ritual", "curse", "cursed", "identify"]
 opposes = ["willpower", "arcane"]
 specializations = ["conjuration", "evocation", "divination", "transmutation", "enchantment", "abjuration", "illusion", "necromancy"]
 

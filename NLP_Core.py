@@ -374,19 +374,46 @@ class NLPCore:
 
     def _match_by_keyword(self, processed_text):
         """!
-        @brief Checks processed_text for a literal, whole-word hit against any skill's own
+        @brief Checks processed_text for a literal, whole-word hit against every skill's own
             skills.toml keyword list -- the fallback map_to_action reaches for once every
             phrasing candidate has scored below confidence_threshold semantically. Word
             boundaries matter here (ex: skill "artistry"'s keyword "art" must not match inside
             "start"); a multi-word keyword (ex: "black market") matches as the exact phrase.
+            Returns every skill with a literal hit, not just the first declared -- two
+            different skills can each have their own keyword present in the same sentence
+            (ex: "cost" for appraise and "dagger" for blades both appearing in "what's this
+            dagger worth"), and _best_keyword_match picks between them by embedding score
+            rather than accepting whichever happens to come first in skills.toml.
         @param processed_text The cleaned and processed player input.
-        @return The first matching skill's name in skills.toml declaration order, or None.
+        @return A list of every matching skill's name, in skills.toml declaration order.
         """
+        matches = []
         for name, skill in self.skills_data.items():
             for keyword in skill.get("keywords", []):
                 if re.search(rf"\b{re.escape(keyword)}\b", processed_text):
-                    return name
-        return None
+                    matches.append(name)
+                    break
+        return matches
+
+    def _best_keyword_match(self, processed_text, cosine_scores):
+        """!
+        @brief Picks the strongest-scoring skill among every literal keyword hit in
+            processed_text (see _match_by_keyword), rather than accepting skills.toml's
+            arbitrary declaration order when more than one skill has a hit. Only ever called
+            as a fallback once every phrasing candidate has already missed
+            confidence_threshold semantically (see map_to_action).
+        @param processed_text The cleaned and processed player input.
+        @param cosine_scores The (num_candidates x num_phrases) matrix map_to_action already
+            computed for this input, reused here instead of re-encoding anything.
+        @return (skill_name, score), or (None, -1.0) if no skill had a literal keyword hit.
+        """
+        best_skill, best_score = None, -1.0
+        for name in self._match_by_keyword(processed_text):
+            positions = [i for i, skill_name in enumerate(self.skill_indices) if skill_name == name]
+            score = cosine_scores[:, positions].max().item()
+            if score > best_score:
+                best_skill, best_score = name, score
+        return best_skill, best_score
 
     def map_to_action(self, processed_text):
         """!
@@ -429,16 +456,13 @@ class NLPCore:
                 self.event_bus.publish("log_info", f"Mapped input to action: {best_skill} via best phrase (Score: {best_score:.4f})")
             return best_skill, best_score
 
-        keyword_skill = self._match_by_keyword(processed_text)
-        if keyword_skill:
-            skill_phrase_positions = [i for i, name in enumerate(self.skill_indices) if name == keyword_skill]
-            keyword_score = cosine_scores[:, skill_phrase_positions].max().item()
-            if keyword_score >= self.keyword_fallback_floor:
-                self.event_bus.publish(
-                    "log_info",
-                    f"Mapped input to action: {keyword_skill} via keyword fallback (Score: {keyword_score:.4f})"
-                )
-                return keyword_skill, keyword_score
+        keyword_skill, keyword_score = self._best_keyword_match(processed_text, cosine_scores)
+        if keyword_skill and keyword_score >= self.keyword_fallback_floor:
+            self.event_bus.publish(
+                "log_info",
+                f"Mapped input to action: {keyword_skill} via keyword fallback (Score: {keyword_score:.4f})"
+            )
+            return keyword_skill, keyword_score
 
         self.event_bus.publish(
             "log_info",
