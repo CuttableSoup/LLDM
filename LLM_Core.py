@@ -257,11 +257,15 @@ class LLMCore:
                 "closed": f"{container or 'it'} is closed and needs to be opened first",
                 "not_present": f"there's no \"{item_name}\" here to {intent}",
                 "not_takeable": f"{subject} isn't something that can be picked up, given, or traded",
+                "not_usable": f"{subject} isn't something that can be used like that",
                 "no_recipient": "there's no one here to give it to",
                 "not_openable": f"{subject} isn't something that can be opened or closed",
                 "already_open": f"{container or 'it'} is already open",
                 "already_closed": f"{container or 'it'} is already closed",
                 "cant_afford": f"the player can't afford the {data.get('price', 0)} currency it costs",
+                "no_exit": "there's no way through in that direction",
+                "wrong_band": "the player isn't standing in the right spot to reach that way out",
+                "blocked_by_enemies": "something hostile is still standing in the way",
             }.get(data.get("reason"), f"the player's attempt to {intent} {subject} doesn't apply here")
             prompt = (
                 f"The player tries to {intent} {subject} "
@@ -303,6 +307,28 @@ class LLMCore:
                 f"The player closes {container}.\n"
                 f"Narrate this in 1-2 sentences as the Game Master."
             )
+        elif intent == "use":
+            # "healed"/"remaining_hp"/"charges_left"/"replaced_with" are
+            # DMCore._resolve_use_intent's own real roll/consumption results, never invented --
+            # same "feed the LLM the real mechanical outcome" rule every other roll-bearing
+            # narration already follows. "healed" is 0 for an item with no healing effect
+            # wired yet (ex: a future wand) -- worded to not claim an effect that didn't happen.
+            healed = data.get("healed", 0)
+            effect_text = (
+                f", restoring {healed} HP (now at {data.get('remaining_hp', 0)} HP)" if healed
+                else ""
+            )
+            charges_left = data.get("charges_left", 0)
+            if charges_left > 0:
+                aftermath = f" It has {charges_left} charge(s) left."
+            elif data.get("replaced_with"):
+                aftermath = f" All used up, it's left behind only a {data['replaced_with']}."
+            else:
+                aftermath = " It's completely used up."
+            prompt = (
+                f"The player uses \"{item_name}\"{effect_text}.{aftermath}\n"
+                f"Narrate this in 1-2 sentences as the Game Master."
+            )
         elif intent in ("advance", "retreat"):
             # "moved" is advance_or_retreat's own {entity, before, after} list (DM_Movement.py)
             # -- real band-gap numbers already earned by the player's own movement, never
@@ -329,6 +355,27 @@ class LLMCore:
                     f"against.\n"
                     f"Narrate this in 1-2 sentences as the Game Master."
                 )
+        elif intent == "move":
+            # Taking a declared exit to a different room of the current multi-room dungeon
+            # (see DM_Rules.py's room-graph notes) -- unlike advance/retreat (repositioning
+            # within one room), this replaces the whole scene, so the room's own name/
+            # description/characters (DMCore._resolve_room_transition_intent) get folded into
+            # ongoing narration grounding exactly the way generate_scene_intro does for a
+            # brand-new scenario -- otherwise every later combat/action prompt in the new
+            # room would keep citing the *previous* room's flavor text, stale the moment the
+            # player actually moved.
+            self.scenario_description = data.get("room_description", "")
+            self.scenario_characters = data.get("characters", [])
+            characters_text = (
+                "\nCharacters present: " + " | ".join(self.scenario_characters)
+                if self.scenario_characters else ""
+            )
+            prompt = (
+                f"The player heads {data.get('direction', 'onward')}, arriving at: "
+                f"\"{data.get('room_name', '')}\".\n"
+                f"{self.scenario_description}{characters_text}\n"
+                f"Narrate arriving in this new area in 2-3 sentences as the Game Master."
+            )
         elif item_name == "currency":
             if intent == "give":
                 prompt = (

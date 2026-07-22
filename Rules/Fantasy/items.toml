@@ -3,6 +3,7 @@ name = "longsword"
 supertype = "object"
 subtype = "weapon"
 skill = "blades"
+description = "A well-balanced steel blade, kept sharp and ready."
 max_hp = 10
 # No "range" field at all -- melee, usable only in the same band as the target (see
 # DM_Movement.py's "Movement and range"; is_in_range treats a missing range as 0).
@@ -18,6 +19,7 @@ name = "spear"
 supertype = "object"
 subtype = "weapon"
 skill = "polearms"
+description = "A long-hafted spear, its iron head kept honed for thrusting."
 max_hp = 8
 # Reach weapon -- usable one band beyond plain melee (see DM_Movement.py's "Movement and
 # range"), the one deliberate exception to "melee only works in the same band as the target".
@@ -34,6 +36,7 @@ name = "long bow"
 supertype = "object"
 subtype = "weapon"
 skill = "missiles"
+description = "A polished longbow, strung and ready to loose an arrow."
 max_hp = 5
 # In bands, not meters -- reaches every band a typical room/field has (see the "bands"
 # scenario field), same "no per-tier accuracy modifier, just in-range-or-not" rule every
@@ -50,6 +53,7 @@ fortitude = { dice = 1, pips = 0 }
 name = "chain mail"
 supertype = "object"
 subtype = "armor"
+description = "A shirt of interlocking steel rings, worn for protection in battle."
 max_hp = 20
 armor_value = { dice = 2, pips = 0 }
 armor_tags = [ "physical", "piercing", "bludgeoning", "slashing" ]
@@ -62,12 +66,36 @@ fortitude = { dice = 5, pips = 0 }
 name = "health potion"
 supertype = "object"
 subtype = "potion"
+# Nondescript on purpose -- "healing" (below) is a hidden property revealed only once
+# identified, same mechanism as the cursed dagger's own [entity.test] ("reveal" -> tags
+# read back once is_identified is true). The description here still needs to be non-empty
+# (an empty one gets silently dropped from a container's "contents" -- see the items.toml
+# comment history), just not one that gives away the answer up front.
+description = "A small glass vial holding a swirl of murky liquid. Whatever it does isn't obvious just by looking."
 tags = [ "healing" ]
+# Opts into DMCore._resolve_use_intent's generic "use" handling (see the module note there --
+# gated on this flag, not subtype, so a future non-potion usable item, ex: a wand, doesn't
+# need a "potion" subtype just to qualify). No "charges" field -- absent means single-use,
+# spent entirely on the one use (see _consume_charge). "replace_with" is what's left in
+# inventory afterward: an empty vial, not nothing.
+usable = true
+replace_with = "glass vial"
 bulk = 0
 value = 15
 [entity.skills]
 healing = { dice = 5, pips = 0 }
 fortitude = { dice = 1, pips = 0 }
+
+# Untrained-friendly on purpose (difficulty 4, vs the cursed dagger's 8) -- neither appraise
+# nor medicine is anything gladstone starts trained in, and a mundane potion shouldn't need
+# real expertise to eventually work out, unlike confirming a magical curse.
+[entity.test]
+difficulty = 4
+skill = [ "appraise", "medicine" ]
+blocks_if_condition = "identified"
+
+[entity.test.pass]
+reveal = true
 
 [[entity]]
 name = "chest"
@@ -131,3 +159,185 @@ blocks_if_condition = "identified"
 
 [entity.test.pass]
 reveal = true
+
+# Traps: a skill check against the object itself, same [entity.test] mechanism as a chest's
+# lock, but "fail" now carries a "damage" key (apply_test_outcome, DM_Status.py) that deals
+# real damage to the player via the same calculate_damage/evaluate_statuses path any weapon
+# hit takes. "armed" starts active (like a chest's own "locked"); a pass dismisses it (the
+# trap is now safe forever); a fail applies "triggered" instead, which blocks_if_condition
+# then keeps future attempts from re-rolling and re-damaging the exact same spent trap.
+[[entity]]
+name = "dart trap"
+supertype = "object"
+subtype = "trap"
+description = "A row of pinprick holes lines the wall at waist height, aimed squarely across the doorway."
+max_hp = 5
+
+[entity.conditions.armed]
+duration = "permanent"
+
+[entity.test]
+difficulty = 9
+skill = [ "finesse", "acrobatics" ]
+requires_condition = "armed"
+blocks_if_condition = "triggered"
+
+[entity.test.pass]
+dismiss_condition = "armed"
+
+[entity.test.fail]
+condition = "triggered"
+duration = "permanent"
+dismiss = ""
+# 3 dice, not 2 -- chain mail's own armor_value/armor_tags already reduces "piercing" by
+# 2 dice, and a trap that a full suit of armor shrugs off entirely wouldn't be much of a
+# trap. Still less than the scythe trap's own 3 dice against "slashing" armor coverage --
+# no difference there, this is just about clearing chain mail's reduction, not escalation.
+damage = { dice = 3, pips = 0, bonus = 0 }
+damage_tags = [ "piercing" ]
+
+[[entity]]
+name = "scythe trap"
+supertype = "object"
+subtype = "trap"
+description = "A rusted blade hangs half-hidden in the shadows overhead, strung on a taut wire across the passage."
+max_hp = 8
+
+[entity.conditions.armed]
+duration = "permanent"
+
+[entity.test]
+difficulty = 10
+# reflexes is listed first since it's what gladstone (and any similarly-built character) is
+# actually trained in -- 2 dice, vs untrained 1d6 for dodge/acrobatics, which would make this
+# trap nearly unbeatable on its own (max roll 6, never clearing a difficulty above 6). "dodge"
+# is still included because it's the single most natural verb for evading a swinging blade --
+# without it, "I dodge the trap" wouldn't match this test.skill list at all and would
+# silently fall through to a harmless, mechanically-meaningless auto-success instead of a
+# real (if difficult) attempt.
+skill = [ "reflexes", "dodge", "acrobatics" ]
+requires_condition = "armed"
+blocks_if_condition = "triggered"
+
+[entity.test.pass]
+dismiss_condition = "armed"
+
+[entity.test.fail]
+condition = "triggered"
+duration = "permanent"
+dismiss = ""
+damage = { dice = 3, pips = 0, bonus = 0 }
+damage_tags = [ "slashing" ]
+
+[[entity]]
+name = "iron chest"
+supertype = "object"
+subtype = "container"
+description = "A dented iron strongbox, left behind by whatever guard once manned this post."
+max_hp = 40
+bulk = 5
+value = 8
+currency = 15
+inventory = [ "health potion" ]
+
+[entity.conditions.locked]
+duration = "permanent"
+
+[entity.conditions.closed]
+duration = "permanent"
+
+[entity.test]
+difficulty = 10
+skill = [ "finesse" ]
+requires_condition = "locked"
+blocks_if_condition = "jammed"
+
+[entity.test.pass]
+dismiss_condition = "locked"
+
+[entity.test.fail]
+condition = "jammed"
+duration = "permanent"
+dismiss = ""
+
+[entity.skills]
+fortitude = { dice = 4, pips = 0 }
+
+[[entity]]
+name = "ornate reliquary"
+supertype = "object"
+subtype = "container"
+description = "A carved stone reliquary, sealed with a heavier lock than anything else found so far down here."
+max_hp = 60
+bulk = 5
+value = 20
+currency = 40
+inventory = [ "health potion", "health potion", "spear" ]
+
+[entity.conditions.locked]
+duration = "permanent"
+
+[entity.conditions.closed]
+duration = "permanent"
+
+[entity.test]
+difficulty = 14
+skill = [ "finesse" ]
+requires_condition = "locked"
+blocks_if_condition = "jammed"
+
+[entity.test.pass]
+dismiss_condition = "locked"
+
+[entity.test.fail]
+condition = "jammed"
+duration = "permanent"
+dismiss = ""
+
+[entity.skills]
+fortitude = { dice = 6, pips = 0 }
+
+[[entity]]
+name = "dusty coffer"
+supertype = "object"
+subtype = "container"
+description = "A small, unassuming coffer tucked into a crack in the wall, easy to miss unless you're looking for it."
+max_hp = 20
+bulk = 3
+value = 5
+currency = 10
+inventory = [ "health potion" ]
+
+[entity.conditions.locked]
+duration = "permanent"
+
+[entity.conditions.closed]
+duration = "permanent"
+
+[entity.test]
+difficulty = 8
+skill = [ "finesse" ]
+requires_condition = "locked"
+blocks_if_condition = "jammed"
+
+[entity.test.pass]
+dismiss_condition = "locked"
+
+[entity.test.fail]
+condition = "jammed"
+duration = "permanent"
+dismiss = ""
+
+[entity.skills]
+fortitude = { dice = 3, pips = 0 }
+
+# What a health potion becomes once drunk (see its own "replace_with") -- an empty husk left
+# in inventory rather than the potion just vanishing outright. Not usable itself (no "usable"
+# field), and worth little.
+[[entity]]
+name = "glass vial"
+supertype = "object"
+subtype = "trinket"
+description = "An empty glass vial, its contents long since consumed."
+bulk = 0
+value = 1

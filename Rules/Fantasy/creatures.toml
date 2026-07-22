@@ -67,3 +67,137 @@ reflexes = { dice = 3, pips = 0 }
 dodge = { dice = 3, pips = 0 }
 strength = { dice = 4, pips = 0 }
 brawling = { dice = 4, pips = 0 }
+
+[[entity]]
+name = "giant spider"
+supertype = "creature"
+subtype = "animal"
+description = "An abdomen swollen to the size of a barrel, bristling with coarse hair, skitters along webbing strung wall to wall."
+
+max_hp = 14
+
+# Common trope, and a real payoff for gladstone's own "fireball" -- fire is the one thing
+# this thing has no answer for.
+vulnerability_value = { dice = 2, pips = 0 }
+vulnerability_tags = [ "fire" ]
+
+[[entity.abilities]]
+name = "venomous bite"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "piercing", "poison" ]
+damage_value = { dice = 2, pips = 0, bonus = "user.strength_damage" }
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "venomous bite"
+
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+willpower = { dice = 1, pips = 0 }
+reflexes = { dice = 3, pips = 0 }
+dodge = { dice = 4, pips = 0 }
+strength = { dice = 1, pips = 0 }
+brawling = { dice = 4, pips = 0 }
+
+[[entity]]
+name = "skeleton warrior"
+supertype = "creature"
+subtype = "undead"
+description = "A yellowed skeleton in tattered mail, empty sockets fixed forward, a notched blade held in a bony grip."
+
+max_hp = 20
+
+# Undead -- poison means nothing to something with no blood left to poison (notes.txt's
+# own "poison damage tagged so undead are immune" example, realized here for real).
+immunity_tags = [ "poison" ]
+# Old bones shatter under blunt force more readily than they resist a cutting edge.
+vulnerability_value = { dice = 2, pips = 0 }
+vulnerability_tags = [ "bludgeoning" ]
+
+[[entity.abilities]]
+name = "notched blade"
+supertype = "innate"
+subtype = "weapon"
+skill = "blades"
+damage_tags = [ "slashing" ]
+damage_value = { dice = 2, pips = 1, bonus = "user.strength_damage" }
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "notched blade"
+
+[entity.skills]
+fortitude = { dice = 3, pips = 0 }
+willpower = { dice = 3, pips = 0 }
+reflexes = { dice = 2, pips = 0 }
+dodge = { dice = 2, pips = 0 }
+strength = { dice = 3, pips = 0 }
+blades = { dice = 4, pips = 0 }
+
+[[entity]]
+name = "the bone warden"
+supertype = "creature"
+subtype = "undead"
+description = "A towering, armor-fused skeleton bound in chains of dark iron, its ribcage packed with cold blue witchfire that never quite goes out."
+
+max_hp = 50
+
+immunity_tags = [ "poison" ]
+# 1 die, not 2 -- live-tested at 2 dice against gladstone's longsword (1d+2 pips, roughly
+# 4-9 raw) and it came out even or ahead almost every swing, netting 0 damage nearly every
+# round and making melee-only play effectively unwinnable rather than just weaker than the
+# fire/arcane approach. 1 die still meaningfully blunts a physical hit without walling it off.
+resistance_value = { dice = 1, pips = 0 }
+resistance_tags = [ "physical", "piercing", "slashing" ]
+# The one thing this crypt's own guardian never learned to withstand -- gladstone's
+# "fireball" is a real answer here, not just flavor.
+vulnerability_value = { dice = 2, pips = 0 }
+vulnerability_tags = [ "fire" ]
+
+[[entity.abilities]]
+name = "bone claw"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "slashing" ]
+damage_value = { dice = 3, pips = 0, bonus = "user.strength_damage" }
+
+[[entity.abilities]]
+name = "grave chill"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "cold" ]
+damage_value = { dice = 4, pips = 1, bonus = 0 }
+
+# Escalates once badly hurt -- checked in order, first-match-wins (same convention
+# rules.toml's own wound ladder and choose_behavior's docstring already use): a plain
+# claw above 40% HP, a much harder desperate strike from 40% down to death.
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.4 },
+]
+action = "bone claw"
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "grave chill"
+
+[entity.skills]
+fortitude = { dice = 6, pips = 0 }
+# 3, not 5 -- at 5 dice this all but auto-beat gladstone's own 2-dice arcane on "fireball"'s
+# opposed roll (arcane opposes willpower), making the one approach the vulnerability_tags
+# above is supposed to reward a near-guaranteed whiff in practice. 3 is still a real defense.
+willpower = { dice = 3, pips = 0 }
+reflexes = { dice = 2, pips = 0 }
+dodge = { dice = 2, pips = 0 }
+strength = { dice = 5, pips = 0 }
+brawling = { dice = 5, pips = 0 }

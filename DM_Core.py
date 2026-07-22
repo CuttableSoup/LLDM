@@ -38,6 +38,12 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         self.entities = {}
         self.scenario = {}
         self.scenario_entities = []
+        # Populated for real by load_scenario_definition -- empty/None here is what a plain
+        # single-room scenario (arena/tavern/field/dungeon) keeps permanently, since it has
+        # no [[room]] tables at all (see DM_Rules.py's "Scenario instancing"/room-graph notes).
+        self.rooms = {}
+        self.current_room_key = None
+        self.visited_rooms = {}
         self.rules = {}
         self.round_number = 0
         # The player's persisted combat target -- distinct from _get_target_name()'s "first
@@ -61,8 +67,11 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         self.event_bus.publish("log_info", "DMCore initialized.")
         self.event_bus.publish("rules_loaded", {"skills": self.skills, "entities": self.entities})
         self.event_bus.publish("scenario_loaded", {
-            "name": self.scenario.get("name"),
-            "description": self.scenario.get("description"),
+            # For a multi-room dungeon this narrates the *starting room* specifically (ex:
+            # "Entrance Hall"), not just the dungeon's own overall blurb -- see
+            # _current_scene_name/_current_scene_description in DM_Rules.py.
+            "name": self._current_scene_name(),
+            "description": self._current_scene_description(),
             "characters": self._describe_scenario_characters(),
         })
         self.event_bus.subscribe("action_detected", self._on_action_detected)
@@ -241,9 +250,17 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             result["defender"] = target_name
             result["opposing_skill"] = None
             outcome = test.get("pass") if result["success"] else test.get("fail")
-            loot = self.apply_test_outcome(target_name, outcome)
+            effects = self.apply_test_outcome(target_name, outcome) or {}
+            loot = effects.get("loot")
             if loot and (loot["currency"] or loot["items"]):
                 result["loot"] = loot
+            damage = effects.get("damage")
+            if damage:
+                # A trap's failed disarm/dodge attempt (ex: dart trap, scythe trap) -- same
+                # "damage" key LLM_Core._describe_outcome already renders for a normal weapon
+                # hit, just sourced from the target's own [entity.test.fail] instead of an
+                # attack roll.
+                result["damage"] = damage
         elif target_name:
             # Looked up before rolling (not just for damage afterward, as before) so distance
             # can gate the attack roll itself -- is_in_range (DM_Movement.py) is a pure
@@ -340,13 +357,15 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
     def _on_item_interaction_detected(self, data):
         """!
         @brief Event handler for a free-text item-interaction match (see NLPCore.map_to_item):
-            "examine"/"take"/"give"/"trade" against a named item, "open"/"close" against
-            the scene target itself, or "advance"/"retreat" against the whole scene.
-            Deliberately bypasses the whole skill/dice system -- none of these warrant a
-            roll (see DM_Movement.py's module docstring for why movement specifically is
-            deterministic, not a check). Publishes "item_interaction_resolved" either way,
-            with enough detail for narration to explain a miss (locked, closed, not present,
-            not takeable, ...) rather than staying silent.
+            "examine"/"take"/"give"/"trade"/"use" against a named item, "open"/"close"
+            against the scene target itself, "advance"/"retreat" against the whole scene, or
+            "move" (with a "direction") to take a declared exit to a different room of the
+            current multi-room dungeon. Deliberately bypasses the whole skill/dice system --
+            none of these warrant a roll (see DM_Movement.py's module docstring for why
+            movement specifically is deterministic, not a check). Publishes
+            "item_interaction_resolved" either way, with enough detail for narration to
+            explain a miss (locked, closed, not present, not takeable, not usable, no exit,
+            wrong band, blocked by enemies, ...) rather than staying silent.
 
             "take"/"trade" move an item from the target to the player; "give" moves one from
             the player to the target -- same transfer_item/transfer_currency primitives,
@@ -354,10 +373,17 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             TOML `value` as a price (denied outright if the player can't afford it, rather
             than a partial payment). "examine" and "open"/"close" never move anything;
             "advance"/"retreat" move every living scenario entity's distance at once (see
-            advance_or_retreat in DM_Movement.py), not just one target.
+            advance_or_retreat in DM_Movement.py), not just one target; "move" replaces the
+            whole current room (see _resolve_room_transition_intent/_find_room_exit); "use"
+            consumes or activates an item already in the player's own inventory (see
+            _resolve_use_intent), never a target's -- NLPCore's own keyword set for it today
+            is just "drink"/"quaff" (potions), but the intent itself is the generic "use" so
+            a future item type (ex: a wand) only ever needs new keywords, not new handling
+            here.
         @param data The item_interaction_detected payload from NLPCore
-            ({intent, item_name, input, score}). "item_name" is None for "open"/"close" and
-            "advance"/"retreat", all of which act on the scene directly rather than a named item.
+            ({intent, item_name, input, score}). "item_name" is None for "open"/"close",
+            "advance"/"retreat", and "move", none of which act on a named item; "move" also
+            carries a "direction" (ex: "forward", "right").
         """
         intent = data.get("intent")
         item_name = data.get("item_name")
@@ -376,6 +402,19 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             # just the current target.
             moved = self.advance_or_retreat(intent)
             resolved(True, moved=moved)
+            return
+
+        if intent == "move":
+            # Also unrelated to target_name/the locked gate -- leaving the room entirely has
+            # nothing to do with reaching a container's contents, same reasoning advance/
+            # retreat above already follows.
+            self._resolve_room_transition_intent(data.get("direction"), resolved)
+            return
+
+        if intent == "use":
+            # Also unrelated to target_name/the locked gate -- using something already in the
+            # player's own inventory has nothing to do with any scene target at all.
+            self._resolve_use_intent(item_name, resolved)
             return
 
         if target_name and self.is_locked(target_name):
@@ -496,6 +535,159 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             return
         self.apply_condition(target_name, "closed", duration="permanent", dismiss="")
         resolved(True, container=target_name)
+
+    def _find_room_exit(self, room, direction):
+        """!
+        @brief Finds the current room's own declared [[room.exit]] usable right now for the
+            given direction -- "usable" meaning both the direction matches *and* the player
+            is currently standing in the exact band that exit is declared at (DM_Rules.py's
+            room-graph notes). This band gate is what actually enables a branch: a room can
+            declare more than one exit (ex: one "right" at band 2, another "forward" at band
+            3), and which one resolves depends on where the player has actually moved to
+            (via ordinary advance/retreat) within the room, not just which word they said.
+        @param room The current room's own table, or None (a plain, non-room scenario).
+        @param direction "forward"/"back"/"left"/"right" (see NLP_Core.py's DIRECTION_PHRASES).
+        @return (exit_table, None) if a usable match was found; (None, "no_exit") if the
+                room has no exit at all in that direction; (None, "wrong_band") if it does,
+                but not from the player's current band.
+        """
+        if not room:
+            return None, "no_exit"
+        matching_direction = [e for e in room.get("exit", []) if e.get("direction") == direction]
+        if not matching_direction:
+            return None, "no_exit"
+        player_band = self.get_band(self.player_name)
+        for exit_def in matching_direction:
+            if exit_def.get("band") == player_band:
+                return exit_def, None
+        return None, "wrong_band"
+
+    def _resolve_room_transition_intent(self, direction, resolved):
+        """!
+        @brief Handles "move" -- taking a declared exit to a different room of the current
+            multi-room dungeon (see DM_Rules.py's "Scenario instancing"/room-graph notes and
+            _find_room_exit). Denied (reason "no_exit") if the current room has no exit at
+            all in that direction -- including every plain, single-room scenario (arena/
+            tavern/field/dungeon), which has no rooms/exits to speak of and so always fails
+            this check, same as a "close" aimed at a creature fails "not_openable"; denied
+            (reason "wrong_band") if that direction exists in this room but not from the
+            player's current band; denied (reason "blocked_by_enemies") if any living
+            hostile creature remains in the current room -- a dungeon-crawl convention: a
+            room is cleared before moving past it, not slipped around while something is
+            still actively fighting the player.
+        @param direction "forward"/"back"/"left"/"right", from NLPCore's direction match.
+        @param resolved The item_interaction_resolved publisher closure from the caller.
+        """
+        exit_def, reason = self._find_room_exit(self._current_room(), direction)
+        if exit_def is None:
+            resolved(False, reason=reason)
+            return
+
+        for entity_name in self.scenario_entities:
+            if entity_name == self.player_name:
+                continue
+            if self.is_hostile(entity_name, self.player_name) and self.get_current_hp(entity_name) > 0:
+                resolved(False, reason="blocked_by_enemies")
+                return
+
+        self.enter_room(exit_def["destination"], exit_def.get("arrival_band", 1))
+        new_room = self._current_room()
+        resolved(
+            True,
+            room_name=new_room.get("name", "") if new_room else "",
+            room_description=new_room.get("description", "") if new_room else "",
+            characters=self._describe_scenario_characters(),
+        )
+
+    def _resolve_use_intent(self, item_name, resolved):
+        """!
+        @brief Handles "use" (today's only keywords are "drink"/"quaff", both potion-flavored
+            -- see NLP_Core.py's USE_KEYWORDS) -- activating/consuming an item already in the
+            player's own inventory. Deliberately never reaches a target's inventory the way
+            "take" can -- you can't use something you haven't picked up yet; take/examine
+            already exist for reaching a container's contents first. Gated on a truthy
+            "usable" field (reason "not_usable" otherwise, ex: trying to use a sword) rather
+            than any particular subtype, since this is meant to cover more than potions --
+            a future wand (subtype "wand", not "potion") opts in the same way, just by
+            carrying `usable = true` plus whatever effect fields it defines.
+
+            The only effect actually implemented yet is healing, read from the item's own
+            "healing" {dice, pips} skill stat if present (ex: health potion) and rolled
+            through apply_healing (DM_Status.py) -- the healing counterpart to
+            calculate_damage's own roll_dice usage. An item with no "healing" stat still
+            "uses" successfully (consumes a charge, may still identify/replace itself below),
+            it just has no numeric effect yet -- there's nothing else to trigger until a
+            second effect type is actually built.
+
+            Using it also identifies it, whether or not it already was -- you now know
+            exactly what it does, from experience, which is a strictly stronger kind of
+            knowledge than a prior appraise/medicine check (see items.toml's health potion
+            and its own [entity.test]).
+
+            Consumption is charge-based (see _consume_charge): an item with no "charges"
+            field at all is single-use, spent entirely on this one call (every potion
+            today); one carrying a "charges" count only depletes by one per use and keeps
+            working until it hits zero (a future wand's whole reason to have this field
+            rather than being single-use like a potion). Either way, once charges reach
+            zero, the item is removed from inventory and swapped for whatever its own
+            "replace_with" names (ex: health potion -> glass vial, an empty husk) -- an item
+            with no "replace_with" just vanishes, the same as before this field existed.
+        @param item_name NLPCore's best-guess item match (map_to_item), or None.
+        @param resolved The item_interaction_resolved publisher closure from the caller.
+        """
+        player = self.entities.get(self.player_name, {})
+        if not item_name or item_name not in player.get("inventory", []):
+            resolved(False, reason="not_present")
+            return
+        item = self.entities.get(item_name, {})
+        if not item.get("usable"):
+            resolved(False, reason="not_usable")
+            return
+
+        healing = item.get("skills", {}).get("healing")
+        healed = 0
+        remaining_hp = self.get_current_hp(self.player_name)
+        if healing:
+            healed = self.roll_dice(healing.get("dice", 0), healing.get("pips", 0))
+            remaining_hp = self.apply_healing(self.player_name, healed)
+
+        self.apply_condition(item_name, "identified", duration="permanent", dismiss="")
+
+        charges_left = self._consume_charge(item_name)
+        replaced_with = None
+        if charges_left <= 0:
+            player["inventory"].remove(item_name)
+            replace_with = item.get("replace_with")
+            if replace_with:
+                if replace_with in self.entities:
+                    player["inventory"].append(replace_with)
+                    replaced_with = replace_with
+                else:
+                    self.event_bus.publish(
+                        "log_error", f"{item_name}'s replace_with names unknown entity: {replace_with}"
+                    )
+
+        resolved(
+            True, healed=healed, remaining_hp=remaining_hp,
+            charges_left=max(charges_left, 0), replaced_with=replaced_with,
+        )
+
+    def _consume_charge(self, item_name):
+        """!
+        @brief Decrements an item's own "charges" by one and returns what's left --
+            _resolve_use_intent's only source of truth for whether this use was the item's
+            last. An item with no "charges" field at all is single-use: treated as if this
+            one use was already its only charge, so it always returns 0 (every potion today,
+            since none declare "charges"). An item that does declare one (ex: a future wand)
+            survives repeated uses until the count actually reaches zero.
+        @param item_name The entity being used.
+        @return The remaining charge count (0 or negative means "used up").
+        """
+        item = self.entities.get(item_name, {})
+        if "charges" not in item:
+            return 0
+        item["charges"] -= 1
+        return item["charges"]
 
     def _resolve_item_test_target(self, target_name, skill_name):
         """!

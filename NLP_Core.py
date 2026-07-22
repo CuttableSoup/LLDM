@@ -24,6 +24,13 @@ TAKE_KEYWORDS = ("take ", "grab ", "pick up", "loot ")
 # "what's this worth" still reaches appraise instead of being swallowed here.
 GIVE_KEYWORDS = ("give ", "hand over", "offer ")
 TRADE_KEYWORDS = ("trade ", "buy ", "purchase ")
+# Consuming or activating an item already in the player's own inventory -- see
+# DMCore._resolve_use_intent. The intent name is the generic "use" (not "drink"), so this one
+# mechanism can grow to cover more than potions later (ex: a wand's own "wave "/"point at ")
+# just by adding new phrases here, without touching DMCore at all. A bare "use " deliberately
+# isn't included: it's far too generic a verb (could plausibly mean almost anything) to
+# safely route every "use ..." phrase into item-use handling the way these specific verbs can.
+USE_KEYWORDS = ("drink ", "quaff ", "drink it")
 OPEN_KEYWORDS = ("open the ", "open it")
 CLOSE_KEYWORDS = ("close the ", "close it", "shut the ", "shut it")
 # Movement/positioning (see DM_Movement.py) -- like open/close, these act on the whole scene
@@ -35,6 +42,28 @@ CLOSE_KEYWORDS = ("close the ", "close it", "shut the ", "shut it")
 # and would swallow it as a "close" intent instead.
 ADVANCE_KEYWORDS = ("advance", "move closer", "approach", "move toward", "move in", "step closer")
 RETREAT_KEYWORDS = ("retreat", "back away", "back off", "fall back", "step back", "withdraw", "move away")
+# Macro, inter-room movement in a multi-room dungeon (see DM_Rules.py's room-graph notes) --
+# a different axis entirely from ADVANCE/RETREAT_KEYWORDS above (which only ever reposition
+# the player's *band* within the current room). A direction here names one of the current
+# room's own [[room.exit]] entries (DMCore._find_room_exit) -- which exit actually resolves
+# depends on both the direction *and* the player's current band, so a room can have more than
+# one exit (ex: "right" at band 2 vs "forward" at band 3), a real branch rather than just a
+# forward/back corridor. Phrasing deliberately spells out "room"/"door"/"deeper"/"way" so this
+# can't be confused with plain intra-room advance/retreat, which say nothing about leaving the
+# room at all.
+DIRECTION_PHRASES = {
+    "forward": (
+        "next room", "proceed deeper", "continue deeper", "go deeper", "through the door",
+        "onward into the dungeon", "continue onward", "move on ahead", "go forward",
+        "head forward", "continue forward",
+    ),
+    "back": (
+        "previous room", "last room", "go back the way", "back the way we came",
+        "the room behind", "back the way i came",
+    ),
+    "left": ("go left", "head left", "turn left", "to the left", "the left passage", "the left exit"),
+    "right": ("go right", "head right", "turn right", "to the right", "the right passage", "the right exit"),
+}
 
 # map_to_item checks these before any embedding match -- currency is a plain integer field
 # (entity["currency"]), not an object-supertype entity with a name/description to embed.
@@ -103,12 +132,24 @@ class NLPCore:
             self.event_bus.publish(f"{save_load_intent}_requested", {"slot": slot_name})
             return
 
+        direction = self._detect_direction(processed)
+        if direction:
+            # A different axis from "advance"/"retreat" below -- see DIRECTION_PHRASES'
+            # module note. No item name to resolve at all, so map_to_item never runs for
+            # this either; DMCore._find_room_exit is what actually decides whether this
+            # direction resolves to a real exit from the player's current band.
+            self.event_bus.publish("item_interaction_detected", {
+                "intent": "move", "item_name": None, "direction": direction,
+                "input": processed, "score": None,
+            })
+            return
+
         intent = self._detect_item_intent(processed)
         if intent in ("open", "close", "advance", "retreat"):
             # These act on the current scene target directly (ex: "open the chest" opens
             # *the* chest, not some named item inside it), or on the scene as a whole (ex:
-            # "advance" moves relative to every living entity, not one named item) -- no item
-            # name to resolve at all, so map_to_item never runs for them.
+            # "advance" moves relative to every living entity) -- no item name to resolve at
+            # all, so map_to_item never runs for them either.
             self.event_bus.publish("item_interaction_detected", {
                 "intent": intent, "item_name": None, "input": processed, "score": None,
             })
@@ -145,8 +186,11 @@ class NLPCore:
     def _detect_item_intent(self, processed_text):
         """!
         @brief Checks processed input for an item-interaction verb, ahead of skill matching.
+            Inter-room movement is checked separately, before this (see _detect_direction),
+            since it isn't keyed to a single fixed intent name the way these are.
         @param processed_text The cleaned and processed player input.
-        @return "examine", "take", "give", "trade", "open", "close", "advance", "retreat", or None.
+        @return "examine", "take", "give", "trade", "use", "open", "close", "advance",
+            "retreat", or None.
         """
         if any(keyword in processed_text for keyword in EXAMINE_KEYWORDS):
             return "examine"
@@ -156,6 +200,8 @@ class NLPCore:
             return "give"
         if any(keyword in processed_text for keyword in TRADE_KEYWORDS):
             return "trade"
+        if any(keyword in processed_text for keyword in USE_KEYWORDS):
+            return "use"
         if any(keyword in processed_text for keyword in OPEN_KEYWORDS):
             return "open"
         if any(keyword in processed_text for keyword in CLOSE_KEYWORDS):
@@ -164,6 +210,18 @@ class NLPCore:
             return "advance"
         if any(keyword in processed_text for keyword in RETREAT_KEYWORDS):
             return "retreat"
+        return None
+
+    def _detect_direction(self, processed_text):
+        """!
+        @brief Checks processed input for a room-exit direction, ahead of both save/load
+            intent's own callers and skill matching -- see DIRECTION_PHRASES' module note.
+        @param processed_text The cleaned and processed player input.
+        @return "forward", "back", "left", "right", or None.
+        """
+        for direction, phrases in DIRECTION_PHRASES.items():
+            if any(phrase in processed_text for phrase in phrases):
+                return direction
         return None
 
     def _detect_save_load_intent(self, processed_text):

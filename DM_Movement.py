@@ -85,18 +85,22 @@ class MovementMixin(DMCoreProtocol):
     def _clamp_band(self, band):
         """!
         @brief Clamps a candidate band to a floor of 1 always, and additionally to the
-            scenario's own "bands" count whenever scenario["enclosed"] is true (the default
+            current scene's own "bands" count whenever its "enclosed" is true (the default
             when the field is missing -- safer to assume a room has walls than to silently
-            let retreat escape an unenclosed-by-omission scenario). An unenclosed scenario
+            let retreat escape an unenclosed-by-omission scenario). An unenclosed scene
             has no upper clamp at all -- see this file's module docstring for why that's the
-            actual "escape" mechanism. Pure -- doesn't touch any entity -- so
-            advance_or_retreat can preview a candidate move before committing to it.
+            actual "escape" mechanism. "Current scene" is the current *room*'s own table for
+            a multi-room dungeon (bands/enclosed are declared per-room there, not on
+            self.scenario itself -- see DM_Rules.py's room-graph notes) or self.scenario
+            directly for a plain single-room scenario. Pure -- doesn't touch any entity --
+            so advance_or_retreat can preview a candidate move before committing to it.
         @param band The candidate band number.
         @return The clamped band number.
         """
+        scene = self._current_room() or self.scenario
         band = max(1, band)
-        if self.scenario.get("enclosed", True):
-            band = min(band, self.scenario.get("bands", 1))
+        if scene.get("enclosed", True):
+            band = min(band, scene.get("bands", 1))
         return band
 
     def move_entity(self, entity_name, delta):

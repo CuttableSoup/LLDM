@@ -394,6 +394,108 @@ class TestChestTradeConversation(_LivePipelineTestCase):
 
 
 @unittest.skipUnless(_lm_studio_reachable(), "LM Studio not reachable at http://127.0.0.1:1234")
+class TestCryptDungeonConversation(_LivePipelineTestCase):
+    """!
+    @brief The multi-room dungeon's full-pipeline counterpart: real NLPCore/DMCore/LLMCore
+        driving an actual room-to-room crawl through "crypt" (Rules/Fantasy/scenarios/
+        crypt.toml) -- a trap's disarm-or-be-damaged check, a real combat kill, a room
+        transition narrated through a live LLM call (DMCore._resolve_room_transition_intent /
+        LLMCore.generate_item_interaction_response's "move" branch -- nothing in
+        test_unit.py's TestMultiRoomDungeon touches the LLM side of this at all, only the
+        mechanics), the band-gated *branch* into the hidden alcove and back out again, and a
+        second, room-local chest -- distinct from TestChestSagaConversation, which never
+        leaves its one room at all.
+    """
+    scenario_name = "crypt"
+
+    def setUp(self):
+        self._boot()
+
+    def tearDown(self):
+        # See TestChestSagaConversation's own tearDown for why this matters: leaving a
+        # deterministic seed in place would silently affect other tests' unrelated rolls for
+        # the rest of this pytest process.
+        random.seed()
+
+    def test_disarm_trap_kill_spider_branch_and_loot_through_the_real_pipeline(self):
+        # Seed 3 gives a clean run start to finish, verified directly against the mechanics
+        # (no LLM involved in producing these numbers, only in narrating them): the
+        # entrance's dart trap disarm (finesse, 3 dice, difficulty 9) rolls 12 -- a pass; the
+        # spider (blades vs its own dodge) dies in exactly two hits (18 vs difficulty 14,
+        # then 16 vs difficulty 9); the hidden alcove's coffer lock (finesse, difficulty 8)
+        # rolls 14; the iron chest's own lock (finesse, difficulty 10) rolls 11 -- both
+        # passes. Re-pick this seed if any of these dice/difficulties ever change.
+        random.seed(3)
+
+        action_events = []
+        item_events = []
+        round_events = []
+        self.event_bus.subscribe("action_resolved", action_events.append)
+        self.event_bus.subscribe("item_interaction_resolved", item_events.append)
+        self.event_bus.subscribe("round_resolved", round_events.append)
+        player_name = self.dm_core.player_name
+
+        transcript = []
+
+        def say(player_input):
+            response = self._say(player_input)
+            transcript.append((player_input, response))
+            self.assertTrue(response.strip())
+            self.assertNotIn("Could not connect to the local LLM", response)
+            return response
+
+        say("I disarm the trap")
+        self.assertTrue(action_events[-1]["success"])
+        self.assertNotIn("damage", action_events[-1])  # a passed disarm never damages the player
+
+        say("I advance")
+        say("continue deeper")
+        self.assertEqual(item_events[-1]["room_name"], "The Hall of Webs")
+        self.assertEqual(self.dm_core.current_room_key, "hall_of_webs")
+
+        say("I attack the spider")
+        say("I attack the spider")
+        self.assertEqual(self.dm_core.get_current_hp("giant spider"), 0)
+        # A hostile creature always batches into round narration, never the single-action path.
+        self.assertEqual(len(round_events), 2)
+
+        say("continue deeper")
+        self.assertEqual(self.dm_core.current_room_key, "guard_chamber")
+
+        # The actual point of this test: guard_chamber has a real branch (see DM_Rules.py's
+        # room-graph notes) -- "right" only resolves once the player has actually moved to
+        # band 2, matching this room's own [[room.exit]] declaration, not just the word said.
+        say("I advance")
+        say("go right")
+        self.assertEqual(item_events[-1]["room_name"], "The Hidden Alcove")
+        self.assertEqual(self.dm_core.current_room_key, "hidden_alcove")
+
+        say("I pick the lock")
+        self.assertTrue(action_events[-1]["success"])
+        say("open the coffer")
+        say("take the health potion")
+        self.assertIn("health potion", self.dm_core.entities[player_name]["inventory"])
+
+        # Back out of the branch, then push on to the room's own main-path chest.
+        say("go back the way we came")
+        self.assertEqual(self.dm_core.current_room_key, "guard_chamber")
+        say("I advance")
+        say("I pick the lock")
+        self.assertTrue(action_events[-1]["success"])
+        say("open the chest")
+        say("take the health potion")
+
+        # Started with 3 health potions, +1 from the coffer, +1 from the chest.
+        self.assertEqual(self.dm_core.entities[player_name]["inventory"].count("health potion"), 5)
+        # Every check passed and the trap was disarmed cleanly -- no damage the whole way through.
+        self.assertEqual(self.dm_core.get_current_hp(player_name), 36)
+
+        print("\n=== Crypt dungeon transcript ===")
+        for player_input, response in transcript:
+            print(f"> {player_input}\n{response}\n")
+
+
+@unittest.skipUnless(_lm_studio_reachable(), "LM Studio not reachable at http://127.0.0.1:1234")
 class TestSaveAndResumeConversation(unittest.TestCase):
     """!
     @brief Simulates an actual app restart, not just a save_game/load_game round-trip: session

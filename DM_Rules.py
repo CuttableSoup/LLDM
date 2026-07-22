@@ -40,6 +40,37 @@ class RulesMixin(DMCoreProtocol):
             ) if description
         ]
 
+    def _current_room(self):
+        """!
+        @brief The current room's own table, for a multi-room dungeon (see load_scenario_
+            definition) -- None for a plain single-room scenario (arena/tavern/field/dungeon),
+            which has no [[room]] tables at all.
+        @return self.rooms[self.current_room_key], or None.
+        """
+        if not self.rooms:
+            return None
+        return self.rooms.get(self.current_room_key)
+
+    def _current_scene_name(self):
+        """!
+        @brief The name to narrate the current scene with -- the room's own name if this is a
+            multi-room dungeon (ex: "Entrance Hall"), else the flat scenario's own name (ex:
+            "The Rusty Tankard"). Used for both the initial scenario_loaded payload and every
+            later room_entered payload, so a multi-room dungeon's intro and every subsequent
+            room transition are narrated the same way.
+        @return The scene name string.
+        """
+        room = self._current_room()
+        return room.get("name", "") if room else self.scenario.get("name", "")
+
+    def _current_scene_description(self):
+        """!
+        @brief The description to narrate the current scene with -- see _current_scene_name.
+        @return The scene description string.
+        """
+        room = self._current_room()
+        return room.get("description", "") if room else self.scenario.get("description", "")
+
     def load_rules(self, rules_dir):
         base_dir = os.path.dirname(os.path.abspath(__file__))
         full_dir = os.path.join(base_dir, rules_dir)
@@ -88,6 +119,23 @@ class RulesMixin(DMCoreProtocol):
             Scenarios live in their own subdirectory rather than the flat Rules/Fantasy/
             scan in load_rules (which only keeps whichever [scenario] table it reads last),
             so multiple named scenarios can coexist and one is selected explicitly by name.
+
+            A scenario file is either a plain single room (arena/tavern/field/dungeon --
+            entities listed directly under [scenario]) or a multi-room dungeon: one or more
+            [[room]] tables, each with its own "entities"/"bands"/"enclosed" plus a list of
+            [[room.exit]] sub-tables ({band, direction, destination, arrival_band}), and
+            [scenario].start_room naming which room to begin in. A room's own "entities"
+            list never includes the player -- only room-local creatures/traps/chests -- the
+            player (and anything else meant to persist across the whole dungeon) is instead
+            listed once, at the top level, under [scenario].entities, positioned at their
+            starting band in the starting room (see load_scenario/_populate_room). Each exit
+            is only usable from the specific band it names, which is what lets a room have
+            more than one exit at all (ex: one exit at band 2 leading right to a side room,
+            another at band 3 continuing forward) -- a real branch, not just a corridor's
+            forward/back pair. self.rooms stays an empty dict for the plain-scenario shape --
+            load_scenario/enter_room both branch on "is self.rooms populated" rather than a
+            separate flag, so a plain scenario file never has to declare anything extra just
+            to opt out of the room-graph machinery.
         @param scenario_name The scenario's filename without extension (ex: "arena", "tavern").
         @raises FileNotFoundError if no matching scenario file exists. Unlike load_rules'
                 blanket per-file try/except, a missing/malformed scenario is fatal on purpose:
@@ -103,17 +151,30 @@ class RulesMixin(DMCoreProtocol):
         with open(filepath, "rb") as f:
             data = tomllib.load(f)
         self.scenario = data.get("scenario", {})
+        self.rooms = {room.get("key"): room for room in data.get("room", [])}
+        self.current_room_key = self.scenario.get("start_room")
+        # room_key -> the list of instance names created for it the first time it was
+        # entered (see enter_room) -- what makes a revisited room stay exactly as the player
+        # left it (a cleared trap stays cleared, a dead creature stays dead, a looted chest
+        # stays empty) instead of respawning fresh from template on every visit.
+        self.visited_rooms = {}
 
-    def load_scenario(self):
+    def _instance_entities(self, entity_entries):
         """!
-        @brief Instantiates each entity listed in the scenario as its own independent copy of its
-            template, so duplicate creatures (ex: two wolves) get separate HP/conditions instead
-            of sharing the same template dict.
+        @brief Instantiates a list of entity entries as independent copies of their
+            templates, so duplicate creatures (ex: two wolves) get separate HP/conditions
+            instead of sharing the same template dict. Used for the scenario's own top-level
+            "entities" list (the player, and any other entity meant to persist across the
+            whole playthrough -- see load_scenario) and for a single room's own "entities"
+            list (see _populate_room) -- a room's list never includes the player at all, so
+            this never needs to special-case it.
+        @param entity_entries A list of {name, band} tables.
+        @return The list of instance names created, in entity_entries order.
         """
-        self.scenario_entities = []
+        instance_names = []
         occurrence_counts = {}
 
-        for entry in self.scenario.get("entities", []):
+        for entry in entity_entries:
             template_name = entry.get("name")
             template = self.entities.get(template_name)
             if template is None:
@@ -135,7 +196,46 @@ class RulesMixin(DMCoreProtocol):
             # mutate, so it must start as its own copy rather than sharing the template's dict.
             instance["active_conditions"] = dict(instance.get("conditions", {}))
             self.entities[instance_name] = instance
-            self.scenario_entities.append(instance_name)
+            instance_names.append(instance_name)
+
+        return instance_names
+
+    def _populate_room(self, room_key):
+        """!
+        @brief Instances (or, for a room visited before, restores) room_key's own "entities"
+            list and merges it with whatever's already persistent in scenario_entities (ex:
+            the player) -- shared by load_scenario (the dungeon's starting room) and
+            enter_room (every later transition), so both go through the exact same
+            visited-rooms bookkeeping. A room's own entity list never includes the player --
+            only room-local things (creatures/traps/chests) -- which is what lets a revisit
+            restore *exactly* the same instances (a cleared trap stays cleared, a dead
+            creature stays dead, a looted chest stays empty) without needing to reconcile a
+            player entry that would otherwise appear once per room in the TOML for no reason
+            beyond bookkeeping.
+        @param room_key The room to populate, matching a key in self.rooms.
+        """
+        room = self.rooms.get(room_key, {})
+        if room_key in self.visited_rooms:
+            room_entities = list(self.visited_rooms[room_key])
+        else:
+            room_entities = self._instance_entities(room.get("entities", []))
+            self.visited_rooms[room_key] = list(room_entities)
+        self.scenario_entities = [self.player_name] + room_entities
+
+    def load_scenario(self):
+        """!
+        @brief Instances the scenario's own top-level "entities" list -- for a plain
+            single-room scenario (arena/tavern/field/dungeon) that's everyone in the scene;
+            for a multi-room dungeon it's just whatever persists across the whole
+            playthrough (today, only the player, positioned at their own starting band --
+            see load_scenario_definition), with the *starting room's* own entities merged in
+            via _populate_room. Always a fresh instancing (covers __init__, load_game, and
+            ad-hoc test scenarios that reassign self.scenario/self.rooms directly and call
+            this again) -- see "Scenario instancing" in CLAUDE.md.
+        """
+        self.scenario_entities = self._instance_entities(self.scenario.get("entities", []))
+        if self.rooms:
+            self._populate_room(self.current_room_key)
 
         # Keeps current_target in sync with scenario_entities on every load -- covers
         # __init__, load_game, and ad-hoc test scenarios that reassign self.scenario directly
@@ -143,3 +243,33 @@ class RulesMixin(DMCoreProtocol):
         self.current_target = self._choose_combat_target()
 
         self.event_bus.publish("log_info", f"Scenario loaded: {self.scenario_entities}")
+
+    def enter_room(self, room_key, arrival_band=1):
+        """!
+        @brief Moves the player to a different room in the same multi-room dungeon --
+            DMCore._on_item_interaction_detected's "move" handling is the only caller, gated
+            there on the current room actually declaring a matching exit (see
+            DMCore._find_room_exit) and being clear of living hostiles first. Never touches
+            the player's own live instance beyond repositioning their band (see
+            _populate_room) -- HP, inventory, currency, and conditions carry over across
+            rooms exactly as combat/looting left them. A room visited before is restored
+            from visited_rooms rather than re-instanced (see _populate_room); a room visited
+            for the first time is instanced fresh, same as any scenario load.
+        @param room_key The target room's own "key", as named in the exit that's moving here.
+        @param arrival_band Where the player ends up in the new room -- the exit's own
+            "arrival_band" (defaulting to 1, "just past the doorway", if the exit doesn't
+            specify one).
+        @return True if room_key names a real room and the move happened, False otherwise
+                (ex: a stale/typo'd exit reference -- callers are expected to have already
+                validated room_key came from the current room's own declared exits).
+        """
+        if room_key not in self.rooms:
+            return False
+
+        self.current_room_key = room_key
+        self.entities[self.player_name]["band"] = arrival_band
+        self._populate_room(room_key)
+
+        self.current_target = self._choose_combat_target()
+        self.event_bus.publish("log_info", f"Entered room '{room_key}': {self.scenario_entities}")
+        return True

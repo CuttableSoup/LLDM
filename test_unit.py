@@ -1689,6 +1689,69 @@ class TestItemTargetedSkillCheck(unittest.TestCase):
         self.assertEqual(self.dm_core.current_target, starting_target)
 
 
+class TestHealthPotionIdentify(unittest.TestCase):
+    """!
+    @brief items.toml's "health potion" carries its own [entity.test] (difficulty=4,
+        skill=["appraise", "medicine"], pass.reveal=true) -- deliberately nondescript on its
+        own (see the items.toml comment) so its "healing" tag is a hidden property revealed
+        only once identified, the same mechanism TestItemTargetedSkillCheck already covers
+        for the cursed dagger. The one thing genuinely different here: health potions are a
+        *fungible* item -- gladstone starts with three, all sharing the exact same
+        self.entities["health potion"] template dict (inventory just repeats the name
+        string, see CLAUDE.md's "Inventory/currency transfer" notes) -- so identifying any
+        one of them identifies all of them at once, everywhere, for the rest of the
+        playthrough. Not a bug specific to this feature, just the existing item model made
+        newly visible now that identity is worth hiding at all.
+    """
+
+    def setUp(self):
+        self.event_bus = EventBus()
+        self.action_events = []
+        self.event_bus.subscribe("action_resolved", self.action_events.append)
+        self.dm_core = DMCore(self.event_bus, scenario_name="arena")
+
+    def _check_the_potion(self, skill_name, roll_result):
+        self.dm_core.roll_dice = lambda dice, pips: roll_result
+        self.dm_core._on_action_detected({
+            "skill": skill_name, "target": "health potion", "input": "I appraise the health potion",
+        })
+
+    def test_starts_unidentified_with_no_hint_in_its_description(self):
+        self.assertFalse(self.dm_core.is_identified("health potion"))
+        self.assertNotIn("healing", self.dm_core.entities["health potion"]["description"].lower())
+
+    def test_successful_check_reveals_healing_and_marks_identified(self):
+        self._check_the_potion("appraise", roll_result=4)  # clears difficulty 4
+        result = self.action_events[-1]
+        self.assertTrue(result["success"])
+        self.assertEqual(result["revealed"], ["healing"])
+        self.assertTrue(self.dm_core.is_identified("health potion"))
+
+    def test_failed_check_reveals_nothing(self):
+        self._check_the_potion("appraise", roll_result=1)  # well under difficulty 4
+        result = self.action_events[-1]
+        self.assertFalse(result["success"])
+        self.assertNotIn("revealed", result)
+        self.assertFalse(self.dm_core.is_identified("health potion"))
+
+    def test_medicine_also_qualifies_as_a_valid_identify_skill(self):
+        self._check_the_potion("medicine", roll_result=4)
+        self.assertTrue(self.dm_core.is_identified("health potion"))
+
+    def test_identifying_one_potion_identifies_every_copy_at_once(self):
+        # Fungible items share one template dict (see this class's own docstring) -- there's
+        # no per-instance "which copy" to distinguish.
+        self.assertEqual(self.dm_core.entities["gladstone"]["inventory"].count("health potion"), 3)
+        self._check_the_potion("appraise", roll_result=4)
+        self.assertTrue(self.dm_core.is_identified("health potion"))
+
+    def test_identified_potion_blocks_a_repeat_check(self):
+        self._check_the_potion("appraise", roll_result=4)
+        self.assertTrue(self.dm_core.is_identified("health potion"))
+
+        self.assertIsNone(self.dm_core._resolve_item_test_target("health potion", "appraise"))
+
+
 class TestOpenClose(unittest.TestCase):
     def setUp(self):
         self.event_bus = EventBus()
@@ -1874,6 +1937,131 @@ class TestGiveAndTrade(unittest.TestCase):
         result = self.resolved[-1]
         self.assertFalse(result["found"])
         self.assertEqual(result["reason"], "not_takeable")
+
+
+class TestUseItem(unittest.TestCase):
+    """!
+    @brief "use" (DMCore._resolve_use_intent) consumes or activates an item already in the
+        player's own inventory -- never a target's, unlike take/give/trade. NLPCore's own
+        keywords for it today are just "drink"/"quaff" (see NLP_Core.py's USE_KEYWORDS), but
+        the intent/handling itself is the generic "use", gated on a truthy "usable" field
+        rather than any particular subtype, and built around two generalizing pieces neither
+        of which the original drink-only version had: a "charges" count (single-use if
+        absent, multi-use if present -- see _consume_charge) and "replace_with" (what's left
+        in inventory once charges hit zero, ex: health potion -> glass vial). Healing itself
+        (apply_healing, DM_Status.py -- the clamped-at-max_hp counterpart to apply_damage) is
+        still the only effect actually wired, exercised here via the one real usable item,
+        health potion.
+    """
+
+    def setUp(self):
+        self.event_bus = EventBus()
+        self.resolved = []
+        self.event_bus.subscribe("item_interaction_resolved", self.resolved.append)
+        self.dm_core = DMCore(self.event_bus, scenario_name="arena")
+
+    def _use(self, item_name="health potion", roll_result=6):
+        self.dm_core.roll_dice = lambda dice, pips: roll_result
+        self.dm_core._on_item_interaction_detected({
+            "intent": "use", "item_name": item_name, "input": "I drink the health potion",
+        })
+        return self.resolved[-1]
+
+    def test_using_heals_and_consumes_exactly_one(self):
+        self.dm_core.apply_damage("gladstone", 20)  # 36 -> 16
+        starting_count = self.dm_core.entities["gladstone"]["inventory"].count("health potion")
+
+        # roll_dice is stubbed to return roll_result directly (same convention
+        # TestItemTargetedSkillCheck's own _check_the_dagger mock already uses), so this is
+        # the healing roll's total, not per-die.
+        result = self._use(roll_result=6)
+
+        self.assertTrue(result["found"])
+        self.assertEqual(result["healed"], 6)
+        self.assertEqual(self.dm_core.get_current_hp("gladstone"), 22)
+        self.assertEqual(result["remaining_hp"], 22)
+        self.assertEqual(
+            self.dm_core.entities["gladstone"]["inventory"].count("health potion"),
+            starting_count - 1,
+        )
+
+    def test_using_a_single_use_item_replaces_it_with_its_replace_with(self):
+        # gladstone starts with three health potions -- using one should leave exactly two
+        # behind, plus one new glass vial, not wipe every potion out.
+        starting_count = self.dm_core.entities["gladstone"]["inventory"].count("health potion")
+
+        result = self._use()
+
+        self.assertEqual(result["charges_left"], 0)
+        self.assertEqual(result["replaced_with"], "glass vial")
+        self.assertEqual(
+            self.dm_core.entities["gladstone"]["inventory"].count("health potion"),
+            starting_count - 1,
+        )
+        self.assertIn("glass vial", self.dm_core.entities["gladstone"]["inventory"])
+
+    def test_apply_healing_clamps_at_max_hp_directly(self):
+        self.dm_core.apply_damage("gladstone", 1)  # 36 -> 35
+        result = self.dm_core.apply_healing("gladstone", 999)
+        self.assertEqual(result, 36)
+        self.assertEqual(self.dm_core.get_current_hp("gladstone"), 36)
+
+    def test_using_identifies_the_item_even_if_never_checked_first(self):
+        self.assertFalse(self.dm_core.is_identified("health potion"))
+        self._use()
+        self.assertTrue(self.dm_core.is_identified("health potion"))
+
+    def test_using_something_not_marked_usable_is_rejected(self):
+        result = self._use(item_name="longsword")
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "not_usable")
+        self.assertIn("longsword", self.dm_core.entities["gladstone"]["inventory"])
+
+    def test_using_something_not_actually_carried_is_rejected(self):
+        # "cursed dagger" is a real entity, just not in gladstone's own inventory in this scenario.
+        result = self._use(item_name="cursed dagger")
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "not_present")
+
+    def test_using_never_touches_a_scene_target(self):
+        # Unlike take/give/trade, use must never reach into current_target's inventory --
+        # there's no health potion anywhere near the wolf/thane in this scenario at all, so a
+        # match here can only mean it incorrectly looked at the player's own stock regardless
+        # of who source_name would normally be.
+        starting_target = self.dm_core.current_target
+        self._use()
+        self.assertEqual(self.dm_core.current_target, starting_target)
+        self.assertNotIn("health potion", self.dm_core.entities.get(starting_target, {}).get("inventory", []))
+
+    def test_multi_charge_item_survives_repeated_uses_until_charges_run_out(self):
+        # No real multi-charge item exists yet (see the "charges" field's own module note --
+        # this is meant to generalize to a future wand), so this exercises _consume_charge
+        # directly against a synthetic one rather than waiting for real content to add it.
+        self.dm_core.entities["test wand"] = {
+            "name": "test wand", "supertype": "object", "subtype": "wand",
+            "usable": True, "charges": 2,
+        }
+        self.dm_core.entities["gladstone"]["inventory"].append("test wand")
+
+        result = self._use(item_name="test wand")
+        self.assertEqual(result["charges_left"], 1)
+        self.assertIn("test wand", self.dm_core.entities["gladstone"]["inventory"])
+
+        result = self._use(item_name="test wand")
+        self.assertEqual(result["charges_left"], 0)
+        self.assertNotIn("test wand", self.dm_core.entities["gladstone"]["inventory"])
+
+    def test_using_an_item_with_no_healing_stat_still_succeeds_with_no_effect(self):
+        self.dm_core.entities["test wand"] = {
+            "name": "test wand", "supertype": "object", "subtype": "wand",
+            "usable": True, "charges": 1,
+        }
+        self.dm_core.entities["gladstone"]["inventory"].append("test wand")
+
+        result = self._use(item_name="test wand")
+
+        self.assertTrue(result["found"])
+        self.assertEqual(result["healed"], 0)
 
 
 class TestInventoryTransfer(unittest.TestCase):
@@ -2244,6 +2432,321 @@ class TestSaveLoad(unittest.TestCase):
         saves_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Saves")
         slot_dir = self.dm_core._save_slot_dir("../../evil")
         self.assertEqual(os.path.dirname(slot_dir), saves_root)
+
+
+class TestMultiRoomDungeon(unittest.TestCase):
+    """!
+    @brief Rules/Fantasy/scenarios/crypt.toml is the first multi-room scenario ([[room]]
+        tables plus start_room) -- covers room instancing/isolation from a plain scenario,
+        trap [entity.test] damage (apply_test_outcome's "damage" key), band-gated exits
+        (including a real branch, not just a forward/back corridor), and visited-room state
+        persistence (a cleared room stays cleared).
+    """
+
+    def setUp(self):
+        self.event_bus = EventBus()
+        self.action_events = []
+        self.item_events = []
+        self.round_events = []
+        self.event_bus.subscribe("action_resolved", self.action_events.append)
+        self.event_bus.subscribe("item_interaction_resolved", self.item_events.append)
+        self.event_bus.subscribe("round_resolved", self.round_events.append)
+        self.dm_core = DMCore(self.event_bus, scenario_name="crypt")
+
+    def _move(self, direction):
+        self.dm_core._on_item_interaction_detected(
+            {"intent": "move", "item_name": None, "direction": direction, "input": f"go {direction}"}
+        )
+        return self.item_events[-1]
+
+    def test_a_plain_scenario_has_no_rooms(self):
+        # arena/tavern/field/dungeon have no [[room]] tables at all -- self.rooms must stay
+        # empty for them, which is what load_scenario/enter_room branch on to know a scenario
+        # is the plain, single-room shape rather than a dungeon's room graph.
+        plain_dm = DMCore(EventBus(), scenario_name="dungeon")
+        self.assertEqual(plain_dm.rooms, {})
+        self.assertIsNone(plain_dm.current_room_key)
+
+    def test_crypt_loads_its_room_graph_and_starts_in_the_entrance(self):
+        self.assertEqual(
+            set(self.dm_core.rooms.keys()),
+            {
+                "entrance", "hall_of_webs", "guard_chamber", "hidden_alcove",
+                "collapsed_passage", "bone_gallery", "sanctum", "boss_chamber",
+            },
+        )
+        self.assertEqual(self.dm_core.current_room_key, "entrance")
+        # The player is never repeated in a room's own "entities" list (see
+        # DM_Rules.py's _populate_room) -- only listed once, at [scenario].entities.
+        self.assertEqual(self.dm_core.scenario_entities, ["gladstone", "dart trap"])
+        # A trap is never hostile (same is_hostile short-circuit as any other "object"
+        # supertype) -- with nothing hostile in the room, current_target falls back to it,
+        # exactly the way the original dungeon.toml's chest already works.
+        self.assertEqual(self.dm_core.current_target, "dart trap")
+
+    def test_failed_disarm_damages_the_player_and_arms_blocks_further_attempts(self):
+        starting_hp = self.dm_core.get_current_hp("gladstone")
+        with patch("random.randint", return_value=1):  # finesse 3d1=3, well under difficulty 9
+            self.dm_core._on_action_detected({"skill": "finesse", "input": "I try to disarm the trap"})
+
+        result = self.action_events[-1]
+        self.assertFalse(result["success"])
+        # Trap's fail damage is 3d (patched to 1 each = 3 raw), reduced by chain mail's own
+        # 2d "piercing" armor coverage (also patched to 1 each = 2) -- net 1, not 0, which is
+        # exactly why the trap deals 3 dice and not 2 (see the items.toml comment).
+        self.assertEqual(result["damage"]["net_damage"], 1)
+        self.assertEqual(self.dm_core.get_current_hp("gladstone"), starting_hp - 1)
+        self.assertIn("triggered", self.dm_core.entities["dart trap"]["active_conditions"])
+        self.assertIn("armed", self.dm_core.entities["dart trap"]["active_conditions"])  # fail never dismisses it
+
+        # blocks_if_condition="triggered" -- a repeat attempt must fall through to the normal
+        # opposed path (difficulty 0, no HP loss) instead of rolling and re-damaging again.
+        hp_after_first_hit = self.dm_core.get_current_hp("gladstone")
+        with patch("random.randint", return_value=6):
+            self.dm_core._on_action_detected({"skill": "finesse", "input": "I try again"})
+        self.assertEqual(self.action_events[-1]["difficulty"], 0)
+        self.assertEqual(self.dm_core.get_current_hp("gladstone"), hp_after_first_hit)
+
+    def test_successful_disarm_dismisses_armed_with_no_damage(self):
+        starting_hp = self.dm_core.get_current_hp("gladstone")
+        with patch("random.randint", return_value=6):  # finesse 3d6=18, clears difficulty 9
+            self.dm_core._on_action_detected({"skill": "finesse", "input": "I disarm the trap"})
+
+        result = self.action_events[-1]
+        self.assertTrue(result["success"])
+        self.assertNotIn("damage", result)
+        self.assertEqual(self.dm_core.get_current_hp("gladstone"), starting_hp)
+        self.assertNotIn("armed", self.dm_core.entities["dart trap"]["active_conditions"])
+
+    def test_move_denied_with_no_exit_from_a_plain_scenario(self):
+        plain_dm = DMCore(self.event_bus, scenario_name="dungeon")
+        self.item_events.clear()
+        plain_dm._on_item_interaction_detected({"intent": "move", "item_name": None, "direction": "forward", "input": "go forward"})
+        self.assertEqual(self.item_events[-1]["reason"], "no_exit")
+
+    def test_back_denied_with_no_exit_from_the_entrance(self):
+        # The entrance room declares no "back" exit at all.
+        result = self._move("back")
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "no_exit")
+        self.assertEqual(self.dm_core.current_room_key, "entrance")
+
+    def test_forward_denied_from_the_wrong_band(self):
+        # The entrance's own "forward" exit is only declared at band 2 -- the player starts
+        # at band 1, so it isn't reachable yet (must advance toward the trap first).
+        self.assertEqual(self.dm_core.get_band("gladstone"), 1)
+        result = self._move("forward")
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "wrong_band")
+        self.assertEqual(self.dm_core.current_room_key, "entrance")
+
+    def test_forward_succeeds_once_the_player_reaches_the_exit_band(self):
+        with patch("random.randint", return_value=6):
+            self.dm_core._on_action_detected({"skill": "finesse", "input": "I disarm the trap"})
+        self.dm_core.advance_or_retreat("advance")  # band 1 -> 2, toward the trap/exit
+        self.assertEqual(self.dm_core.get_band("gladstone"), 2)
+
+        result = self._move("forward")
+
+        self.assertTrue(result["found"])
+        self.assertEqual(result["room_name"], "The Hall of Webs")
+        self.assertEqual(self.dm_core.current_room_key, "hall_of_webs")
+        self.assertEqual(self.dm_core.scenario_entities, ["gladstone", "giant spider"])
+        self.assertEqual(self.dm_core.current_target, "giant spider")
+        self.assertEqual(self.dm_core.get_band("gladstone"), 1)  # this exit's own arrival_band
+
+    def test_move_blocked_while_a_hostile_creature_is_still_alive(self):
+        self.dm_core.enter_room("hall_of_webs")  # spider present, still alive
+        self.item_events.clear()
+
+        result = self._move("forward")
+
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "blocked_by_enemies")
+        self.assertEqual(self.dm_core.current_room_key, "hall_of_webs")
+
+    def test_move_allowed_once_the_room_is_cleared(self):
+        self.dm_core.enter_room("hall_of_webs")
+        self.dm_core.apply_damage("giant spider", 999)  # kill it outright
+        self.item_events.clear()
+
+        result = self._move("forward")
+
+        self.assertTrue(result["found"])
+        self.assertEqual(self.dm_core.current_room_key, "guard_chamber")
+
+    def test_branching_exit_leads_right_to_the_hidden_alcove_not_the_main_path(self):
+        # guard_chamber declares two forward-ish exits at two different bands: "right" at
+        # band 2 (a real branch, into hidden_alcove) and "forward" at band 3 (the main
+        # path, into collapsed_passage) -- this is the case a single forward/back pair per
+        # room could never express. Setting the band directly rather than via
+        # advance_or_retreat -- guard_chamber's iron chest sits at band 1 (the same band the
+        # player arrives at), so "advance" toward it (already gap 0) is correctly a no-op;
+        # that's advance_or_retreat's own behavior (see TestMovementAndRange), not what this
+        # test is about.
+        self.dm_core.enter_room("guard_chamber")
+        self.dm_core.entities["gladstone"]["band"] = 2
+
+        result = self._move("right")
+
+        self.assertTrue(result["found"])
+        self.assertEqual(self.dm_core.current_room_key, "hidden_alcove")
+        self.assertIn("dusty coffer", self.dm_core.scenario_entities)
+
+    def test_branching_exit_forward_from_a_different_band_leads_to_the_main_path(self):
+        self.dm_core.enter_room("guard_chamber")
+        self.dm_core.entities["gladstone"]["band"] = 3
+
+        result = self._move("forward")
+
+        self.assertTrue(result["found"])
+        self.assertEqual(self.dm_core.current_room_key, "collapsed_passage")
+
+    def test_right_exit_not_available_from_band_3_in_guard_chamber(self):
+        self.dm_core.enter_room("guard_chamber")
+        self.dm_core.entities["gladstone"]["band"] = 3  # "right" only exists at band 2
+        self.item_events.clear()
+
+        result = self._move("right")
+
+        self.assertEqual(result["reason"], "wrong_band")
+
+    def test_player_state_carries_over_between_rooms(self):
+        # Room transitions must never reset the player's own live instance the way a fresh
+        # scenario load intentionally does (see DM_Rules.py's _populate_room) -- HP/currency/
+        # inventory earned in one room must still be there in the next.
+        self.dm_core.apply_damage("gladstone", 5)
+        self.dm_core.entities["gladstone"]["currency"] += 50
+        hp_before = self.dm_core.get_current_hp("gladstone")
+        currency_before = self.dm_core.entities["gladstone"]["currency"]
+
+        with patch("random.randint", return_value=6):
+            self.dm_core._on_action_detected({"skill": "finesse", "input": "I disarm the trap"})
+        self.dm_core.advance_or_retreat("advance")
+        self._move("forward")
+
+        self.assertEqual(self.dm_core.get_current_hp("gladstone"), hp_before)
+        self.assertEqual(self.dm_core.entities["gladstone"]["currency"], currency_before)
+
+    def test_revisited_room_keeps_its_state_instead_of_respawning(self):
+        # Kill the spider, move on, then come back -- the same dead spider should still be
+        # dead, not a freshly-instanced, full-HP one.
+        self.dm_core.enter_room("hall_of_webs")
+        self.dm_core.apply_damage("giant spider", 999)
+        self._move("forward")  # -> guard_chamber
+
+        self._move("back")  # -> back to hall_of_webs
+
+        self.assertEqual(self.dm_core.current_room_key, "hall_of_webs")
+        self.assertEqual(self.dm_core.get_current_hp("giant spider"), 0)
+        # current_target re-falls-back past the dead spider since nothing else is hostile/alive.
+        self.assertNotEqual(self.dm_core.current_target, "giant spider")
+
+    def test_looted_chest_stays_looted_on_a_return_visit(self):
+        self.dm_core.enter_room("hall_of_webs")
+        self.dm_core.apply_damage("giant spider", 999)
+        self._move("forward")  # -> guard_chamber (iron chest)
+
+        with patch("random.randint", return_value=6):  # finesse 3d6=18, clears the chest's lock (10)
+            self.dm_core._on_action_detected({"skill": "finesse", "input": "I pick the lock"})
+        self.dm_core.transfer_item("iron chest", "gladstone", "health potion")
+        self.assertNotIn("health potion", self.dm_core.entities["iron chest"]["inventory"])
+
+        self._move("back")  # -> hall_of_webs
+        self.dm_core.enter_room("guard_chamber")  # back again
+
+        self.assertFalse(self.dm_core.is_locked("iron chest"))
+        self.assertNotIn("health potion", self.dm_core.entities["iron chest"]["inventory"])
+
+    def test_boss_chamber_has_no_forward_exit(self):
+        for room_key in ("hall_of_webs", "guard_chamber", "collapsed_passage", "bone_gallery", "sanctum", "boss_chamber"):
+            self.dm_core.enter_room(room_key)
+        self.assertEqual(self.dm_core.current_room_key, "boss_chamber")
+        self.item_events.clear()
+
+        result = self._move("forward")
+
+        self.assertEqual(result["reason"], "no_exit")
+
+    def test_boss_chooses_its_first_behavior_entry_above_the_hp_cutoff(self):
+        self.dm_core.enter_room("boss_chamber")
+        # Above 40% of 50 HP -- the first [[entity.behavior]] entry should match.
+        behavior = self.dm_core.choose_behavior("the bone warden")
+        self.assertEqual(behavior["action"], "bone claw")
+
+    def test_boss_escalates_to_its_second_behavior_entry_once_badly_hurt(self):
+        self.dm_core.enter_room("boss_chamber")
+        self.dm_core.apply_damage("the bone warden", 40)  # down to 10/50 = 20%, under the 0.4 cutoff
+
+        behavior = self.dm_core.choose_behavior("the bone warden")
+
+        self.assertEqual(behavior["action"], "grave chill")
+        # "grave chill" is an inline [[entity.abilities]] entry on "the bone warden" itself
+        # (no standalone spells.toml/techniques.toml entity to look up by name), so it has to
+        # be resolved via resolve_named_ability, not a bare self.entities lookup.
+        ability = self.dm_core.resolve_named_ability("the bone warden", "grave chill")
+        self.assertIn("cold", ability.get("damage_tags", []))
+
+    def test_boss_attack_deals_real_damage_when_it_hits(self):
+        self.dm_core.enter_room("boss_chamber")
+        with patch("random.randint", return_value=6):  # both attacker and defender roll max
+            turn = self.dm_core.resolve_behavior_action("the bone warden", "gladstone")
+        self.assertEqual(turn["skill"], "brawling")
+        self.assertTrue(turn["success"])
+        self.assertGreater(turn["damage"]["net_damage"], 0)
+        self.assertEqual(turn["damage"]["defender"], "gladstone")
+
+
+class TestMultiRoomSaveLoad(unittest.TestCase):
+    """!
+    @brief Save/load fidelity for a multi-room dungeon specifically -- DM_Persistence.py's
+        _all_known_instance_names/visited_rooms handling, distinct from TestSaveLoad's
+        plain single-room coverage.
+    """
+
+    def setUp(self):
+        self.event_bus = EventBus()
+        self.dm_core = DMCore(self.event_bus, scenario_name="crypt")
+        self.slot_dirs = []
+
+    def tearDown(self):
+        for slot_dir in self.slot_dirs:
+            shutil.rmtree(slot_dir, ignore_errors=True)
+
+    def _track(self, slot_name):
+        self.slot_dirs.append(self.dm_core._save_slot_dir(slot_name))
+        return slot_name
+
+    def test_save_load_resumes_in_the_room_it_was_saved_in(self):
+        slot = self._track("test_crypt_resume_room")
+        self.dm_core.enter_room("hall_of_webs")
+        self.dm_core.apply_damage("giant spider", 5)
+        self.dm_core.save_game(slot)
+
+        fresh_bus = EventBus()
+        fresh_dm = DMCore(fresh_bus, scenario_name="crypt")  # boots back at "entrance"
+        fresh_dm.load_game(slot)
+
+        self.assertEqual(fresh_dm.current_room_key, "hall_of_webs")
+        self.assertEqual(fresh_dm.scenario_entities, ["gladstone", "giant spider"])
+        self.assertEqual(fresh_dm.get_current_hp("giant spider"), 9)
+
+    def test_save_load_preserves_an_earlier_cleared_room_too(self):
+        # Not just the room the player is standing in -- a trap disarmed two rooms back must
+        # still be disarmed after a resume, not reset to "armed" the way re-instancing purely
+        # from the starting room's own fresh templates would leave it.
+        slot = self._track("test_crypt_resume_earlier_room")
+        with patch("random.randint", return_value=6):
+            self.dm_core._on_action_detected({"skill": "finesse", "input": "I disarm the trap"})
+        self.assertFalse(self.dm_core.entities["dart trap"].get("active_conditions", {}).get("armed"))
+        self.dm_core.enter_room("hall_of_webs")
+        self.dm_core.save_game(slot)
+
+        fresh_dm = DMCore(EventBus(), scenario_name="crypt")
+        fresh_dm.load_game(slot)
+
+        self.assertEqual(fresh_dm.current_room_key, "hall_of_webs")
+        self.assertNotIn("armed", fresh_dm.entities["dart trap"].get("active_conditions", {}))
 
 
 class TestLLMSaveLoad(unittest.TestCase):

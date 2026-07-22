@@ -51,6 +51,29 @@ class StatusMixin(DMCoreProtocol):
         self.evaluate_statuses(entity_name, "on_damage")
         return entity["hp"]
 
+    def apply_healing(self, entity_name, amount):
+        """!
+        @brief Adds HP to an entity, clamped at their own max_hp -- the inverse of
+            apply_damage, but deliberately its own method rather than apply_damage called
+            with a negative amount: apply_damage has no upper clamp at all (only ever needed
+            a floor of 0, since incoming damage never had a reason to push past max_hp the
+            other way) and unconditionally evaluates "on_damage" statuses, which doesn't make
+            sense for a heal -- a wound tier crossed by *healing* isn't a new injury. (A wound
+            condition crossed the other way while healing still isn't auto-dismissed by this
+            -- see DM_Status.py's own "on_damage" TODO; that's a separate, still-open gap.)
+        @param entity_name The name of the entity being healed.
+        @param amount The amount of HP to restore.
+        @return The entity's current HP after healing.
+        """
+        entity = self.entities.get(entity_name)
+        if entity is None:
+            return 0
+        current_hp = self.get_current_hp(entity_name)
+        max_hp = entity.get("max_hp", current_hp)
+        entity["hp"] = min(max_hp, current_hp + amount)
+        self.event_bus.publish("log_info", f"{entity_name} heals {amount} HP ({current_hp} -> {entity['hp']} HP).")
+        return entity["hp"]
+
     def get_comparable_value(self, entity_name, field):
         """!
         @brief Resolves a requirement's field name to a comparable value for an entity.
@@ -188,20 +211,30 @@ class StatusMixin(DMCoreProtocol):
     def apply_test_outcome(self, entity_name, outcome):
         """!
         @brief Applies the pass/fail consequence of an entity's [entity.test] (ex: a chest's
-            lock check, or an item's own hidden-property check), dispatching purely on which
-            keys are present in outcome -- no "action" enum needed. A key of
-            "dismiss_condition" removes that condition; a key of "condition" applies a new one
-            (the same {condition, duration, dismiss} shape [[status]]'s own "apply" block
-            already uses); a truthy "reveal" key applies the permanent "identified"
-            condition (ex: the cursed dagger's arcane check) -- it doesn't say *what* was
-            revealed, that's read back off the entity's own data (ex: its "tags" field) by
-            whoever narrates it, once is_identified is true; a truthy "loot" key hands
-            everything (currency + inventory) to the player via loot_entity. Any combination
-            can be present at once, or the whole outcome can be empty/omitted for no consequence.
-        @param entity_name The name of the entity the test was performed against.
+            lock check, a trap's disarm/dodge attempt, or an item's own hidden-property
+            check), dispatching purely on which keys are present in outcome -- no "action"
+            enum needed. A key of "dismiss_condition" removes that condition; a key of
+            "condition" applies a new one (the same {condition, duration, dismiss} shape
+            [[status]]'s own "apply" block already uses); a truthy "reveal" key applies the
+            permanent "identified" condition (ex: the cursed dagger's arcane check) -- it
+            doesn't say *what* was revealed, that's read back off the entity's own data (ex:
+            its "tags" field) by whoever narrates it, once is_identified is true; a truthy
+            "loot" key hands everything (currency + inventory) to the player via loot_entity;
+            a "damage" key ({dice, pips, bonus}, same shape as any weapon/spell's own
+            damage_value) deals real damage to the player via calculate_damage -- ex: a
+            trap's failed disarm/dodge attempt -- reusing the exact same immunity/resistance/
+            vulnerability and evaluate_statuses("on_damage") path a weapon hit already takes,
+            rather than a separate one-off HP subtraction. Any combination can be present at
+            once, or the whole outcome can be empty/omitted for no consequence.
+        @param entity_name The name of the entity the test was performed against -- also the
+            nominal "attacker" for a "damage" key (ex: the trap itself), purely so
+            resolve_damage_value has something to resolve a flat/no bonus against; traps
+            aren't expected to carry their own skills the way a creature would.
         @param outcome The test's "pass" or "fail" table (or None/"" for no consequence).
-        @return loot_entity's {currency, items} summary if "loot" applied, else None -- so the
-                caller can narrate what was actually gained instead of leaving the LLM to guess.
+        @return A dict with "loot" (loot_entity's {currency, items} summary) and/or "damage"
+                (calculate_damage's own result dict) present only for whichever keys actually
+                fired, or None if outcome was empty -- so the caller can narrate exactly what
+                happened instead of leaving the LLM to guess.
         """
         if not outcome:
             return None
@@ -216,9 +249,13 @@ class StatusMixin(DMCoreProtocol):
             )
         if outcome.get("reveal"):
             self.apply_condition(entity_name, "identified", duration="permanent", dismiss="")
+        effects = {}
         if outcome.get("loot"):
-            return self.loot_entity(entity_name, self.player_name)
-        return None
+            effects["loot"] = self.loot_entity(entity_name, self.player_name)
+        if outcome.get("damage"):
+            ability = {"damage_value": outcome["damage"], "damage_tags": outcome.get("damage_tags", [])}
+            effects["damage"] = self.calculate_damage(entity_name, self.player_name, ability)
+        return effects or None
 
     def evaluate_statuses(self, entity_name, trigger):
         """!

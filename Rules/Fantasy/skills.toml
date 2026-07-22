@@ -64,7 +64,7 @@ specializations = ["tumbling", "tightrope walking", "falling safely"]
 [[skill]]
 name = "finesse"
 description = "Delicate physical manipulation of objects."
-keywords = ["manipulation", "precision", "covert", "pick", "lock", "steal", "dexterity"]
+keywords = ["manipulation", "precision", "covert", "pick", "lock", "steal", "dexterity", "disarm", "trap"]
 opposes = ["observation", "reflexes"]
 specializations = ["sleight of hand", "lockpicking", "pickpocketing"]
 
@@ -120,7 +120,7 @@ specializations = ["longbow", "crossbow", "sling"]
 [[skill]]
 name = "appraise"
 description = "Determining the financial or historical value of items."
-keywords = ["evaluation", "commerce", "investigation", "value", "price", "worth", "cost", "identify", "examine"]
+keywords = ["evaluation", "commerce", "investigation", "value", "price", "worth", "cost", "identify", "examine", "appraise"]
 opposes = ["forgery", "deception"]
 specializations = ["jewelry", "weapons", "antiques"]
 
