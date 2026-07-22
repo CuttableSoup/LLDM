@@ -66,9 +66,6 @@ requirements = [
 apply = { condition = "dead", duration = "permanent", dismiss = "resurrection" }
 description = "Broken neck; punctured lung; eviscerated."
 
-# TODO: the "enhance" buff technique (removed from characters.toml, deferred) needs a
-# condition whose skills/modifier are variable per apply-site, like damage_value already is,
-# rather than fixed as below. Not designed yet.
 [[condition]]
 name = "stunned"
 modifier = { dice = -1, pips = 0, bonus = 0 }

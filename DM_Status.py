@@ -59,8 +59,7 @@ class StatusMixin(DMCoreProtocol):
             a floor of 0, since incoming damage never had a reason to push past max_hp the
             other way) and unconditionally evaluates "on_damage" statuses, which doesn't make
             sense for a heal -- a wound tier crossed by *healing* isn't a new injury. (A wound
-            condition crossed the other way while healing still isn't auto-dismissed by this
-            -- see DM_Status.py's own "on_damage" TODO; that's a separate, still-open gap.)
+            condition crossed the other way while healing still isn't auto-dismissed by this.)
         @param entity_name The name of the entity being healed.
         @param amount The amount of HP to restore.
         @return The entity's current HP after healing.
@@ -264,9 +263,6 @@ class StatusMixin(DMCoreProtocol):
         @param trigger The trigger name to evaluate (ex: "on_damage").
         @return The list of status definitions that were applied.
         """
-        # TODO: this only ever applies conditions, never dismisses one whose requirements have
-        # stopped holding (ex: healing back above a wound tier still leaves it applied).
-        # dismiss_condition already exists as the removal primitive; nothing calls it from here.
         matched_statuses = self.get_applicable_statuses(entity_name, trigger)
         for status in matched_statuses:
             apply_block = status.get("apply")

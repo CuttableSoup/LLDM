@@ -486,11 +486,6 @@ class NLPCore:
             self.event_bus.publish("log_error", "NLPCore: Skill embeddings not initialized.")
             return None, 0.0
 
-        # TODO: a keyword-driven skill can still dominate an unrelated whole-sentence match --
-        # ex: "I identify the dagger" resolves here to "polearms" (0.51) instead of "arcane",
-        # because "identify" alone isn't enough to out-score it. Since "polearms" isn't in the
-        # dagger's own entity.test.skill, the item-targeted check in DM_Core silently declines
-        # it and the turn falls through to a no-op instead of the intended arcane check.
         candidates = self._generate_match_candidates(processed_text)
         candidate_embeddings = self.model.encode(candidates, convert_to_tensor=True)
 
@@ -578,8 +573,6 @@ class NLPCore:
         if self.target_embeddings is None:
             return None, 0.0
 
-        # TODO: no real multi-instance disambiguation (ex: "the wounded wolf" vs "the other
-        # one") -- see the tie-break note in the docstring above.
         input_embedding = self.model.encode(processed_text, convert_to_tensor=True)
         cosine_scores = util.cos_sim(input_embedding, self.target_embeddings)[0]
 

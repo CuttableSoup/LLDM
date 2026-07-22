@@ -402,10 +402,6 @@ class CombatMixin(DMCoreProtocol):
             "status". Ex: creatures.toml's wolf has one behavior, "always attack
             while hp_per_remain >= 0.01", so it keeps attacking until it's
             effectively dead and then simply stops matching any behavior at all.
-        # TODO: a behavior only ever names an attack, never movement -- an entity whose chosen
-        # action is out of range (see resolve_behavior_action/get_range_modifier) just does
-        # nothing that turn rather than closing the distance first. No scenario today starts a
-        # ranged combatant out of its own weapon's reach, so this costs nothing in practice yet.
         @param entity_name The name of the entity choosing a behavior.
         @return The first matching behavior definition, or None if none match (or
                 the entity has no behavior list at all).
