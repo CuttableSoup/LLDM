@@ -86,6 +86,8 @@ name = "thane"
 supertype = "creature"
 subtype = "humanoid"
 description = "A grizzled mercenary who fights at gladstone's side."
+is_party = true                            # Shows thane on GUICore's Party tab alongside
+                                            # gladstone -- see entity_schema.toml's is_party.
 
 max_hp = 24
 

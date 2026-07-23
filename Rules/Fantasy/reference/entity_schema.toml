@@ -45,6 +45,12 @@ description = "Flavor text shown to the LLM narrator and to a passed skill check
 is_player = false                          # Exactly one loaded template must set this true
                                             # (characters.toml's gladstone) -- DMCore.__init__
                                             # raises ValueError at boot if none does.
+is_party = false                           # Marks a non-player ally as part of the player's
+                                            # own party (ex: characters.toml's thane) -- purely
+                                            # a display flag read by GUICore's Party tab
+                                            # (is_player OR is_party); no combat/behavior logic
+                                            # depends on it. is_player already implies party
+                                            # membership, so gladstone doesn't need this too.
 
 # ---------------------------------------------------------------------------------------------
 # Vitals and physical stats

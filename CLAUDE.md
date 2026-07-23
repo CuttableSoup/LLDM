@@ -32,9 +32,17 @@ order: `NLPCore`, `LLMCore`, `GUICore`, then `DMCore` last (it publishes `rules_
 - **`LLM_Core.py`** — posts to LM Studio's OpenAI-compatible `/v1/chat/completions` on a
   background thread, with a rolling 100-message context window. Subscribes to six narration
   triggers (see "Narration" below).
-- **`GUI_Core.py`** — Tkinter window: history pane + tabbed Party/Notes/Map/Debug panels.
-  Only History (via `llm_response_ready`) and Debug (via `rules_loaded`) are currently wired
-  to real data.
+- **`GUI_Core.py`** — Tkinter window: history pane + tabbed Party/Notes/Map panels, plus a
+  dropdown File menu (Save.../Load...) on the window's menu bar in place of always-visible
+  save controls. Save opens a popup asking for a slot name; Load opens a popup listing every
+  existing slot (a subdirectory of `Saves/`) to pick from. History (via `llm_response_ready`)
+  and Party (via `rules_loaded`) are wired to real data; Notes has a display method but
+  nothing publishes to it yet (see "Known gaps"). The Party tab is a `ttk.Treeview`: one
+  collapsible node per party member — an entity with `is_player = true` (the player) or
+  `is_party = true` (an ally, ex: `characters.toml`'s `thane` — see `entity_schema.toml`'s
+  `is_party`) — each expanding into its own Equipment/Inventory/Conditions groups. The Map
+  tab is a free-form drawing canvas (click-drag to sketch, a small color palette, a Clear
+  button) for the player's own scratch map; the engine never writes to it.
 - **`Textual_Core.py`** — a parallel, headless-testable mirror of `GUI_Core`'s output, driven
   the same way via `user_input_submitted`. Not part of `LLDM.py`'s boot sequence; run standalone.
   Used by `test_unit.py` for pilot-driven UI tests.
@@ -467,7 +475,9 @@ offline subset only.
 - `NLP_Core.py` — a keyword-driven skill match can still dominate an unrelated whole-sentence
   embedding match (ex: "identify the dagger" resolves to the wrong skill); no multi-instance
   disambiguation (ex: "the wounded wolf" vs. "the other wolf").
-- `GUI_Core.py` — Party/Notes/Map tabs have display methods but nothing publishes to them yet.
+- `GUI_Core.py` — the Notes tab has a display method but nothing publishes to it yet. The
+  Party tab only refreshes on `rules_loaded` (boot/new game); `game_loaded` doesn't republish
+  it, so a loaded save's party panel can go stale until the next `rules_loaded`.
 
 ## Extended goals
 
