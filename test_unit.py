@@ -1263,13 +1263,28 @@ class TestStatusEvaluation(unittest.TestCase):
         self.dm_core.apply_damage("gladstone", 0)
         self.assertEqual(self.dm_core.entities["gladstone"]["active_conditions"], {})
 
-    def test_progressing_through_tiers_accumulates_conditions(self):
-        # Auto-apply only adds; it doesn't remove a condition once its requirements stop holding.
+    def test_progressing_through_tiers_dismisses_the_stale_one(self):
+        # Once a worse tier matches, the previous tier's requirements no longer hold, so
+        # evaluate_statuses dismisses it instead of letting conditions accumulate.
         self.dm_core.apply_damage("gladstone", 18)  # 50% -> wounded
         self.dm_core.apply_damage("gladstone", 13)  # ~14% -> incapacitated
         active = self.dm_core.entities["gladstone"]["active_conditions"]
-        self.assertIn("wounded", active)
+        self.assertNotIn("wounded", active)
         self.assertIn("incapacitated", active)
+
+    def test_healing_back_above_a_tier_dismisses_its_condition(self):
+        self.dm_core.apply_damage("gladstone", 18)  # 50% -> wounded
+        self.assertIn("wounded", self.dm_core.entities["gladstone"]["active_conditions"])
+        self.dm_core.apply_healing("gladstone", 999)  # back to full -> no tier matches
+        self.assertNotIn("wounded", self.dm_core.entities["gladstone"]["active_conditions"])
+
+    def test_dead_condition_is_not_auto_dismissed_by_healing(self):
+        # "dead"'s apply block sets dismiss = "resurrection", so simple healing must not
+        # revive it via the same automatic sweep that clears "wounded"/"stunned"/etc.
+        self.dm_core.apply_damage("gladstone", 36)  # 0% -> dead
+        self.assertIn("dead", self.dm_core.entities["gladstone"]["active_conditions"])
+        self.dm_core.apply_healing("gladstone", 999)
+        self.assertIn("dead", self.dm_core.entities["gladstone"]["active_conditions"])
 
 
 class TestScenarioLoading(unittest.TestCase):

@@ -57,9 +57,10 @@ class StatusMixin(DMCoreProtocol):
             apply_damage, but deliberately its own method rather than apply_damage called
             with a negative amount: apply_damage has no upper clamp at all (only ever needed
             a floor of 0, since incoming damage never had a reason to push past max_hp the
-            other way) and unconditionally evaluates "on_damage" statuses, which doesn't make
-            sense for a heal -- a wound tier crossed by *healing* isn't a new injury. (A wound
-            condition crossed the other way while healing still isn't auto-dismissed by this.)
+            other way). Still evaluates "on_damage" statuses afterward -- not to apply a new
+            injury (healing only ever raises hp_per_remain, so no worse tier can newly match),
+            but so a wound tier's condition that no longer holds (ex: "wounded" once healed
+            back above 0.59) gets dismissed via evaluate_statuses' own stale-condition sweep.
         @param entity_name The name of the entity being healed.
         @param amount The amount of HP to restore.
         @return The entity's current HP after healing.
@@ -71,6 +72,7 @@ class StatusMixin(DMCoreProtocol):
         max_hp = entity.get("max_hp", current_hp)
         entity["hp"] = min(max_hp, current_hp + amount)
         self.event_bus.publish("log_info", f"{entity_name} heals {amount} HP ({current_hp} -> {entity['hp']} HP).")
+        self.evaluate_statuses(entity_name, "on_damage")
         return entity["hp"]
 
     def get_comparable_value(self, entity_name, field):
@@ -258,12 +260,20 @@ class StatusMixin(DMCoreProtocol):
 
     def evaluate_statuses(self, entity_name, trigger):
         """!
-        @brief Applies every status matching the given trigger that the entity currently qualifies for.
+        @brief Applies every status matching the given trigger that the entity currently
+            qualifies for, then dismisses any condition this same trigger's statuses previously
+            applied whose requirements no longer hold (ex: a "wounded" gladstone healed back
+            above 0.59 hp_per_remain, or one further hurt into "incapacitated" whose hp_per_remain
+            no longer falls in "wounded"'s own 0.40-0.59 range). A condition is only eligible for
+            this automatic sweep if it was stored with a falsy "dismiss" -- one stored with a
+            named mechanism (ex: "dead"'s dismiss = "resurrection") is left alone; simple hp
+            recovery shouldn't be able to undo it.
         @param entity_name The name of the entity to evaluate.
         @param trigger The trigger name to evaluate (ex: "on_damage").
         @return The list of status definitions that were applied.
         """
         matched_statuses = self.get_applicable_statuses(entity_name, trigger)
+        matched_conditions = set()
         for status in matched_statuses:
             apply_block = status.get("apply")
             if apply_block and apply_block.get("condition"):
@@ -273,4 +283,18 @@ class StatusMixin(DMCoreProtocol):
                     duration=apply_block.get("duration"),
                     dismiss=apply_block.get("dismiss"),
                 )
+                matched_conditions.add(apply_block["condition"])
+
+        active_conditions = self.entities.get(entity_name, {}).get("active_conditions", {})
+        for status in self.rules.get("status", []):
+            if status.get("trigger") != trigger:
+                continue
+            apply_block = status.get("apply")
+            condition_name = apply_block.get("condition") if apply_block else None
+            if not condition_name or condition_name in matched_conditions:
+                continue
+            active_entry = active_conditions.get(condition_name)
+            if active_entry is not None and not active_entry.get("dismiss"):
+                self.dismiss_condition(entity_name, condition_name)
+
         return matched_statuses

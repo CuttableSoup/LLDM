@@ -156,8 +156,8 @@ before re-instancing for this reason (see "Saving and loading").
 ## Status and conditions
 
 `rules.toml`'s `[[status]]` table drives derived conditions. Each entry has:
-- `trigger` — when to evaluate it; only `"on_damage"` is wired today, called from
-  `apply_damage`.
+- `trigger` — when to evaluate it; only `"on_damage"` is wired today, called from both
+  `apply_damage` and `apply_healing` (see "Damage and healing" below).
 - `requirements` — a list of `{field, operator, value}` comparisons (`COMPARATORS` in
   `DM_Status.py`: `>`, `<`, `>=`, `<=`, `==`, `!=`, `in`, `not_in`), ALL of which must hold.
   `field` is either derived (`"hp_per_remain"`) or a direct entity attribute.
@@ -169,26 +169,31 @@ Every instance has `active_conditions` present from creation (seeded from the te
 `[entity.conditions]`, empty if none declared). `dismiss_condition(entity_name, condition_name)`
 is the general-purpose removal primitive.
 
+`evaluate_statuses` also sweeps the *other* direction: after applying whatever matches now, it
+walks every status definition sharing the same trigger and, for each one whose own `apply.condition`
+is currently active on the entity but whose `requirements` no longer hold, dismisses it — ex: a
+`gladstone` hurt from "wounded" (0.40-0.59 hp_per_remain) down into "incapacitated" (0.10-0.19) has
+"wounded" dismissed in the same call, and one healed back above 0.59 has it dismissed too (see
+"Damage and healing"). A condition is only eligible for this sweep if it was stored with a falsy
+`dismiss` — one stored with a named mechanism (ex: `"dead"`'s `dismiss = "resurrection"`) is left
+alone, so ordinary healing can't revive a dead entity through the same path that clears a wound tier.
+
+## Damage and healing
+
+`apply_damage` subtracts HP (floored at 0) and calls `evaluate_statuses(entity_name, "on_damage")`.
+`apply_healing` adds HP (clamped at `max_hp`) and calls the same `evaluate_statuses("on_damage")` —
+not to apply a *new* injury (healing only ever raises `hp_per_remain`, so no worse tier can newly
+match) but so a wound tier's condition that no longer holds after the heal gets dismissed by
+`evaluate_statuses`' own stale-condition sweep, above.
+
 Nothing automatically re-evaluates and dismisses a status-driven condition once its
 requirements stop holding (ex: a healed entity keeps a `wounded` condition applied earlier).
 
 ## Entity tests
 
 A `[entity.test]` block is a skill check against an entity itself (ex: `items.toml`'s `chest`
-lock, `cursed dagger`'s curse-identification check):
-```toml
-[entity.test]
-difficulty = 12
-skill = [ "finesse" ]
-requires_condition = "locked"
-blocks_if_condition = "jammed"
-[entity.test.pass]
-dismiss_condition = "locked"
-[entity.test.fail]
-condition = "jammed"
-duration = "permanent"
-dismiss = ""
-```
+lock, `cursed dagger`'s curse-identification check; see `Rules/Fantasy/reference/
+entity_schema.toml` for every field it and every other entity table can carry).
 `is_test_available(target, test, skill_name)` gates it: `skill_name` must be in `test["skill"]`;
 `requires_condition` (if set) must currently be active; `blocks_if_condition` (if set) must
 not be. A skill not in `test["skill"]` isn't blocked — it just isn't a test, and falls through
@@ -346,6 +351,13 @@ directly in input can resolve it via `map_to_action` before a bare skill would;
 
 ## Data/TOML conventions
 
+- `Rules/Fantasy/reference/entity_schema.toml` is a single, heavily-commented `[[entity]]`
+  cataloging every field the engine reads off an entity (or explicitly marks as unused/
+  reserved) — identity, vitals, skills, inventory/equipped, weapon/spell/technique fields,
+  defensive tags, abilities, attitudes, starting conditions, behavior, and `[entity.test]`.
+  Reference/documentation only, never loaded as game data: `load_rules` only `os.listdir()`s
+  the top level of `Rules/Fantasy/` (the same reason `Rules/Fantasy/scenarios/` is safe to
+  hold its own `*.toml` files), and this file lives one directory deeper for the same reason.
 - `load_rules` special-cases only `skill` and `entity` top-level keys; everything else in any
   flat `Rules/Fantasy/*.toml` file lands generically in `self.rules[key]`.
 - `[entity.attitudes]` is `{default, name, supertype}`; `name`/`supertype` are TOML
@@ -428,8 +440,6 @@ offline subset only.
 
 ## Known gaps
 
-- `DM_Status.py` — no automatic dismissal of a status-driven condition once its requirements
-  stop holding.
 - `DM_Combat.py` — `choose_behavior` never chooses to move, only to attack.
 - `NLP_Core.py` — a keyword-driven skill match can still dominate an unrelated whole-sentence
   embedding match (ex: "identify the dagger" resolves to the wrong skill); no multi-instance

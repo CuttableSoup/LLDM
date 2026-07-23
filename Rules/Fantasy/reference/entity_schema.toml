@@ -1,0 +1,336 @@
+# Reference only -- every field the engine currently understands on an [[entity]] table, in
+# one place. Not real game data and never loaded: load_rules (DM_Rules.py) only os.listdir()s
+# the top level of Rules/Fantasy/, the same reason Rules/Fantasy/scenarios/ is safe to hold its
+# own *.toml files -- this file lives one directory deeper for the same reason. Copy the
+# fields you need into characters.toml/npcs.toml/creatures.toml/items.toml/spells.toml/
+# techniques.toml; nothing here is required, and no single real entity uses all of it at once
+# (a wolf has no [entity.test], a chest has no [entity.skills]) -- see those files for
+# realistic combinations.
+#
+# Every field is read with .get(), so an absent field just means "code that reads it falls
+# back to a default" (0, {}, [], or a hardcoded fallback like "untrained" 1D) rather than an
+# error. Fields marked UNUSED below are parsed and kept on the entity dict but nothing in
+# DM_*.py currently reads them -- reserved for narration flavor or a future mechanic (bulk
+# capacity, XP, encumbrance), not enforced by any rule today.
+
+[[entity]]
+
+# ---------------------------------------------------------------------------------------------
+# Identity -- every entity needs at least "name"; supertype/subtype are freeform strings the
+# rest of the data (attitudes' supertype override, is_hostile's "object" check, an ability's
+# skill matching, DM_Core's subtype == "container" gate) interprets by convention, not an enum
+# enforced anywhere. Common supertypes in use: "creature" (characters.toml/npcs.toml/
+# creatures.toml), "object" (items.toml), "spell"/"technique" (spells.toml/techniques.toml),
+# "innate" (a one-off inline ability with no shared catalog entity, ex: gladstone's "punch").
+# Common subtypes: "humanoid"/"animal"/"elemental"/"undead" (creature), "weapon"/"armor"/
+# "potion"/"container"/"trap"/"trinket" (object), "evocation" (spell school), "martial"
+# (technique), "weapon" (an innate attack's own subtype, ex: wolf's "bite").
+name = "reference_entity"                  # Required. The instancing/lookup key everywhere
+                                            # (inventory entries, equipped slots, abilities'
+                                            # string references, scenario "entities" lists all
+                                            # name an entity this way).
+supertype = "creature"                     # See above. Also gates is_hostile: supertype ==
+                                            # "object" is never treated as hostile regardless
+                                            # of attitude data.
+subtype = "humanoid"                       # See above. Also gates DM_Core's open/close
+                                            # handling (subtype == "container" only).
+description = "Flavor text shown to the LLM narrator and to a passed skill check's outcome."
+                                            # Read by describe_character (roster/defender_details)
+                                            # and by examine (item_interaction_resolved's own
+                                            # "description"). An item with an empty description
+                                            # is silently dropped from a container's "contents"
+                                            # listing -- keep it non-empty even when deliberately
+                                            # vague (ex: health potion's description hides what
+                                            # it does until identified).
+is_player = false                          # Exactly one loaded template must set this true
+                                            # (characters.toml's gladstone) -- DMCore.__init__
+                                            # raises ValueError at boot if none does.
+
+# ---------------------------------------------------------------------------------------------
+# Vitals and physical stats
+max_hp = 20                                # Ceiling for get_current_hp/apply_healing's clamp;
+                                            # also the "hp_per_remain" denominator every
+                                            # [[status]] wound tier checks against. An entity
+                                            # with max_hp == 0 (or absent) never matches any
+                                            # hp_per_remain requirement (get_comparable_value
+                                            # returns None for a non-positive max_hp).
+currency = 0                                # Starting money -- transfer_currency/loot_entity/
+                                            # "trade"'s price check all read and mutate this.
+bulk = 0                                    # UNUSED today -- an object's own carry weight; no
+                                            # code currently checks it against max_bulk.
+value = 0                                   # An object's price -- read by "trade"
+                                            # (item_interaction_resolved's "price"; denied
+                                            # "cant_afford" if the buyer's own currency is
+                                            # short).
+weight = 0                                  # UNUSED today -- reserved, no code reads it.
+max_bulk = 0                                # UNUSED today -- reserved carry-capacity cap for
+                                            # "bulk"; no code enforces it yet.
+exp = 0                                     # UNUSED today -- reserved for a future
+                                            # leveling/XP mechanic.
+
+# ---------------------------------------------------------------------------------------------
+# Movement (see DM_Movement.py's "Movement and range" in CLAUDE.md)
+speed = 1                                   # Only ever read off the player's own entity
+                                            # (advance_or_retreat) -- bands moved per
+                                            # advance/retreat action. Defaults to 1 if absent.
+                                            # An enemy/ally's own "speed" (if set) is inert:
+                                            # nothing but the player currently moves.
+# "band" is never set in a template -- it's assigned per-instance at scenario-load time from
+# the scenario/room's own "entities" list ({name, band}), not authored here.
+
+# ---------------------------------------------------------------------------------------------
+# Skills -- {dice, pips} per skill name, read by resolve_action/resolve_opposed_action/
+# get_opposing_skill/select_ability_skill/roll_initiative/resolve_bonus. A skill this entity
+# doesn't list defaults to untrained (1 die, 0 pips) wherever it's rolled. "healing" here (not
+# a top-level field) is what _resolve_use_intent rolls for a usable item's healing effect (ex:
+# items.toml's health potion) -- same {dice, pips} shape as any other skill entry, just never
+# actually rolled as a skill check.
+[entity.skills]
+blades = { dice = 4, pips = 0 }
+dodge = { dice = 3, pips = 1 }
+fortitude = { dice = 3, pips = 0 }
+healing = { dice = 5, pips = 0 }            # Only meaningful on a usable item, not a creature.
+
+# ---------------------------------------------------------------------------------------------
+# Inventory, currency carrier, and equipped slots
+inventory = [ "longsword", "health potion", "health potion" ]
+                                            # A flat list of item entity names; duplicates
+                                            # represent quantity (transfer_item moves one
+                                            # matching entry per call). Also doubles as a
+                                            # container's own contents (ex: items.toml's chest).
+
+[entity.equipped]
+                                            # slot name -> item entity name. Slot names are
+                                            # freeform strings (get_equipped_weapon/
+                                            # get_damage_reduction iterate .values(), never
+                                            # keys) -- "rhand"/"chest" are convention, not
+                                            # enforced. An equipped item with its own
+                                            # damage_value is what find_attack_ability/
+                                            # get_equipped_weapon treat as the wielded weapon;
+                                            # one with armor_value/armor_tags is what
+                                            # get_damage_reduction treats as worn armor. The
+                                            # same item name must also exist in "inventory".
+rhand = "longsword"
+chest = "chain mail"
+
+# ---------------------------------------------------------------------------------------------
+# Ability/weapon/spell/technique fields -- present directly on a weapon/armor object
+# (items.toml), a spell/technique (spells.toml/techniques.toml), or an inline table inside
+# another entity's own "abilities" list (below). Not every field applies to every kind of
+# ability -- a plain weapon has no "targets", a non-damaging ability has no damage_value.
+skill = "blades"                            # A single skill name, or a list (ex: techniques.
+                                            # toml's cleave: ["blades", "axes"]) -- any one
+                                            # match counts (ability_matches_skill). A list lets
+                                            # select_ability_skill pick the entity's own
+                                            # highest-rated of the options.
+range = 0                                   # In bands, absent/0 meaning melee (usable only in
+                                            # the target's own band). 1 extends melee by one
+                                            # band (a reach weapon, ex: spear). A ranged
+                                            # weapon/spell (ex: long bow, fireball) sets its own
+                                            # reach directly, no accuracy falloff across it.
+                                            # is_in_range(attacker, defender, ability) is True
+                                            # unconditionally when ability is None (a
+                                            # non-physical check, ex: charisma).
+damage_value = { dice = 1, pips = 2, bonus = "strength_damage" }
+                                            # {dice, pips, bonus} -- resolve_damage_value rolls
+                                            # dice/pips and adds the resolved bonus. "bonus" is
+                                            # either a flat number or a "user.<rule_name>"
+                                            # reference into a same-named table in rules.toml
+                                            # (ex: "user.strength_damage" divides the attacker's
+                                            # own strength dice by that rule's "divisor").
+                                            # "dice"/"pips" can themselves be the literal string
+                                            # "user.weapon.dice"/"user.weapon.pips" (ex:
+                                            # cleave) -- resolved off the attacker's own
+                                            # equipped weapon instead of a fixed number.
+damage_tags = [ "slashing" ]                # Matched against a defender's resistance_tags/
+                                            # immunity_tags/vulnerability_tags and an equipped
+                                            # armor's own armor_tags.
+difficulty = 10                             # UNUSED on a spell/technique today (spells/
+                                            # techniques resolve via resolve_opposed_action,
+                                            # which rolls the defender's own opposing skill
+                                            # instead of a fixed number) -- only [entity.test]'s
+                                            # own "difficulty" (below) is actually read.
+                                            # Reserved here for a future non-opposed cast option.
+targets = { number = 1, aoe = 0 }           # UNUSED today -- reserved for a future
+                                            # multi-target/area-of-effect mechanic; nothing
+                                            # currently reads "number" or "aoe".
+
+# ---------------------------------------------------------------------------------------------
+# Abilities -- a flat list on the ability-*having* entity (creature/character), not the ability
+# entity itself. Each entry is either a bare string naming a shared catalog entity (resolved by
+# name via resolve_ability, ex: "fireball" -> spells.toml's own [[entity]]) or an inline table
+# for a one-off innate ability with no shared entity to point at (ex: gladstone's "punch",
+# wolf's "bite") -- same weapon/spell/technique fields as above, just embedded directly. TOML's
+# `[[entity.abilities]]` array-of-tables syntax (used by creatures.toml/npcs.toml) and the flat
+# `abilities = [...]` syntax (used by characters.toml) both land in the same "abilities" key --
+# pick whichever reads better for how many entries you have.
+[[entity.abilities]]
+name = "punch"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "bludgeoning" ]
+damage_value = { dice = 0, pips = 0, bonus = "user.strength_damage" }
+
+# ---------------------------------------------------------------------------------------------
+# Defensive traits -- static, tag-matched, permanent to what the entity is (see CLAUDE.md's
+# "Tags vs. conditions"). armor_value/armor_tags belong on a worn *item* (read off whatever's
+# in [entity.equipped]); resistance/immunity/vulnerability are innate to the entity carrying
+# them directly (a creature, or an item if you want an inherently resistant weapon/armor piece).
+armor_value = { dice = 2, pips = 0 }        # Item-only: rolled reduction, added to the
+                                            # wearer's own resistance_value roll.
+armor_tags = [ "physical", "piercing", "bludgeoning", "slashing" ]
+resistance_value = { dice = 2, pips = 0 }   # Rolled, partial reduction on a matching tag.
+resistance_tags = [ "physical" ]
+immunity_tags = [ "poison" ]                # Absolute -- zeroes net damage on a matching tag
+                                            # regardless of any roll. Wins outright over
+                                            # vulnerability if a single attack matches both.
+vulnerability_value = { dice = 2, pips = 0 }# Rolled, extra damage added before reduction on a
+                                            # matching tag.
+vulnerability_tags = [ "fire" ]
+tags = [ "cursed" ]                         # Freeform classification, unrelated to the
+                                            # damage/armor/resistance tag-matching above --
+                                            # read back by narration once is_identified is true
+                                            # (a passed [entity.test] with "reveal" in its
+                                            # outcome), never shown by a plain examine before
+                                            # that. Also doubles as a usable item's opt-in
+                                            # marker for what kind of effect it has (ex: health
+                                            # potion's tags = ["healing"], purely descriptive --
+                                            # the actual heal is driven by "usable" +
+                                            # [entity.skills].healing, below, not by this list).
+
+# ---------------------------------------------------------------------------------------------
+# Usable (consumable) item fields -- gates DM_Core._resolve_use_intent
+usable = true                               # Required truthy to opt into "use"/"drink"/"quaff"
+                                            # at all (reason "not_usable" otherwise). Not tied
+                                            # to subtype == "potion" -- a future wand opts in
+                                            # the same way regardless of its own subtype.
+                                            # The actual healing amount (if any) is rolled from
+                                            # [entity.skills].healing, above -- there is no
+                                            # separate top-level "healing" field.
+charges = 3                                 # Absent means single-use (spent entirely on one
+                                            # "use"). Present, depletes by one per use; at zero
+                                            # the item is removed from inventory and swapped for
+                                            # "replace_with" (or simply removed if absent).
+replace_with = "glass vial"                 # Must name another loaded entity; an unknown name
+                                            # logs an error and the item is just removed instead.
+
+# ---------------------------------------------------------------------------------------------
+# Descriptive/flavor fields -- purely narrative, read by describe_character for the
+# scenario_loaded roster and every action's own "defender_details" (deliberately excludes
+# mechanical data like skills/dice, see CLAUDE.md's "Social and attitudes").
+languages = [ "common" ]                    # UNUSED today -- reserved for a future
+                                            # comprehension-gates-dialogue mechanic (see
+                                            # CLAUDE.md's "Extended goals").
+memories = [ "A wife at home" ]
+quotes = [ "Hello, world" ]
+
+[entity.qualities]
+                                            # key -> value, joined as "Qualities: k v, k v, ..."
+                                            # in describe_character. Freeform keys -- body/eye/
+                                            # gender/hair/height/skin/size/race/age are simply
+                                            # what the shipped data happens to use.
+body = "athletic"
+eye = "brown"
+gender = "male"
+hair = "black"
+height = "tall"
+skin = "fair"
+size = "medium"
+race = "human"
+age = 35
+
+# ---------------------------------------------------------------------------------------------
+# Attitudes -- get_attitude's three-tier lookup: a specific "name" override beats a "supertype"
+# override beats "default". No [entity.attitudes] table at all defaults every axis to neutral
+# (0), which is enough on its own to make is_hostile true (disposition <= 0) -- an NPC with a
+# real default array is what opts *out* of default combat routing. Values are nominally
+# -100..100 (headroom to -150/150 for get_attitude_tier's clamp). Axes, in order: disposition
+# (Hostile<->Friendly), trust (Suspicious<->Trusting), confidence (Fearful<->Confident),
+# respect (Disdainful<->Admiring), obligation (Unfettered<->Indebted), intimacy
+# (Disgusted<->Enamored).
+[entity.attitudes]
+default = [ 0, 0, 0, 0, 0, 0 ]
+
+[[entity.attitudes.supertype]]
+                                            # TOML parses this as a list of single-key tables --
+                                            # get_attitude loops it checking `if toward_name in
+                                            # override`. Matches by the *target's own* supertype.
+undead = [ -100, -100, 100, -100, -100, -100 ]
+
+[[entity.attitudes.name]]
+                                            # Same shape, matched by the target's own literal
+                                            # name -- checked before the supertype override.
+anne = [ 100, 100, 100, 100, 100, 100 ]
+
+# ---------------------------------------------------------------------------------------------
+# Starting conditions -- seeds active_conditions at instancing time (copied fresh per instance,
+# never shared with the template). Same {duration, dismiss} shape apply_condition itself
+# writes; "dismiss" left absent/empty means the general-purpose dismiss_condition (or
+# evaluate_statuses' own stale-condition sweep, for a status-driven one) can clear it, a named
+# value (ex: "resurrection") means only that specific mechanism can.
+[entity.conditions.locked]
+duration = "permanent"
+
+[entity.conditions.closed]
+duration = "permanent"
+
+# ---------------------------------------------------------------------------------------------
+# Behavior (creature/ally AI) -- a declaration-order list, matched top-down: the first entry
+# whose "requirements" all hold is what this entity does on its own turn in a round_resolved
+# round (resolve_behavior_action). "requirements" uses the exact same {field, operator, value}
+# engine [[status]] does (entity_matches_requirements) -- "field" can be derived
+# ("hp_per_remain") or any direct attribute. "action" names one of this entity's *own*
+# abilities by name (resolved via resolve_named_ability + select_ability_skill), not a bare
+# skill. An entity with no matching behavior (or no behavior list at all) simply doesn't act
+# that round -- including if its only action's range can't reach the target (choose_behavior
+# never decides to move instead, see CLAUDE.md's "Known gaps").
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "punch"
+
+# ---------------------------------------------------------------------------------------------
+# Entity test -- a skill check against this entity itself (a lock, a trap, a hidden property),
+# not an opposed roll against a defender (see CLAUDE.md's "Entity tests"). Resolved as a flat
+# resolve_action(player, skill, difficulty) check.
+[entity.test]
+difficulty = 12                             # The only "difficulty" the engine actually reads
+                                            # for a check (contrast the ability-level
+                                            # "difficulty" above, which is unused).
+skill = [ "finesse" ]                       # Which skill(s) can attempt this test at all --
+                                            # gates whether it's a test in the first place
+                                            # (is_test_available); a skill not listed here just
+                                            # isn't a test and falls through to ordinary
+                                            # opposed-skill resolution instead.
+requires_condition = "locked"               # If set, this active_conditions entry must
+                                            # currently be present for the test to be available.
+blocks_if_condition = "jammed"              # If set, this active_conditions entry must
+                                            # currently be *absent* -- stops a spent/failed test
+                                            # from re-rolling forever.
+
+[entity.test.pass]
+                                            # apply_test_outcome dispatches purely on which of
+                                            # these keys are present -- any combination, or none.
+dismiss_condition = "locked"                # Removes a condition (ex: unlocks the chest).
+condition = "identified"                    # Applies a new condition (same fields as below).
+duration = "permanent"
+dismiss = ""
+reveal = true                               # Truthy -> also applies "identified" permanently;
+                                            # what it reveals is read back off this entity's own
+                                            # "tags" field by whoever narrates it, not stored
+                                            # on the outcome itself.
+loot = true                                 # Truthy -> hands everything (currency + inventory)
+                                            # to the player via loot_entity.
+damage = { dice = 3, pips = 0, bonus = 0 }  # A {dice, pips, bonus} table -- deals real damage
+                                            # to the player via calculate_damage (ex: a trap's
+                                            # failed disarm), same immunity/resistance/
+                                            # vulnerability/evaluate_statuses path a weapon hit
+                                            # takes. Pair with damage_tags, below.
+damage_tags = [ "piercing" ]
+
+[entity.test.fail]
+condition = "jammed"
+duration = "permanent"
+dismiss = ""
