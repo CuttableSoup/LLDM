@@ -86,6 +86,20 @@ class LLMCore:
             passes its own name instead so the narration doesn't misattribute it.
         @return The outcome description as a string.
         """
+        # Set only by resolve_behavior_action (DM_Combat.py) when a creature/ally's own turn
+        # was a move rather than an attack -- either a deliberate `action = "advance"`/
+        # "retreat"` behavior entry (ex: fleeing once badly hurt) or its own fallback when the
+        # attack it chose couldn't currently reach its target. No roll happens for a move, so
+        # this is worded as repositioning, not a missed attack -- mirrors the player's own
+        # "advance"/"retreat" wording in generate_item_interaction_response, just per-actor.
+        if action_result.get("movement"):
+            verb = "advances toward" if action_result["movement"] == "advance" else "retreats from"
+            opponent = action_result.get("opponent") or "its target"
+            return (
+                f"{actor.capitalize()} {verb} {opponent} "
+                f"({action_result.get('before')} -> {action_result.get('after')} bands away)."
+            )
+
         # Set only by DMCore._on_action_detected/resolve_behavior_action when get_range_modifier
         # (DM_Movement.py) says the target is too far away for this weapon/ability to reach at
         # all -- no roll was attempted (unlike every other outcome this builds a line for), so

@@ -50,6 +50,37 @@ value = 10
 fortitude = { dice = 1, pips = 0 }
 
 [[entity]]
+name = "short bow"
+supertype = "object"
+subtype = "weapon"
+skill = "missiles"
+description = "A stubby hunting bow, its string frayed but still taut."
+max_hp = 4
+# Shorter reach than the long bow -- still well past melee, just not the same all-room
+# coverage (see DM_Movement.py's "Movement and range").
+range = 4
+damage_value = { dice = 1, pips = 2, bonus = 0 }
+damage_tags = [ "piercing" ]
+bulk = 1
+value = 6
+[entity.skills]
+fortitude = { dice = 1, pips = 0 }
+
+[[entity]]
+name = "rusty shortsword"
+supertype = "object"
+subtype = "weapon"
+skill = "blades"
+description = "A pitted, poorly maintained blade, more intimidating than sharp."
+max_hp = 6
+damage_value = { dice = 1, pips = 1, bonus = "strength_damage" }
+damage_tags = [ "slashing" ]
+bulk = 1
+value = 3
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+
+[[entity]]
 name = "chain mail"
 supertype = "object"
 subtype = "armor"

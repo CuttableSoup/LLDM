@@ -75,12 +75,18 @@ class StatusMixin(DMCoreProtocol):
         self.evaluate_statuses(entity_name, "on_damage")
         return entity["hp"]
 
-    def get_comparable_value(self, entity_name, field):
+    def get_comparable_value(self, entity_name, field, opponent_name=None):
         """!
         @brief Resolves a requirement's field name to a comparable value for an entity.
         @param entity_name The name of the entity to check.
-        @param field The field name, either a derived value (ex: "hp_per_remain") or an entity attribute (ex: "supertype").
-        @return The resolved value, or None if it can't be determined.
+        @param field The field name, either a derived value (ex: "hp_per_remain",
+            "distance_to_target") or an entity attribute (ex: "supertype").
+        @param opponent_name The entity being acted against, if any -- only relevant to a
+            derived field defined relative to an opponent (currently just
+            "distance_to_target"); status requirements never pass one, since a status has no
+            notion of an opponent at all.
+        @return The resolved value, or None if it can't be determined (ex: "distance_to_target"
+                with no opponent_name given).
         """
         if field == "hp_per_remain":
             entity = self.entities.get(entity_name, {})
@@ -88,13 +94,30 @@ class StatusMixin(DMCoreProtocol):
             if max_hp <= 0:
                 return None
             return self.get_current_hp(entity_name) / max_hp
+        if field == "distance_to_target":
+            # Not used by any shipped [[entity.behavior]] yet (the implicit "advance when the
+            # chosen attack can't reach" fallback in resolve_behavior_action covers the common
+            # case without any TOML authorship) -- available for a creature that needs to
+            # *choose* between more than one attack option by range instead, ex: a creature
+            # with both a melee and a ranged attack picking the ranged one while the gap is
+            # still open, falling to melee once it closes. None with no opponent_name at all,
+            # same as a malformed/unresolvable requirement -- never accidentally matches.
+            if opponent_name is None:
+                return None
+            return self.get_distance_between(entity_name, opponent_name)
         return self.entities.get(entity_name, {}).get(field)
 
-    def entity_matches_requirements(self, entity_name, requirements):
+    def entity_matches_requirements(self, entity_name, requirements, opponent_name=None):
         """!
-        @brief Checks whether an entity currently satisfies every comparison in a status's requirements.
+        @brief Checks whether an entity currently satisfies every comparison in a status's
+            (or a behavior's) requirements.
         @param entity_name The name of the entity to check.
         @param requirements A list of {field, operator, value} comparisons, all of which must hold.
+        @param opponent_name The entity being acted against, if any -- only meaningful to
+            choose_behavior's own callers (a status's own requirements have no opponent, so
+            this is always None from evaluate_statuses/get_applicable_statuses); forwarded
+            unchanged to get_comparable_value for an opponent-relative field like
+            "distance_to_target".
         @return True if every comparison is satisfied.
         """
         for comparison in requirements:
@@ -103,7 +126,7 @@ class StatusMixin(DMCoreProtocol):
                 self.event_bus.publish("log_warning", f"Unknown requirement operator: {comparison.get('operator')}")
                 return False
 
-            actual_value = self.get_comparable_value(entity_name, comparison.get("field"))
+            actual_value = self.get_comparable_value(entity_name, comparison.get("field"), opponent_name)
             if actual_value is None or not compare(actual_value, comparison.get("value")):
                 return False
 

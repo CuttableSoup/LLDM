@@ -280,11 +280,41 @@ duration = "permanent"
 # whose "requirements" all hold is what this entity does on its own turn in a round_resolved
 # round (resolve_behavior_action). "requirements" uses the exact same {field, operator, value}
 # engine [[status]] does (entity_matches_requirements) -- "field" can be derived
-# ("hp_per_remain") or any direct attribute. "action" names one of this entity's *own*
-# abilities by name (resolved via resolve_named_ability + select_ability_skill), not a bare
-# skill. An entity with no matching behavior (or no behavior list at all) simply doesn't act
-# that round -- including if its only action's range can't reach the target (choose_behavior
-# never decides to move instead, see CLAUDE.md's "Known gaps").
+# ("hp_per_remain", "distance_to_target" -- see below) or any direct attribute. "action" is
+# either one of this entity's *own* abilities by name (resolved via resolve_named_ability +
+# select_ability_skill, not a bare skill), or one of two reserved movement words,
+# "advance"/"retreat" (MOVEMENT_ACTIONS, DM_Combat.py), routed to move_toward_or_away
+# (DM_Movement.py) instead -- ex: creatures.toml's wolf/giant spider both check a low-hp
+# "retreat" entry ahead of their own attack entry, the explicit, opt-in way a creature values
+# its own life and flees rather than fights to the death; an undead/construct with no such
+# entry just keeps attacking regardless of its own HP. An entity with no matching behavior (or
+# no behavior list at all) simply doesn't act that round -- but an attack entry that *did*
+# match, whose target is currently out of its own range, doesn't just do nothing:
+# resolve_behavior_action falls back to "advance" on its own in that case, no explicit
+# "advance" entry needed, closing the distance instead of standing idle.
+#
+# "distance_to_target" is a derived field like "hp_per_remain", but opponent-relative -- the
+# band gap to whichever entity resolve_behavior_action is resolving this turn against
+# (get_distance_between(entity_name, opponent_name)), None (never matching) if no opponent is
+# known at all (ex: a status's own requirements, which never carry one). Not needed for the
+# common "my one attack can't reach" case (the implicit "advance" fallback above already
+# handles that with no TOML at all) -- it's for a creature choosing *between* more than one
+# attack option by range. creatures.toml's "bandit" (in the "field" scenario) is the shipped
+# example -- both "short bow" and "rusty shortsword" below are real items.toml entities, named
+# directly (no [[entity.abilities]] duplication needed -- see resolve_ability):
+#   [[entity.behavior]]
+#   requirements = [ { field = "distance_to_target", operator = ">", value = 0 } ]
+#   action = "short bow"
+#   [[entity.behavior]]
+#   requirements = [ { field = "hp_per_remain", operator = ">=", value = 0.01 } ]
+#   action = "rusty shortsword"
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+    { field = "hp_per_remain", operator = "<", value = 0.40 },
+]
+action = "retreat"
+
 [[entity.behavior]]
 requirements = [
     { field = "hp_per_remain", operator = ">=", value = 0.01 },

@@ -14,10 +14,20 @@ damage_tags = [ "piercing" ]
 damage_value = { dice = 1, pips = 0, bonus = "user.strength_damage" }
 
 # Checked in order; the first entry whose requirements are all met is what the wolf
-# does on its turn. A wolf always bites as long as it's not at 0 HP -- once
-# hp_per_remain drops below 0.01 no behavior matches, so it simply stops acting.
-# "action" names one of the wolf's own abilities (below), not a bare skill -- resolved
-# the same way a player naming a technique directly is (resolve_named_ability).
+# does on its turn. An animal values its own life -- once it's taken real injury
+# (hp_per_remain under 0.40, the same cutoff rules.toml's own "wounded" tier bottoms out
+# at) it turns and runs rather than keep pressing a losing fight; only once it's
+# effectively dead (hp_per_remain 0) does neither entry match and it simply stops acting.
+# "action" names either a reserved movement word ("advance"/"retreat", resolved via
+# move_toward_or_away) or one of the wolf's own abilities (below) -- an ability name is
+# resolved the same way a player naming a technique directly is (resolve_named_ability).
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+    { field = "hp_per_remain", operator = "<", value = 0.40 },
+]
+action = "retreat"
+
 [[entity.behavior]]
 requirements = [
     { field = "hp_per_remain", operator = ">=", value = 0.01 },
@@ -88,6 +98,14 @@ subtype = "weapon"
 skill = "brawling"
 damage_tags = [ "piercing", "poison" ]
 damage_value = { dice = 2, pips = 0, bonus = "user.strength_damage" }
+
+# Same self-preservation cutoff as the wolf's own -- see its comment above.
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+    { field = "hp_per_remain", operator = "<", value = 0.40 },
+]
+action = "retreat"
 
 [[entity.behavior]]
 requirements = [
@@ -201,3 +219,55 @@ reflexes = { dice = 2, pips = 0 }
 dodge = { dice = 2, pips = 0 }
 strength = { dice = 5, pips = 0 }
 brawling = { dice = 5, pips = 0 }
+
+[[entity]]
+name = "bandit"
+supertype = "creature"
+subtype = "humanoid"
+description = "A road-worn brigand in mismatched leathers, a short bow slung across their back and a rusty shortsword at their hip."
+
+max_hp = 18
+currency = 12
+inventory = [ "short bow", "rusty shortsword" ]
+
+# Named directly rather than as [[entity.abilities]] inline tables -- "short bow"/"rusty
+# shortsword" are real items.toml entities (see resolve_ability: a plain string ability entry
+# is looked up in self.entities the same way an equipped item or a spells.toml/techniques.toml
+# name is, items included), so their own skill/range/damage_value/damage_tags are used as-is,
+# no duplication needed.
+abilities = [ "short bow", "rusty shortsword" ]
+
+# The worked "distance_to_target" example CLAUDE.md's own "Status and conditions" section and
+# Rules/Fantasy/reference/entity_schema.toml describe, made real: a bandit favors its bow while
+# there's any gap at all to its target, and only draws its sword once that gap closes to zero
+# -- checked ahead of the plain "always attack" entry, the same declaration-order,
+# first-match-wins convention every other behavior list uses. If the target is out past the
+# short bow's own range = 4, resolve_behavior_action's own implicit fallback (no entry needed
+# here) closes the distance instead of loosing an arrow that can't land. A bandit values its
+# own life same as the wolf/giant spider above -- self-preservation, not loyalty, is what
+# brought it here -- so it flees rather than fights to the death once badly hurt.
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+    { field = "hp_per_remain", operator = "<", value = 0.40 },
+]
+action = "retreat"
+
+[[entity.behavior]]
+requirements = [
+    { field = "distance_to_target", operator = ">", value = 0 },
+]
+action = "short bow"
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "rusty shortsword"
+
+[entity.skills]
+missiles = { dice = 4, pips = 0 }
+blades = { dice = 3, pips = 0 }
+dodge = { dice = 3, pips = 0 }
+fortitude = { dice = 2, pips = 0 }
+strength = { dice = 2, pips = 0 }

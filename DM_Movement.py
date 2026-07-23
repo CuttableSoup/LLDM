@@ -41,9 +41,13 @@ class MovementMixin(DMCoreProtocol):
         unless otherwise specified": get_range_modifier-era speed-in-units is gone too --
         movement now spends an entity's own `speed` field (an int, defaulting to 1 band, only
         overridden on something unusually fast/slow) shifting *its own* band, never anyone
-        else's. Only the player can choose to do this today via advance_or_retreat (see its
-        own docstring for why -- creature/ally behavior never chooses to move; see
-        DM_Combat.py's choose_behavior).
+        else's. The player triggers this via advance_or_retreat (see its own docstring);
+        a creature/ally triggers the exact same math via move_toward_or_away, either because
+        its own `[[entity.behavior]]` explicitly names `action = "advance"`/`"retreat"` (ex:
+        a self-preserving animal fleeing once badly hurt) or because resolve_behavior_action
+        (DM_Combat.py) falls back to it automatically when the behavior it did choose names an
+        attack that can't currently reach its target -- closing the distance instead of simply
+        not acting.
 
         **A room's own `bands` count is also its wall, unless it says otherwise.**
         `scenario["enclosed"]` (bool) controls whether move_entity's upper clamp is enforced:
@@ -117,31 +121,57 @@ class MovementMixin(DMCoreProtocol):
         entity["band"] = self._clamp_band(self.get_band(entity_name) + delta)
         return entity["band"]
 
-    def advance_or_retreat(self, direction):
+    def _resolve_move_delta(self, entity_name, opponent_name, direction):
         """!
-        @brief Resolves the player's own "advance"/"retreat" action: moves *only* the
-            player's own band, toward or away from self.current_target, by up to the
-            player's own "speed" (default 1). Every other entity's own band is untouched --
-            they don't move, the player does -- but because gaps are computed from both
-            sides' band numbers (get_distance_between), the player's own movement still
-            changes their distance to *everyone* in the scene at once, sometimes in opposite
-            directions: retreating from current_target can carry the player past band 1
-            (impossible, clamped) or straight toward a different entity sitting on the other
-            side, closing that gap even though "retreat" was the command. This is the direct
-            payoff of objective bands over the earlier player-anchored version, which could
-            never produce that outcome because every other entity moved in lockstep.
+        @brief The shared "which way, how far" math behind both advance_or_retreat (the
+            player's own move) and move_toward_or_away (a creature/ally's own move):
+            entity_name's signed band shift, up to its own "speed" (default 1), toward or
+            away from opponent_name.
 
-            If current_target is in the same band already (gap 0), "advance" has nothing to
+            If opponent_name is in the same band already (gap 0), "advance" has nothing to
             do -- already as close as physically possible, so it's a no-op rather than
             picking an arbitrary direction to move in anyway. "Retreat" from a tie still
             needs *some* direction, since opening the gap is well-defined even when there's
             no "toward" to invert; it prefers moving to a higher band number (arbitrary, but
             documented, not an accident) and falls back to a lower one only if that's already
-            blocked -- ex: the player is tied with current_target *and* already pinned at an
+            blocked -- ex: entity_name is tied with opponent_name *and* already pinned at an
             enclosed room's own ceiling, where "prefer higher" alone would silently do
             nothing (a real bug this exact case caught during testing: retreating while
             engaged at band 1 of a 4-band room kept trying to go to band 0, which doesn't
             exist, and every retreat silently no-opped).
+        @param entity_name The entity that will move.
+        @param opponent_name The entity being moved toward/away from.
+        @param direction "advance" (closes the gap) or "retreat" (opens it).
+        @return The signed band delta to pass to move_entity.
+        """
+        entity_band = self.get_band(entity_name)
+        gap = self.get_band(opponent_name) - entity_band
+        speed = self.entities.get(entity_name, {}).get("speed", 1)
+
+        if gap == 0:
+            if direction == "advance":
+                return 0
+            if self._clamp_band(entity_band + speed) != entity_band:
+                return speed
+            return -speed
+
+        toward_opponent = 1 if gap > 0 else -1
+        return (toward_opponent if direction == "advance" else -toward_opponent) * speed
+
+    def advance_or_retreat(self, direction):
+        """!
+        @brief Resolves the player's own "advance"/"retreat" action: moves *only* the
+            player's own band, toward or away from self.current_target, by up to the
+            player's own "speed" (default 1) -- see _resolve_move_delta for the shared
+            distance/tie-breaking math. Every other entity's own band is untouched -- they
+            don't move, the player does -- but because gaps are computed from both sides'
+            band numbers (get_distance_between), the player's own movement still changes
+            their distance to *everyone* in the scene at once, sometimes in opposite
+            directions: retreating from current_target can carry the player past band 1
+            (impossible, clamped) or straight toward a different entity sitting on the other
+            side, closing that gap even though "retreat" was the command. This is the direct
+            payoff of objective bands over the earlier player-anchored version, which could
+            never produce that outcome because every other entity moved in lockstep.
         @param direction "advance" (closes the gap to current_target) or "retreat" (opens it).
         @return A list of {entity, before, after} dicts -- the gap to each living non-player
                 scenario entity that actually changed, before/after in bands. Not what moved
@@ -157,22 +187,7 @@ class MovementMixin(DMCoreProtocol):
             if entity_name != self.player_name and self.get_current_hp(entity_name) > 0
         }
 
-        player_band = self.get_band(self.player_name)
-        gap_to_target = self.get_band(target_name) - player_band
-        speed = self.entities.get(self.player_name, {}).get("speed", 1)
-
-        if gap_to_target == 0:
-            if direction == "advance":
-                delta = 0
-            elif self._clamp_band(player_band + speed) != player_band:
-                delta = speed
-            else:
-                delta = -speed
-        else:
-            toward_target = 1 if gap_to_target > 0 else -1
-            delta = (toward_target if direction == "advance" else -toward_target) * speed
-
-        self.move_entity(self.player_name, delta)
+        self.move_entity(self.player_name, self._resolve_move_delta(self.player_name, target_name, direction))
 
         moved = []
         for entity_name, before in before_gaps.items():
@@ -180,6 +195,35 @@ class MovementMixin(DMCoreProtocol):
             if after != before:
                 moved.append({"entity": entity_name, "before": before, "after": after})
         return moved
+
+    def move_toward_or_away(self, entity_name, opponent_name, direction):
+        """!
+        @brief The creature/ally counterpart to advance_or_retreat -- moves entity_name's own
+            band toward/away from opponent_name by up to its own "speed", using the exact
+            same distance/tie-breaking math (_resolve_move_delta). Unlike advance_or_retreat,
+            which is always relative to the player's own current_target, this takes
+            opponent_name directly so it works for any entity against whichever opponent
+            resolve_behavior_action already resolved for it (a hostile entity's own player
+            target, or an ally's shared current_target) -- called either because a behavior
+            entry explicitly names `action = "advance"`/`"retreat"` (ex: fleeing once badly
+            hurt), or as resolve_behavior_action's own fallback when an attack it chose can't
+            currently reach opponent_name.
+        @param entity_name The entity that will move.
+        @param opponent_name The entity being moved toward/away from.
+        @param direction "advance" or "retreat".
+        @return {"opponent", "before", "after"} (the band gap to opponent_name, before/after
+                the move), or None if entity_name or opponent_name isn't a real, distinct
+                entity.
+        """
+        if not entity_name or not opponent_name or entity_name == opponent_name:
+            return None
+        if entity_name not in self.entities or opponent_name not in self.entities:
+            return None
+
+        before = self.get_distance_between(entity_name, opponent_name)
+        self.move_entity(entity_name, self._resolve_move_delta(entity_name, opponent_name, direction))
+        after = self.get_distance_between(entity_name, opponent_name)
+        return {"opponent": opponent_name, "before": before, "after": after}
 
     def is_in_range(self, attacker_name, defender_name, ability):
         """!

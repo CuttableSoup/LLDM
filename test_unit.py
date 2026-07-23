@@ -908,6 +908,42 @@ class TestMovementAndRange(unittest.TestCase):
 
         self.assertNotIn("wolf_2", {entry["entity"] for entry in moved})
 
+    # --- move_toward_or_away: the creature/ally counterpart to advance_or_retreat ----------
+
+    def test_move_toward_or_away_advances_the_entity_toward_its_opponent(self):
+        self.dm_core.entities["wolf"]["band"] = 1
+        self.dm_core.entities["gladstone"]["band"] = 4
+
+        result = self.dm_core.move_toward_or_away("wolf", "gladstone", "advance")
+
+        self.assertEqual(self.dm_core.get_band("wolf"), 2)
+        self.assertEqual(result, {"opponent": "gladstone", "before": 3, "after": 2})
+
+    def test_move_toward_or_away_retreats_the_entity_away_from_its_opponent(self):
+        self.dm_core.entities["wolf"]["band"] = 2
+        self.dm_core.entities["gladstone"]["band"] = 4
+
+        result = self.dm_core.move_toward_or_away("wolf", "gladstone", "retreat")
+
+        self.assertEqual(self.dm_core.get_band("wolf"), 1)
+        self.assertEqual(result, {"opponent": "gladstone", "before": 2, "after": 3})
+
+    def test_move_toward_or_away_only_moves_the_acting_entity(self):
+        # Unlike advance_or_retreat (always the player), this can be called for any entity --
+        # only entity_name's own band should change, wolf_2 stays put.
+        self.dm_core.entities["wolf"]["band"] = 1
+        self.dm_core.entities["wolf_2"]["band"] = 1
+        self.dm_core.entities["gladstone"]["band"] = 4
+
+        self.dm_core.move_toward_or_away("wolf", "gladstone", "advance")
+
+        self.assertEqual(self.dm_core.get_band("wolf"), 2)
+        self.assertEqual(self.dm_core.get_band("wolf_2"), 1)
+
+    def test_move_toward_or_away_returns_none_for_an_unknown_entity(self):
+        self.assertIsNone(self.dm_core.move_toward_or_away("not_a_real_entity", "gladstone", "advance"))
+        self.assertIsNone(self.dm_core.move_toward_or_away("wolf", "not_a_real_entity", "advance"))
+
     # --- is_in_range -------------------------------------------------------------------
 
     def test_is_in_range_is_always_true_for_non_attack_actions(self):
@@ -974,12 +1010,35 @@ class TestMovementAndRange(unittest.TestCase):
         self.assertNotEqual(result.get("reason"), "out_of_range")
         self.assertIn("roll", result)
 
-    def test_resolve_behavior_action_returns_none_when_out_of_range(self):
+    def test_resolve_behavior_action_advances_when_its_attack_is_out_of_range(self):
+        # Closing the distance is the fallback for *any* out-of-reach attack behavior, no
+        # TOML authoring required -- unlike fleeing (below), which is an explicit opt-in.
         self.dm_core.entities["wolf"]["band"] = 3  # bite needs gap 0 with gladstone at band 1
 
         result = self.dm_core.resolve_behavior_action("wolf", "gladstone")
 
-        self.assertIsNone(result)
+        self.assertEqual(result, {"movement": "advance", "opponent": "gladstone", "before": 2, "after": 1})
+        self.assertEqual(self.dm_core.get_band("wolf"), 2)
+
+    def test_resolve_behavior_action_retreats_once_badly_hurt(self):
+        # creatures.toml's wolf: hp_per_remain under 0.40 matches its own explicit "retreat"
+        # behavior entry, checked ahead of "bite" -- self-preservation wins even though the
+        # wolf is already in range and could otherwise attack.
+        self.dm_core.apply_damage("wolf", 12)  # 4/16 = 25%, under the 0.40 cutoff
+        self.dm_core.entities["wolf"]["band"] = 1
+        self.dm_core.entities["gladstone"]["band"] = 1
+
+        result = self.dm_core.resolve_behavior_action("wolf", "gladstone")
+
+        self.assertEqual(result["movement"], "retreat")
+        self.assertEqual(self.dm_core.get_band("wolf"), 2)
+
+    def test_resolve_behavior_action_returns_none_when_a_deliberate_move_has_no_valid_opponent(self):
+        self.dm_core.entities["fleeing_dummy"] = {
+            "name": "fleeing_dummy", "max_hp": 20, "hp": 5, "skills": {},
+            "behavior": [{"requirements": [], "action": "retreat"}],
+        }
+        self.assertIsNone(self.dm_core.resolve_behavior_action("fleeing_dummy", "not_a_real_entity"))
 
     # --- _on_item_interaction_detected("advance"/"retreat") -------------------------------
 
@@ -1069,6 +1128,43 @@ class TestEntityBehavior(unittest.TestCase):
             "behavior": [{"requirements": [], "action": "does_not_exist"}],
         }
         self.assertIsNone(self.dm_core.resolve_behavior_action("confused_dummy", "gladstone"))
+
+    def test_choose_behavior_can_pick_between_a_ranged_and_melee_option_by_distance(self):
+        # "distance_to_target" isn't used by any shipped creature yet (see get_comparable_value),
+        # but is available for exactly this: a hypothetical archer-brawler choosing its bow
+        # while the gap is still open, falling to its fists once the target closes in --
+        # opponent_name has to be passed through choose_behavior for this to resolve at all.
+        self.dm_core.entities["archer_dummy"] = {
+            "name": "archer_dummy", "max_hp": 20, "skills": {},
+            "behavior": [
+                {
+                    "requirements": [{"field": "distance_to_target", "operator": ">", "value": 0}],
+                    "action": "shoot",
+                },
+                {"requirements": [], "action": "punch"},
+            ],
+        }
+        self.dm_core.entities["archer_dummy"]["band"] = 4
+        self.dm_core.entities["gladstone"]["band"] = 1
+
+        behavior = self.dm_core.choose_behavior("archer_dummy", "gladstone")
+        self.assertEqual(behavior["action"], "shoot")
+
+        self.dm_core.entities["archer_dummy"]["band"] = 1
+        behavior = self.dm_core.choose_behavior("archer_dummy", "gladstone")
+        self.assertEqual(behavior["action"], "punch")
+
+    def test_choose_behavior_without_an_opponent_never_matches_a_distance_requirement(self):
+        self.dm_core.entities["archer_dummy"] = {
+            "name": "archer_dummy", "max_hp": 20, "skills": {},
+            "behavior": [
+                {
+                    "requirements": [{"field": "distance_to_target", "operator": ">", "value": 0}],
+                    "action": "shoot",
+                },
+            ],
+        }
+        self.assertIsNone(self.dm_core.choose_behavior("archer_dummy"))
 
     def test_resolve_behavior_action_strikes_back_and_applies_damage(self):
         # An unarmored, skill-less target so the wolf's bite always lands and nothing
@@ -1201,6 +1297,81 @@ class TestEntityBehavior(unittest.TestCase):
         self.assertEqual(self.dm_core.current_target, "wolf")
 
 
+class TestBandit(unittest.TestCase):
+    """!
+    @brief creatures.toml's bandit is the real, shipped exercise of "distance_to_target":
+        unlike TestEntityBehavior's synthetic archer_dummy, this is actual game content --
+        real items.toml entities named directly in "abilities" (see resolve_ability), not
+        inline-table stand-ins -- placed in the field scenario (see field.toml).
+    """
+
+    def setUp(self):
+        self.event_bus = EventBus()
+        self.dm_core = DMCore(self.event_bus)
+        self.dm_core.scenario = {
+            "bands": 8, "enclosed": False,
+            "entities": [{"name": "gladstone", "band": 1}, {"name": "bandit", "band": 5}],
+        }
+        self.dm_core.load_scenario()
+
+    def test_bow_and_sword_resolve_as_real_item_entities(self):
+        # Not [[entity.abilities]] inline duplicates -- "short bow"/"rusty shortsword" resolve
+        # straight to their own items.toml entities, range/damage_value/damage_tags included.
+        bow = self.dm_core.resolve_named_ability("bandit", "short bow")
+        sword = self.dm_core.resolve_named_ability("bandit", "rusty shortsword")
+        self.assertEqual(bow["range"], 4)
+        self.assertEqual(bow["skill"], "missiles")
+        self.assertNotIn("range", sword)  # melee, same as any other unlisted-range weapon
+        self.assertEqual(sword["skill"], "blades")
+
+    def test_favors_the_bow_at_a_distance(self):
+        # Starting gap is 4 -- exactly the short bow's own range, so it's both "not adjacent"
+        # (distance_to_target > 0, the behavior's own requirement) and actually reachable.
+        behavior = self.dm_core.choose_behavior("bandit", "gladstone")
+        self.assertEqual(behavior["action"], "short bow")
+
+        turn = self.dm_core.resolve_behavior_action("bandit", "gladstone")
+        self.assertEqual(turn["skill"], "missiles")
+        self.assertNotIn("movement", turn)
+
+    def test_switches_to_the_sword_once_adjacent(self):
+        self.dm_core.entities["bandit"]["band"] = 1  # same band as gladstone -- gap 0
+
+        behavior = self.dm_core.choose_behavior("bandit", "gladstone")
+        self.assertEqual(behavior["action"], "rusty shortsword")
+
+        turn = self.dm_core.resolve_behavior_action("bandit", "gladstone")
+        self.assertEqual(turn["skill"], "blades")
+        self.assertNotIn("movement", turn)
+
+    def test_closes_distance_instead_of_shooting_past_the_bows_own_range(self):
+        # distance_to_target > 0 alone still picks "short bow" (it doesn't know the bow's own
+        # range, just that there's a gap) -- is_in_range is what actually catches this, falling
+        # back to the implicit "advance" resolve_behavior_action already provides for any
+        # out-of-reach attack, no bandit-specific TOML needed for this part.
+        self.dm_core.entities["bandit"]["band"] = 6  # gap 5, past the short bow's range = 4
+
+        turn = self.dm_core.resolve_behavior_action("bandit", "gladstone")
+
+        self.assertEqual(turn, {"movement": "advance", "opponent": "gladstone", "before": 5, "after": 4})
+
+    def test_flees_once_badly_hurt_instead_of_drawing_the_sword(self):
+        self.dm_core.entities["bandit"]["band"] = 1  # adjacent -- sword would otherwise fire
+        self.dm_core.apply_damage("bandit", 15)  # 3/18 ~= 17%, under the 0.40 self-preservation cutoff
+
+        turn = self.dm_core.resolve_behavior_action("bandit", "gladstone")
+
+        self.assertEqual(turn["movement"], "retreat")
+
+    def test_field_scenario_seats_the_bandit_at_short_bow_range(self):
+        # field.toml's own starting band (5) is chosen to already sit at gap 4 from gladstone
+        # (band 1) -- the short bow's own range -- so the very first round of a real playthrough
+        # already demonstrates the ranged-over-melee choice, not just this test's own setUp.
+        field = DMCore(EventBus(), scenario_name="field")
+        self.assertIn("bandit", field.scenario_entities)
+        self.assertEqual(field.get_distance_between("gladstone", "bandit"), 4)
+
+
 class TestStatusEvaluation(unittest.TestCase):
     def setUp(self):
         self.event_bus = EventBus()
@@ -1241,6 +1412,24 @@ class TestStatusEvaluation(unittest.TestCase):
         self.dm_core.entities["gladstone"]["supertype"] = "undead"
         matched = self.dm_core.get_applicable_statuses("gladstone", "on_damage")
         self.assertEqual([s["name"] for s in matched], ["test_include"])
+
+    def test_distance_to_target_resolves_the_band_gap_to_the_given_opponent(self):
+        self.dm_core.entities["gladstone"]["band"] = 1
+        self.dm_core.entities["wolf"]["band"] = 4
+        self.assertEqual(self.dm_core.get_comparable_value("wolf", "distance_to_target", "gladstone"), 3)
+
+    def test_distance_to_target_is_none_without_an_opponent(self):
+        # A status's own requirements never pass opponent_name (see get_applicable_statuses),
+        # so a requirement that names "distance_to_target" there can never accidentally match.
+        self.assertIsNone(self.dm_core.get_comparable_value("wolf", "distance_to_target"))
+
+    def test_distance_to_target_requirement_is_forwarded_through_entity_matches_requirements(self):
+        self.dm_core.entities["gladstone"]["band"] = 1
+        self.dm_core.entities["wolf"]["band"] = 1
+        requirements = [{"field": "distance_to_target", "operator": ">", "value": 0}]
+        self.assertFalse(self.dm_core.entity_matches_requirements("wolf", requirements, "gladstone"))
+        self.dm_core.entities["wolf"]["band"] = 3
+        self.assertTrue(self.dm_core.entity_matches_requirements("wolf", requirements, "gladstone"))
 
     def test_unknown_operator_never_matches(self):
         self.dm_core.rules["status"] = [{

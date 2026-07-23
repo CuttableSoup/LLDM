@@ -2,6 +2,11 @@ import random
 
 from DM_Types import DMCoreProtocol
 
+# Reserved [[entity.behavior]] action names -- resolve_behavior_action routes these straight to
+# move_toward_or_away (DM_Movement.py) instead of resolve_named_ability, so no real ability may
+# ever be named "advance"/"retreat".
+MOVEMENT_ACTIONS = {"advance", "retreat"}
+
 
 class CombatMixin(DMCoreProtocol):
     """!
@@ -11,7 +16,10 @@ class CombatMixin(DMCoreProtocol):
         DMCore.__init__). calculate_damage calls self.apply_damage (StatusMixin) to apply
         the net damage and trigger on_damage statuses; choose_behavior calls
         self.entity_matches_requirements (StatusMixin) to reuse the same
-        {field, operator, value} requirement engine [[status]] uses. Inherits DMCoreProtocol
+        {field, operator, value} requirement engine [[status]] uses;
+        resolve_behavior_action calls self.move_toward_or_away (MovementMixin) for a
+        deliberate `action = "advance"`/`"retreat"` behavior entry, or as its own fallback
+        when a chosen attack can't currently reach its target. Inherits DMCoreProtocol
         purely so type checkers can resolve these shared attributes/cross-mixin methods --
         see DM_Types.py.
     """
@@ -393,55 +401,79 @@ class CombatMixin(DMCoreProtocol):
             return best_skill
         return ability_skill[0] if ability_skill else None
 
-    def choose_behavior(self, entity_name):
+    def choose_behavior(self, entity_name, opponent_name=None):
         """!
         @brief Picks the first entry in an entity's [[entity.behavior]] list whose
             requirements are currently met, in declaration order -- the same
             {field, operator, value} requirement engine [[status]] already uses
             (entity_matches_requirements), just read from "behavior" instead of
-            "status". Ex: creatures.toml's wolf has one behavior, "always attack
-            while hp_per_remain >= 0.01", so it keeps attacking until it's
-            effectively dead and then simply stops matching any behavior at all.
+            "status". Ex: creatures.toml's wolf checks a low-hp "retreat" entry first,
+            then falls back to "always attack while hp_per_remain >= 0.01", so it
+            keeps attacking (or fleeing) until it's effectively dead and then simply
+            stops matching any behavior at all.
         @param entity_name The name of the entity choosing a behavior.
+        @param opponent_name The entity it would act against, if any -- forwarded to
+            entity_matches_requirements purely so a requirement can reference the
+            opponent-relative "distance_to_target" field (ex: a creature with both a
+            melee and a ranged attack choosing between them by the current gap); no
+            shipped behavior data uses this yet, since resolve_behavior_action's own
+            implicit "advance when the chosen attack can't reach" fallback already
+            covers the common single-attack case without it.
         @return The first matching behavior definition, or None if none match (or
                 the entity has no behavior list at all).
         """
         for behavior in self.entities.get(entity_name, {}).get("behavior", []):
-            if self.entity_matches_requirements(entity_name, behavior.get("requirements", [])):
+            if self.entity_matches_requirements(entity_name, behavior.get("requirements", []), opponent_name):
                 return behavior
         return None
 
     def resolve_behavior_action(self, entity_name, target_name):
         """!
-        @brief Resolves an entity's currently-chosen behavior as an opposed action against a
-            target. A behavior names a specific *action* (ex: creatures.toml's wolf names
-            "bite", one of its own abilities) rather than a bare skill -- reusing
-            resolve_named_ability + select_ability_skill, the exact same lookup the
-            player's own named-technique path (ex: "cleave") already uses, rather than
-            going through find_attack_ability's equipped-weapon-first priority. That
-            priority exists to disambiguate a skill name shared by multiple things; a
-            behavior already knows exactly which ability it means, so there's nothing
-            to disambiguate.
+        @brief Resolves an entity's currently-chosen behavior against a target -- either a
+            deliberate move (see below) or an opposed attack. A behavior names a specific
+            *action* (ex: creatures.toml's wolf names "bite", one of its own abilities)
+            rather than a bare skill -- reusing resolve_named_ability + select_ability_skill,
+            the exact same lookup the player's own named-technique path (ex: "cleave")
+            already uses, rather than going through find_attack_ability's
+            equipped-weapon-first priority. That priority exists to disambiguate a skill name
+            shared by multiple things; a behavior already knows exactly which ability it
+            means, so there's nothing to disambiguate.
 
-            Range-checked exactly like the player's own attacks (see is_in_range in
-            DM_Movement.py) -- an entity whose only action is out of reach from target_name
-            (ex: a wolf whose bite is melee-only, and the player has retreated out of its
-            band) simply doesn't act this round, the same "no behavior currently matches"
-            outcome as having no behavior data at all. Nothing here makes the entity move to
-            close the distance instead -- see DM_Movement.py's module docstring for why
-            that's a deliberate follow-up, not part of this pass.
+            `action = "advance"`/`"retreat"` are reserved, not looked up as abilities at all
+            -- MOVEMENT_ACTIONS routes straight to move_toward_or_away (DM_Movement.py), the
+            explicit way a behavior entry opts into self-preservation (ex: fleeing once
+            hp_per_remain drops low, checked ahead of an attack entry in the same
+            declaration-order list choose_behavior already walks -- see creatures.toml's
+            wolf/giant spider for the shipped example) or into deliberately closing distance
+            regardless of what's in range.
+
+            Otherwise, range-checked exactly like the player's own attacks (see is_in_range
+            in DM_Movement.py) -- but unlike a denied player attack (which just fails with
+            "out_of_range", no roll, same turn), an entity whose chosen attack can't currently
+            reach target_name moves toward it instead of doing nothing: closing the distance
+            is what any of these would obviously do rather than stand still out of reach, and
+            unlike fleeing (which needs an author's judgment call about which creatures value
+            their own life) there's no reason this needs to be opted into per entity.
         @param entity_name The name of the acting entity (ex: a wolf).
         @param target_name The name of the entity being acted against (ex: the player).
-        @return The behavior's resolution result dict (same shape as resolve_opposed_action's,
-            plus "damage" on a successful hit), or None if no behavior currently matches,
-            its named action isn't actually one of the entity's own abilities, or its target
-            is currently out of range.
+        @return A movement dict ({"movement", "opponent", "before", "after"}) if the chosen
+            behavior was a deliberate move, or was an attack that had to close distance
+            instead; an opposed-action result dict (same shape as resolve_opposed_action's,
+            plus "damage" on a successful hit) on a normal attack; or None if no behavior
+            currently matches, its named action isn't actually one of the entity's own
+            abilities, or a move (deliberate or fallback) had nowhere valid to happen (ex:
+            target_name isn't a real entity).
         """
-        behavior = self.choose_behavior(entity_name)
+        behavior = self.choose_behavior(entity_name, target_name)
         if behavior is None:
             return None
 
         action_name = behavior.get("action")
+
+        if action_name in MOVEMENT_ACTIONS:
+            movement = self.move_toward_or_away(entity_name, target_name, action_name)
+            return {"movement": action_name, **movement} if movement else None
+
         ability = self.resolve_named_ability(entity_name, action_name)
         if ability is None:
             self.event_bus.publish(
@@ -450,7 +482,8 @@ class CombatMixin(DMCoreProtocol):
             return None
 
         if not self.is_in_range(entity_name, target_name, ability):
-            return None
+            movement = self.move_toward_or_away(entity_name, target_name, "advance")
+            return {"movement": "advance", **movement} if movement else None
 
         skill_name = self.select_ability_skill(entity_name, ability)
         result = self.resolve_opposed_action(entity_name, skill_name, target_name)

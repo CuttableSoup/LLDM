@@ -1,12 +1,16 @@
 [scenario]
 name = "The Open Field"
-description = "Rolling grassland stretches to the horizon under a gray sky. A lone wolf stalks through the tall grass, watching."
+description = "Rolling grassland stretches to the horizon under a gray sky. A wolf stalks through the tall grass, and farther off a bandit lurks at the treeline, bow in hand."
 # Unenclosed -- unlike the arena/tavern/dungeon, retreat here is never capped at "bands" (see
 # DM_Movement.py's "Movement and range"). Something can actually get away by outrunning
 # whatever's chasing it, which an enclosed room can never allow.
-bands = 6
+bands = 8
 enclosed = false
 entities = [
     { name = "gladstone", band = 1 },
-    { name = "wolf", band = 3 }
+    { name = "wolf", band = 3 },
+    # Starts at gap 4 from gladstone -- exactly the short bow's own range = 4 (items.toml), so
+    # the very first round already demonstrates its "distance_to_target" behavior favoring the
+    # bow over its sword (creatures.toml).
+    { name = "bandit", band = 5 },
 ]

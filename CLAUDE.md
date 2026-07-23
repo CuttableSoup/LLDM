@@ -86,22 +86,34 @@ every actor resolves independently against state as of the start of the round, n
 sequentially. `current_target` only advances (to the next living hostile entity, or the
 first living non-player entity if none is hostile) once, at the end of the round, if it died.
 
-Creature/ally behavior never chooses to move — `choose_behavior` only ever picks an attack,
-so an entity starting out of its own weapon's range can't act until the player advances
-into range.
+A behavior entry's `action` is either an ability name or one of two reserved movement words,
+`"advance"`/`"retreat"` (`MOVEMENT_ACTIONS`, `DM_Combat.py`), routed to `move_toward_or_away`
+(`DM_Movement.py`) instead of an ability lookup. An explicit `"retreat"` entry is how a
+creature values its own life — checked ahead of its attack entry in the same declaration-order
+list, ex: `creatures.toml`'s wolf/giant spider/bandit flee once `hp_per_remain` drops under 0.40
+(the same cutoff `rules.toml`'s own `"wounded"` tier bottoms out at) rather than fight to the death;
+an undead/construct entity (skeleton warrior, the bone warden, a fire elemental) has no such
+entry and fights on regardless of its own HP. Separately, and needing no TOML authorship at
+all, `resolve_behavior_action` falls back to `"advance"` on its own whenever the behavior it
+*did* choose names an attack that can't currently reach its target (`is_in_range` — DM_Movement.py) —
+closing the distance instead of standing idle out of reach.
 
 ## Movement and range
 
 Every scenario entity — the player included — has an objective, 1-indexed `band`: a position
 on the current room's (or scenario's) band line, not a distance-from-player. `get_distance_between(a, b)`
-is the absolute difference between two band numbers. Only the player can move, via
+is the absolute difference between two band numbers. The player moves via
 `advance_or_retreat(direction)` (`DM_Movement.py`): shifts the player's own band by up to
-their `speed` (default 1) toward or away from `current_target`. No other entity moves as a
-result, but because gaps are computed from both sides' bands, the player's own move can change
-their distance to every other entity at once — and not always in the expected direction,
-since retreating from `current_target` can carry the player toward something else on the
-opposite side. At a zero-gap tie, "advance" is a no-op; "retreat" prefers a higher band
-number, falling back to a lower one only if higher is already blocked.
+their `speed` (default 1) toward or away from `current_target`. A creature/ally moves the
+exact same way via `move_toward_or_away(entity_name, opponent_name, direction)` — the same
+distance/tie-break math (`_resolve_move_delta`), just relative to whichever opponent
+`resolve_behavior_action` resolved for it instead of always `current_target` (see "Combat").
+Either way, only the one entity that moved has its band changed, but because gaps are computed
+from both sides' bands, that single move can change its distance to every other entity in the
+scene at once — and not always in the expected direction, since retreating from one opponent
+can carry an entity toward something else on the opposite side. At a zero-gap tie, "advance" is
+a no-op; "retreat" prefers a higher band number, falling back to a lower one only if higher is
+already blocked.
 
 `move_entity`'s floor is always band 1. Its ceiling is the current scene's own `bands` count,
 enforced only when `enclosed` is true (the default when the field is absent). `enclosed = false`
@@ -162,6 +174,18 @@ before re-instancing for this reason (see "Saving and loading").
   `DM_Status.py`: `>`, `<`, `>=`, `<=`, `==`, `!=`, `in`, `not_in`), ALL of which must hold.
   `field` is either derived (`"hp_per_remain"`) or a direct entity attribute.
 - `apply` — `{condition, duration, dismiss}`, naming an entry in `[[condition]]`.
+
+`entity_matches_requirements`/`get_comparable_value` (`DM_Status.py`) are the shared engine
+behind both `[[status]]`'s own requirements and `[[entity.behavior]]`'s (see "Combat"); an
+optional `opponent_name` param, forwarded from `choose_behavior`, resolves an
+opponent-relative derived field — currently just `"distance_to_target"` (the band gap to
+`opponent_name`, `None` — never matching — with no opponent given, which is always the case
+for a status's own requirements). The implicit out-of-range fallback below already covers the
+common single-attack case without it; this is for a creature choosing *between* more than one
+attack option by range instead — `creatures.toml`'s `bandit` (in the `field` scenario) is the
+shipped example: it favors its `short bow` while `distance_to_target > 0`, falling to its
+`rusty shortsword` once that gap closes to 0, both named directly in its own `abilities` list
+since they're real `items.toml` entities, not inline duplicates (see `resolve_ability`).
 
 `evaluate_statuses` finds every status matching a trigger whose requirements the entity
 currently meets and calls `apply_condition`, storing it in `entity["active_conditions"]`.
@@ -440,7 +464,6 @@ offline subset only.
 
 ## Known gaps
 
-- `DM_Combat.py` — `choose_behavior` never chooses to move, only to attack.
 - `NLP_Core.py` — a keyword-driven skill match can still dominate an unrelated whole-sentence
   embedding match (ex: "identify the dagger" resolves to the wrong skill); no multi-instance
   disambiguation (ex: "the wounded wolf" vs. "the other wolf").
