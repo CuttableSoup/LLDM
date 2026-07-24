@@ -4,6 +4,7 @@ import os
 import shutil
 import tempfile
 import threading
+import tkinter as tk
 import unittest
 from unittest.mock import patch
 
@@ -13,11 +14,46 @@ from sentence_transformers import SentenceTransformer
 
 from DM_Core import DMCore
 from Event_Bus import EventBus
+from GUI_Core import GUICore
 from LLM_Core import LLMCore
 from LLM_Rag import RagIndex
 from NLP_Core import NLPCore
 from Textual_Core import TextualCore
 from textual.widgets import Button, Input, RichLog, TabbedContent
+
+
+class DMTestCase(unittest.TestCase):
+    """Shared setUp for tests that just need a fresh DMCore over a real scenario.
+    Subclasses set scenario_name to pick which one, and override setUp (calling
+    super().setUp() first) to also capture events or otherwise extend the fixture."""
+    scenario_name = "arena"
+
+    def setUp(self):
+        self.event_bus = EventBus()
+        self.dm_core = DMCore(self.event_bus, scenario_name=self.scenario_name)
+
+    def _capture(self, event_name):
+        events = []
+        self.event_bus.subscribe(event_name, events.append)
+        return events
+
+    def _capture_any(self, *event_names):
+        events = []
+        for name in event_names:
+            self.event_bus.subscribe(name, events.append)
+        return events
+
+
+class LLMTestCase(unittest.TestCase):
+    """Shared setUp for tests that just need a fresh LLMCore with RAG disabled."""
+
+    def setUp(self):
+        self.event_bus = EventBus()
+        # rag_source_dir points at a real directory with no PDFs in it, so RagIndex's
+        # background build returns immediately (see LLMCore.__init__'s docstring) instead of
+        # every test here kicking off a real, potentially minutes-long index build against
+        # whatever's actually in Settings/Fantasy/.
+        self.llm_core = LLMCore(self.event_bus, rag_source_dir=os.path.join("Rules", "Fantasy"))
 
 
 class TestGameBoot(unittest.TestCase):
@@ -314,15 +350,7 @@ class TestNlpConfidenceThreshold(unittest.TestCase):
         self.assertEqual(self.dm_core.current_target, "wolf")
 
 
-class TestClarificationResponse(unittest.TestCase):
-    def setUp(self):
-        self.event_bus = EventBus()
-        # rag_source_dir points at a real directory with no PDFs in it, so RagIndex's
-        # background build returns immediately (see LLMCore.__init__'s docstring) instead of
-        # every test here kicking off a real, potentially minutes-long index build against
-        # whatever's actually in Settings/Fantasy/.
-        self.llm_core = LLMCore(self.event_bus, rag_source_dir=os.path.join("Rules", "Fantasy"))
-
+class TestClarificationResponse(LLMTestCase):
     def test_unmatched_input_queues_a_clarification_prompt_not_a_dice_roll(self):
         # _queue_narration appends to context_window synchronously before spawning the
         # background network fetch, so this is checkable without waiting on (or mocking) LM
@@ -411,11 +439,7 @@ class TestClarificationResponse(unittest.TestCase):
         self.assertIn("no roll involved", prompt)
 
 
-class TestOpposedResolution(unittest.TestCase):
-    def setUp(self):
-        self.event_bus = EventBus()
-        self.dm_core = DMCore(self.event_bus)
-
+class TestOpposedResolution(DMTestCase):
     def test_highest_value_opposing_skill_is_used(self):
         # blades opposes = ['dodge', 'blades', 'brawling', 'axes', 'polearms']
         # 'dodge' is listed first, but 'brawling' rates higher (5*3=15 vs 2*3=6),
@@ -474,11 +498,7 @@ class TestOpposedResolution(unittest.TestCase):
         self.assertEqual(result["difficulty"], 0)
 
 
-class TestDamageCalculation(unittest.TestCase):
-    def setUp(self):
-        self.event_bus = EventBus()
-        self.dm_core = DMCore(self.event_bus)
-
+class TestDamageCalculation(DMTestCase):
     def test_bonus_resolves_flat_number(self):
         self.assertEqual(self.dm_core.resolve_bonus("gladstone", 5), 5)
 
@@ -643,14 +663,12 @@ class TestDamageCalculation(unittest.TestCase):
         self.assertEqual(result["net_damage"], 7)
 
 
-class TestCombatLoop(unittest.TestCase):
+class TestCombatLoop(DMTestCase):
     def setUp(self):
-        self.event_bus = EventBus()
-        self.resolved = []
+        super().setUp()
         # These tests always face a scenario target, so combat narration ("round_resolved")
         # is what fires, not the no-combat "action_resolved" path.
-        self.event_bus.subscribe("round_resolved", self.resolved.append)
-        self.dm_core = DMCore(self.event_bus)
+        self.resolved = self._capture("round_resolved")
 
     def test_find_attack_ability_prefers_equipped_weapon(self):
         # Gladstone has a longsword equipped in rhand, which uses the "blades" skill.
@@ -808,15 +826,10 @@ class TestCombatLoop(unittest.TestCase):
             DMCore(EventBus(), scenario_name="does_not_exist")
 
 
-class TestMovementAndRange(unittest.TestCase):
+class TestMovementAndRange(DMTestCase):
     def setUp(self):
-        self.event_bus = EventBus()
-        self.resolved = []
-        self.event_bus.subscribe("round_resolved", self.resolved.append)
-        self.event_bus.subscribe("action_resolved", self.resolved.append)
-        self.dm_core = DMCore(self.event_bus)  # arena: bands=4, enclosed=true, everyone starts band 1
-
-    # --- get_band / get_distance_between --------------------------------------------------
+        super().setUp()  # arena: bands=4, enclosed=true, everyone starts band 1
+        self.resolved = self._capture_any("round_resolved", "action_resolved")
 
     def test_every_entity_including_player_has_an_objective_band(self):
         # Deliberately not a "player is always 0" special case anymore -- see DM_Movement.py's
@@ -949,42 +962,28 @@ class TestMovementAndRange(unittest.TestCase):
     def test_is_in_range_is_always_true_for_non_attack_actions(self):
         self.assertTrue(self.dm_core.is_in_range("gladstone", "wolf", None))
 
-    def test_melee_only_works_in_the_same_band_as_the_target(self):
-        # The explicit design rule this whole redesign was built around -- a longsword has
-        # no "range" field at all, so is_in_range must default that to 0.
-        longsword = self.dm_core.entities["longsword"]
-        self.dm_core.entities["wolf"]["band"] = 1
-        self.assertTrue(self.dm_core.is_in_range("gladstone", "wolf", longsword))
-        self.dm_core.entities["wolf"]["band"] = 2
-        self.assertFalse(self.dm_core.is_in_range("gladstone", "wolf", longsword))
-
     def test_innate_ability_with_no_range_data_is_also_melee_only(self):
         bite = self.dm_core.resolve_named_ability("wolf", "bite")
         self.dm_core.entities["wolf"]["band"] = 3
         self.assertFalse(self.dm_core.is_in_range("wolf", "gladstone", bite))
 
-    def test_reach_weapon_works_one_band_beyond_melee(self):
-        spear = self.dm_core.entities["spear"]
-        self.dm_core.entities["wolf"]["band"] = 1
-        self.assertTrue(self.dm_core.is_in_range("gladstone", "wolf", spear))  # gap 0
-        self.dm_core.entities["wolf"]["band"] = 2
-        self.assertTrue(self.dm_core.is_in_range("gladstone", "wolf", spear))  # gap 1, reach
-        self.dm_core.entities["wolf"]["band"] = 3
-        self.assertFalse(self.dm_core.is_in_range("gladstone", "wolf", spear))  # gap 2, too far
-
-    def test_ranged_weapon_reaches_its_own_declared_band_count(self):
-        long_bow = self.dm_core.entities["long bow"]  # range = 6
-        self.dm_core.entities["wolf"]["band"] = 7  # gap 6
-        self.assertTrue(self.dm_core.is_in_range("gladstone", "wolf", long_bow))
-        self.dm_core.entities["wolf"]["band"] = 8  # gap 7
-        self.assertFalse(self.dm_core.is_in_range("gladstone", "wolf", long_bow))
-
-    def test_spell_reaches_its_own_declared_band_count(self):
-        fireball = self.dm_core.entities["fireball"]  # range = 5
-        self.dm_core.entities["wolf"]["band"] = 6  # gap 5
-        self.assertTrue(self.dm_core.is_in_range("gladstone", "wolf", fireball))
-        self.dm_core.entities["wolf"]["band"] = 7  # gap 6
-        self.assertFalse(self.dm_core.is_in_range("gladstone", "wolf", fireball))
+    def test_weapon_and_spell_range_thresholds(self):
+        # (item, defender band, expected) -- gladstone stays at band 1 throughout, so
+        # defender band doubles as the gap between them. Covers melee (longsword has no
+        # "range" field, defaulting to 0), a reach weapon (spear, range=1), a ranged
+        # weapon (long bow, range=6), and a spell (fireball, range=5), each right at and
+        # one band past its own limit.
+        cases = [
+            ("longsword", 1, True), ("longsword", 2, False),
+            ("spear", 1, True), ("spear", 2, True), ("spear", 3, False),
+            ("long bow", 7, True), ("long bow", 8, False),
+            ("fireball", 6, True), ("fireball", 7, False),
+        ]
+        for item_name, band, expected in cases:
+            with self.subTest(item=item_name, band=band):
+                ability = self.dm_core.entities[item_name]
+                self.dm_core.entities["wolf"]["band"] = band
+                self.assertEqual(self.dm_core.is_in_range("gladstone", "wolf", ability), expected)
 
     # --- integration through _on_action_detected / resolve_behavior_action ---------------
 
@@ -1091,12 +1090,10 @@ class TestMovementAndRange(unittest.TestCase):
         shutil.rmtree(self.dm_core._save_slot_dir("test_movement_save"), ignore_errors=True)
 
 
-class TestEntityBehavior(unittest.TestCase):
+class TestEntityBehavior(DMTestCase):
     def setUp(self):
-        self.event_bus = EventBus()
-        self.resolved = []
-        self.event_bus.subscribe("round_resolved", self.resolved.append)
-        self.dm_core = DMCore(self.event_bus)
+        super().setUp()
+        self.resolved = self._capture("round_resolved")
 
     def test_choose_behavior_matches_while_the_entity_is_alive(self):
         # creatures.toml's wolf: a single behavior, "always bite while hp_per_remain >= 0.01".
@@ -1297,17 +1294,9 @@ class TestEntityBehavior(unittest.TestCase):
         self.assertEqual(self.dm_core.current_target, "wolf")
 
 
-class TestBandit(unittest.TestCase):
-    """!
-    @brief creatures.toml's bandit is the real, shipped exercise of "distance_to_target":
-        unlike TestEntityBehavior's synthetic archer_dummy, this is actual game content --
-        real items.toml entities named directly in "abilities" (see resolve_ability), not
-        inline-table stand-ins -- placed in the field scenario (see field.toml).
-    """
-
+class TestBandit(DMTestCase):
     def setUp(self):
-        self.event_bus = EventBus()
-        self.dm_core = DMCore(self.event_bus)
+        super().setUp()
         self.dm_core.scenario = {
             "bands": 8, "enclosed": False,
             "entities": [{"name": "gladstone", "band": 1}, {"name": "bandit", "band": 5}],
@@ -1372,11 +1361,7 @@ class TestBandit(unittest.TestCase):
         self.assertEqual(field.get_distance_between("gladstone", "bandit"), 4)
 
 
-class TestStatusEvaluation(unittest.TestCase):
-    def setUp(self):
-        self.event_bus = EventBus()
-        self.dm_core = DMCore(self.event_bus)
-
+class TestStatusEvaluation(DMTestCase):
     def test_hp_per_remain_requirement_matches_current_percentage(self):
         # gladstone: max_hp 36. At 18 hp (50%) the "wounded" status (0.40-0.59) should match.
         self.dm_core.apply_damage("gladstone", 18)
@@ -1476,11 +1461,7 @@ class TestStatusEvaluation(unittest.TestCase):
         self.assertIn("dead", self.dm_core.entities["gladstone"]["active_conditions"])
 
 
-class TestScenarioLoading(unittest.TestCase):
-    def setUp(self):
-        self.event_bus = EventBus()
-        self.dm_core = DMCore(self.event_bus)
-
+class TestScenarioLoading(DMTestCase):
     def test_duplicate_entities_get_unique_instance_names(self):
         # arena.toml lists gladstone once, wolf twice, and thane (an ally) once.
         self.assertEqual(self.dm_core.scenario_entities, ["gladstone", "wolf", "wolf_2", "thane"])
@@ -1536,17 +1517,16 @@ class TestScenarioLoading(unittest.TestCase):
         self.assertEqual(self.dm_core.scenario_entities, ["wolf"])
 
 
-class TestLockedChest(unittest.TestCase):
+class TestLockedChest(DMTestCase):
+    # Rules/Fantasy/scenarios/dungeon.toml puts the player alone with a locked chest
+    # (items.toml's "chest": [entity.test] {difficulty=12, skill=["finesse"]}, starting
+    # condition "locked").
+    scenario_name = "dungeon"
+
     def setUp(self):
-        self.event_bus = EventBus()
-        self.action_events = []
-        self.round_events = []
-        self.event_bus.subscribe("action_resolved", self.action_events.append)
-        self.event_bus.subscribe("round_resolved", self.round_events.append)
-        # Rules/Fantasy/scenarios/dungeon.toml puts the player alone with a locked chest
-        # (items.toml's "chest": [entity.test] {difficulty=12, skill=["finesse"]}, starting
-        # condition "locked").
-        self.dm_core = DMCore(self.event_bus, scenario_name="dungeon")
+        super().setUp()
+        self.action_events = self._capture("action_resolved")
+        self.round_events = self._capture("round_resolved")
 
     def test_chest_starts_locked(self):
         # Seeded from the template's [entity.conditions.locked] at instancing time (load_scenario).
@@ -1659,14 +1639,14 @@ class TestLockedChest(unittest.TestCase):
         self.assertFalse(self.dm_core.is_identified("chest"))
 
 
-class TestItemInteraction(unittest.TestCase):
+class TestItemInteraction(DMTestCase):
+    # dungeon.toml's chest carries a "cursed dagger" plus currency=20, for exercising
+    # examine (read-only) vs take (transfers) without any dice roll involved.
+    scenario_name = "dungeon"
+
     def setUp(self):
-        self.event_bus = EventBus()
-        self.resolved = []
-        self.event_bus.subscribe("item_interaction_resolved", self.resolved.append)
-        # dungeon.toml's chest carries a "cursed dagger" plus currency=20, for exercising
-        # examine (read-only) vs take (transfers) without any dice roll involved.
-        self.dm_core = DMCore(self.event_bus, scenario_name="dungeon")
+        super().setUp()
+        self.resolved = self._capture("item_interaction_resolved")
 
     def test_examine_and_take_are_blocked_while_the_container_is_locked(self):
         self.dm_core._on_item_interaction_detected({
@@ -1808,26 +1788,13 @@ class TestItemInteraction(unittest.TestCase):
         self.assertEqual(result["reason"], "not_takeable")
 
 
-class TestItemTargetedSkillCheck(unittest.TestCase):
-    """!
-    @brief items.toml's "cursed dagger" carries its own [entity.test] (difficulty=8,
-        skill=["arcane"], pass.reveal=true) -- the first entity whose test is reached one
-        level *deeper* than the scene itself (an item inside a container, or already in the
-        player's inventory), via DMCore._resolve_item_test_target/_resolve_item_test rather
-        than the pre-existing current_target-based test path a scene entity like the chest
-        already used. Exercised at the DMCore level (a synthetic action_detected payload,
-        same convention TestLockedChest already uses) -- NLPCore actually producing this
-        target/skill pairing from free text is covered live in test_integration.py, since it
-        needs a real dice roll to demonstrate the reveal actually reaching a real narration.
-    """
+class TestItemTargetedSkillCheck(DMTestCase):
+    scenario_name = "dungeon"
 
     def setUp(self):
-        self.event_bus = EventBus()
-        self.action_events = []
-        self.round_events = []
-        self.event_bus.subscribe("action_resolved", self.action_events.append)
-        self.event_bus.subscribe("round_resolved", self.round_events.append)
-        self.dm_core = DMCore(self.event_bus, scenario_name="dungeon")
+        super().setUp()
+        self.action_events = self._capture("action_resolved")
+        self.round_events = self._capture("round_resolved")
         self.dm_core.dismiss_condition("chest", "locked")
         self.dm_core.dismiss_condition("chest", "closed")
 
@@ -1893,26 +1860,10 @@ class TestItemTargetedSkillCheck(unittest.TestCase):
         self.assertEqual(self.dm_core.current_target, starting_target)
 
 
-class TestHealthPotionIdentify(unittest.TestCase):
-    """!
-    @brief items.toml's "health potion" carries its own [entity.test] (difficulty=4,
-        skill=["appraise", "medicine"], pass.reveal=true) -- deliberately nondescript on its
-        own (see the items.toml comment) so its "healing" tag is a hidden property revealed
-        only once identified, the same mechanism TestItemTargetedSkillCheck already covers
-        for the cursed dagger. The one thing genuinely different here: health potions are a
-        *fungible* item -- gladstone starts with three, all sharing the exact same
-        self.entities["health potion"] template dict (inventory just repeats the name
-        string, see CLAUDE.md's "Inventory/currency transfer" notes) -- so identifying any
-        one of them identifies all of them at once, everywhere, for the rest of the
-        playthrough. Not a bug specific to this feature, just the existing item model made
-        newly visible now that identity is worth hiding at all.
-    """
-
+class TestHealthPotionIdentify(DMTestCase):
     def setUp(self):
-        self.event_bus = EventBus()
-        self.action_events = []
-        self.event_bus.subscribe("action_resolved", self.action_events.append)
-        self.dm_core = DMCore(self.event_bus, scenario_name="arena")
+        super().setUp()
+        self.action_events = self._capture("action_resolved")
 
     def _check_the_potion(self, skill_name, roll_result):
         self.dm_core.roll_dice = lambda dice, pips: roll_result
@@ -1956,12 +1907,12 @@ class TestHealthPotionIdentify(unittest.TestCase):
         self.assertIsNone(self.dm_core._resolve_item_test_target("health potion", "appraise"))
 
 
-class TestOpenClose(unittest.TestCase):
+class TestOpenClose(DMTestCase):
+    scenario_name = "dungeon"
+
     def setUp(self):
-        self.event_bus = EventBus()
-        self.resolved = []
-        self.event_bus.subscribe("item_interaction_resolved", self.resolved.append)
-        self.dm_core = DMCore(self.event_bus, scenario_name="dungeon")
+        super().setUp()
+        self.resolved = self._capture("item_interaction_resolved")
 
     def _unlock_the_chest(self):
         self.dm_core.roll_dice = lambda dice, pips: 99
@@ -2046,14 +1997,14 @@ class TestOpenClose(unittest.TestCase):
         self.assertEqual(result["reason"], "not_openable")
 
 
-class TestGiveAndTrade(unittest.TestCase):
+class TestGiveAndTrade(DMTestCase):
+    # tavern.toml's innkeeper -- a living recipient, unlike the dungeon's chest, so give
+    # actually has somewhere sensible to go.
+    scenario_name = "tavern"
+
     def setUp(self):
-        self.event_bus = EventBus()
-        self.resolved = []
-        self.event_bus.subscribe("item_interaction_resolved", self.resolved.append)
-        # tavern.toml's innkeeper -- a living recipient, unlike the dungeon's chest, so give
-        # actually has somewhere sensible to go.
-        self.dm_core = DMCore(self.event_bus, scenario_name="tavern")
+        super().setUp()
+        self.resolved = self._capture("item_interaction_resolved")
 
     def test_give_moves_an_item_from_the_player_to_the_target(self):
         self.dm_core._on_item_interaction_detected({
@@ -2143,26 +2094,10 @@ class TestGiveAndTrade(unittest.TestCase):
         self.assertEqual(result["reason"], "not_takeable")
 
 
-class TestUseItem(unittest.TestCase):
-    """!
-    @brief "use" (DMCore._resolve_use_intent) consumes or activates an item already in the
-        player's own inventory -- never a target's, unlike take/give/trade. NLPCore's own
-        keywords for it today are just "drink"/"quaff" (see NLP_Core.py's USE_KEYWORDS), but
-        the intent/handling itself is the generic "use", gated on a truthy "usable" field
-        rather than any particular subtype, and built around two generalizing pieces neither
-        of which the original drink-only version had: a "charges" count (single-use if
-        absent, multi-use if present -- see _consume_charge) and "replace_with" (what's left
-        in inventory once charges hit zero, ex: health potion -> glass vial). Healing itself
-        (apply_healing, DM_Status.py -- the clamped-at-max_hp counterpart to apply_damage) is
-        still the only effect actually wired, exercised here via the one real usable item,
-        health potion.
-    """
-
+class TestUseItem(DMTestCase):
     def setUp(self):
-        self.event_bus = EventBus()
-        self.resolved = []
-        self.event_bus.subscribe("item_interaction_resolved", self.resolved.append)
-        self.dm_core = DMCore(self.event_bus, scenario_name="arena")
+        super().setUp()
+        self.resolved = self._capture("item_interaction_resolved")
 
     def _use(self, item_name="health potion", roll_result=6):
         self.dm_core.roll_dice = lambda dice, pips: roll_result
@@ -2268,10 +2203,8 @@ class TestUseItem(unittest.TestCase):
         self.assertEqual(result["healed"], 0)
 
 
-class TestInventoryTransfer(unittest.TestCase):
-    def setUp(self):
-        self.event_bus = EventBus()
-        self.dm_core = DMCore(self.event_bus, scenario_name="dungeon")
+class TestInventoryTransfer(DMTestCase):
+    scenario_name = "dungeon"
 
     def test_transfer_currency_moves_the_full_amount_by_default(self):
         moved = self.dm_core.transfer_currency("chest", "gladstone")
@@ -2318,16 +2251,15 @@ class TestInventoryTransfer(unittest.TestCase):
         self.assertEqual(self.dm_core.entities["gladstone"]["inventory"].count("health potion"), 5)
 
 
-class TestNpcDialogue(unittest.TestCase):
+class TestNpcDialogue(DMTestCase):
+    # Rules/Fantasy/scenarios/tavern.toml puts the player with a friendly NPC
+    # (npcs.toml's innkeeper) instead of the default "arena" combat scenario.
+    scenario_name = "tavern"
+
     def setUp(self):
-        self.event_bus = EventBus()
-        self.action_events = []
-        self.round_events = []
-        self.event_bus.subscribe("action_resolved", self.action_events.append)
-        self.event_bus.subscribe("round_resolved", self.round_events.append)
-        # Rules/Fantasy/scenarios/tavern.toml puts the player with a friendly NPC
-        # (npcs.toml's innkeeper) instead of the default "arena" combat scenario.
-        self.dm_core = DMCore(self.event_bus, scenario_name="tavern")
+        super().setUp()
+        self.action_events = self._capture("action_resolved")
+        self.round_events = self._capture("round_resolved")
 
     def test_innkeeper_is_not_hostile_toward_the_player(self):
         self.assertFalse(self.dm_core.is_hostile("innkeeper", "gladstone"))
@@ -2406,11 +2338,7 @@ class TestNpcDialogue(unittest.TestCase):
         self.assertIn("Lost her husband to a bandit raid", result["defender_details"])
 
 
-class TestAttitudePhrases(unittest.TestCase):
-    def setUp(self):
-        self.event_bus = EventBus()
-        self.dm_core = DMCore(self.event_bus)
-
+class TestAttitudePhrases(DMTestCase):
     def _tier_name(self, value):
         tier = self.dm_core.get_attitude_tier(value)
         assert tier is not None
@@ -2495,10 +2423,9 @@ class TestAttitudePhrases(unittest.TestCase):
         self.assertIn("Attitude toward gladstone:", round_events[0]["defender_details"])
 
 
-class TestSaveLoad(unittest.TestCase):
+class TestSaveLoad(DMTestCase):
     def setUp(self):
-        self.event_bus = EventBus()
-        self.dm_core = DMCore(self.event_bus)
+        super().setUp()
         self.slot_dirs = []
 
     def tearDown(self):
@@ -2638,24 +2565,14 @@ class TestSaveLoad(unittest.TestCase):
         self.assertEqual(os.path.dirname(slot_dir), saves_root)
 
 
-class TestMultiRoomDungeon(unittest.TestCase):
-    """!
-    @brief Rules/Fantasy/scenarios/crypt.toml is the first multi-room scenario ([[room]]
-        tables plus start_room) -- covers room instancing/isolation from a plain scenario,
-        trap [entity.test] damage (apply_test_outcome's "damage" key), band-gated exits
-        (including a real branch, not just a forward/back corridor), and visited-room state
-        persistence (a cleared room stays cleared).
-    """
+class TestMultiRoomDungeon(DMTestCase):
+    scenario_name = "crypt"
 
     def setUp(self):
-        self.event_bus = EventBus()
-        self.action_events = []
-        self.item_events = []
-        self.round_events = []
-        self.event_bus.subscribe("action_resolved", self.action_events.append)
-        self.event_bus.subscribe("item_interaction_resolved", self.item_events.append)
-        self.event_bus.subscribe("round_resolved", self.round_events.append)
-        self.dm_core = DMCore(self.event_bus, scenario_name="crypt")
+        super().setUp()
+        self.action_events = self._capture("action_resolved")
+        self.item_events = self._capture("item_interaction_resolved")
+        self.round_events = self._capture("round_resolved")
 
     def _move(self, direction):
         self.dm_core._on_item_interaction_detected(
@@ -2901,16 +2818,11 @@ class TestMultiRoomDungeon(unittest.TestCase):
         self.assertEqual(turn["damage"]["defender"], "gladstone")
 
 
-class TestMultiRoomSaveLoad(unittest.TestCase):
-    """!
-    @brief Save/load fidelity for a multi-room dungeon specifically -- DM_Persistence.py's
-        _all_known_instance_names/visited_rooms handling, distinct from TestSaveLoad's
-        plain single-room coverage.
-    """
+class TestMultiRoomSaveLoad(DMTestCase):
+    scenario_name = "crypt"
 
     def setUp(self):
-        self.event_bus = EventBus()
-        self.dm_core = DMCore(self.event_bus, scenario_name="crypt")
+        super().setUp()
         self.slot_dirs = []
 
     def tearDown(self):
@@ -2953,14 +2865,9 @@ class TestMultiRoomSaveLoad(unittest.TestCase):
         self.assertNotIn("armed", fresh_dm.entities["dart trap"].get("active_conditions", {}))
 
 
-class TestLLMSaveLoad(unittest.TestCase):
+class TestLLMSaveLoad(LLMTestCase):
     def setUp(self):
-        self.event_bus = EventBus()
-        # rag_source_dir points at a real directory with no PDFs in it, so RagIndex's
-        # background build returns immediately (see LLMCore.__init__'s docstring) instead of
-        # every test here kicking off a real, potentially minutes-long index build against
-        # whatever's actually in Settings/Fantasy/.
-        self.llm_core = LLMCore(self.event_bus, rag_source_dir=os.path.join("Rules", "Fantasy"))
+        super().setUp()
         self.slot_dirs = []
 
     def tearDown(self):
@@ -3047,11 +2954,7 @@ class FakeRagIndex:
         return self.matches
 
 
-class TestLlmPerformRag(unittest.TestCase):
-    def setUp(self):
-        self.event_bus = EventBus()
-        self.llm_core = LLMCore(self.event_bus, rag_source_dir=os.path.join("Rules", "Fantasy"))
-
+class TestLlmPerformRag(LLMTestCase):
     def test_perform_rag_returns_empty_string_with_no_matches(self):
         self.llm_core.rag_index = FakeRagIndex([])
         self.assertEqual(self.llm_core.perform_rag("what is Brevoy"), "")
@@ -3221,6 +3124,228 @@ class TestRagIndex(unittest.TestCase):
 
         results = self.index.query("How do I bake a chocolate cake", confidence_threshold=0.6)
         self.assertEqual(results, [])
+
+
+class TestGUICore(unittest.TestCase):
+    """GUI_Core.py's Tkinter surface, exercised directly (no mainloop) -- see Textual_Core.py's
+    own tests below for the headless-testable mirror this class doesn't duplicate."""
+
+    def setUp(self):
+        self.event_bus = EventBus()
+        self.gui = GUICore(self.event_bus)
+        self.gui.root.withdraw()  # keep the real window off-screen during tests
+        self.slot_dirs = []
+
+    def tearDown(self):
+        self.gui.root.destroy()
+        for slot_dir in self.slot_dirs:
+            shutil.rmtree(slot_dir, ignore_errors=True)
+
+    def _track(self, slot_name):
+        self.slot_dirs.append(self.gui._save_slot_dir(slot_name))
+        return slot_name
+
+    def test_init_builds_the_expected_tabs_and_subscribes_to_every_event(self):
+        tab_texts = [self.gui.notebook.tab(t, "text") for t in self.gui.notebook.tabs()]
+        self.assertEqual(tab_texts, ["Party", "Notes", "Map"])
+        for event_name in ("llm_response_ready", "rules_loaded", "party_status_changed",
+                           "game_saved", "game_loaded", "game_load_failed",
+                           "save_requested", "load_requested"):
+            self.assertIn(event_name, self.event_bus.subscribers)
+
+    def test_display_llm_response_appends_to_history(self):
+        self.event_bus.publish("llm_response_ready", "The wolf snarls.")
+        self.assertIn("The wolf snarls.", self.gui.history_text.get("1.0", tk.END))
+
+    def test_submit_input_publishes_echoes_and_clears_the_entry(self):
+        submitted = []
+        self.event_bus.subscribe("user_input_submitted", submitted.append)
+        self.gui.input_entry.insert(0, "attack the wolf")
+
+        self.gui.submit_input()
+
+        self.assertEqual(submitted, ["attack the wolf"])
+        self.assertIn("> attack the wolf", self.gui.history_text.get("1.0", tk.END))
+        self.assertEqual(self.gui.input_entry.get(), "")
+
+    def test_submit_input_ignores_blank_input(self):
+        submitted = []
+        self.event_bus.subscribe("user_input_submitted", submitted.append)
+        self.gui.input_entry.insert(0, "   ")
+
+        self.gui.submit_input()
+
+        self.assertEqual(submitted, [])
+
+    def test_display_party_status_renders_equipment_abilities_inventory_conditions(self):
+        self.event_bus.publish("rules_loaded", {"entities": {
+            "gladstone": {
+                "is_player": True, "name": "Gladstone", "hp": 30, "max_hp": 36,
+                "equipped": {"rhand": "longsword"}, "abilities": ["cleave"],
+                "inventory": ["torch", "torch"], "active_conditions": {"wounded": {}},
+            },
+            "thane": {"is_party": True, "name": "Thane", "hp": 10, "max_hp": 10},
+            "wolf": {"name": "wolf", "hp": 10, "max_hp": 10},  # neither player nor party
+        }})
+
+        members = self.gui.party_tree.get_children()
+        labels = [self.gui.party_tree.item(m, "text") for m in members]
+        self.assertEqual(labels, ["Gladstone (HP: 30/36)", "Thane (HP: 10/10)"])
+
+        groups = self.gui.party_tree.get_children(members[0])
+        group_texts = [self.gui.party_tree.item(g, "text") for g in groups]
+        self.assertEqual(group_texts, ["Equipment", "Abilities", "Inventory", "Conditions"])
+
+        equipment, abilities, inventory, conditions = groups
+
+        def child_texts(node):
+            return [self.gui.party_tree.item(c, "text") for c in self.gui.party_tree.get_children(node)]
+
+        self.assertEqual(child_texts(equipment), ["rhand: longsword"])
+        self.assertEqual(child_texts(abilities), ["cleave"])
+        self.assertEqual(child_texts(inventory), ["torch x2"])
+        self.assertEqual(child_texts(conditions), ["wounded"])
+
+    def test_display_party_status_shows_none_placeholders_for_empty_groups(self):
+        self.event_bus.publish("rules_loaded", {"entities": {
+            "gladstone": {"is_player": True, "name": "Gladstone", "hp": 36, "max_hp": 36},
+        }})
+        member = self.gui.party_tree.get_children()[0]
+        for group in self.gui.party_tree.get_children(member):
+            children = self.gui.party_tree.get_children(group)
+            self.assertEqual([self.gui.party_tree.item(c, "text") for c in children], ["(none)"])
+
+    def test_display_party_status_redraws_instead_of_appending_on_repeat_events(self):
+        # "party_status_changed" fires after every action -- the tree must be rebuilt each
+        # time, not grow a duplicate node per event (see DM_Core.py's _publish_party_status).
+        payload = {"entities": {"gladstone": {"is_player": True, "name": "Gladstone", "hp": 36, "max_hp": 36}}}
+        self.event_bus.publish("rules_loaded", payload)
+        self.event_bus.publish("party_status_changed", payload)
+        self.assertEqual(len(self.gui.party_tree.get_children()), 1)
+
+    def test_save_load_status_events_append_to_history(self):
+        self.event_bus.publish("game_saved", {"slot": "run1"})
+        self.event_bus.publish("game_loaded", {"slot": "run1"})
+        self.event_bus.publish("game_load_failed", {"slot": "missing"})
+
+        history = self.gui.history_text.get("1.0", tk.END)
+        self.assertIn("Game saved as 'run1'", history)
+        self.assertIn("Game loaded from 'run1'", history)
+        self.assertIn("No save named 'missing' found", history)
+
+    def test_map_drawing_creates_a_line_in_the_chosen_color_and_clear_removes_it(self):
+        self.gui.set_map_pen_color("red")
+
+        Event = type("Event", (), {})
+        start, move, end = Event(), Event(), Event()
+        start.x, start.y = 10, 10
+        move.x, move.y = 20, 20
+        end.x, end.y = 20, 20
+        self.gui._on_map_draw_start(start)
+        self.gui._on_map_draw_move(move)
+        self.gui._on_map_draw_end(end)
+
+        lines = self.gui.map_canvas.find_all()
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(self.gui.map_canvas.itemcget(lines[0], "fill"), "red")
+        self.assertIsNone(self.gui._map_last_point)
+
+        self.gui.clear_map()
+        self.assertEqual(self.gui.map_canvas.find_all(), ())
+
+    def test_save_game_then_load_game_round_trips_the_notes_tab(self):
+        slot = self._track("test_gui_notes_roundtrip")
+        self.gui.notes_text.delete("1.0", tk.END)
+        self.gui.notes_text.insert(tk.END, "remember the side passage")
+        self.gui.save_game(slot)
+
+        self.gui.notes_text.delete("1.0", tk.END)
+        self.gui.load_game(slot)
+
+        self.assertEqual(self.gui.notes_text.get("1.0", "end-1c"), "remember the side passage")
+
+    def test_load_game_missing_slot_logs_and_leaves_notes_untouched(self):
+        self.gui.display_notes("still here")
+        errors = []
+        self.event_bus.subscribe("log_error", errors.append)
+
+        self.gui.load_game("no_such_slot_at_all")
+
+        self.assertEqual(self.gui.notes_text.get("1.0", "end-1c"), "still here")
+        self.assertTrue(errors)
+
+    def test_save_requested_and_load_requested_events_are_wired(self):
+        # The same events NLPCore's save/load text intercept publishes -- GUICore must react
+        # to them regardless of whether the File menu or a typed command triggered them.
+        slot = self._track("test_gui_event_wiring")
+        self.gui.notes_text.delete("1.0", tk.END)
+        self.gui.notes_text.insert(tk.END, "wired via events")
+
+        self.event_bus.publish("save_requested", {"slot": slot})
+        self.gui.notes_text.delete("1.0", tk.END)
+        self.event_bus.publish("load_requested", {"slot": slot})
+
+        self.assertEqual(self.gui.notes_text.get("1.0", "end-1c"), "wired via events")
+
+    def test_save_requested_with_no_slot_is_ignored(self):
+        slots_before = self.gui._list_save_slots()
+
+        self.gui._on_save_requested({})
+        self.gui._on_load_requested({})
+
+        self.assertEqual(self.gui._list_save_slots(), slots_before)
+
+    @patch("GUI_Core.simpledialog.askstring", return_value="  my slot  ")
+    def test_request_save_publishes_save_requested_with_the_trimmed_typed_name(self, mock_askstring):
+        self._track("my slot")
+        save_events = []
+        self.event_bus.subscribe("save_requested", save_events.append)
+
+        self.gui.request_save()
+
+        self.assertEqual(save_events, [{"slot": "my slot"}])
+
+    @patch("GUI_Core.simpledialog.askstring", return_value=None)
+    def test_request_save_does_nothing_when_the_popup_is_cancelled(self, mock_askstring):
+        save_events = []
+        self.event_bus.subscribe("save_requested", save_events.append)
+
+        self.gui.request_save()
+
+        self.assertEqual(save_events, [])
+
+    @patch.object(GUICore, "_list_save_slots", return_value=[])
+    def test_request_load_with_no_saved_games_shows_a_message_instead_of_a_list(self, mock_slots):
+        self.gui.request_load()
+
+        popup = next(w for w in self.gui.root.winfo_children() if isinstance(w, tk.Toplevel))
+        labels = [w for w in popup.winfo_children() if isinstance(w, tk.Label)]
+        self.assertEqual(labels[0].cget("text"), "No saved games found.")
+        popup.destroy()
+
+    @patch.object(GUICore, "_list_save_slots", return_value=["run1", "run2"])
+    def test_request_load_lists_slots_and_publishes_load_requested_for_the_selection(self, mock_slots):
+        load_events = []
+        self.event_bus.subscribe("load_requested", load_events.append)
+
+        self.gui.request_load()
+
+        picker = next(w for w in self.gui.root.winfo_children() if isinstance(w, tk.Toplevel))
+        listbox = next(w for w in picker.winfo_children() if isinstance(w, tk.Listbox))
+        self.assertEqual(listbox.get(0, tk.END), ("run1", "run2"))
+
+        listbox.selection_clear(0, tk.END)
+        listbox.selection_set(1)
+        button_row = next(w for w in picker.winfo_children() if isinstance(w, tk.Frame))
+        load_button = next(
+            w for w in button_row.winfo_children()
+            if isinstance(w, tk.Button) and w.cget("text") == "Load"
+        )
+
+        load_button.invoke()
+
+        self.assertEqual(load_events, [{"slot": "run2"}])
+        self.assertFalse(picker.winfo_exists())
 
 
 def lines_of(app, widget_id):

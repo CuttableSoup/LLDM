@@ -471,11 +471,23 @@ Practical constraints when touching this file:
 
 - **`test_unit.py`** — offline `unittest.TestCase` classes covering dice/damage resolution,
   statuses, scenario/room loading, entity tests, item interactions (examine/take/give/trade/
-  open/close/use/move), inventory transfer, NPC dialogue, attitude phrases, save/load, and the
-  Textual mirror. `TestGameBoot` and `TestNlpConfidenceThreshold` load the real
-  `sentence-transformers` model via `setUpClass`; the latter uses `setUp` to re-run
-  `load_rules`/`load_scenario_definition`/`load_scenario` before each test, since state shared
-  across a `setUpClass`-based class is also shared mutable game state.
+  open/close/use/move), inventory transfer, NPC dialogue, attitude phrases, save/load,
+  `GUICore` (below), and the Textual mirror. `TestGameBoot` and `TestNlpConfidenceThreshold`
+  load the real `sentence-transformers` model via `setUpClass`; the latter uses `setUp` to
+  re-run `load_rules`/`load_scenario_definition`/`load_scenario` before each test, since state
+  shared across a `setUpClass`-based class is also shared mutable game state. Most other
+  classes share their `DMCore`/`LLMCore` fixture setup via two base classes, `DMTestCase`
+  (`scenario_name` class attribute, plus `_capture`/`_capture_any` helpers for subscribing a
+  list-append per event) and `LLMTestCase` — subclasses override `setUp` (calling
+  `super().setUp()` first) only when they need more than a bare fixture.
+- **`TestGUICore`** — drives `GUICore` directly (no `mainloop`, real `Tk` root withdrawn in
+  `setUp`) rather than duplicating `Textual_Core`'s own coverage: tab/event-subscription setup,
+  input submission, the Party tab's tree rendering (per-member Equipment/Abilities/Inventory/
+  Conditions groups, empty-group placeholders, redraw-not-append on repeat events), the Map
+  tab's freehand drawing/clear, save/load status narration, the Notes tab's save/load round
+  trip, and the File menu's Save/Load popups (`simpledialog.askstring` mocked; the Load picker's
+  listbox/button driven directly via `.invoke()`, with `_list_save_slots` mocked so the tests
+  never depend on or touch whatever is actually saved under `Saves/`).
 - **`test_integration.py`** — every test needing a real, running LM Studio
   (`TestInnkeeperConversation`, `TestRagGroundedNarration`, `TestArenaCombatConversation`,
   `TestChestSagaConversation`, `TestChestTradeConversation`, `TestCryptDungeonConversation`,
