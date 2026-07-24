@@ -4,6 +4,10 @@ supertype = "object"
 subtype = "weapon"
 skill = "blades"
 description = "A well-balanced steel blade, kept sharp and ready."
+# A single candidate slot, or a list -- resolve_equip_slot (DM_Inventory.py) picks the first
+# one valid for the equipping entity's own supertype/subtype (rules.toml's [[equip_slot]]).
+# One-handed, so either hand will do.
+equip_slot = [ "rhand", "lhand" ]
 max_hp = 10
 # No "range" field at all -- melee, usable only in the same band as the target (see
 # DM_Movement.py's "Movement and range"; is_in_range treats a missing range as 0).
@@ -20,6 +24,7 @@ supertype = "object"
 subtype = "weapon"
 skill = "polearms"
 description = "A long-hafted spear, its iron head kept honed for thrusting."
+equip_slot = "rhand"
 max_hp = 8
 # Reach weapon -- usable one band beyond plain melee (see DM_Movement.py's "Movement and
 # range"), the one deliberate exception to "melee only works in the same band as the target".
@@ -37,6 +42,7 @@ supertype = "object"
 subtype = "weapon"
 skill = "missiles"
 description = "A polished longbow, strung and ready to loose an arrow."
+equip_slot = "rhand"
 max_hp = 5
 # In bands, not meters -- reaches every band a typical room/field has (see the "bands"
 # scenario field), same "no per-tier accuracy modifier, just in-range-or-not" rule every
@@ -55,6 +61,7 @@ supertype = "object"
 subtype = "weapon"
 skill = "missiles"
 description = "A stubby hunting bow, its string frayed but still taut."
+equip_slot = "rhand"
 max_hp = 4
 # Shorter reach than the long bow -- still well past melee, just not the same all-room
 # coverage (see DM_Movement.py's "Movement and range").
@@ -72,6 +79,7 @@ supertype = "object"
 subtype = "weapon"
 skill = "blades"
 description = "A pitted, poorly maintained blade, more intimidating than sharp."
+equip_slot = [ "rhand", "lhand" ]
 max_hp = 6
 damage_value = { dice = 1, pips = 1, bonus = "strength_damage" }
 damage_tags = [ "slashing" ]
@@ -85,6 +93,7 @@ name = "chain mail"
 supertype = "object"
 subtype = "armor"
 description = "A shirt of interlocking steel rings, worn for protection in battle."
+equip_slot = "chest"
 max_hp = 20
 armor_value = { dice = 2, pips = 0 }
 armor_tags = [ "physical", "piercing", "bludgeoning", "slashing" ]
@@ -168,6 +177,7 @@ supertype = "object"
 subtype = "weapon"
 skill = "blades"
 description = "A wickedly curved dagger, its blade etched with faintly glowing runes that seem to shift when unwatched."
+equip_slot = [ "rhand", "lhand" ]
 max_hp = 8
 damage_value = { dice = 1, pips = 1, bonus = "strength_damage" }
 damage_tags = [ "slashing" ]

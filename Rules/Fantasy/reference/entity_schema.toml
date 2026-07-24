@@ -129,6 +129,18 @@ skill = "blades"                            # A single skill name, or a list (ex
                                             # match counts (ability_matches_skill). A list lets
                                             # select_ability_skill pick the entity's own
                                             # highest-rated of the options.
+equip_slot = "rhand"                        # Weapon/armor only -- a single slot name, or a
+                                            # list of candidates (ex: a one-handed weapon
+                                            # offering both "rhand" and "lhand"). "equip"
+                                            # (DMCore._resolve_equip_intent) picks the first
+                                            # candidate valid for the equipping entity's own
+                                            # supertype/subtype (resolve_equip_slot,
+                                            # DM_Inventory.py, against rules.toml's own
+                                            # [[equip_slot]] table -- see get_equip_slots,
+                                            # DM_Rules.py). Absent means "equip"/"unequip"
+                                            # refuse this item outright (reason
+                                            # "not_equippable") -- ex: a potion or a chest key
+                                            # is never equippable no matter what slots exist.
 range = 0                                   # In bands, absent/0 meaning melee (usable only in
                                             # the target's own band). 1 extends melee by one
                                             # band (a reach weapon, ex: spear). A ranged

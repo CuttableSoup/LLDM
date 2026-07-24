@@ -73,7 +73,20 @@ class RagIndex:
         self.chunk_embeddings = None
         self.ready = False
 
-        threading.Thread(target=self._build, daemon=True).start()
+        self._build_thread = threading.Thread(target=self._build, daemon=True)
+        self._build_thread.start()
+
+    def wait_until_ready(self, timeout=None):
+        """!
+        @brief Blocks until the background build kicked off by __init__ finishes. LLMCore
+            itself never calls this -- query() already handles "not ready yet" by returning
+            no matches -- but a synchronous caller (ex: a standalone pre-build script) needs
+            a real way to wait rather than polling self.ready in a sleep loop.
+        @param timeout Max seconds to wait; None waits indefinitely.
+        @return self.ready, so a caller can tell "timed out" apart from "build failed".
+        """
+        self._build_thread.join(timeout)
+        return self.ready
 
     def _build(self):
         """!

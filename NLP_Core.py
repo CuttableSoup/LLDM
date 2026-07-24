@@ -16,6 +16,23 @@ from sentence_transformers import SentenceTransformer, util
 # description is "Using swords and knives in close combat.", which a bare "close " would
 # misfire on before skill matching ever got a chance to run.
 EXAMINE_KEYWORDS = ("examine", "inspect", "look at", "check out")
+# Moves an item already in the player's own inventory into a worn/wielded [entity.equipped]
+# slot -- see DMCore._resolve_equip_intent. No collision risk with any skill's own keyword
+# list (checked by grep against skills.toml -- none of these four phrases appear there).
+EQUIP_KEYWORDS = ("equip ", "wear ", "wield ", "put on ")
+# Checked ahead of both EQUIP_KEYWORDS ("unequip " literally contains "equip " as a
+# substring -- "un" + "equip ") and TAKE_KEYWORDS ("take off" would otherwise match
+# TAKE_KEYWORDS' own "take " substring first and misfire as a plain "take"). Deliberately
+# just these two phrases,
+# not a broader "remove "/"take off my " -- "remove" collides with real item names
+# (items.toml's "dart trap"/"scythe trap") and finesse's own "disarm"/"trap" keywords, so
+# "remove the trap" needs to keep falling through to a disarm skill check, not get swallowed
+# here as an attempt to unequip something named "trap". See DMCore._resolve_unequip_intent.
+UNEQUIP_KEYWORDS = ("unequip ", "take off")
+# Moves an item out of inventory onto the current room/scene's own ground (see
+# DMCore._resolve_drop_intent) -- unlike "give"/"trade" (both aimed at the current target),
+# this one has no recipient at all.
+DROP_KEYWORDS = ("drop ", "discard ", "put down")
 TAKE_KEYWORDS = ("take ", "grab ", "pick up", "loot ")
 # "give"/"trade" move an item the opposite directions ("give" is player -> target, "trade" is
 # target -> player but paid) -- see DMCore._on_item_interaction_detected. TRADE_KEYWORDS
@@ -189,11 +206,19 @@ class NLPCore:
             Inter-room movement is checked separately, before this (see _detect_direction),
             since it isn't keyed to a single fixed intent name the way these are.
         @param processed_text The cleaned and processed player input.
-        @return "examine", "take", "give", "trade", "use", "open", "close", "advance",
-            "retreat", or None.
+        @return "examine", "equip", "unequip", "drop", "take", "give", "trade", "use",
+            "open", "close", "advance", "retreat", or None.
         """
         if any(keyword in processed_text for keyword in EXAMINE_KEYWORDS):
             return "examine"
+        # Checked ahead of EQUIP_KEYWORDS -- "unequip " contains EQUIP_KEYWORDS' own "equip "
+        # as a literal substring ("un" + "equip "), so this order isn't optional.
+        if any(keyword in processed_text for keyword in UNEQUIP_KEYWORDS):
+            return "unequip"
+        if any(keyword in processed_text for keyword in EQUIP_KEYWORDS):
+            return "equip"
+        if any(keyword in processed_text for keyword in DROP_KEYWORDS):
+            return "drop"
         if any(keyword in processed_text for keyword in TAKE_KEYWORDS):
             return "take"
         if any(keyword in processed_text for keyword in GIVE_KEYWORDS):

@@ -32,8 +32,8 @@ order: `NLPCore`, `LLMCore`, `GUICore`, then `DMCore` last (it publishes `rules_
 - **`LLM_Core.py`** — posts to LM Studio's OpenAI-compatible `/v1/chat/completions` on a
   background thread, with a rolling 100-message context window. Subscribes to six narration
   triggers (see "Narration" below).
-- **`GUI_Core.py`** — Tkinter window: history pane + tabbed Party/Notes/Map panels, plus a
-  dropdown File menu (Save.../Load...) on the window's menu bar in place of always-visible
+- **`GUI_Core.py`** — Tkinter window: history pane + tabbed Party/Notes/Map/Debug panels, plus
+  a dropdown File menu (Save.../Load...) on the window's menu bar in place of always-visible
   save controls. Save opens a popup asking for a slot name; Load opens a popup listing every
   existing slot (a subdirectory of `Saves/`) to pick from. History (via `llm_response_ready`)
   and Party are wired to real data; Notes is a free-typed scratchpad persisted through its own
@@ -41,12 +41,24 @@ order: `NLPCore`, `LLMCore`, `GUICore`, then `DMCore` last (it publishes `rules_
   collapsible node per party member — an entity with `is_player = true` (the player) or
   `is_party = true` (an ally, ex: `characters.toml`'s `thane` — see `entity_schema.toml`'s
   `is_party`) — labeled with its current/max HP and each expanding into its own Equipment/
-  Abilities/Inventory/Conditions groups. It redraws on `rules_loaded` (boot/new game) and on
-  `party_status_changed` (DMCore's cheap post-action re-publish of `self.entities` — see
-  "Action resolution pipeline" below — kept separate from `rules_loaded` since NLPCore also
-  rebuilds its embeddings from that event, which would be far too expensive per action). The
-  Map tab is a free-form drawing canvas (click-drag to sketch, a small color palette, a Clear
-  button) for the player's own scratch map; the engine never writes to it.
+  Skills/Abilities/Inventory/Conditions groups. Equipment lists every slot valid for the
+  member's own supertype/subtype (per rules.toml's `[[equip_slot]]` table, resolved the same
+  override-precedence way `get_attitude` resolves name/supertype/default — see "Data/TOML
+  conventions" below), filled or `(empty)`, not just the ones actually occupied — any
+  equipped slot that isn't on that list at all (a data mismatch `_validate_equipped_slots`
+  already logs at load time) is still shown, appended after. Skills lists each
+  `[entity.skills]` entry in WEG dice notation (`"blades: 5D+2"`). It redraws on `rules_loaded`
+  (boot/new game) and on `party_status_changed` (DMCore's cheap post-action re-publish of
+  `self.entities`/`self.rules["equip_slot"]` — see "Action resolution pipeline" below — kept
+  separate from `rules_loaded` since NLPCore also rebuilds its embeddings from that event,
+  which would be far too expensive per action). The Map tab is a free-form drawing canvas
+  (click-drag to sketch, a small color palette, a Clear button) for the player's own scratch
+  map; the engine never writes to it. The Debug tab shows exactly the most recent LLM
+  exchange — the full request text (system message plus entire `context_window` sent) and the
+  raw response text, overwritten (not appended) on every `llm_debug_updated` (`LLM_Core.py`'s
+  `fetch_from_llm`, fired alongside `llm_response_ready` on success, or with `"[ERROR] ..."`
+  as the response on a failed request) — a debugging aid, no persistence, distinct from the
+  history pane's already-narrated text.
 - **`Textual_Core.py`** — a parallel, headless-testable mirror of `GUI_Core`'s output, driven
   the same way via `user_input_submitted`. Not part of `LLDM.py`'s boot sequence; run standalone.
   Used by `test_unit.py` for pilot-driven UI tests.
@@ -263,19 +275,48 @@ itself.
 
 ## Items and movement as intents
 
-Looking at, taking, giving, trading, opening, closing, using, and moving between rooms all
-bypass the skill/dice system entirely — none of them warrant a roll.
+Looking at, taking, giving, trading, opening, closing, using, equipping, dropping, and moving
+between rooms all bypass the skill/dice system entirely — none of them warrant a roll.
 `NLPCore._detect_item_intent` recognizes phrase-level keywords (not bare words, to avoid
-misfiring on ordinary skill phrasing) for eight intents before skill matching runs:
-`examine`, `take`, `give`, `trade`, `open`, `close`, `use` (currently `drink`/`quaff`), and
+misfiring on ordinary skill phrasing) for eleven intents before skill matching runs:
+`examine`, `equip` (`equip`/`wear`/`wield`/`put on`), `unequip` (`unequip`/`take off` —
+deliberately not a broader `remove`, which would collide with items.toml's own `"dart trap"`/
+`"scythe trap"` names and finesse's `disarm`/`trap` keywords), `drop` (`drop`/`discard`/
+`put down`), `take`, `give`, `trade`, `open`, `close`, `use` (currently `drink`/`quaff`), and
 direction/movement phrases (`DIRECTION_PHRASES`) for `advance`/`retreat`/`move`. `open`/`close`/
 `advance`/`retreat`/`move` act on the current scene target or the whole scene, publishing
-`item_interaction_detected` with `item_name: None`; the other four run through
+`item_interaction_detected` with `item_name: None`; every other intent runs through
 `NLPCore.map_to_item`, an embedding match against every `supertype == "object"` entity's
 name/description (currency is checked first as a fixed synonym list — `gold`/`coin`/
 `currency`/`money` — returning the sentinel `"currency"`).
 
 `DMCore._on_item_interaction_detected` resolves with zero dice rolls:
+- `"equip"`/`"unequip"`/`"drop"` are checked first, since none of them care about
+  target_name/the locked gate below at all — same reasoning `"use"` already follows (gear has
+  to already be in the player's own inventory).
+  - `_resolve_equip_intent` (`InventoryMixin.equip_item`/`resolve_equip_slot`,
+    `DM_Inventory.py`) moves an item already in the player's own inventory into whichever
+    `[entity.equipped]` slot its own `equip_slot` field (items.toml — a single slot name, or a
+    list of candidates) resolves to for the player's own supertype/subtype (`rules.toml`'s
+    `[[equip_slot]]` table via `get_equip_slots`, `DM_Rules.py`). Denied `"not_present"` if
+    it's not in inventory at all, `"not_equippable"` if it declares no `equip_slot`,
+    `"cant_equip"` if none of its candidates are valid for the player. An item already sitting
+    in the chosen slot is displaced (still in inventory, just unmapped) rather than refusing —
+    the common "equip X" convention of implicitly swapping gear.
+  - `_resolve_unequip_intent` (`InventoryMixin.unequip_item`) only clears the slot mapping —
+    the item was always still in inventory either way — denied `"not_equipped"` if it isn't
+    equipped at all.
+  - `_resolve_drop_intent` unequips the item if needed, then moves it out of inventory onto
+    the current room/scene's own ground (`_current_ground_items` — a `"ground"` list kept on
+    the current room dict for a multi-room dungeon, or the flat scenario dict otherwise;
+    created empty on first use, never authored in TOML). **Known gap:** unlike
+    `scenario_entities`, nothing in `"ground"` is written to or restored from a save slot yet
+    (see "Saving and loading" below), so a drop made since the last save doesn't survive a
+    save/load round trip.
+  - A later `"examine"`/`"take"` aimed at an item sitting in `_current_ground_items()` is
+    resolved by `_resolve_ground_intent` — also checked ahead of target_name/the locked gate,
+    since a dropped item has no container guarding it — before falling through to the
+    ordinary target-based path below for everything else.
 - A locked container denies everything (`reason: "locked"`).
 - `item_name` equal to the current target's own name addresses the target itself, not
   something inside it.
@@ -301,7 +342,7 @@ name/description (currency is checked first as a fixed synonym list — `gold`/`
 
 Publishes `item_interaction_resolved` either way, with enough detail (`found`,
 `reason`/`description`/`container`/`amount`/`price`/`contents`/`healed`/`charges_left`/
-`replaced_with` as applicable) for narration to explain a miss or a success.
+`replaced_with`/`slot`/`replaced` as applicable) for narration to explain a miss or a success.
 
 ## Social and attitudes
 
@@ -334,15 +375,21 @@ raises `ValueError` if none is marked.
 - `action_not_understood` → `generate_clarification_response` — no roll to describe; just
   acknowledges the input didn't resolve to any action.
 - `item_interaction_resolved` → `generate_item_interaction_response` — covers examine/take/
-  give/trade/open/close/use, and room transitions (`intent == "move"`): a successful move
-  overwrites `self.scenario_description`/`self.scenario_characters` with the new room's own
-  data before building the prompt, the same way `generate_scene_intro` seeds them initially,
-  so later prompts in the new room stop citing the previous room's flavor text.
+  give/trade/open/close/use/equip/unequip/drop, and room transitions (`intent == "move"`): a
+  successful move overwrites `self.scenario_description`/`self.scenario_characters` with the
+  new room's own data before building the prompt, the same way `generate_scene_intro` seeds
+  them initially, so later prompts in the new room stop citing the previous room's flavor text.
 - `game_load_failed` → `generate_load_failed_response`.
 
 The scenario/room setting and character roster are re-injected into the system message on
 every request (not just the opening one), so narration stays grounded even after the intro
 scrolls out of the rolling 100-message `context_window`.
+
+Every `_queue_narration` call's background fetch also publishes `llm_debug_updated
+{"query", "response"}` alongside `llm_response_ready` — `"query"` is the exact outgoing
+request text (system message plus the entire `context_window` sent, role-labeled), `"response"`
+the raw text that came back (or `"[ERROR] ..."` on a failed request) — consumed only by
+`GUICore`'s Debug tab (see "GUI_Core.py" above), never stored in `context_window` itself.
 
 ## Saving and loading
 
@@ -447,6 +494,15 @@ full prompt.
 `LLMCore.__init__` takes an optional `rag_source_dir` so tests can point it at a directory
 with no PDFs (skips even the model load).
 
+`vectorize_pdf.py` is a standalone CLI that builds this same cache ahead of time, outside the
+app: `python vectorize_pdf.py [pdf_or_dir] [--query "..."]`, defaulting to `Settings/Fantasy/`.
+Reuses `RagIndex` directly (no chunking/embedding logic duplicated) via
+`RagIndex.wait_until_ready()`, which blocks on the same background thread `__init__` starts —
+the one hook `RagIndex` itself has no other reason to expose, since `query()` already handles
+"not ready yet" by returning no matches rather than blocking. A single `.pdf` path resolves to
+its own parent directory (`RagIndex` indexes a whole directory, not one file in isolation), so
+the cache this produces is exactly what a real run pointed at that directory would build.
+
 ## Textual mirror (headless testing)
 
 `Textual_Core.py` subscribes to the same events `GUI_Core` displays and adds its own `Input`
@@ -482,12 +538,14 @@ Practical constraints when touching this file:
   `super().setUp()` first) only when they need more than a bare fixture.
 - **`TestGUICore`** — drives `GUICore` directly (no `mainloop`, real `Tk` root withdrawn in
   `setUp`) rather than duplicating `Textual_Core`'s own coverage: tab/event-subscription setup,
-  input submission, the Party tab's tree rendering (per-member Equipment/Abilities/Inventory/
-  Conditions groups, empty-group placeholders, redraw-not-append on repeat events), the Map
-  tab's freehand drawing/clear, save/load status narration, the Notes tab's save/load round
-  trip, and the File menu's Save/Load popups (`simpledialog.askstring` mocked; the Load picker's
-  listbox/button driven directly via `.invoke()`, with `_list_save_slots` mocked so the tests
-  never depend on or touch whatever is actually saved under `Saves/`).
+  input submission, the Party tab's tree rendering (per-member Equipment/Skills/Abilities/
+  Inventory/Conditions groups, empty-group placeholders, every valid equip slot shown even
+  unfilled, redraw-not-append on repeat events), the Map tab's freehand drawing/clear, the
+  Debug tab overwriting (not appending) its Query/Response boxes on `llm_debug_updated`,
+  save/load status narration, the Notes tab's save/load round trip, and the File menu's
+  Save/Load popups (`simpledialog.askstring` mocked; the Load picker's listbox/button driven
+  directly via `.invoke()`, with `_list_save_slots` mocked so the tests never depend on or
+  touch whatever is actually saved under `Saves/`).
 - **`test_integration.py`** — every test needing a real, running LM Studio
   (`TestInnkeeperConversation`, `TestRagGroundedNarration`, `TestArenaCombatConversation`,
   `TestChestSagaConversation`, `TestChestTradeConversation`, `TestCryptDungeonConversation`,

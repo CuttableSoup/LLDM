@@ -65,7 +65,11 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         self.load_scenario_definition(scenario_name)
         self.load_scenario()
         self.event_bus.publish("log_info", "DMCore initialized.")
-        self.event_bus.publish("rules_loaded", {"skills": self.skills, "entities": self.entities})
+        self.event_bus.publish("rules_loaded", {
+            "skills": self.skills,
+            "entities": self.entities,
+            "equip_slots": self.rules.get("equip_slot", []),
+        })
         self.event_bus.publish("scenario_loaded", {
             # For a multi-room dungeon this narrates the *starting room* specifically (ex:
             # "Entrance Hall"), not just the dungeon's own overall blurb -- see
@@ -135,10 +139,13 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             conditions (a resolved action, an item interaction, a game load). Deliberately
             not "rules_loaded" -- NLPCore also rebuilds its sentence-transformer embeddings
             from that event, which would be far too expensive to redo after every single
-            action; "party_status_changed" carries the same "entities" shape but only
-            GUICore listens for it.
+            action; "party_status_changed" carries the same "entities"/"equip_slots" shape
+            but only GUICore listens for it.
         """
-        self.event_bus.publish("party_status_changed", {"entities": self.entities})
+        self.event_bus.publish("party_status_changed", {
+            "entities": self.entities,
+            "equip_slots": self.rules.get("equip_slot", []),
+        })
 
     def _resolve_action_skill(self, skill_name):
         """!
@@ -371,15 +378,16 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
     def _on_item_interaction_detected(self, data):
         """!
         @brief Event handler for a free-text item-interaction match (see NLPCore.map_to_item):
-            "examine"/"take"/"give"/"trade"/"use" against a named item, "open"/"close"
-            against the scene target itself, "advance"/"retreat" against the whole scene, or
-            "move" (with a "direction") to take a declared exit to a different room of the
-            current multi-room dungeon. Deliberately bypasses the whole skill/dice system --
-            none of these warrant a roll (see DM_Movement.py's module docstring for why
-            movement specifically is deterministic, not a check). Publishes
-            "item_interaction_resolved" either way, with enough detail for narration to
-            explain a miss (locked, closed, not present, not takeable, not usable, no exit,
-            wrong band, blocked by enemies, ...) rather than staying silent.
+            "examine"/"take"/"give"/"trade"/"use"/"equip"/"unequip"/"drop" against a named
+            item, "open"/"close" against the scene target itself, "advance"/"retreat"
+            against the whole scene, or "move" (with a "direction") to take a declared exit
+            to a different room of the current multi-room dungeon. Deliberately bypasses the
+            whole skill/dice system -- none of these warrant a roll (see DM_Movement.py's
+            module docstring for why movement specifically is deterministic, not a check).
+            Publishes "item_interaction_resolved" either way, with enough detail for
+            narration to explain a miss (locked, closed, not present, not takeable, not
+            usable, not equippable, cant_equip, not_equipped, no exit, wrong band, blocked by
+            enemies, ...) rather than staying silent.
 
             "take"/"trade" move an item from the target to the player; "give" moves one from
             the player to the target -- same transfer_item/transfer_currency primitives,
@@ -393,7 +401,13 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             _resolve_use_intent), never a target's -- NLPCore's own keyword set for it today
             is just "drink"/"quaff" (potions), but the intent itself is the generic "use" so
             a future item type (ex: a wand) only ever needs new keywords, not new handling
-            here.
+            here. "equip"/"unequip" (see _resolve_equip_intent/_resolve_unequip_intent) only
+            ever touch the player's own [entity.equipped] slot mapping, same "already in your
+            own inventory" restriction as "use"; "drop" (see _resolve_drop_intent) moves an
+            item out of inventory onto the current room/scene's own ground (see
+            _current_ground_items), where a later "take"/"examine" can reach it again --
+            checked ahead of the target/locked gate below, since a dropped item has no
+            container guarding it.
         @param data The item_interaction_detected payload from NLPCore
             ({intent, item_name, input, score}). "item_name" is None for "open"/"close",
             "advance"/"retreat", and "move", none of which act on a named item; "move" also
@@ -430,6 +444,22 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             # Also unrelated to target_name/the locked gate -- using something already in the
             # player's own inventory has nothing to do with any scene target at all.
             self._resolve_use_intent(item_name, resolved)
+            return
+
+        if intent == "equip":
+            self._resolve_equip_intent(item_name, resolved)
+            return
+
+        if intent == "unequip":
+            self._resolve_unequip_intent(item_name, resolved)
+            return
+
+        if intent == "drop":
+            self._resolve_drop_intent(item_name, resolved)
+            return
+
+        if intent in ("examine", "take") and item_name in self._current_ground_items():
+            self._resolve_ground_intent(intent, item_name, resolved)
             return
 
         if target_name and self.is_locked(target_name):
@@ -686,6 +716,104 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             True, healed=healed, remaining_hp=remaining_hp,
             charges_left=max(charges_left, 0), replaced_with=replaced_with,
         )
+
+    def _resolve_equip_intent(self, item_name, resolved):
+        """!
+        @brief Handles "equip" -- moving an item already in the player's own inventory into
+            whichever [entity.equipped] slot it's actually valid for (see
+            InventoryMixin.equip_item/DM_Rules.py's get_equip_slots). Deliberately never
+            reaches a target's inventory (same "take it first" rule _resolve_use_intent
+            already follows) -- gear has to be picked up before it can be worn.
+        @param item_name NLPCore's best-guess item match (map_to_item), or None.
+        @param resolved The item_interaction_resolved publisher closure from the caller.
+        """
+        player = self.entities.get(self.player_name, {})
+        if not item_name or item_name not in player.get("inventory", []):
+            resolved(False, reason="not_present")
+            return
+        if not self.entities.get(item_name, {}).get("equip_slot"):
+            resolved(False, reason="not_equippable")
+            return
+        slot, previous = self.equip_item(self.player_name, item_name)
+        if slot is None:
+            # equip_item only returns None here when resolve_equip_slot found no candidate
+            # slot valid for the player's own supertype/subtype -- the "not_equippable" case
+            # above already ruled out "declares no equip_slot at all".
+            resolved(False, reason="cant_equip")
+            return
+        resolved(True, slot=slot, replaced=previous)
+
+    def _resolve_unequip_intent(self, item_name, resolved):
+        """!
+        @brief Handles "unequip" -- clearing whichever [entity.equipped] slot item_name
+            currently occupies on the player (see InventoryMixin.unequip_item). The item
+            stays in inventory either way (an equipped item is always also listed there --
+            see entity_schema.toml's own [entity.equipped] comment), so this never calls
+            transfer_item.
+        @param item_name NLPCore's best-guess item match (map_to_item), or None.
+        @param resolved The item_interaction_resolved publisher closure from the caller.
+        """
+        slot = self.unequip_item(self.player_name, item_name) if item_name else None
+        if slot is None:
+            resolved(False, reason="not_equipped")
+            return
+        resolved(True, slot=slot)
+
+    def _current_ground_items(self):
+        """!
+        @brief The mutable list of item names dropped in the current room/scene -- a room's
+            own "ground" key for a multi-room dungeon (persists across a revisit the same way
+            a cleared trap does -- see DM_Rules.py's room-graph notes), or the flat
+            scenario's own "ground" key otherwise. Created empty on first use; never
+            authored in TOML. Known gap: unlike scenario_entities, nothing here is written to
+            or restored from a save slot yet (see DM_Persistence.py's "Saving and loading"),
+            so a drop made since the last save doesn't survive a save/load round trip.
+        @return The mutable ground list itself (not a copy) -- callers append/remove in place.
+        """
+        room = self._current_room()
+        scope = room if room is not None else self.scenario
+        return scope.setdefault("ground", [])
+
+    def _resolve_drop_intent(self, item_name, resolved):
+        """!
+        @brief Handles "drop" -- moving an item out of the player's own inventory (clearing
+            its own [entity.equipped] slot first, if it happened to be equipped) and onto the
+            current room/scene's own ground (see _current_ground_items), where a later
+            "take"/"examine" can reach it again -- unlike _resolve_use_intent's "use it up"
+            consumption, dropping an item never destroys it.
+        @param item_name NLPCore's best-guess item match (map_to_item), or None.
+        @param resolved The item_interaction_resolved publisher closure from the caller.
+        """
+        player = self.entities.get(self.player_name, {})
+        if not item_name or item_name not in player.get("inventory", []):
+            resolved(False, reason="not_present")
+            return
+        self.unequip_item(self.player_name, item_name)
+        player["inventory"].remove(item_name)
+        self._current_ground_items().append(item_name)
+        resolved(True)
+
+    def _resolve_ground_intent(self, intent, item_name, resolved):
+        """!
+        @brief Handles "examine"/"take" once item_name is already confirmed to be sitting on
+            the current room/scene's own ground (see _current_ground_items) -- checked ahead
+            of target_name/the locked gate in _on_item_interaction_detected, since a dropped
+            item has no container guarding it at all, unlike everything else "take"/"examine"
+            can reach. "examine" only describes; "take" moves it into the player's own
+            inventory the same way transfer_item would, just off the ground list instead of
+            another entity's own inventory.
+        @param intent "examine" or "take".
+        @param item_name The item entity confirmed present in _current_ground_items().
+        @param resolved The item_interaction_resolved publisher closure from the caller.
+        """
+        if intent == "examine":
+            description = self.entities.get(item_name, {}).get("description", "")
+            revealed = list(self.entities.get(item_name, {}).get("tags", [])) if self.is_identified(item_name) else []
+            resolved(True, description=description, revealed=revealed)
+            return
+        self._current_ground_items().remove(item_name)
+        self.entities.setdefault(self.player_name, {}).setdefault("inventory", []).append(item_name)
+        resolved(True)
 
     def _consume_charge(self, item_name):
         """!

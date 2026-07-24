@@ -280,6 +280,9 @@ class LLMCore:
                 "no_exit": "there's no way through in that direction",
                 "wrong_band": "the player isn't standing in the right spot to reach that way out",
                 "blocked_by_enemies": "something hostile is still standing in the way",
+                "not_equippable": f"{subject} isn't something that can be worn or wielded",
+                "cant_equip": f"{subject} has nothing on the player's own body it could go onto",
+                "not_equipped": f"{subject} isn't currently equipped at all",
             }.get(data.get("reason"), f"the player's attempt to {intent} {subject} doesn't apply here")
             prompt = (
                 f"The player tries to {intent} {subject} "
@@ -319,6 +322,26 @@ class LLMCore:
         elif intent == "close":
             prompt = (
                 f"The player closes {container}.\n"
+                f"Narrate this in 1-2 sentences as the Game Master."
+            )
+        elif intent == "equip":
+            # "replaced" is the item that previously occupied this slot, if any -- real state
+            # from DMCore._resolve_equip_intent, not invented, same rule every other roll/
+            # transfer-bearing narration here already follows.
+            replaced = data.get("replaced")
+            replaced_text = f", replacing \"{replaced}\"" if replaced else ""
+            prompt = (
+                f"The player equips \"{item_name}\"{replaced_text}.\n"
+                f"Narrate this in 1-2 sentences as the Game Master."
+            )
+        elif intent == "unequip":
+            prompt = (
+                f"The player unequips \"{item_name}\".\n"
+                f"Narrate this in 1-2 sentences as the Game Master."
+            )
+        elif intent == "drop":
+            prompt = (
+                f"The player drops \"{item_name}\".\n"
                 f"Narrate this in 1-2 sentences as the Game Master."
             )
         elif intent == "use":
@@ -471,26 +494,32 @@ class LLMCore:
         system_message = self._build_system_message(rag_query if rag_query else prompt)
 
         def fetch_from_llm():
+            messages = [{"role": "system", "content": system_message}] + self.context_window
             data = {
-                "messages": [{"role": "system", "content": system_message}] + self.context_window,
+                "messages": messages,
                 "temperature": 0.7,
                 "max_tokens": 4096
             }
+            # Exactly what's about to go over the wire, formatted for a human -- see
+            # display_llm_debug (GUI_Core.py)'s Debug tab, not narration itself.
+            query_text = "\n\n".join(f"[{m['role']}]\n{m['content']}" for m in messages)
             req = urllib.request.Request(
-                self.api_url, 
-                data=json.dumps(data).encode('utf-8'), 
+                self.api_url,
+                data=json.dumps(data).encode('utf-8'),
                 headers={'Content-Type': 'application/json'}
             )
-            
+
             try:
                 response = urllib.request.urlopen(req)
                 result = json.loads(response.read().decode('utf-8'))
                 llm_text = result['choices'][0]['message']['content']
                 self.context_window.append({"role": "assistant", "content": llm_text})
                 self.event_bus.publish("llm_response_ready", llm_text)
+                self.event_bus.publish("llm_debug_updated", {"query": query_text, "response": llm_text})
             except Exception as e:
                 self.event_bus.publish("log_error", f"LLM connection failed: {e}")
                 self.event_bus.publish("llm_response_ready", "System: Could not connect to the local LLM.")
+                self.event_bus.publish("llm_debug_updated", {"query": query_text, "response": f"[ERROR] {e}"})
 
         threading.Thread(target=fetch_from_llm, daemon=True).start()
 

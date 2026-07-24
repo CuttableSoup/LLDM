@@ -6,7 +6,7 @@ import tempfile
 import threading
 import tkinter as tk
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
@@ -253,6 +253,29 @@ class TestNlpConfidenceThreshold(unittest.TestCase):
         self.assertEqual(self.nlp_core._detect_item_intent("open the chest"), "open")
         self.assertEqual(self.nlp_core._detect_item_intent("close the chest"), "close")
         self.assertEqual(self.nlp_core._detect_item_intent("shut it"), "close")
+
+    def test_detect_item_intent_recognizes_equip_unequip_drop(self):
+        self.assertEqual(self.nlp_core._detect_item_intent("equip the longsword"), "equip")
+        self.assertEqual(self.nlp_core._detect_item_intent("wear the chain mail"), "equip")
+        self.assertEqual(self.nlp_core._detect_item_intent("wield the spear"), "equip")
+        self.assertEqual(self.nlp_core._detect_item_intent("put on the chain mail"), "equip")
+        self.assertEqual(self.nlp_core._detect_item_intent("unequip the longsword"), "unequip")
+        self.assertEqual(self.nlp_core._detect_item_intent("take off the chain mail"), "unequip")
+        self.assertEqual(self.nlp_core._detect_item_intent("drop the torch"), "drop")
+        self.assertEqual(self.nlp_core._detect_item_intent("discard the empty vial"), "drop")
+        self.assertEqual(self.nlp_core._detect_item_intent("put down the shield"), "drop")
+
+    def test_take_off_resolves_to_unequip_not_take(self):
+        # "take off" contains TAKE_KEYWORDS' own "take " substring -- UNEQUIP_KEYWORDS has to
+        # be checked first in _detect_item_intent or this would misfire as a plain "take".
+        self.assertEqual(self.nlp_core._detect_item_intent("take off the chain mail"), "unequip")
+
+    def test_remove_is_deliberately_not_an_unequip_keyword(self):
+        # A broader "remove "/"take off my " would have collided with items.toml's own
+        # "dart trap"/"scythe trap" entity names and finesse's "disarm"/"trap" keywords --
+        # "remove the trap" must stay free to reach a disarm skill check, not get swallowed
+        # here as an attempt to unequip something literally named "trap".
+        self.assertIsNone(self.nlp_core._detect_item_intent("remove the trap"))
 
     def test_trade_keywords_do_not_overlap_with_appraise(self):
         # skills.toml's "appraise" keywords: evaluation, commerce, investigation, value,
@@ -2203,6 +2226,111 @@ class TestUseItem(DMTestCase):
         self.assertEqual(result["healed"], 0)
 
 
+class TestEquipUnequipDrop(DMTestCase):
+    def setUp(self):
+        super().setUp()
+        self.resolved = self._capture("item_interaction_resolved")
+
+    def _interact(self, intent, item_name):
+        self.dm_core._on_item_interaction_detected({
+            "intent": intent, "item_name": item_name, "input": f"I {intent} the {item_name}",
+        })
+        return self.resolved[-1]
+
+    def test_resolve_equip_slot_picks_first_valid_candidate(self):
+        self.assertEqual(self.dm_core.resolve_equip_slot("gladstone", "longsword"), "rhand")
+
+    def test_resolve_equip_slot_returns_none_without_an_equip_slot_field(self):
+        self.assertIsNone(self.dm_core.resolve_equip_slot("gladstone", "health potion"))
+
+    def test_equip_moves_item_into_its_declared_slot(self):
+        self.dm_core.unequip_item("gladstone", "longsword")
+
+        result = self._interact("equip", "longsword")
+
+        self.assertTrue(result["found"])
+        self.assertEqual(result["slot"], "rhand")
+        self.assertIsNone(result["replaced"])
+        self.assertEqual(self.dm_core.entities["gladstone"]["equipped"]["rhand"], "longsword")
+        # Still in inventory too -- equipping never removes it from there.
+        self.assertIn("longsword", self.dm_core.entities["gladstone"]["inventory"])
+
+    def test_equip_displaces_whatever_was_already_in_that_slot(self):
+        # gladstone's rhand already holds the longsword (characters.toml) -- equipping a
+        # second rhand/lhand weapon should bump it, not refuse the action.
+        self.dm_core.entities["gladstone"]["inventory"].append("rusty shortsword")
+
+        result = self._interact("equip", "rusty shortsword")
+
+        self.assertTrue(result["found"])
+        self.assertEqual(result["slot"], "rhand")
+        self.assertEqual(result["replaced"], "longsword")
+        self.assertEqual(self.dm_core.entities["gladstone"]["equipped"]["rhand"], "rusty shortsword")
+        self.assertIn("longsword", self.dm_core.entities["gladstone"]["inventory"])
+        self.assertNotIn("longsword", self.dm_core.entities["gladstone"]["equipped"].values())
+
+    def test_equip_rejects_an_item_not_in_inventory(self):
+        result = self._interact("equip", "cursed dagger")
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "not_present")
+
+    def test_equip_rejects_an_item_with_no_equip_slot_field(self):
+        result = self._interact("equip", "health potion")
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "not_equippable")
+
+    def test_equip_rejects_a_slot_invalid_for_the_entity(self):
+        self.dm_core.entities["winged boots"] = {
+            "name": "winged boots", "supertype": "object", "subtype": "trinket",
+            "equip_slot": "wings",
+        }
+        self.dm_core.entities["gladstone"]["inventory"].append("winged boots")
+
+        result = self._interact("equip", "winged boots")
+
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "cant_equip")
+
+    def test_unequip_clears_the_slot_but_keeps_the_item_in_inventory(self):
+        result = self._interact("unequip", "longsword")
+
+        self.assertTrue(result["found"])
+        self.assertEqual(result["slot"], "rhand")
+        self.assertNotIn("rhand", self.dm_core.entities["gladstone"]["equipped"])
+        self.assertIn("longsword", self.dm_core.entities["gladstone"]["inventory"])
+
+    def test_unequip_rejects_something_not_currently_equipped(self):
+        result = self._interact("unequip", "health potion")
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "not_equipped")
+
+    def test_drop_moves_an_equipped_item_onto_the_ground_and_unequips_it(self):
+        result = self._interact("drop", "longsword")
+
+        self.assertTrue(result["found"])
+        self.assertNotIn("longsword", self.dm_core.entities["gladstone"]["inventory"])
+        self.assertNotIn("rhand", self.dm_core.entities["gladstone"]["equipped"])
+        self.assertIn("longsword", self.dm_core._current_ground_items())
+
+    def test_drop_rejects_an_item_not_in_inventory(self):
+        result = self._interact("drop", "cursed dagger")
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "not_present")
+
+    def test_dropped_item_can_be_examined_and_taken_back(self):
+        self._interact("drop", "longsword")
+
+        examine_result = self._interact("examine", "longsword")
+        self.assertTrue(examine_result["found"])
+        # Just looking doesn't remove it from the ground.
+        self.assertIn("longsword", self.dm_core._current_ground_items())
+
+        take_result = self._interact("take", "longsword")
+        self.assertTrue(take_result["found"])
+        self.assertNotIn("longsword", self.dm_core._current_ground_items())
+        self.assertIn("longsword", self.dm_core.entities["gladstone"]["inventory"])
+
+
 class TestInventoryTransfer(DMTestCase):
     scenario_name = "dungeon"
 
@@ -2421,6 +2549,49 @@ class TestAttitudePhrases(DMTestCase):
         self.dm_core._on_action_detected({"skill": "blades", "input": "I attack the wolf"})
 
         self.assertIn("Attitude toward gladstone:", round_events[0]["defender_details"])
+
+
+class TestEquipSlots(DMTestCase):
+    def test_get_equip_slots_prefers_subtype_match_over_supertype_only_entry(self):
+        self.dm_core.rules["equip_slot"] = [
+            {"supertype": "creature", "slots": ["default_slot"]},
+            {"supertype": "creature", "subtype": "humanoid", "slots": ["rhand", "chest"]},
+        ]
+        self.assertEqual(self.dm_core.get_equip_slots("gladstone"), ["rhand", "chest"])
+
+    def test_get_equip_slots_falls_back_to_a_supertype_only_entry(self):
+        self.dm_core.rules["equip_slot"] = [
+            {"supertype": "creature", "slots": ["default_slot"]},
+        ]
+        self.assertEqual(self.dm_core.get_equip_slots("gladstone"), ["default_slot"])
+
+    def test_get_equip_slots_returns_empty_list_without_a_matching_rule(self):
+        self.dm_core.rules["equip_slot"] = []
+        self.assertEqual(self.dm_core.get_equip_slots("gladstone"), [])
+
+    def test_real_rules_toml_grants_gladstone_the_humanoid_slot_set(self):
+        # gladstone (creature/humanoid) against the real, shipped rules.toml -- regression
+        # guard for the actual [[equip_slot]] data, not just the matching logic above.
+        self.assertEqual(
+            self.dm_core.get_equip_slots("gladstone"),
+            ["head", "neck", "chest", "back", "rhand", "lhand", "ring", "feet"],
+        )
+
+    def test_validate_equipped_slots_logs_an_error_for_a_slot_the_rules_dont_allow(self):
+        errors = self._capture("log_error")
+        self.dm_core.entities["gladstone"]["equipped"]["tail"] = "banner"
+
+        self.dm_core._validate_equipped_slots()
+
+        self.assertTrue(any("tail" in message for message in errors))
+
+    def test_validate_equipped_slots_stays_quiet_for_the_real_shipped_data(self):
+        # gladstone's own [entity.equipped] (rhand/chest) is already valid for creature/
+        # humanoid in the real rules.toml -- a regression guard against rules.toml and
+        # characters.toml drifting out of sync with each other.
+        errors = self._capture("log_error")
+        self.dm_core._validate_equipped_slots()
+        self.assertEqual(errors, [])
 
 
 class TestSaveLoad(DMTestCase):
@@ -2940,6 +3111,45 @@ class TestLLMSaveLoad(LLMTestCase):
         self.assertEqual(self.llm_core.context_window, [{"role": "user", "content": "before save"}])
 
 
+class TestLlmDebugEvent(LLMTestCase):
+    """!
+    @brief fetch_from_llm's own network path (LLM_Core.py's _queue_narration) never runs for
+        real in this offline suite -- threading.Thread is patched so its target is captured
+        and invoked directly/synchronously instead of on a real background thread, with
+        urllib.request.urlopen mocked in place of a real LM Studio connection."""
+
+    def _run_fetch(self, prompt, urlopen_result=None, urlopen_side_effect=None):
+        with patch("threading.Thread") as mock_thread, \
+             patch("urllib.request.urlopen", return_value=urlopen_result, side_effect=urlopen_side_effect):
+            self.llm_core._queue_narration(prompt)
+            mock_thread.call_args.kwargs["target"]()
+
+    def test_successful_request_publishes_the_full_query_and_raw_response(self):
+        debug_events = []
+        self.event_bus.subscribe("llm_debug_updated", debug_events.append)
+        fake_response = MagicMock()
+        fake_response.read.return_value = json.dumps(
+            {"choices": [{"message": {"content": "The wolf snarls."}}]}
+        ).encode("utf-8")
+
+        self._run_fetch("The wolf attacks.", urlopen_result=fake_response)
+
+        self.assertEqual(len(debug_events), 1)
+        self.assertIn("[system]", debug_events[0]["query"])
+        self.assertIn("The wolf attacks.", debug_events[0]["query"])
+        self.assertEqual(debug_events[0]["response"], "The wolf snarls.")
+
+    def test_failed_request_publishes_the_error_as_the_response(self):
+        debug_events = []
+        self.event_bus.subscribe("llm_debug_updated", debug_events.append)
+
+        self._run_fetch("The wolf attacks.", urlopen_side_effect=OSError("connection refused"))
+
+        self.assertEqual(len(debug_events), 1)
+        self.assertIn("The wolf attacks.", debug_events[0]["query"])
+        self.assertIn("connection refused", debug_events[0]["response"])
+
+
 class FakeRagIndex:
     """!
     @brief Duck-typed stand-in for LLM_Rag.RagIndex's query() method, so LLMCore-level tests
@@ -3125,6 +3335,17 @@ class TestRagIndex(unittest.TestCase):
         results = self.index.query("How do I bake a chocolate cake", confidence_threshold=0.6)
         self.assertEqual(results, [])
 
+    def test_wait_until_ready_blocks_on_the_real_background_thread(self):
+        # Unlike every other test in this class, this goes through the real __init__ (not
+        # RagIndex.__new__) since wait_until_ready joins the actual thread __init__ starts --
+        # pointed at an empty directory so _build returns almost immediately (no PDFs found,
+        # no model load needed) rather than waiting on a real extract/embed pass.
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            index = RagIndex(EventBus(), source_dir=tmp_dir, cache_dir=os.path.join(tmp_dir, ".cache"))
+            result = index.wait_until_ready(timeout=30)
+            self.assertFalse(result)  # no PDFs in tmp_dir -- build ran, found nothing, never became ready
+            self.assertFalse(index.ready)
+
 
 class TestGUICore(unittest.TestCase):
     """GUI_Core.py's Tkinter surface, exercised directly (no mainloop) -- see Textual_Core.py's
@@ -3147,15 +3368,30 @@ class TestGUICore(unittest.TestCase):
 
     def test_init_builds_the_expected_tabs_and_subscribes_to_every_event(self):
         tab_texts = [self.gui.notebook.tab(t, "text") for t in self.gui.notebook.tabs()]
-        self.assertEqual(tab_texts, ["Party", "Notes", "Map"])
-        for event_name in ("llm_response_ready", "rules_loaded", "party_status_changed",
-                           "game_saved", "game_loaded", "game_load_failed",
-                           "save_requested", "load_requested"):
+        self.assertEqual(tab_texts, ["Party", "Notes", "Map", "Debug"])
+        for event_name in ("llm_response_ready", "llm_debug_updated", "rules_loaded",
+                           "party_status_changed", "game_saved", "game_loaded",
+                           "game_load_failed", "save_requested", "load_requested"):
             self.assertIn(event_name, self.event_bus.subscribers)
 
     def test_display_llm_response_appends_to_history(self):
         self.event_bus.publish("llm_response_ready", "The wolf snarls.")
         self.assertIn("The wolf snarls.", self.gui.history_text.get("1.0", tk.END))
+
+    def test_display_llm_debug_shows_the_most_recent_query_and_response(self):
+        self.event_bus.publish("llm_debug_updated", {
+            "query": "[system]\nYou are the Game Master.\n\n[user]\nThe wolf bites.",
+            "response": "The wolf's fangs sink in.",
+        })
+        self.assertIn("[system]\nYou are the Game Master.", self.gui.debug_query_text.get("1.0", tk.END))
+        self.assertIn("The wolf's fangs sink in.", self.gui.debug_response_text.get("1.0", tk.END))
+
+        # A later exchange replaces the boxes rather than appending to them -- "most recent"
+        # only, no running history kept in the Debug tab.
+        self.event_bus.publish("llm_debug_updated", {"query": "second query", "response": "second response"})
+        self.assertNotIn("wolf", self.gui.debug_query_text.get("1.0", tk.END))
+        self.assertIn("second query", self.gui.debug_query_text.get("1.0", tk.END))
+        self.assertIn("second response", self.gui.debug_response_text.get("1.0", tk.END))
 
     def test_submit_input_publishes_echoes_and_clears_the_entry(self):
         submitted = []
@@ -3177,11 +3413,12 @@ class TestGUICore(unittest.TestCase):
 
         self.assertEqual(submitted, [])
 
-    def test_display_party_status_renders_equipment_abilities_inventory_conditions(self):
+    def test_display_party_status_renders_equipment_skills_abilities_inventory_conditions(self):
         self.event_bus.publish("rules_loaded", {"entities": {
             "gladstone": {
                 "is_player": True, "name": "Gladstone", "hp": 30, "max_hp": 36,
                 "equipped": {"rhand": "longsword"}, "abilities": ["cleave"],
+                "skills": {"blades": {"dice": 5, "pips": 0}, "athletics": {"dice": 2, "pips": 2}},
                 "inventory": ["torch", "torch"], "active_conditions": {"wounded": {}},
             },
             "thane": {"is_party": True, "name": "Thane", "hp": 10, "max_hp": 10},
@@ -3194,17 +3431,42 @@ class TestGUICore(unittest.TestCase):
 
         groups = self.gui.party_tree.get_children(members[0])
         group_texts = [self.gui.party_tree.item(g, "text") for g in groups]
-        self.assertEqual(group_texts, ["Equipment", "Abilities", "Inventory", "Conditions"])
+        self.assertEqual(group_texts, ["Equipment", "Skills", "Abilities", "Inventory", "Conditions"])
 
-        equipment, abilities, inventory, conditions = groups
+        equipment, skills, abilities, inventory, conditions = groups
 
         def child_texts(node):
             return [self.gui.party_tree.item(c, "text") for c in self.gui.party_tree.get_children(node)]
 
         self.assertEqual(child_texts(equipment), ["rhand: longsword"])
+        self.assertEqual(child_texts(skills), ["blades: 5D", "athletics: 2D+2"])
         self.assertEqual(child_texts(abilities), ["cleave"])
         self.assertEqual(child_texts(inventory), ["torch x2"])
         self.assertEqual(child_texts(conditions), ["wounded"])
+
+    def test_display_party_status_lists_every_valid_equip_slot_even_when_empty(self):
+        # equip_slots (the rules_loaded/party_status_changed payload's own copy of rules.
+        # toml's [[equip_slot]] table) drives which slots show up at all -- an unfilled one
+        # (here, "chest") must still render as "(empty)" rather than being omitted, and a
+        # slot the entity actually has equipped that isn't on the valid list ("tail", a
+        # stand-in for a data mismatch) is still shown, just appended after the valid ones.
+        self.event_bus.publish("rules_loaded", {
+            "entities": {
+                "gladstone": {
+                    "is_player": True, "name": "Gladstone", "hp": 36, "max_hp": 36,
+                    "supertype": "creature", "subtype": "humanoid",
+                    "equipped": {"rhand": "longsword", "tail": "banner"},
+                },
+            },
+            "equip_slots": [
+                {"supertype": "creature", "subtype": "humanoid", "slots": ["rhand", "chest"]},
+            ],
+        })
+
+        member = self.gui.party_tree.get_children()[0]
+        equipment = self.gui.party_tree.get_children(member)[0]
+        child_texts = [self.gui.party_tree.item(c, "text") for c in self.gui.party_tree.get_children(equipment)]
+        self.assertEqual(child_texts, ["rhand: longsword", "chest: (empty)", "tail: banner"])
 
     def test_display_party_status_shows_none_placeholders_for_empty_groups(self):
         self.event_bus.publish("rules_loaded", {"entities": {

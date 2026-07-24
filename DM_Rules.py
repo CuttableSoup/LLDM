@@ -97,6 +97,59 @@ class RulesMixin(DMCoreProtocol):
                 except Exception as e:
                     self.event_bus.publish("log_error", f"Error loading {filename}: {e}")
 
+        self._validate_equipped_slots()
+
+    def get_equip_slots(self, entity_name):
+        """!
+        @brief Resolves the valid [entity.equipped] slot names for entity_name, from
+            rules.toml's own [[equip_slot]] table: a "subtype"-specific entry for this
+            entity's own supertype beats a supertype-only entry (no "subtype" key at all),
+            same override precedence as get_attitude's name/supertype/default lookup.
+        @param entity_name The name of the entity (template or live instance) to look up.
+        @return The list of valid slot names, or [] if no [[equip_slot]] entry matches this
+                entity's own supertype/subtype at all.
+        """
+        entity = self.entities.get(entity_name, {})
+        supertype = entity.get("supertype")
+        subtype = entity.get("subtype")
+
+        supertype_only_slots = None
+        for rule in self.rules.get("equip_slot", []):
+            if rule.get("supertype") != supertype:
+                continue
+            if "subtype" in rule:
+                if rule.get("subtype") == subtype:
+                    return list(rule.get("slots", []))
+            elif supertype_only_slots is None:
+                supertype_only_slots = list(rule.get("slots", []))
+
+        return supertype_only_slots if supertype_only_slots is not None else []
+
+    def _validate_equipped_slots(self):
+        """!
+        @brief Cross-checks every loaded entity's own [entity.equipped] slot keys against
+            get_equip_slots for its supertype/subtype, logging an error for any slot name
+            not on that list (ex: a "tail" slot on a humanoid). Called once load_rules has
+            finished reading every *.toml file, since an entity template (characters.toml)
+            and rules.toml's own [[equip_slot]] table can load in either order within the
+            same directory scan. Doesn't block loading -- same "malformed data degrades
+            quietly" convention as load_rules' own per-file try/except -- just surfaces the
+            mismatch instead of DM_Combat.py silently reading a slot key nothing declared.
+        """
+        for name, entity in self.entities.items():
+            equipped = entity.get("equipped")
+            if not equipped:
+                continue
+            valid_slots = self.get_equip_slots(name)
+            for slot in equipped:
+                if slot not in valid_slots:
+                    self.event_bus.publish(
+                        "log_error",
+                        f"Entity '{name}' equips slot '{slot}', not valid for "
+                        f"supertype/subtype {entity.get('supertype')}/{entity.get('subtype')} "
+                        f"(valid slots: {valid_slots or 'none'})."
+                    )
+
     def _resolve_player_name(self):
         """!
         @brief Finds the one entity template marked `is_player = true` (ex: characters.toml's

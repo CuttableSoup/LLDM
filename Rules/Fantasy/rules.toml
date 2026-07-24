@@ -192,3 +192,31 @@ confidence = "feels utterly fearless around them"
 respect = "regards them with total reverence"
 obligation = "feels they owe them a debt that can never be repaid"
 intimacy = "is utterly infatuated with them"
+
+# Which [entity.equipped] slot names are valid for a given kind of entity -- entity_schema.
+# toml's own [entity.equipped] comment notes slot names are freeform strings today (nothing in
+# DM_*.py validates them against anything); this table is reference data for that validation to
+# read from later, not itself enforced by any code yet. Matched the same way get_attitude's
+# "name"/"supertype" overrides are: a "subtype" entry beats a "supertype"-only entry for the
+# same supertype, checked in declaration order. An animal/elemental has no hands or worn
+# clothing, so it lists no slots at all; an undead humanoid keeps just enough to wield the
+# weapon/armor it died in.
+[[equip_slot]]
+supertype = "creature"
+subtype = "humanoid"
+slots = [ "head", "neck", "chest", "back", "rhand", "lhand", "ring", "feet" ]
+
+[[equip_slot]]
+supertype = "creature"
+subtype = "undead"
+slots = [ "rhand", "chest" ]
+
+[[equip_slot]]
+supertype = "creature"
+subtype = "animal"
+slots = []
+
+[[equip_slot]]
+supertype = "creature"
+subtype = "elemental"
+slots = []

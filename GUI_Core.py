@@ -84,6 +84,22 @@ class GUICore:
 
         self.notebook.add(self.map_tab, text="Map")
 
+        # Debug: exactly what went out in the most recent LLM request and what came back --
+        # updated on "llm_debug_updated" (LLM_Core.py's fetch_from_llm), which fires
+        # alongside "llm_response_ready" but carries the full request text (system message +
+        # entire context_window sent), not just the narration text shown in the history pane.
+        self.debug_tab = tk.Frame(self.notebook)
+
+        tk.Label(self.debug_tab, text="Query").pack(fill=tk.X, anchor=tk.W)
+        self.debug_query_text = tk.Text(self.debug_tab, wrap=tk.WORD, state=tk.DISABLED, height=1)
+        self.debug_query_text.pack(fill=tk.BOTH, expand=True)
+
+        tk.Label(self.debug_tab, text="Response").pack(fill=tk.X, anchor=tk.W)
+        self.debug_response_text = tk.Text(self.debug_tab, wrap=tk.WORD, state=tk.DISABLED, height=1)
+        self.debug_response_text.pack(fill=tk.BOTH, expand=True)
+
+        self.notebook.add(self.debug_tab, text="Debug")
+
         self.input_frame = tk.Frame(self.root)
         self.input_frame.pack(fill=tk.X, side=tk.BOTTOM, padx=5, pady=5)
 
@@ -97,6 +113,7 @@ class GUICore:
         self.user_input = ""
         self.event_bus.publish("log_info", "GUICore initialized.")
         self.event_bus.subscribe("llm_response_ready", self.display_llm_response)
+        self.event_bus.subscribe("llm_debug_updated", self.display_llm_debug)
         self.event_bus.subscribe("rules_loaded", self.display_party_status)
         # "party_status_changed" is DMCore's cheap re-publish after anything that can change
         # a party member's HP/equipment/inventory/conditions (see DM_Core.py's
@@ -134,6 +151,22 @@ class GUICore:
 
     def display_llm_response(self, text):
         self.append_to_history(f"{text}\n\n")
+
+    def display_llm_debug(self, data):
+        """!
+        @brief Replaces the Debug tab's Query/Response boxes with the most recent LLM
+            exchange -- overwritten each time ("most recent" only, no history kept), same
+            redraw-not-append rule display_party_status follows for its own tree.
+        @param data The "llm_debug_updated" payload ({"query": ..., "response": ...}) --
+            "query" is the full request text (system message + entire context_window sent),
+            "response" is the raw text that came back, or "[ERROR] ..." if the request failed.
+        """
+        for widget, text in ((self.debug_query_text, data.get("query", "")),
+                              (self.debug_response_text, data.get("response", ""))):
+            widget.config(state=tk.NORMAL)
+            widget.delete("1.0", tk.END)
+            widget.insert(tk.END, text)
+            widget.config(state=tk.DISABLED)
 
     def request_save(self):
         """!
@@ -209,6 +242,31 @@ class GUICore:
     def display_game_load_failed(self, data):
         self.append_to_history(f"[System] No save named '{data.get('slot')}' found.\n\n")
 
+    def _resolve_equip_slots(self, entity, equip_slot_rules):
+        """!
+        @brief Mirrors DMCore.get_equip_slots' own override precedence (DM_Rules.py) so the
+            Party tab can list every valid [entity.equipped] slot for a member -- including
+            one currently unfilled -- without DMCore needing to publish a pre-resolved list
+            per entity. A "subtype"-specific rule for this entity's own supertype beats a
+            supertype-only rule (no "subtype" key at all).
+        @param entity The party member's own entity dict (reads "supertype"/"subtype").
+        @param equip_slot_rules The "equip_slots" list from the rules_loaded/
+            party_status_changed payload (rules.toml's own [[equip_slot]] table).
+        @return The list of valid slot names, or [] if no rule matches this entity at all.
+        """
+        supertype = entity.get("supertype")
+        subtype = entity.get("subtype")
+        supertype_only_slots = None
+        for rule in equip_slot_rules:
+            if rule.get("supertype") != supertype:
+                continue
+            if "subtype" in rule:
+                if rule.get("subtype") == subtype:
+                    return list(rule.get("slots", []))
+            elif supertype_only_slots is None:
+                supertype_only_slots = list(rule.get("slots", []))
+        return supertype_only_slots if supertype_only_slots is not None else []
+
     def display_party_status(self, rules_data):
         """!
         @brief Rebuilds the Party tab from "rules_loaded" (boot/new game) or
@@ -216,15 +274,17 @@ class GUICore:
             state -- see DM_Core.py's _publish_party_status): one collapsible tree node per
             party member -- an entity with is_player = true (the player) or is_party = true
             (an ally like thane, see entity_schema.toml's is_party) -- labeled with its
-            current/max HP and each expanding into its own Equipment/Abilities/Inventory/
-            Conditions groups.
-        @param rules_data The event payload ({"entities": ...}, plus "skills" for
-            "rules_loaded" specifically -- unused here).
+            current/max HP and each expanding into its own Equipment/Skills/Abilities/
+            Inventory/Conditions groups.
+        @param rules_data The event payload ({"entities": ..., "equip_slots": ...}, plus
+            "skills" for "rules_loaded" specifically -- the skill catalog, unused here since
+            each member's own skills live on the entity itself).
         """
         self.event_bus.publish("log_info", "Displaying party status.")
         self.party_tree.delete(*self.party_tree.get_children())
 
         entities = rules_data.get("entities", {})
+        equip_slot_rules = rules_data.get("equip_slots", [])
         for entity_key, entity in entities.items():
             if not (entity.get("is_player") or entity.get("is_party")):
                 continue
@@ -235,10 +295,27 @@ class GUICore:
 
             equipment_node = self.party_tree.insert(member, tk.END, text="Equipment", open=False)
             equipped = entity.get("equipped", {}) or {}
-            for slot, item in equipped.items():
-                self.party_tree.insert(equipment_node, tk.END, text=f"{slot}: {item}")
-            if not equipped:
+            # Every valid slot for this entity's own supertype/subtype is listed, filled or
+            # not, so an empty ring/back slot is visible rather than just absent; a slot the
+            # entity has equipped but that isn't actually valid (a data mismatch
+            # _validate_equipped_slots already logs at load time) is still shown, appended
+            # after the valid ones, so nothing equipped is silently hidden.
+            valid_slots = self._resolve_equip_slots(entity, equip_slot_rules)
+            slot_order = valid_slots + [slot for slot in equipped if slot not in valid_slots]
+            for slot in slot_order:
+                self.party_tree.insert(equipment_node, tk.END, text=f"{slot}: {equipped.get(slot, '(empty)')}")
+            if not slot_order:
                 self.party_tree.insert(equipment_node, tk.END, text="(none)")
+
+            skills_node = self.party_tree.insert(member, tk.END, text="Skills", open=False)
+            skills = entity.get("skills", {}) or {}
+            for skill_name, stats in skills.items():
+                dice = stats.get("dice", 0)
+                pips = stats.get("pips", 0)
+                rating = f"{dice}D" + (f"+{pips}" if pips else "")
+                self.party_tree.insert(skills_node, tk.END, text=f"{skill_name}: {rating}")
+            if not skills:
+                self.party_tree.insert(skills_node, tk.END, text="(none)")
 
             abilities_node = self.party_tree.insert(member, tk.END, text="Abilities", open=False)
             abilities = entity.get("abilities", []) or []
