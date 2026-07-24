@@ -185,6 +185,9 @@ class PersistenceMixin(DMCoreProtocol):
             "description": self._current_scene_description(),
             "characters": self._describe_scenario_characters(),
         })
+        # Restores GUICore's Party tab to the resumed save's own state -- see
+        # _publish_party_status (DM_Core.py) for why this isn't just "rules_loaded" again.
+        self._publish_party_status()
 
     def _on_save_requested(self, data):
         """!

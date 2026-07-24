@@ -110,6 +110,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         item_result = self._try_item_test_action(explicit_target, skill_name, data.get("input"))
         if item_result is not None:
             self.event_bus.publish("action_resolved", item_result)
+            self._publish_party_status()
             return
 
         self._apply_target_redirect(explicit_target)
@@ -125,6 +126,19 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             self.event_bus.publish("round_resolved", result)
         else:
             self.event_bus.publish("action_resolved", result)
+        self._publish_party_status()
+
+    def _publish_party_status(self):
+        """!
+        @brief Re-publishes a fresh entities snapshot for GUICore's Party tab to redraw from,
+            after anything that can change a party member's HP/equipment/inventory/
+            conditions (a resolved action, an item interaction, a game load). Deliberately
+            not "rules_loaded" -- NLPCore also rebuilds its sentence-transformer embeddings
+            from that event, which would be far too expensive to redo after every single
+            action; "party_status_changed" carries the same "entities" shape but only
+            GUICore listens for it.
+        """
+        self.event_bus.publish("party_status_changed", {"entities": self.entities})
 
     def _resolve_action_skill(self, skill_name):
         """!
@@ -394,6 +408,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             self.event_bus.publish("item_interaction_resolved", {
                 "intent": intent, "item_name": item_name, "input": input_text, "found": found, **extra,
             })
+            self._publish_party_status()
 
         if intent in ("advance", "retreat"):
             # Unlike everything else this handler resolves, this isn't about target_name/

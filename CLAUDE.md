@@ -36,12 +36,16 @@ order: `NLPCore`, `LLMCore`, `GUICore`, then `DMCore` last (it publishes `rules_
   dropdown File menu (Save.../Load...) on the window's menu bar in place of always-visible
   save controls. Save opens a popup asking for a slot name; Load opens a popup listing every
   existing slot (a subdirectory of `Saves/`) to pick from. History (via `llm_response_ready`)
-  and Party (via `rules_loaded`) are wired to real data; Notes has a display method but
-  nothing publishes to it yet (see "Known gaps"). The Party tab is a `ttk.Treeview`: one
+  and Party are wired to real data; Notes is a free-typed scratchpad persisted through its own
+  save/load slice (see "Saving and loading" below). The Party tab is a `ttk.Treeview`: one
   collapsible node per party member — an entity with `is_player = true` (the player) or
   `is_party = true` (an ally, ex: `characters.toml`'s `thane` — see `entity_schema.toml`'s
-  `is_party`) — each expanding into its own Equipment/Inventory/Conditions groups. The Map
-  tab is a free-form drawing canvas (click-drag to sketch, a small color palette, a Clear
+  `is_party`) — labeled with its current/max HP and each expanding into its own Equipment/
+  Abilities/Inventory/Conditions groups. It redraws on `rules_loaded` (boot/new game) and on
+  `party_status_changed` (DMCore's cheap post-action re-publish of `self.entities` — see
+  "Action resolution pipeline" below — kept separate from `rules_loaded` since NLPCore also
+  rebuilds its embeddings from that event, which would be far too expensive per action). The
+  Map tab is a free-form drawing canvas (click-drag to sketch, a small color palette, a Clear
   button) for the player's own scratch map; the engine never writes to it.
 - **`Textual_Core.py`** — a parallel, headless-testable mirror of `GUI_Core`'s output, driven
   the same way via `user_input_submitted`. Not part of `LLDM.py`'s boot sequence; run standalone.
@@ -52,7 +56,11 @@ order: `NLPCore`, `LLMCore`, `GUICore`, then `DMCore` last (it publishes `rules_
 
 `user_input_submitted` → `NLPCore` → `action_detected {skill, score, input, target?}` →
 `DMCore` resolves it → `round_resolved` (combat) or `action_resolved` (no combat) → `LLMCore`
-narrates → `llm_response_ready` → GUI/Textual display it.
+narrates → `llm_response_ready` → GUI/Textual display it. `_on_action_detected` and
+`_on_item_interaction_detected` (see "Items and movement as intents" below) both also call
+`_publish_party_status`, which re-publishes `party_status_changed {"entities": self.entities}`
+so `GUICore`'s Party tab redraws after anything that could have changed a party member's own
+HP/equipment/inventory/conditions.
 
 Inside `DMCore._on_action_detected`:
 1. Resolves the acting skill's ability (weapon/spell/technique/innate) via
@@ -338,13 +346,15 @@ scrolls out of the rolling 100-message `context_window`.
 
 ## Saving and loading
 
-Two sibling JSON files per slot, `Saves/<slot>/dm_state.json` and `Saves/<slot>/llm_state.json`,
-written/read independently by `DMCore` and `LLMCore`. `EventBus` has no request/response
-mechanism, so each core owns and persists its own slice rather than sharing one file.
+Three sibling JSON files per slot -- `Saves/<slot>/dm_state.json`, `Saves/<slot>/llm_state.json`,
+`Saves/<slot>/gui_state.json` -- written/read independently by `DMCore`, `LLMCore`, and
+`GUICore`. `EventBus` has no request/response mechanism, so each core owns and persists its
+own slice rather than sharing one file.
 
 **Trigger:** `save_requested`/`load_requested {"slot": slot_name}`, published either by
 `NLPCore._detect_save_load_intent` (prefix-stripping on raw input, checked before item/skill
-matching) or by the GUI/Textual slot-name field and Save/Load buttons.
+matching), by `GUICore`'s File menu (Save.../Load... popups -- see "GUI_Core.py" above), or by
+`Textual_Core`'s slot-name field and Save/Load buttons.
 
 `DMCore.save_game` writes a diff from a fresh instantiation: `scenario_key`, `player_name`,
 `round_number`, `current_room_key`, `scenario_entities`, and per-instance
@@ -352,10 +362,15 @@ matching) or by the GUI/Textual slot-name field and Save/Load buttons.
 TOML), then the same scenario-load path `__init__` uses, then overlays each saved instance's
 mutable fields onto the freshly-instanced entities; a saved instance with no post-reload match
 is skipped. Publishes `game_loaded` on success (not `scenario_loaded`, which would re-narrate
-an opening scene) or `game_load_failed {"slot", "reason"}` on failure.
+an opening scene) or `game_load_failed {"slot", "reason"}` on failure, then re-publishes
+`party_status_changed` (see "Action resolution pipeline" below) so a resumed save's Party tab
+isn't left showing the previous game's state.
 
 `LLMCore.save_game`/`load_game` persist/restore `context_window` plus scenario name/
 description/characters; loading is silent (no new narration queued).
+
+`GUICore.save_game`/`load_game` persist/restore the Notes tab's free text; loading is silent,
+same as `LLMCore`'s.
 
 Slot names are run through `os.path.basename` before use, so a slot can't escape `Saves/`.
 
@@ -475,9 +490,6 @@ offline subset only.
 - `NLP_Core.py` — a keyword-driven skill match can still dominate an unrelated whole-sentence
   embedding match (ex: "identify the dagger" resolves to the wrong skill); no multi-instance
   disambiguation (ex: "the wounded wolf" vs. "the other wolf").
-- `GUI_Core.py` — the Notes tab has a display method but nothing publishes to it yet. The
-  Party tab only refreshes on `rules_loaded` (boot/new game); `game_loaded` doesn't republish
-  it, so a loaded save's party panel can go stale until the next `rules_loaded`.
 
 ## Extended goals
 
