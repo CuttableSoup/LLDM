@@ -322,6 +322,14 @@ class RulesMixin(DMCoreProtocol):
         if self.rooms:
             self._populate_room(self.current_room_key)
 
+        # Snaps thane/anne/etc. into formation around wherever the player actually starts --
+        # a party member's own TOML-authored "band" is a starting guess, not authoritative,
+        # since _apply_party_formation always wins on the very next player move anyway (see
+        # DM_Movement.py); doing it here too means a scenario/room that starts the player
+        # somewhere other than band 1 doesn't leave the party visibly out of formation before
+        # anyone's taken a single action.
+        self._apply_party_formation()
+
         # Keeps current_target in sync with scenario_entities on every load -- covers
         # __init__, load_game, and ad-hoc test scenarios that reassign self.scenario directly
         # and call load_scenario() again (see CLAUDE.md's "Scenario instancing").
@@ -339,7 +347,11 @@ class RulesMixin(DMCoreProtocol):
             _populate_room) -- HP, inventory, currency, and conditions carry over across
             rooms exactly as combat/looting left them. A room visited before is restored
             from visited_rooms rather than re-instanced (see _populate_room); a room visited
-            for the first time is instanced fresh, same as any scenario load.
+            for the first time is instanced fresh, same as any scenario load. The party
+            (thane/anne/etc.) follows the player through the doorway too --
+            _apply_party_formation snaps them back into formation around the player's own
+            arrival_band, rather than leaving them stranded at whatever band they happened to
+            occupy in the room just left.
         @param room_key The target room's own "key", as named in the exit that's moving here.
         @param arrival_band Where the player ends up in the new room -- the exit's own
             "arrival_band" (defaulting to 1, "just past the doorway", if the exit doesn't
@@ -354,6 +366,7 @@ class RulesMixin(DMCoreProtocol):
         self.current_room_key = room_key
         self.entities[self.player_name]["band"] = arrival_band
         self._populate_room(room_key)
+        self._apply_party_formation()
 
         self.current_target = self._choose_combat_target()
         self.event_bus.publish("log_info", f"Entered room '{room_key}': {self.scenario_entities}")

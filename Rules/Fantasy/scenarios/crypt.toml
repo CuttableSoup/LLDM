@@ -14,7 +14,8 @@ description = "A crypt long since swallowed by the earth, its passages choked wi
 start_room = "entrance"
 entities = [
     { name = "gladstone", band = 1 },
-    { name = "thane", band = 1 }
+    { name = "thane", band = 1 },
+    { name = "anne", band = 1 }
 ]
 
 [[room]]

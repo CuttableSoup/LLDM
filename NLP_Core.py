@@ -59,6 +59,20 @@ CLOSE_KEYWORDS = ("close the ", "close it", "shut the ", "shut it")
 # and would swallow it as a "close" intent instead.
 ADVANCE_KEYWORDS = ("advance", "move closer", "approach", "move toward", "move in", "step closer")
 RETREAT_KEYWORDS = ("retreat", "back away", "back off", "fall back", "step back", "withdraw", "move away")
+# Party positioning (see DM_Core._resolve_formation_intent / CLAUDE.md's "Party formation") --
+# like advance/retreat above, these act on the scene (specifically, whichever party member is
+# named, or the whole party if none is) rather than a named item, so no map_to_item lookup ever
+# runs for them either; unlike advance/retreat, DMCore -- not NLPCore -- is what figures out
+# *who* is being addressed, by searching the raw input for a party member's own name. None of
+# these phrases collide with ADVANCE/RETREAT_KEYWORDS' own substrings (ex: "fall back" is
+# retreat, "fall in behind" is not "fall back").
+FORMATION_BEHIND_KEYWORDS = (
+    "stay behind", "get behind", "hang back", "keep behind", "fall in behind", "stand behind",
+)
+FORMATION_ABREAST_KEYWORDS = (
+    "walk beside", "stay beside", "stay abreast", "walk with me", "walk alongside", "flank me",
+    "stand beside", "walk abreast",
+)
 # Macro, inter-room movement in a multi-room dungeon (see DM_Rules.py's room-graph notes) --
 # a different axis entirely from ADVANCE/RETREAT_KEYWORDS above (which only ever reposition
 # the player's *band* within the current room). A direction here names one of the current
@@ -162,11 +176,13 @@ class NLPCore:
             return
 
         intent = self._detect_item_intent(processed)
-        if intent in ("open", "close", "advance", "retreat"):
+        if intent in ("open", "close", "advance", "retreat", "formation_behind", "formation_abreast"):
             # These act on the current scene target directly (ex: "open the chest" opens
             # *the* chest, not some named item inside it), or on the scene as a whole (ex:
-            # "advance" moves relative to every living entity) -- no item name to resolve at
-            # all, so map_to_item never runs for them either.
+            # "advance" moves relative to every living entity, "formation_behind" directs
+            # whichever party member is named in the input, or everyone present if none is --
+            # see DMCore._resolve_formation_intent) -- no item name to resolve at all, so
+            # map_to_item never runs for any of them either.
             self.event_bus.publish("item_interaction_detected", {
                 "intent": intent, "item_name": None, "input": processed, "score": None,
             })
@@ -207,7 +223,8 @@ class NLPCore:
             since it isn't keyed to a single fixed intent name the way these are.
         @param processed_text The cleaned and processed player input.
         @return "examine", "equip", "unequip", "drop", "take", "give", "trade", "use",
-            "open", "close", "advance", "retreat", or None.
+            "open", "close", "advance", "retreat", "formation_behind", "formation_abreast",
+            or None.
         """
         if any(keyword in processed_text for keyword in EXAMINE_KEYWORDS):
             return "examine"
@@ -231,6 +248,13 @@ class NLPCore:
             return "open"
         if any(keyword in processed_text for keyword in CLOSE_KEYWORDS):
             return "close"
+        # Checked ahead of ADVANCE_KEYWORDS -- "stand behind"/"walk abreast" etc. don't
+        # collide with any advance/retreat phrase, but formation is the more specific match
+        # whenever both could plausibly apply.
+        if any(keyword in processed_text for keyword in FORMATION_BEHIND_KEYWORDS):
+            return "formation_behind"
+        if any(keyword in processed_text for keyword in FORMATION_ABREAST_KEYWORDS):
+            return "formation_abreast"
         if any(keyword in processed_text for keyword in ADVANCE_KEYWORDS):
             return "advance"
         if any(keyword in processed_text for keyword in RETREAT_KEYWORDS):

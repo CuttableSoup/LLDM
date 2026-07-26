@@ -416,11 +416,14 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             item out of inventory onto the current room/scene's own ground (see
             _current_ground_items), where a later "take"/"examine" can reach it again --
             checked ahead of the target/locked gate below, since a dropped item has no
-            container guarding it.
+            container guarding it. "formation_behind"/"formation_abreast" (see
+            _resolve_formation_intent, CLAUDE.md's "Party formation") direct any currently-
+            present party member named in the input -- or every one present, if none is named
+            -- to a new follow_offset, taking effect immediately.
         @param data The item_interaction_detected payload from NLPCore
             ({intent, item_name, input, score}). "item_name" is None for "open"/"close",
-            "advance"/"retreat", and "move", none of which act on a named item; "move" also
-            carries a "direction" (ex: "forward", "right").
+            "advance"/"retreat", "formation_behind"/"formation_abreast", and "move", none of
+            which act on a named item; "move" also carries a "direction" (ex: "forward", "right").
         """
         intent = data.get("intent")
         item_name = data.get("item_name")
@@ -440,6 +443,12 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             # just the current target.
             moved = self.advance_or_retreat(intent)
             resolved(True, moved=moved)
+            return
+
+        if intent in ("formation_behind", "formation_abreast"):
+            # Also unrelated to target_name/the locked gate -- directing the party has
+            # nothing to do with any scene target at all.
+            self._resolve_formation_intent(intent, input_text, resolved)
             return
 
         if intent == "move":
@@ -615,6 +624,48 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             if exit_def.get("band") == player_band:
                 return exit_def, None
         return None, "wrong_band"
+
+    def _resolve_formation_intent(self, intent, input_text, resolved):
+        """!
+        @brief Handles "formation_behind"/"formation_abreast" -- a player-issued party
+            positioning command (ex: "stay behind me, anne"), covering CLAUDE.md's "Party
+            formation" own noted gap: follow_offset already lived on the entity instance for
+            exactly this, nothing previously wrote to it in play. Which party member(s) get
+            addressed is resolved by a plain, whole-word, case-insensitive search of the raw
+            input for any currently-in-scene party member's own name (NLPCore never parses
+            this out itself -- unlike map_to_item/map_to_target's embedding matches, a party
+            member's own name either is or isn't literally said, so there's no ambiguity worth
+            spending a semantic match on) -- if none is named, every party member currently
+            present is addressed instead, so a bare "stay behind me" still does something
+            sensible. The new follow_offset takes effect immediately (_apply_party_formation),
+            not just on the party's next move.
+        @param intent "formation_behind" (follow_offset -1, one band back) or
+            "formation_abreast" (follow_offset 0, walks alongside).
+        @param input_text The raw (lowercased, prefix-stripped) player input, searched for
+            party member names.
+        @param resolved The item_interaction_resolved publisher closure from the caller.
+        """
+        offset = -1 if intent == "formation_behind" else 0
+        stance = "behind" if intent == "formation_behind" else "abreast"
+
+        party_present = [
+            name for name in self.scenario_entities
+            if name != self.player_name and self.entities.get(name, {}).get("is_party")
+        ]
+        named = [
+            name for name in party_present
+            if re.search(rf"\b{re.escape(name.lower())}\b", input_text or "")
+        ]
+        addressed = named or party_present
+
+        if not addressed:
+            resolved(False, reason="no_party")
+            return
+
+        for name in addressed:
+            self.entities[name]["follow_offset"] = offset
+        self._apply_party_formation()
+        resolved(True, members=addressed, stance=stance)
 
     def _resolve_room_transition_intent(self, direction, resolved):
         """!

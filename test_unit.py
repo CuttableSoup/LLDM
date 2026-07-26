@@ -302,6 +302,19 @@ class TestNlpConfidenceThreshold(unittest.TestCase):
         self.assertEqual(self.nlp_core._detect_item_intent("back away slowly"), "retreat")
         self.assertEqual(self.nlp_core._detect_item_intent("fall back"), "retreat")
 
+    def test_detect_item_intent_recognizes_formation_commands(self):
+        self.assertEqual(self.nlp_core._detect_item_intent("stay behind me, anne"), "formation_behind")
+        self.assertEqual(self.nlp_core._detect_item_intent("get behind me"), "formation_behind")
+        self.assertEqual(self.nlp_core._detect_item_intent("hang back"), "formation_behind")
+        self.assertEqual(self.nlp_core._detect_item_intent("walk beside me"), "formation_abreast")
+        self.assertEqual(self.nlp_core._detect_item_intent("stay abreast"), "formation_abreast")
+        self.assertEqual(self.nlp_core._detect_item_intent("flank me"), "formation_abreast")
+
+    def test_formation_keywords_do_not_misfire_on_advance_or_retreat(self):
+        # "fall in behind" must not be swallowed by RETREAT_KEYWORDS' own "fall back".
+        self.assertEqual(self.nlp_core._detect_item_intent("fall in behind me"), "formation_behind")
+        self.assertEqual(self.nlp_core._detect_item_intent("fall back"), "retreat")
+
     def test_close_the_distance_still_resolves_to_close_not_advance(self):
         # A known, accepted ambiguity -- CLOSE_KEYWORDS' "close the " wins over this natural
         # phrasing (see ADVANCE_KEYWORDS' own module note). Documented here so a future
@@ -337,6 +350,26 @@ class TestNlpConfidenceThreshold(unittest.TestCase):
         self.assertEqual(len(item_events), 1)
         self.assertEqual(item_events[0]["intent"], "advance")
         self.assertIsNone(item_events[0]["item_name"])
+
+    def test_full_pipeline_formation_command_directs_the_named_party_member(self):
+        # arena.toml's thane is the only is_party member present here -- naming it explicitly
+        # should be who gets addressed, with no item_name (map_to_item never runs) and no
+        # action_detected (no skill/dice involved at all).
+        item_events = []
+        resolved_events = []
+        detected_actions = []
+        self.event_bus.subscribe("item_interaction_detected", item_events.append)
+        self.event_bus.subscribe("item_interaction_resolved", resolved_events.append)
+        self.event_bus.subscribe("action_detected", detected_actions.append)
+
+        self.event_bus.publish("user_input_submitted", "stay behind me, thane")
+
+        self.assertEqual(len(item_events), 1)
+        self.assertEqual(item_events[0]["intent"], "formation_behind")
+        self.assertIsNone(item_events[0]["item_name"])
+        self.assertEqual(resolved_events[-1]["members"], ["thane"])
+        self.assertEqual(self.dm_core.entities["thane"]["follow_offset"], -1)
+        self.assertEqual(detected_actions, [])
 
     def test_map_to_target_matches_a_named_creature(self):
         # Global catalog match, same as map_to_item -- arena.toml's wolf_2/thane are both
@@ -2770,7 +2803,7 @@ class TestMultiRoomDungeon(DMTestCase):
         self.assertEqual(self.dm_core.current_room_key, "entrance")
         # The player is never repeated in a room's own "entities" list (see
         # DM_Rules.py's _populate_room) -- only listed once, at [scenario].entities.
-        self.assertEqual(self.dm_core.scenario_entities, ["gladstone", "thane", "dart trap"])
+        self.assertEqual(self.dm_core.scenario_entities, ["gladstone", "thane", "anne", "dart trap"])
         # A trap is never hostile (same is_hostile short-circuit as any other "object"
         # supertype) -- with nothing hostile in the room, current_target falls back to it,
         # exactly the way the original dungeon.toml's chest already works.
@@ -2783,6 +2816,95 @@ class TestMultiRoomDungeon(DMTestCase):
         self.assertIn("thane", self.dm_core.scenario_entities)
         self.dm_core.enter_room("hall_of_webs")
         self.assertIn("thane", self.dm_core.scenario_entities)
+
+    def test_party_formation_holds_after_advancing(self):
+        # thane (follow_offset = 0) walks abreast; anne (follow_offset = -1) trails one band
+        # behind -- both snap back into formation the moment the player's own band changes
+        # (_apply_party_formation, DM_Movement.py), not just at scenario load.
+        self.assertEqual(self.dm_core.get_band("gladstone"), 1)
+        self.assertEqual(self.dm_core.get_band("thane"), 1)
+        self.assertEqual(self.dm_core.get_band("anne"), 1)  # -1 clamped to the floor
+
+        self.dm_core.advance_or_retreat("advance")  # entrance is 2 bands -- room to actually move
+
+        self.assertEqual(self.dm_core.get_band("gladstone"), 2)
+        self.assertEqual(self.dm_core.get_band("thane"), 2)  # walks abreast
+        self.assertEqual(self.dm_core.get_band("anne"), 1)  # one band behind, no longer clamped
+
+        self.dm_core.advance_or_retreat("retreat")
+
+        self.assertEqual(self.dm_core.get_band("gladstone"), 1)
+        self.assertEqual(self.dm_core.get_band("thane"), 1)
+        self.assertEqual(self.dm_core.get_band("anne"), 1)
+
+    def test_party_formation_holds_across_a_room_transition(self):
+        # A stale band from the room just left must not survive into the new one --
+        # enter_room re-snaps formation around the player's own arrival_band.
+        self.dm_core.advance_or_retreat("advance")  # gladstone/thane -> band 2, anne -> band 1
+        self._move("forward")  # -> hall_of_webs, arrival_band 1 for the player
+
+        self.assertEqual(self.dm_core.current_room_key, "hall_of_webs")
+        self.assertEqual(self.dm_core.get_band("gladstone"), 1)
+        self.assertEqual(self.dm_core.get_band("thane"), 1)
+        self.assertEqual(self.dm_core.get_band("anne"), 1)
+
+    def test_formation_command_naming_one_member_only_moves_that_member(self):
+        # anne already trails by default (follow_offset -1) -- "walk beside me, anne" should
+        # flip only her to 0, leaving thane's own offset (already 0) untouched.
+        self.dm_core.advance_or_retreat("advance")  # gladstone/thane -> band 2, anne -> band 1
+        item_events = []
+        self.event_bus.subscribe("item_interaction_resolved", item_events.append)
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "formation_abreast", "item_name": None,
+            "input": "walk beside me, anne", "direction": None,
+        })
+
+        result = item_events[-1]
+        self.assertTrue(result["found"])
+        self.assertEqual(result["members"], ["anne"])
+        self.assertEqual(result["stance"], "abreast")
+        self.assertEqual(self.dm_core.entities["anne"]["follow_offset"], 0)
+        self.assertEqual(self.dm_core.entities["thane"]["follow_offset"], 0)
+        # Takes effect immediately, not just on the next move.
+        self.assertEqual(self.dm_core.get_band("anne"), 2)
+
+    def test_formation_command_naming_no_one_addresses_the_whole_party(self):
+        item_events = []
+        self.event_bus.subscribe("item_interaction_resolved", item_events.append)
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "formation_behind", "item_name": None,
+            "input": "everyone stay behind me", "direction": None,
+        })
+
+        result = item_events[-1]
+        self.assertTrue(result["found"])
+        self.assertEqual(set(result["members"]), {"thane", "anne"})
+        self.assertEqual(self.dm_core.entities["thane"]["follow_offset"], -1)
+        self.assertEqual(self.dm_core.entities["anne"]["follow_offset"], -1)
+        # gladstone is still at band 1 (the floor) here, so -1 clamps right back to it.
+        self.assertEqual(self.dm_core.get_band("thane"), 1)
+        self.assertEqual(self.dm_core.get_band("anne"), 1)
+
+        self.dm_core.advance_or_retreat("advance")  # room to actually separate at band 2
+
+        self.assertEqual(self.dm_core.get_band("thane"), self.dm_core.get_band("gladstone") - 1)
+        self.assertEqual(self.dm_core.get_band("anne"), self.dm_core.get_band("gladstone") - 1)
+
+    def test_formation_command_with_no_party_present_is_denied(self):
+        plain_dm = DMCore(EventBus(), scenario_name="dungeon")  # no is_party entities at all
+        item_events = []
+        plain_dm.event_bus.subscribe("item_interaction_resolved", item_events.append)
+
+        plain_dm._on_item_interaction_detected({
+            "intent": "formation_behind", "item_name": None,
+            "input": "stay behind me", "direction": None,
+        })
+
+        result = item_events[-1]
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "no_party")
 
     def test_hidden_trap_fails_its_notice_roll_and_stays_out_of_the_roster(self):
         with patch("random.randint", return_value=1):  # observation 1D=1, under difficulty 4
@@ -2889,7 +3011,7 @@ class TestMultiRoomDungeon(DMTestCase):
         self.assertTrue(result["found"])
         self.assertEqual(result["room_name"], "The Hall of Webs")
         self.assertEqual(self.dm_core.current_room_key, "hall_of_webs")
-        self.assertEqual(self.dm_core.scenario_entities, ["gladstone", "thane", "giant spider"])
+        self.assertEqual(self.dm_core.scenario_entities, ["gladstone", "thane", "anne", "giant spider"])
         self.assertEqual(self.dm_core.current_target, "giant spider")
         self.assertEqual(self.dm_core.get_band("gladstone"), 1)  # this exit's own arrival_band
 
@@ -3061,7 +3183,7 @@ class TestMultiRoomSaveLoad(DMTestCase):
         fresh_dm.load_game(slot)
 
         self.assertEqual(fresh_dm.current_room_key, "hall_of_webs")
-        self.assertEqual(fresh_dm.scenario_entities, ["gladstone", "thane", "giant spider"])
+        self.assertEqual(fresh_dm.scenario_entities, ["gladstone", "thane", "anne", "giant spider"])
         self.assertEqual(fresh_dm.get_current_hp("giant spider"), 9)
 
     def test_save_load_preserves_an_earlier_cleared_room_too(self):

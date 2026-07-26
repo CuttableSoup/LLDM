@@ -136,17 +136,39 @@ their `speed` (default 1) toward or away from `current_target`. A creature/ally 
 exact same way via `move_toward_or_away(entity_name, opponent_name, direction)` — the same
 distance/tie-break math (`_resolve_move_delta`), just relative to whichever opponent
 `resolve_behavior_action` resolved for it instead of always `current_target` (see "Combat").
-Either way, only the one entity that moved has its band changed, but because gaps are computed
-from both sides' bands, that single move can change its distance to every other entity in the
-scene at once — and not always in the expected direction, since retreating from one opponent
-can carry an entity toward something else on the opposite side. At a zero-gap tie, "advance" is
-a no-op; "retreat" prefers a higher band number, falling back to a lower one only if higher is
-already blocked.
+Either way, only the one entity that moved has its band changed (aside from the player's own
+party — see below), but because gaps are computed from both sides' bands, that single move can
+change its distance to every other entity in the scene at once — and not always in the expected
+direction, since retreating from one opponent can carry an entity toward something else on the
+opposite side. At a zero-gap tie, "advance" is a no-op; "retreat" prefers a higher band number,
+falling back to a lower one only if higher is already blocked.
 
 `move_entity`'s floor is always band 1. Its ceiling is the current scene's own `bands` count,
 enforced only when `enclosed` is true (the default when the field is absent). `enclosed = false`
 removes the ceiling entirely — the mechanism for fleeing a scene: once the gap to every
 attacker's own `range` is exceeded, nothing can reach the fleeing entity.
+
+**Party formation.** Every `is_party` entity (ex: `characters.toml`'s `thane`/`anne`) carries
+its own `follow_offset` (int, defaulting to 0), read by `_apply_party_formation`
+(`DM_Movement.py`) to snap that entity's own band to `player_band + follow_offset` (clamped the
+same way `move_entity` clamps anything else). `thane`'s `follow_offset = 0` walks abreast (a
+melee fighter has no reason to hang back); `anne`'s `follow_offset = -1` trails one band behind,
+favoring her own ranged `splash flow` over standing at the front line. This is a flat teleport,
+not a speed-limited move — keeping formation is bookkeeping, not an action that costs a turn —
+and only ever fires where the *player's* own band changes: `advance_or_retreat` (after the
+player's own move) and `enter_room` (after the player's own `arrival_band` is set), never from a
+creature/ally's own combat-turn movement (`move_toward_or_away`), which stays purely tactical
+and is deliberately left free to drift out of formation until the player's next move snaps it
+back. `follow_offset` lives directly on the entity instance, the same mutable field every other
+per-instance stat lives on, which is what lets the player override it in play: "stay behind me"/
+"walk beside me" (NLPCore's `FORMATION_BEHIND_KEYWORDS`/`FORMATION_ABREAST_KEYWORDS`) resolve to
+`item_interaction_detected` intents `"formation_behind"`/`"formation_abreast"`, handled by
+`DMCore._resolve_formation_intent` — unlike `map_to_item`/`map_to_target`'s embedding matches, a
+party member's own name either is or isn't literally present in the input (a plain
+whole-word, case-insensitive search against every currently-in-scene `is_party` member), so
+naming one addresses only them; naming none addresses the whole party present. The new
+`follow_offset` takes effect immediately via `_apply_party_formation`, not just on the next
+move.
 
 `range` (int, in bands) lives on the weapon/spell/ability itself, absent/`0` meaning melee —
 usable only in the target's own band. A reach weapon (ex: `spear`, `range = 1`) extends that
@@ -275,16 +297,19 @@ itself.
 
 ## Items and movement as intents
 
-Looking at, taking, giving, trading, opening, closing, using, equipping, dropping, and moving
-between rooms all bypass the skill/dice system entirely — none of them warrant a roll.
-`NLPCore._detect_item_intent` recognizes phrase-level keywords (not bare words, to avoid
-misfiring on ordinary skill phrasing) for eleven intents before skill matching runs:
-`examine`, `equip` (`equip`/`wear`/`wield`/`put on`), `unequip` (`unequip`/`take off` —
-deliberately not a broader `remove`, which would collide with items.toml's own `"dart trap"`/
-`"scythe trap"` names and finesse's `disarm`/`trap` keywords), `drop` (`drop`/`discard`/
-`put down`), `take`, `give`, `trade`, `open`, `close`, `use` (currently `drink`/`quaff`), and
-direction/movement phrases (`DIRECTION_PHRASES`) for `advance`/`retreat`/`move`. `open`/`close`/
-`advance`/`retreat`/`move` act on the current scene target or the whole scene, publishing
+Looking at, taking, giving, trading, opening, closing, using, equipping, dropping, moving
+between rooms, and directing the party's own formation all bypass the skill/dice system
+entirely — none of them warrant a roll. `NLPCore._detect_item_intent` recognizes phrase-level
+keywords (not bare words, to avoid misfiring on ordinary skill phrasing) for thirteen intents
+before skill matching runs: `examine`, `equip` (`equip`/`wear`/`wield`/`put on`), `unequip`
+(`unequip`/`take off` — deliberately not a broader `remove`, which would collide with
+items.toml's own `"dart trap"`/`"scythe trap"` names and finesse's `disarm`/`trap` keywords),
+`drop` (`drop`/`discard`/`put down`), `take`, `give`, `trade`, `open`, `close`, `use`
+(currently `drink`/`quaff`), `formation_behind`/`formation_abreast` (see "Party formation" —
+`stay behind`/`walk beside` and similar phrasings), and direction/movement phrases
+(`DIRECTION_PHRASES`) for `advance`/`retreat`/`move`. `open`/`close`/`advance`/`retreat`/
+`formation_behind`/`formation_abreast`/`move` act on the current scene target, the whole
+scene, or (for formation) whichever party member the raw input names, publishing
 `item_interaction_detected` with `item_name: None`; every other intent runs through
 `NLPCore.map_to_item`, an embedding match against every `supertype == "object"` entity's
 name/description (currency is checked first as a fixed synonym list — `gold`/`coin`/

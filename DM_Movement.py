@@ -107,6 +107,36 @@ class MovementMixin(DMCoreProtocol):
             band = min(band, scene.get("bands", 1))
         return band
 
+    def _apply_party_formation(self):
+        """!
+        @brief Snaps every currently-scened party member's own band to a fixed offset from
+            the player's own band -- ex: characters.toml's thane (follow_offset = 0) walks
+            abreast, anne (follow_offset = -1) trails one band behind, favoring her own
+            ranged spellwork over standing in melee. Called anywhere the *player's* own band
+            changes (advance_or_retreat, enter_room's own arrival) -- never from a creature/
+            ally's own combat-turn movement (move_toward_or_away), which stays purely
+            tactical (chasing/fleeing its own opponent) and is deliberately left free to drift
+            out of formation until the player's next move snaps it back. This is a flat
+            teleport to the target band, not a speed-limited move_entity call -- keeping
+            formation is bookkeeping, not an action that costs a turn.
+
+            follow_offset is read straight off the entity instance (defaulting to 0 -- walking
+            abreast -- for a party member that doesn't set one), the same per-instance field
+            every other mutable entity stat lives on, so a future player command (ex: "stay
+            behind me, anne") only ever needs to write entities["anne"]["follow_offset"] = -2
+            to take effect on the very next move -- no new mechanism required, just not wired
+            to any player-issued command yet.
+        """
+        player_band = self.get_band(self.player_name)
+        for entity_name in self.scenario_entities:
+            if entity_name == self.player_name:
+                continue
+            entity = self.entities.get(entity_name, {})
+            if not entity.get("is_party"):
+                continue
+            offset = entity.get("follow_offset", 0)
+            entity["band"] = self._clamp_band(player_band + offset)
+
     def move_entity(self, entity_name, delta):
         """!
         @brief Shifts a single entity's own band by delta (positive = higher band number,
@@ -160,22 +190,24 @@ class MovementMixin(DMCoreProtocol):
 
     def advance_or_retreat(self, direction):
         """!
-        @brief Resolves the player's own "advance"/"retreat" action: moves *only* the
-            player's own band, toward or away from self.current_target, by up to the
-            player's own "speed" (default 1) -- see _resolve_move_delta for the shared
-            distance/tie-breaking math. Every other entity's own band is untouched -- they
-            don't move, the player does -- but because gaps are computed from both sides'
-            band numbers (get_distance_between), the player's own movement still changes
-            their distance to *everyone* in the scene at once, sometimes in opposite
-            directions: retreating from current_target can carry the player past band 1
-            (impossible, clamped) or straight toward a different entity sitting on the other
-            side, closing that gap even though "retreat" was the command. This is the direct
-            payoff of objective bands over the earlier player-anchored version, which could
-            never produce that outcome because every other entity moved in lockstep.
+        @brief Resolves the player's own "advance"/"retreat" action: moves the player's own
+            band, toward or away from self.current_target, by up to the player's own "speed"
+            (default 1) -- see _resolve_move_delta for the shared distance/tie-breaking math
+            -- then snaps every party member's own band back into formation around the
+            player's new position (_apply_party_formation). Every *other* entity's own band
+            is untouched -- an enemy doesn't move just because the player did -- but because
+            gaps are computed from both sides' band numbers (get_distance_between), the
+            player's own movement still changes their distance to *everyone* in the scene at
+            once, sometimes in opposite directions: retreating from current_target can carry
+            the player past band 1 (impossible, clamped) or straight toward a different
+            entity sitting on the other side, closing that gap even though "retreat" was the
+            command. This is the direct payoff of objective bands over the earlier
+            player-anchored version, which could never produce that outcome because every
+            other entity moved in lockstep.
         @param direction "advance" (closes the gap to current_target) or "retreat" (opens it).
         @return A list of {entity, before, after} dicts -- the gap to each living non-player
                 scenario entity that actually changed, before/after in bands. Not what moved
-                (only the player did); what changed as a result.
+                (only the player and the party formation did); what changed as a result.
         """
         target_name = self.current_target
         if not target_name or target_name == self.player_name:
@@ -188,6 +220,7 @@ class MovementMixin(DMCoreProtocol):
         }
 
         self.move_entity(self.player_name, self._resolve_move_delta(self.player_name, target_name, direction))
+        self._apply_party_formation()
 
         moved = []
         for entity_name, before in before_gaps.items():

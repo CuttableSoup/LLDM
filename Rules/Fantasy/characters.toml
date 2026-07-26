@@ -88,6 +88,9 @@ subtype = "humanoid"
 description = "A grizzled mercenary who fights at gladstone's side."
 is_party = true                            # Shows thane on GUICore's Party tab alongside
                                             # gladstone -- see entity_schema.toml's is_party.
+follow_offset = 0                          # Walks abreast of gladstone -- a melee fighter
+                                            # has no reason to hang back (see
+                                            # DM_Movement.py's _apply_party_formation).
 
 max_hp = 24
 
@@ -115,3 +118,45 @@ requirements = [
     { field = "hp_per_remain", operator = ">=", value = 0.01 },
 ]
 action = "shortsword strike"
+
+[[entity]]
+name = "anne"
+supertype = "creature"
+subtype = "humanoid"
+description = "A sharp-eyed battle mage, quick with a ward and quicker with a curse."
+is_party = true                            # See thane's own is_party note above.
+follow_offset = -1                         # Trails one band behind gladstone rather than
+                                            # walking abreast -- a mage favors her own
+                                            # ranged spellwork (splash flow, range = 5, see
+                                            # spells.toml) over standing at the front line
+                                            # (see DM_Movement.py's _apply_party_formation).
+                                            # Clamped to band 1 like anything else, so she's
+                                            # still shoulder to shoulder with the party right
+                                            # at a room's own doorway.
+
+max_hp = 18
+
+# Flat list, same convention as gladstone's own "abilities" -- must stay above every
+# [entity.xxx] sub-table below, or TOML would fold it into whichever one came last instead
+# of the top-level [[entity]] table.
+abilities = [ "splash flow" ]
+
+# Same reasoning as thane's own attitudes -- see gladstone's own [[entity.attitudes.name]]
+# override for "anne" above, which already returns this in kind.
+[entity.attitudes]
+default = [ 30, 30, 30, 30, 30, 30 ]
+
+[[entity.attitudes.name]]
+gladstone = [ 100, 100, 100, 100, 100, 100 ]
+
+[entity.skills]
+arcane = { dice = 4, pips = 0 }
+willpower = { dice = 3, pips = 0 }
+fortitude = { dice = 2, pips = 0 }
+dodge = { dice = 2, pips = 1 }
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "splash flow"

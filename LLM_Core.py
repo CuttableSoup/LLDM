@@ -245,16 +245,19 @@ class LLMCore:
 
     def generate_item_interaction_response(self, data):
         """!
-        @brief Narrates an "examine"/"take"/"give"/"trade"/"open"/"close"/"advance"/"retreat"
-            attempt, resolved with no dice roll (see DMCore._on_item_interaction_detected).
-            "examine" only ever describes; it's the deliberate alternative to items being
-            auto-looted into the player's inventory the moment a container opens (ex: a
-            cursed weapon should be seen and described before anyone decides to touch it).
+        @brief Narrates an "examine"/"take"/"give"/"trade"/"open"/"close"/"advance"/"retreat"/
+            "formation_behind"/"formation_abreast" attempt, resolved with no dice roll (see
+            DMCore._on_item_interaction_detected). "examine" only ever describes; it's the
+            deliberate alternative to items being auto-looted into the player's inventory the
+            moment a container opens (ex: a cursed weapon should be seen and described before
+            anyone decides to touch it).
         @param data The "item_interaction_resolved" payload ({intent, item_name, input, found,
-            description?, container?, reason?, amount?, price?, moved?}). "item_name" is None
-            for "open"/"close"/"advance"/"retreat", which act on the scene directly rather
-            than a named item; "moved" (advance/retreat only) is advance_or_retreat's own
-            list of {entity, before, after} distance changes.
+            description?, container?, reason?, amount?, price?, moved?, members?, stance?}).
+            "item_name" is None for "open"/"close"/"advance"/"retreat"/"formation_behind"/
+            "formation_abreast", which act on the scene directly rather than a named item;
+            "moved" (advance/retreat only) is advance_or_retreat's own list of {entity, before,
+            after} distance changes; "members"/"stance" (formation only) are
+            DMCore._resolve_formation_intent's own resolved party member(s) and new stance.
         """
         intent = data.get("intent")
         self.event_bus.publish("log_info", f"Generating item interaction response ({intent}).")
@@ -283,6 +286,7 @@ class LLMCore:
                 "not_equippable": f"{subject} isn't something that can be worn or wielded",
                 "cant_equip": f"{subject} has nothing on the player's own body it could go onto",
                 "not_equipped": f"{subject} isn't currently equipped at all",
+                "no_party": "there's no one from the player's own party here to direct",
             }.get(data.get("reason"), f"the player's attempt to {intent} {subject} doesn't apply here")
             prompt = (
                 f"The player tries to {intent} {subject} "
@@ -392,6 +396,20 @@ class LLMCore:
                     f"against.\n"
                     f"Narrate this in 1-2 sentences as the Game Master."
                 )
+        elif intent in ("formation_behind", "formation_abreast"):
+            # "members"/"stance" are DMCore._resolve_formation_intent's own real result --
+            # whichever party member(s) it actually resolved (named in the input, or every
+            # party member present if none was), never invented.
+            members = data.get("members") or []
+            members_text = " and ".join(members)
+            stance_text = (
+                "stay a band behind the player from now on" if data.get("stance") == "behind"
+                else "walk abreast of the player from now on"
+            )
+            prompt = (
+                f"The player directs {members_text} to {stance_text}.\n"
+                f"Narrate this brief bit of party direction in 1-2 sentences as the Game Master."
+            )
         elif intent == "move":
             # Taking a declared exit to a different room of the current multi-room dungeon
             # (see DM_Rules.py's room-graph notes) -- unlike advance/retreat (repositioning
