@@ -35,19 +35,20 @@ class PersistenceMixin(DMCoreProtocol):
         """!
         @brief Every instance name whose state save_game needs to persist -- just
             scenario_entities for a plain single-room scenario, but for a multi-room dungeon
-            (see DM_Rules.py's room-graph notes) the player (never itself part of any room's
-            own instance list -- see DM_Rules.py's _populate_room) plus the union of *every
-            visited room's* own instance list, not only the room the player happens to be
-            standing in right now. Without the union, saving mid-dungeon and reloading would
-            silently forget that an earlier room's trap was already disarmed or its creature
-            already killed -- the room itself would still be marked visited (see
-            visited_rooms) and so wouldn't be re-instanced fresh, but nothing would have
-            restored its saved state either.
+            (see DM_Rules.py's room-graph notes) every persistent entity (the player, plus
+            anything else declared at [scenario].entities, ex: crypt.toml's "thane" -- never
+            themselves part of any room's own instance list, see DM_Rules.py's _populate_room)
+            plus the union of *every visited room's* own instance list, not only the room the
+            player happens to be standing in right now. Without the union, saving mid-dungeon
+            and reloading would silently forget that an earlier room's trap was already
+            disarmed or its creature already killed -- the room itself would still be marked
+            visited (see visited_rooms) and so wouldn't be re-instanced fresh, but nothing
+            would have restored its saved state either.
         @return A list of instance names, player included, deduplicated.
         """
         if not self.rooms:
             return list(self.scenario_entities)
-        seen = [self.player_name]
+        seen = list(self.persistent_entities)
         for instance_names in self.visited_rooms.values():
             for name in instance_names:
                 if name not in seen:

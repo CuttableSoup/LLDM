@@ -207,6 +207,16 @@ reveal = true
 # hit takes. "armed" starts active (like a chest's own "locked"); a pass dismisses it (the
 # trap is now safe forever); a fail applies "triggered" instead, which blocks_if_condition
 # then keeps future attempts from re-rolling and re-damaging the exact same spent trap.
+#
+# "hidden" starts active too -- unlike "armed" (a mechanical gate on [entity.test]), it's
+# purely about the LLM's own narration prompt: while active, this entity is left out of the
+# roster _describe_scenario_characters builds (and out of any action's own "defender_details"
+# -- see is_hidden/DM_Core.py's _attach_defender_details), so the trap isn't spoiled to the
+# player before they'd have any in-fiction reason to know it's there. [entity.notice] is the
+# check that clears it: rolled automatically, with no player input, the moment this entity is
+# instanced (RulesMixin._auto_roll_notice, DM_Rules.py) -- not player-initiated like
+# [entity.test]'s own disarm check below, which still requires "armed" and works whether or
+# not "hidden" has cleared yet (a lucky blind stab can disarm something never noticed).
 [[entity]]
 name = "dart trap"
 supertype = "object"
@@ -216,6 +226,13 @@ max_hp = 5
 
 [entity.conditions.armed]
 duration = "permanent"
+
+[entity.conditions.hidden]
+duration = "permanent"
+
+[entity.notice]
+skill = "observation"
+difficulty = 4
 
 [entity.test]
 difficulty = 9

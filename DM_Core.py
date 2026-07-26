@@ -38,6 +38,12 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         self.entities = {}
         self.scenario = {}
         self.scenario_entities = []
+        # The instance names from [scenario].entities (ex: the player, plus any ally like
+        # crypt.toml's "thane" meant to persist across the whole dungeon) -- kept separate
+        # from self.scenario_entities so _populate_room can rebuild the latter as
+        # persistent_entities + the current room's own local entities on every room
+        # transition, instead of collapsing back down to just the player (see DM_Rules.py).
+        self.persistent_entities = []
         # Populated for real by load_scenario_definition -- empty/None here is what a plain
         # single-room scenario (arena/tavern/field/dungeon) keeps permanently, since it has
         # no [[room]] tables at all (see DM_Rules.py's "Scenario instancing"/room-graph notes).
@@ -327,12 +333,15 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         """!
         @brief Attaches defender flavor text to the result -- belt-and-suspenders against the
             persistent character roster (see scenario_loaded's "characters" payload) ever
-            being stale.
+            being stale. Skips a still-hidden target (is_hidden -- ex: an unnoticed dart trap
+            that current_target has fallen back to) for the same reason
+            _describe_scenario_characters does: an action resolving against it must not leak
+            its flavor text into narration before the player would actually have noticed it.
         @param result The roll result, mutated in place with "defender_details" if
             describe_character returns anything.
         @param target_name self.current_target, or None.
         """
-        if target_name:
+        if target_name and not self.is_hidden(target_name):
             defender_details = self.describe_character(target_name, toward_name=self.player_name)
             if defender_details:
                 result["defender_details"] = defender_details
@@ -890,34 +899,60 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             result["revealed"] = list(self.entities[item_name].get("tags", []))
         return result
 
+    def _is_party_member(self, entity_name):
+        """!
+        @brief Whether entity_name is on the player's own side -- the player themselves
+            (is_player = true) or an ally like crypt.toml's "thane" (is_party = true, same
+            flag GUICore's Party tab keys off of). Neither _get_target_name nor
+            _choose_combat_target's fallback should ever resolve to a party member -- an ally
+            standing in the same scenario_entities list as the room's actual trap/chest/
+            creature is never a valid default interaction or combat target.
+        @param entity_name The entity to check.
+        @return True if entity_name is the player or a flagged ally.
+        """
+        if entity_name == self.player_name:
+            return True
+        entity = self.entities.get(entity_name, {})
+        return bool(entity.get("is_player") or entity.get("is_party"))
+
     def _get_target_name(self):
         """!
         @brief Picks the current opposed target from the instantiated scenario entities.
-        @return The name of the first non-player entity instance in the scenario, or None if there isn't one.
+        @return The name of the first non-party entity instance in the scenario, or None if there isn't one.
         """
         for instance_name in self.scenario_entities:
-            if instance_name != self.player_name:
+            if not self._is_party_member(instance_name):
                 return instance_name
         return None
 
     def _choose_combat_target(self):
         """!
         @brief Picks self.current_target: the first living, hostile-toward-the-player entity
-            in scenario_entities order. If none qualifies (ex: every wolf is dead, or
-            nothing in the scene was ever hostile -- the dungeon's chest, the tavern's
-            innkeeper), falls back to the first *living* non-player entity instead, so a
-            defeated enemy is never left as a stale target once combat is over -- unlike
-            _get_target_name(), which returns the first non-player entity unconditionally
-            (dead or not) and stays reserved for non-combat interaction resolution, where
-            that's always correct since a chest/NPC is never "defeated". Used both to set
-            the initial current_target (via load_scenario()) and to advance it once the
-            previous target dies (see _on_action_detected's end-of-round check).
-        @return The chosen entity name, or None if no non-player entity in the scenario is alive.
+            in scenario_entities order. If none qualifies (ex: every wolf is dead, or nothing
+            in the scene was ever hostile -- the dungeon's chest, the tavern's innkeeper),
+            falls back to the first living, non-party entity instead (ex: crypt.toml's own
+            "dart trap"), so an ally (ex: "thane") is never mistaken for the scene's own
+            trap/chest/NPC just because it happens to sit earlier in scenario_entities than
+            the real one. Only once *no* such entity exists either does it fall back further,
+            to the first living entity at all -- including an ally, so current_target still
+            has somewhere to land (rather than going stale on a corpse) in a scene with
+            nothing left but the player's own party. Unlike _get_target_name(), which returns
+            the first non-party entity unconditionally (dead or not) and stays reserved for
+            non-combat interaction resolution, where that's always correct since a chest/NPC
+            is never "defeated". Used both to set the initial current_target (via
+            load_scenario()) and to advance it once the previous target dies (see
+            _on_action_detected's end-of-round check).
+        @return The chosen entity name, or None if nothing in the scenario is alive.
         """
         for instance_name in self.scenario_entities:
             if instance_name == self.player_name:
                 continue
             if self.is_hostile(instance_name, self.player_name) and self.get_current_hp(instance_name) > 0:
+                return instance_name
+        for instance_name in self.scenario_entities:
+            if self._is_party_member(instance_name):
+                continue
+            if self.get_current_hp(instance_name) > 0:
                 return instance_name
         for instance_name in self.scenario_entities:
             if instance_name == self.player_name:

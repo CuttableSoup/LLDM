@@ -30,13 +30,17 @@ class RulesMixin(DMCoreProtocol):
         """!
         @brief Builds the "characters" roster (describe_character per scenario instance,
             skipping entities with no descriptive data) shared by scenario_loaded's
-            initial payload and game_loaded's post-load payload.
+            initial payload and game_loaded's post-load payload. Also skips anything still
+            "hidden" (is_hidden -- ex: items.toml's dart trap before its own [entity.notice]
+            auto-roll succeeds, see _auto_roll_notice) so the LLM's narration prompt never
+            gets spoiled with a hazard the player hasn't actually noticed yet.
         @return A list of non-empty character description strings.
         """
         return [
             description for description in (
                 self.describe_character(entity_name, toward_name=self.player_name)
                 for entity_name in self.scenario_entities
+                if not self.is_hidden(entity_name)
             ) if description
         ]
 
@@ -249,22 +253,49 @@ class RulesMixin(DMCoreProtocol):
             # mutate, so it must start as its own copy rather than sharing the template's dict.
             instance["active_conditions"] = dict(instance.get("conditions", {}))
             self.entities[instance_name] = instance
+            self._auto_roll_notice(instance_name)
             instance_names.append(instance_name)
 
         return instance_names
 
+    def _auto_roll_notice(self, instance_name):
+        """!
+        @brief Silently rolls an entity's own [entity.notice] check the moment it's instanced,
+            if it starts with the "hidden" condition active (ex: items.toml's dart trap) --
+            unlike [entity.test] (player-initiated, matched against spoken skill/input),
+            nothing about this needs player input at all: it's the DM checking, on the
+            player's behalf, whether they'd have spotted it just by being in the room. A
+            passed check dismisses "hidden" immediately, so the entity joins the roster
+            _describe_scenario_characters builds like anything else; a failed one leaves it
+            hidden -- and since this only ever runs once, at instancing (the same "state
+            carries forward exactly as it was left" rule every other per-room condition
+            already follows -- see _populate_room/visited_rooms), a hidden hazard that was
+            missed on first entry stays missed for the rest of that playthrough rather than
+            re-rolling for free on every revisit.
+        @param instance_name The freshly-instanced entity to check (a no-op for anything with
+            no [entity.notice] table, or that doesn't start "hidden" -- ex: the player, an
+            ally, or any ordinary creature/object).
+        """
+        entity = self.entities.get(instance_name, {})
+        notice = entity.get("notice")
+        if not notice or "hidden" not in entity.get("active_conditions", {}):
+            return
+        result = self.resolve_action(self.player_name, notice.get("skill", ""), notice.get("difficulty", 0))
+        if result["success"]:
+            self.dismiss_condition(instance_name, "hidden")
+
     def _populate_room(self, room_key):
         """!
         @brief Instances (or, for a room visited before, restores) room_key's own "entities"
-            list and merges it with whatever's already persistent in scenario_entities (ex:
-            the player) -- shared by load_scenario (the dungeon's starting room) and
-            enter_room (every later transition), so both go through the exact same
-            visited-rooms bookkeeping. A room's own entity list never includes the player --
-            only room-local things (creatures/traps/chests) -- which is what lets a revisit
-            restore *exactly* the same instances (a cleared trap stays cleared, a dead
-            creature stays dead, a looted chest stays empty) without needing to reconcile a
-            player entry that would otherwise appear once per room in the TOML for no reason
-            beyond bookkeeping.
+            list and merges it with whatever's already persistent in self.persistent_entities
+            (the player, plus anything else declared at [scenario].entities -- ex: crypt.toml's
+            "thane") -- shared by load_scenario (the dungeon's starting room) and enter_room
+            (every later transition), so both go through the exact same visited-rooms
+            bookkeeping. A room's own entity list never includes the player -- only room-local
+            things (creatures/traps/chests) -- which is what lets a revisit restore *exactly*
+            the same instances (a cleared trap stays cleared, a dead creature stays dead, a
+            looted chest stays empty) without needing to reconcile a player entry that would
+            otherwise appear once per room in the TOML for no reason beyond bookkeeping.
         @param room_key The room to populate, matching a key in self.rooms.
         """
         room = self.rooms.get(room_key, {})
@@ -273,7 +304,7 @@ class RulesMixin(DMCoreProtocol):
         else:
             room_entities = self._instance_entities(room.get("entities", []))
             self.visited_rooms[room_key] = list(room_entities)
-        self.scenario_entities = [self.player_name] + room_entities
+        self.scenario_entities = list(self.persistent_entities) + room_entities
 
     def load_scenario(self):
         """!
@@ -287,6 +318,7 @@ class RulesMixin(DMCoreProtocol):
             this again) -- see "Scenario instancing" in CLAUDE.md.
         """
         self.scenario_entities = self._instance_entities(self.scenario.get("entities", []))
+        self.persistent_entities = list(self.scenario_entities)
         if self.rooms:
             self._populate_room(self.current_room_key)
 

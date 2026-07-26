@@ -293,6 +293,31 @@ duration = "permanent"
 [entity.conditions.closed]
 duration = "permanent"
 
+[entity.conditions.hidden]                  # Opts this entity out of the LLM's narration
+                                            # prompt entirely (_describe_scenario_characters'
+                                            # roster, and any action's own "defender_details")
+                                            # while active -- is_hidden (DM_Status.py). Paired
+                                            # with [entity.notice] below, this is how a hazard
+                                            # like items.toml's dart trap stays unspoiled until
+                                            # the player would actually have a reason to know
+                                            # about it.
+duration = "permanent"
+
+# ---------------------------------------------------------------------------------------------
+# Notice -- an auto-rolled, no-player-input counterpart to [entity.test]: the moment this
+# entity is instanced (RulesMixin._auto_roll_notice, DM_Rules.py), if it starts "hidden"
+# (above), the engine silently rolls resolve_action(player, skill, difficulty) on the player's
+# behalf. A pass dismisses "hidden" immediately; a fail leaves it hidden for the rest of that
+# playthrough -- this only ever rolls once, at instancing, same as every other per-room
+# condition (see _populate_room/visited_rooms). Unrelated to [entity.test]: that one still
+# requires matching player input and works the same whether or not this has resolved yet (ex:
+# a blind disarm attempt against a trap the player never actually noticed).
+[entity.notice]
+skill = "observation"                       # A single skill name (not a list -- there's no
+                                            # player choice to disambiguate between).
+difficulty = 4                              # Same resolve_action semantics as [entity.test]'s
+                                            # own "difficulty".
+
 # ---------------------------------------------------------------------------------------------
 # Behavior (creature/ally AI) -- a declaration-order list, matched top-down: the first entry
 # whose "requirements" all hold is what this entity does on its own turn in a round_resolved

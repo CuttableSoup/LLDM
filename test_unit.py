@@ -2770,11 +2770,41 @@ class TestMultiRoomDungeon(DMTestCase):
         self.assertEqual(self.dm_core.current_room_key, "entrance")
         # The player is never repeated in a room's own "entities" list (see
         # DM_Rules.py's _populate_room) -- only listed once, at [scenario].entities.
-        self.assertEqual(self.dm_core.scenario_entities, ["gladstone", "dart trap"])
+        self.assertEqual(self.dm_core.scenario_entities, ["gladstone", "thane", "dart trap"])
         # A trap is never hostile (same is_hostile short-circuit as any other "object"
         # supertype) -- with nothing hostile in the room, current_target falls back to it,
         # exactly the way the original dungeon.toml's chest already works.
         self.assertEqual(self.dm_core.current_target, "dart trap")
+
+    def test_thane_persists_into_every_room_alongside_the_player(self):
+        # thane is declared once, at [scenario].entities (crypt.toml) -- it must show up in
+        # every room's own scenario_entities, not just the starting one, and never get
+        # dropped by _populate_room's persistent-entities merge (see DM_Rules.py).
+        self.assertIn("thane", self.dm_core.scenario_entities)
+        self.dm_core.enter_room("hall_of_webs")
+        self.assertIn("thane", self.dm_core.scenario_entities)
+
+    def test_hidden_trap_fails_its_notice_roll_and_stays_out_of_the_roster(self):
+        with patch("random.randint", return_value=1):  # observation 1D=1, under difficulty 4
+            dm = DMCore(EventBus(), scenario_name="crypt")
+        self.assertTrue(dm.is_hidden("dart trap"))
+        roster_text = " ".join(dm._describe_scenario_characters())
+        self.assertNotIn("dart trap", roster_text)
+
+    def test_hidden_trap_passing_its_notice_roll_joins_the_roster(self):
+        with patch("random.randint", return_value=6):  # observation 1D=6, clears difficulty 4
+            dm = DMCore(EventBus(), scenario_name="crypt")
+        self.assertFalse(dm.is_hidden("dart trap"))
+        roster_text = " ".join(dm._describe_scenario_characters())
+        self.assertIn("dart trap", roster_text)
+
+    def test_hidden_target_omits_defender_details(self):
+        with patch("random.randint", return_value=1):
+            dm = DMCore(EventBus(), scenario_name="crypt")
+        self.assertTrue(dm.is_hidden("dart trap"))
+        result = {}
+        dm._attach_defender_details(result, "dart trap")
+        self.assertNotIn("defender_details", result)
 
     def test_failed_disarm_damages_the_player_and_arms_blocks_further_attempts(self):
         starting_hp = self.dm_core.get_current_hp("gladstone")
@@ -2843,7 +2873,7 @@ class TestMultiRoomDungeon(DMTestCase):
         self.assertTrue(result["found"])
         self.assertEqual(result["room_name"], "The Hall of Webs")
         self.assertEqual(self.dm_core.current_room_key, "hall_of_webs")
-        self.assertEqual(self.dm_core.scenario_entities, ["gladstone", "giant spider"])
+        self.assertEqual(self.dm_core.scenario_entities, ["gladstone", "thane", "giant spider"])
         self.assertEqual(self.dm_core.current_target, "giant spider")
         self.assertEqual(self.dm_core.get_band("gladstone"), 1)  # this exit's own arrival_band
 
@@ -3015,7 +3045,7 @@ class TestMultiRoomSaveLoad(DMTestCase):
         fresh_dm.load_game(slot)
 
         self.assertEqual(fresh_dm.current_room_key, "hall_of_webs")
-        self.assertEqual(fresh_dm.scenario_entities, ["gladstone", "giant spider"])
+        self.assertEqual(fresh_dm.scenario_entities, ["gladstone", "thane", "giant spider"])
         self.assertEqual(fresh_dm.get_current_hp("giant spider"), 9)
 
     def test_save_load_preserves_an_earlier_cleared_room_too(self):

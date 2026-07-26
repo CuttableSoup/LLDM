@@ -206,6 +206,19 @@ class StatusMixin(DMCoreProtocol):
         """
         return "identified" in self.entities.get(entity_name, {}).get("active_conditions", {})
 
+    def is_hidden(self, entity_name):
+        """!
+        @brief Whether an entity (ex: items.toml's dart trap) currently has the "hidden"
+            condition active -- seeded by its own [entity.conditions.hidden] and dismissed by
+            a passed [entity.notice] auto-roll (see RulesMixin._auto_roll_notice). Mirrors
+            is_locked/is_closed/is_identified exactly. _describe_scenario_characters
+            (DM_Rules.py) checks this to keep a still-hidden entity out of the roster the LLM
+            narrates from, so it isn't spoiled before the player would actually notice it.
+        @param entity_name The name of the entity to check.
+        @return True if "hidden" is in the entity's active_conditions.
+        """
+        return "hidden" in self.entities.get(entity_name, {}).get("active_conditions", {})
+
     def is_test_available(self, entity_name, test, skill_name):
         """!
         @brief Whether an entity's [entity.test] can currently be attempted with the given
