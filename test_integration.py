@@ -418,14 +418,18 @@ class TestCryptDungeonConversation(_LivePipelineTestCase):
         random.seed()
 
     def test_disarm_trap_kill_spider_branch_and_loot_through_the_real_pipeline(self):
-        # Seed 3 gives a clean run start to finish, verified directly against the mechanics
+        # Seed 13 gives a clean run start to finish, verified directly against the mechanics
         # (no LLM involved in producing these numbers, only in narrating them): the
         # entrance's dart trap disarm (finesse, 3 dice, difficulty 9) rolls 12 -- a pass; the
-        # spider (blades vs its own dodge) dies in exactly two hits (18 vs difficulty 14,
-        # then 16 vs difficulty 9); the hidden alcove's coffer lock (finesse, difficulty 8)
-        # rolls 14; the iron chest's own lock (finesse, difficulty 10) rolls 11 -- both
-        # passes. Re-pick this seed if any of these dice/difficulties ever change.
-        random.seed(3)
+        # spider fight is now a two-front affair -- thane (an ally present in every room, not
+        # just combat, see CLAUDE.md's "Combat") joins gladstone's own attacks each round --
+        # so the same two "I attack the spider" actions as before still account for the whole
+        # fight, just from combined damage (gladstone's own blades rolls: 22 then 21, both vs
+        # difficulty 16; thane whiffs the first round and finishes the spider off on the
+        # second); the hidden alcove's coffer lock (finesse, difficulty 8) rolls 9; the iron
+        # chest's own lock (finesse, difficulty 10) rolls 12 -- both passes. Re-pick this seed
+        # if any of these dice/difficulties/entities ever change.
+        random.seed(13)
 
         action_events = []
         item_events = []

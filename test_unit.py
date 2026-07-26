@@ -2806,6 +2806,22 @@ class TestMultiRoomDungeon(DMTestCase):
         dm._attach_defender_details(result, "dart trap")
         self.assertNotIn("defender_details", result)
 
+    def test_hidden_scythe_trap_fails_its_notice_roll_and_stays_out_of_the_roster(self):
+        with patch("random.randint", return_value=1):  # observation 1D=1, under difficulty 6
+            dm = DMCore(EventBus(), scenario_name="crypt")
+            dm.enter_room("collapsed_passage")
+        self.assertTrue(dm.is_hidden("scythe trap"))
+        roster_text = " ".join(dm._describe_scenario_characters())
+        self.assertNotIn("scythe trap", roster_text)
+
+    def test_hidden_scythe_trap_passing_its_notice_roll_joins_the_roster(self):
+        with patch("random.randint", return_value=6):  # observation 1D=6, clears difficulty 6
+            dm = DMCore(EventBus(), scenario_name="crypt")
+            dm.enter_room("collapsed_passage")
+        self.assertFalse(dm.is_hidden("scythe trap"))
+        roster_text = " ".join(dm._describe_scenario_characters())
+        self.assertIn("scythe trap", roster_text)
+
     def test_failed_disarm_damages_the_player_and_arms_blocks_further_attempts(self):
         starting_hp = self.dm_core.get_current_hp("gladstone")
         with patch("random.randint", return_value=1):  # finesse 3d1=3, well under difficulty 9

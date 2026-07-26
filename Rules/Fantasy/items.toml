@@ -264,6 +264,15 @@ max_hp = 8
 [entity.conditions.armed]
 duration = "permanent"
 
+[entity.conditions.hidden]
+duration = "permanent"
+
+# Overhead, not waist-height like the dart trap -- a step harder to catch on a glance, hence
+# the steeper notice difficulty (6 vs. the dart trap's 4).
+[entity.notice]
+skill = "observation"
+difficulty = 6
+
 [entity.test]
 difficulty = 10
 # reflexes is listed first since it's what gladstone (and any similarly-built character) is
