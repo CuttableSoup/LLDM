@@ -418,19 +418,19 @@ class TestCryptDungeonConversation(_LivePipelineTestCase):
         random.seed()
 
     def test_disarm_trap_kill_spider_branch_and_loot_through_the_real_pipeline(self):
-        # Seed 45 gives a clean run start to finish, verified directly against the mechanics
-        # (no LLM involved in producing these numbers, only in narrating them): the
-        # entrance's dart trap disarm (finesse, 3 dice, difficulty 9) rolls 11 -- a pass. The
-        # spider fight is now a three-front affair -- thane and anne (allies present in every
-        # room, not just combat, see CLAUDE.md's "Combat") both join gladstone's own attacks
-        # each round -- so the same two "I attack the spider" actions as before still account
-        # for the whole fight, just carried almost entirely by anne's own "splash flow"
-        # (arcane 12 vs difficulty 4 for 10 damage, then 23 vs difficulty 5 for 20) while
-        # gladstone and thane both miss their own rolls; the hidden alcove's coffer lock
-        # (finesse, difficulty 8) rolls 9; the iron chest's own lock (finesse, difficulty 10)
-        # rolls 11 -- both passes. Re-pick this seed if any of these dice/difficulties/
-        # entities ever change.
-        random.seed(45)
+        # Seed 44 gives a clean run start to finish, verified directly against the mechanics
+        # (no LLM involved in producing these numbers, only in narrating them): the entrance's
+        # dart trap disarm (finesse, 3 dice, difficulty 9) rolls 14 -- a pass. The spider fight
+        # is a three-front affair -- thane and anne (allies present in every room, not just
+        # combat, see CLAUDE.md's "Combat") both join gladstone's own attacks each round -- so
+        # the same two "I attack the spider" actions as before still account for the whole
+        # fight, carried by anne's own "splash flow" (arcane 12 vs difficulty 2 for 8 damage,
+        # then 16 vs difficulty 6 for 12) and gladstone's own second-round blades hit (22 vs
+        # difficulty 19 for 9 damage) while thane whiffs both his own rolls; the hidden
+        # alcove's coffer lock (finesse, difficulty 8) rolls 11; the iron chest's own lock
+        # (finesse, difficulty 10) rolls 10 -- both passes. Re-pick this seed if any of these
+        # dice/difficulties/entities/character skills ever change.
+        random.seed(44)
 
         action_events = []
         item_events = []

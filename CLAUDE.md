@@ -19,9 +19,11 @@ order: `NLPCore`, `LLMCore`, `GUICore`, then `DMCore` last (it publishes `rules_
   `DM_Combat.py` (dice rolling, opposed checks, damage, ability/behavior resolution),
   `DM_Status.py` (statuses/conditions, entity tests), `DM_Inventory.py`
   (currency/item transfer), `DM_Social.py` (attitudes, character description),
-  `DM_Movement.py` (bands, range), and `DM_Persistence.py` (save/load). Python's MRO flattens
-  every mixin method onto one `DMCore` instance, so `dm_core.<method>(...)` call sites
-  (including `test_unit.py`) don't care which file defines a given method.
+  `DM_Movement.py` (bands, range), `DM_Persistence.py` (save/load), and
+  `DM_CharacterCreation.py` (baking a finished character-creation result onto the player
+  entity — see "Character creation" below). Python's MRO flattens every mixin method onto
+  one `DMCore` instance, so `dm_core.<method>(...)` call sites (including `test_unit.py`)
+  don't care which file defines a given method.
 - **`NLP_Core.py`** — `sentence-transformers` (`all-MiniLM-L6-v2`) embeds each skill's
   name/description/keywords as separate phrases, then cosine-matches player input against all
   of them. Also matches free text against item names/directions/save-load prefixes for
@@ -109,7 +111,7 @@ list of `{requirements, action}` entries, matched top-down (`requirements` compa
 derived/entity fields the same way `[[status]]` requirements are — see "Status and
 conditions"). `turns` is sorted by initiative: `roll_initiative(entity_name)` pools every
 skill named in `rules.toml`'s `[[initiative]]` list and rolls once per round; an entity
-lacking a listed skill defaults to untrained (1D/0 pips). Initiative only orders narration —
+lacking a listed skill defaults to untrained (0D/0 pips). Initiative only orders narration —
 every actor resolves independently against state as of the start of the round, not
 sequentially. `current_target` only advances (to the next living hostile entity, or the
 first living non-player entity if none is hostile) once, at the end of the round, if it died.
@@ -176,6 +178,58 @@ by one band; a ranged weapon or spell (ex: `long bow`, `range = 6`) reaches howe
 own data says, with no accuracy difference across that range. `is_in_range(attacker, defender,
 ability)` is `True` unconditionally when `ability` is `None` (a non-physical check, ex:
 `charisma`).
+
+## Character creation
+
+Race/point-buy skill dice, applied to the player entity once, before any scenario loads.
+`Character_Creation.py` is pure, UI- and DMCore-independent logic — its own
+`load_character_creation_data(rules_dir)` re-scans `Rules/Fantasy/*.toml` for `[[skill]]`,
+`[[race]]` (`races.toml`), and `rules.toml`'s own `[character_creation]` table directly
+(duplicated from `DM_Rules.py`'s `load_rules`, the same "computes its own path independently"
+precedent `LLMCore._save_slot_dir` already sets — see "Saving and loading" below), since a
+character has to be buildable *before* a `DMCore` exists to read that data off of.
+`[character_creation]` holds two constants every race shares alike: `pool_dice` (15 — free
+dice to spend across skills however the player likes) and `max_allocation_per_skill` (5 — the
+spending cap on any one skill). There is no separate "base_dice" constant — a race
+(`races.toml`) is its own complete, *absolute* `[race.skill_dice]` table, one entry per skill,
+human included (`human` is simply 2D in everything, spelled out the same as any other race,
+not an implicit default every other race deviates from). `race_baseline_skills` reads a
+skill's value straight off the race's own table, floored at 0; a skill genuinely missing from
+a race's own table (malformed/incomplete data, not a case any shipped race relies on) falls
+back to `UNTRAINED_DICE` (0) — the same untrained convention `resolve_action`/`roll_initiative`
+use for an entity's own missing skill elsewhere in the engine, kept as its own named constant
+here rather than imported from there since Character_Creation.py has to stay importable with
+no DMCore/DM_Combat.py in the picture at all. `elf`/`dwarf`/`half-orc`/`halfling` each raise four
+skills to 3D and lower four others to 1D around that 2D baseline, netting to as many raised as
+lowered, so no race starts with more total dice than any other before the pool is even spent.
+`validate_allocation` rejects an unknown skill name, a negative entry, anything over
+`max_allocation_per_skill`, or a total that isn't *exactly* `pool_dice` (no banking dice, no
+overspending); `build_character_skills` is baseline + allocation, for every skill, as `{dice,
+pips: 0}`.
+
+`DM_CharacterCreation.py`'s `CharacterCreationMixin` is the one piece that touches `DMCore`
+state: `apply_character_creation(character)` — `character` being
+`{"race": race_name, "allocation": {skill_name: dice_int}}` — validates, then overwrites
+`self.entities[self.player_name]["skills"]` entirely (not merged with whatever
+`characters.toml` originally authored) and updates `qualities.race` for flavor. `DMCore.__init__`
+takes this as an optional `character` param (default `None`), applied right after
+`_resolve_player_name()` resolves `self.player_name` and before any scenario loads — so
+`_instance_entities` later deep-copies the *overwritten* skills into the live scenario
+instance, not the template's original ones. `character=None` (every existing caller that
+doesn't pass it) is a complete no-op — `characters.toml`'s own hand-authored `gladstone`
+stays exactly as-is; this system only ever governs a freshly-created character, never
+retrofits existing NPCs/creatures/party members.
+
+`Character_Creation_GUI.py`'s `CharacterCreationDialog` (a modal `Toplevel`, same
+`grab_set`/blocking-`wait_window` pattern `GUICore.request_load` already uses) is the
+interactive front end: a race dropdown, a scrollable per-skill row (baseline, an editable
+spend, the resulting total) for every loaded skill, and a running "dice remaining" counter
+that gates the Create button until it hits exactly zero. Switching races resets every
+allocation to 0, since a race switch can change which skills are even worth spending into.
+`LLDM.py`'s `main()` runs this (via `run_character_creation_dialog`, parented to `GUICore`'s
+own root) *before* constructing `DMCore` — its result (or `None`, if cancelled) feeds straight
+into `DMCore`'s own `character` param. `--skip-character-creation` bypasses the dialog
+entirely for a fast default-skills boot.
 
 ## Scenarios and rooms
 

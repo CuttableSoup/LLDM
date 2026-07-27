@@ -8,7 +8,7 @@
 # realistic combinations.
 #
 # Every field is read with .get(), so an absent field just means "code that reads it falls
-# back to a default" (0, {}, [], or a hardcoded fallback like "untrained" 1D) rather than an
+# back to a default" (0, {}, [], or a hardcoded fallback like "untrained" 0D) rather than an
 # error. Fields marked UNUSED below are parsed and kept on the entity dict but nothing in
 # DM_*.py currently reads them -- reserved for narration flavor or a future mechanic (bulk
 # capacity, XP, encumbrance), not enforced by any rule today.
@@ -87,7 +87,8 @@ speed = 1                                   # Only ever read off the player's ow
 # ---------------------------------------------------------------------------------------------
 # Skills -- {dice, pips} per skill name, read by resolve_action/resolve_opposed_action/
 # get_opposing_skill/select_ability_skill/roll_initiative/resolve_bonus. A skill this entity
-# doesn't list defaults to untrained (1 die, 0 pips) wherever it's rolled. "healing" here (not
+# doesn't list defaults to untrained (0 dice, 0 pips) wherever it's rolled -- unattemptable
+# against anything but an auto-success (difficulty 0) check. "healing" here (not
 # a top-level field) is what _resolve_use_intent rolls for a usable item's healing effect (ex:
 # items.toml's health potion) -- same {dice, pips} shape as any other skill entry, just never
 # actually rolled as a skill check.

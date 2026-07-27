@@ -1,6 +1,7 @@
 import os
 import re
 
+from DM_CharacterCreation import CharacterCreationMixin
 from DM_Combat import CombatMixin
 from DM_Inventory import InventoryMixin
 from DM_Movement import MovementMixin
@@ -9,29 +10,37 @@ from DM_Rules import RulesMixin, scenario_file_path
 from DM_Social import SocialMixin
 from DM_Status import StatusMixin
 
-class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixin, RulesMixin, PersistenceMixin):
+class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixin, RulesMixin, PersistenceMixin, CharacterCreationMixin):
     """!
     @brief Main class handling the core mechanics of the RPG system. The implementation is
         composed from domain mixins in sibling files -- DM_Rules.py (rules/scenario
         loading), DM_Combat.py (dice/damage/ability resolution), DM_Status.py (the
         status/condition system and entity tests), DM_Inventory.py (currency/item
         transfer), DM_Social.py (attitudes and character description), DM_Movement.py
-        (distance tracking, advance/retreat, range-based difficulty), and
-        DM_Persistence.py (save/load) -- so that every dm_core.<method>(...) call site
-        throughout the codebase and test_all.py keeps working unchanged regardless of
-        which file actually defines a given method (Python's MRO flattens every mixin
-        method onto this one class). DM_Core.py itself is reduced to __init__ (boot
-        wiring) plus the two real event handlers, _on_action_detected and
+        (distance tracking, advance/retreat, range-based difficulty), DM_Persistence.py
+        (save/load), and DM_CharacterCreation.py (baking a finished character-creation
+        result -- race + point-buy skill allocation, see Character_Creation.py's own
+        module docstring -- onto the player entity) -- so that every dm_core.<method>(...)
+        call site throughout the codebase and test_all.py keeps working unchanged
+        regardless of which file actually defines a given method (Python's MRO flattens
+        every mixin method onto this one class). DM_Core.py itself is reduced to __init__
+        (boot wiring) plus the two real event handlers, _on_action_detected and
         _on_item_interaction_detected, and their direct helpers -- the pieces that
         orchestrate calls across every mixin and don't belong to any single domain.
     """
 
-    def __init__(self, event_bus, scenario_name="arena"):
+    def __init__(self, event_bus, scenario_name="arena", character=None):
         """!
         @brief Initializes the DM core and loads system references.
         @param event_bus The central event bus instance.
         @param scenario_name Which scenario to load, matching a file in
             Rules/Fantasy/scenarios/ (ex: "arena" loads scenarios/arena.toml).
+        @param character An optional finished character-creation result
+            ({"race": race_name, "allocation": {skill_name: dice_int}}), applied to the
+            player entity via apply_character_creation (DM_CharacterCreation.py) right
+            after self.player_name is resolved, before any scenario is loaded. None (the
+            default) leaves the player template's own hand-authored skills untouched --
+            every existing caller that doesn't pass this keeps working exactly as before.
         """
         self.event_bus = event_bus
         self.skills = {}
@@ -68,6 +77,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         # ad-hoc test scenarios that omit gladstone entirely still keep the same player_name
         # they booted with.
         self.player_name = self._resolve_player_name()
+        self.apply_character_creation(character)
         self.load_scenario_definition(scenario_name)
         self.load_scenario()
         self.event_bus.publish("log_info", "DMCore initialized.")

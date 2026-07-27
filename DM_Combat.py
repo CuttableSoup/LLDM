@@ -212,7 +212,9 @@ class CombatMixin(DMCoreProtocol):
             and rolled once -- not compared statically via the dice*3+pips rating convention
             get_opposing_skill/select_ability_skill use, since initiative is meant to vary
             round to round rather than just rank a fixed pair of skills. A skill the entity
-            lacks defaults to the same untrained 1D/0 pips resolve_action already defaults to.
+            lacks defaults to the same untrained 0D/0 pips resolve_action already defaults to
+            -- an entity with none of the pooled skills simply rolls 0 (still resolvable, just
+            never wins a tie against anyone with even one die in one of them).
         @param entity_name The name of the entity rolling initiative.
         @return The rolled initiative total.
         """
@@ -220,22 +222,25 @@ class CombatMixin(DMCoreProtocol):
         dice = 0
         pips = 0
         for term in self.rules.get("initiative", []):
-            stats = entity_skills.get(term.get("skill"), {"dice": 1, "pips": 0})
+            stats = entity_skills.get(term.get("skill"), {"dice": 0, "pips": 0})
             dice += stats.get("dice", 0)
             pips += stats.get("pips", 0)
         return self.roll_dice(dice, pips)
 
     def resolve_action(self, entity_name, skill_name, difficulty=0):
         """!
-        @brief Resolves the outcome of an entity using a skill against a difficulty.
+        @brief Resolves the outcome of an entity using a skill against a difficulty. A skill
+            entity_name's own [entity.skills] doesn't list at all is untrained -- 0D/0 pips,
+            not a token 1D -- so an unlisted skill can only ever succeed against difficulty 0
+            (an auto-success check, ex: a non-opposed "examine"-style test with no real gate).
         @param entity_name The name of the entity performing the action.
         @param skill_name The skill being used.
         @param difficulty The target number the roll must meet or beat. Defaults to 0 (auto-success) when not supplied.
         @return A dict describing the roll and whether it succeeded.
         """
         entity = self.entities.get(entity_name, {})
-        skill_stats = entity.get("skills", {}).get(skill_name, {"dice": 1, "pips": 0})
-        roll = self.roll_dice(skill_stats.get("dice", 1), skill_stats.get("pips", 0))
+        skill_stats = entity.get("skills", {}).get(skill_name, {"dice": 0, "pips": 0})
+        roll = self.roll_dice(skill_stats.get("dice", 0), skill_stats.get("pips", 0))
         success = roll >= difficulty
         self.event_bus.publish(
             "log_info",
@@ -285,7 +290,7 @@ class CombatMixin(DMCoreProtocol):
         opposing_skill = self.get_opposing_skill(skill_name, defender_name)
         if opposing_skill:
             defender_stats = self.entities[defender_name]["skills"][opposing_skill]
-            difficulty = self.roll_dice(defender_stats.get("dice", 1), defender_stats.get("pips", 0))
+            difficulty = self.roll_dice(defender_stats.get("dice", 0), defender_stats.get("pips", 0))
         else:
             difficulty = 0
 

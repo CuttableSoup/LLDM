@@ -11,14 +11,24 @@ class GUICore:
     @brief Main class handling the display and user interaction.
     """
 
-    def __init__(self, event_bus):
+    def __init__(self, event_bus, master=None):
         """!
         @brief Initializes the GUI components.
         @param event_bus The central event bus instance.
+        @param master An existing Tk widget to parent this window under, as a Toplevel --
+            LLDM.py's own real usage never passes this (self.root is a genuine Tk() root, the
+            app's only one). Test-only: creating and destroying a real Tk() root per test adds
+            up across many tests in one process and can eventually corrupt Tcl's own shared
+            interpreter state (an intermittent, environment-specific TclError seen in this
+            repo's own test suite) -- passing one shared, already-created root in as `master`
+            lets a whole TestCase class reuse it, while each GUICore instance still gets its
+            own fully independent Toplevel/widget tree (mainloop/winfo_children/destroy all
+            behave the same on a Toplevel as on Tk, so nothing else about this class needs to
+            know or care which one self.root actually is).
         """
         self.event_bus = event_bus
 
-        self.root = tk.Tk()
+        self.root = tk.Toplevel(master) if master is not None else tk.Tk()
         self.root.title("LLDM Interface")
         self.root.geometry("1000x600")
 

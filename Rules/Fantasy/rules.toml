@@ -102,6 +102,17 @@ modifier = { dice = 0, pips = 0, bonus = 0 }
 skill = "strength"
 divisor = 2
 
+# Point-buy constants for character creation (Character_Creation.py/DM_CharacterCreation.py).
+# A new character's starting dice come entirely from whichever race is picked -- every race
+# in races.toml spells out an absolute dice count for every skill (human's own is a flat 2D
+# everywhere; there's no separate "base_dice" constant here for any race to fall back to).
+# What every race *does* share is how much is left to spend on top: pool_dice free dice to
+# allocate across skills however the player likes, capped at max_allocation_per_skill in any
+# single skill (so a 15D pool can't all pile into one skill).
+[character_creation]
+pool_dice = 15
+max_allocation_per_skill = 5
+
 # Each entry contributes one skill's dice/pips to the combined initiative pool DMCore.roll_initiative
 # rolls once per round for turn ordering -- "dodge + observation" today, but a third contributing
 # skill later is just another entry, no code change needed (same list-of-terms pattern [[status]]

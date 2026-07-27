@@ -1,0 +1,243 @@
+# Character-creation race templates (see rules.toml's own [character_creation] table for the
+# shared point-buy constants every race uses identically: pool_dice, max_allocation_per_skill).
+# There is no separate "base_dice" constant -- a race's own [race.skill_dice] table is the
+# absolute, authoritative dice count for every single skill, human included (human is simply
+# "2 in everything," spelled out here the same as any other race, not an implicit default
+# every other race deviates from). Character_Creation.race_baseline_skills reads a skill's
+# value straight off this table, floored at 0; a skill genuinely missing from a race's own
+# table (a data-authoring mistake, not an intentional case any race below relies on) falls
+# back to Character_Creation.UNTRAINED_DICE (0) -- deliberately not the general engine's own
+# "missing skill" convention of 1D (resolve_action/roll_initiative), since a chargen'd
+# character always gets an explicit entry for every skill either way, never an actually-absent
+# one. Every non-human race here raises four skills to 3D and lowers four others to 1D around
+# that 2D baseline, so no race starts with more or fewer total dice than any other before the
+# pool is even spent; that's a deliberate balance choice this data happens to follow, not
+# something any code enforces.
+#
+# Not loaded by DMCore.load_rules alone -- Character_Creation.load_character_creation_data
+# reads this same file independently (skill/race/character_creation keys only), so a character
+# can be built *before* a DMCore/scenario exists at all. See DM_CharacterCreation.py's
+# apply_character_creation for how a finished character-creation result is later baked into
+# the player entity once DMCore does exist.
+
+[[race]]
+name = "human"
+description = "Adaptable and unremarkable -- no innate skill strengths or weaknesses."
+
+[race.skill_dice]
+acrobatics = 2
+appraise = 2
+arcane = 2
+artistry = 2
+athletics = 2
+axes = 2
+blades = 2
+brawling = 2
+charisma = 2
+deception = 2
+disguise = 2
+dodge = 2
+escape = 2
+finesse = 2
+fly = 2
+forgery = 2
+fortitude = 2
+gambling = 2
+husbandry = 2
+intimidation = 2
+linguistics = 2
+medicine = 2
+miracles = 2
+missiles = 2
+navigation = 2
+observation = 2
+polearms = 2
+psionics = 2
+reflexes = 2
+stealth = 2
+streetwise = 2
+strength = 2
+survival = 2
+throwing = 2
+trickery = 2
+willpower = 2
+
+[[race]]
+name = "elf"
+description = "Graceful and long-lived, favoring keen senses and subtle magic over raw force."
+
+[race.skill_dice]
+# Raised to 3D
+acrobatics = 3
+arcane = 3
+observation = 3
+stealth = 3
+# Lowered to 1D
+brawling = 1
+fortitude = 1
+intimidation = 1
+strength = 1
+# Everything else stays at the human baseline of 2D
+appraise = 2
+artistry = 2
+athletics = 2
+axes = 2
+blades = 2
+charisma = 2
+deception = 2
+disguise = 2
+dodge = 2
+escape = 2
+finesse = 2
+fly = 2
+forgery = 2
+gambling = 2
+husbandry = 2
+linguistics = 2
+medicine = 2
+miracles = 2
+missiles = 2
+navigation = 2
+polearms = 2
+psionics = 2
+reflexes = 2
+streetwise = 2
+survival = 2
+throwing = 2
+trickery = 2
+willpower = 2
+
+[[race]]
+name = "dwarf"
+description = "Stout and stubborn, at home underground and slow to trust outsiders' magic."
+
+[race.skill_dice]
+# Raised to 3D
+appraise = 3
+fortitude = 3
+intimidation = 3
+strength = 3
+# Lowered to 1D
+acrobatics = 1
+arcane = 1
+charisma = 1
+stealth = 1
+# Everything else stays at the human baseline of 2D
+artistry = 2
+athletics = 2
+axes = 2
+blades = 2
+brawling = 2
+deception = 2
+disguise = 2
+dodge = 2
+escape = 2
+finesse = 2
+fly = 2
+forgery = 2
+gambling = 2
+husbandry = 2
+linguistics = 2
+medicine = 2
+miracles = 2
+missiles = 2
+navigation = 2
+observation = 2
+polearms = 2
+psionics = 2
+reflexes = 2
+streetwise = 2
+survival = 2
+throwing = 2
+trickery = 2
+willpower = 2
+
+[[race]]
+name = "half-orc"
+description = "Powerfully built survivors, more comfortable with a blade than a spellbook."
+
+[race.skill_dice]
+# Raised to 3D
+brawling = 3
+intimidation = 3
+strength = 3
+survival = 3
+# Lowered to 1D
+arcane = 1
+artistry = 1
+charisma = 1
+linguistics = 1
+# Everything else stays at the human baseline of 2D
+acrobatics = 2
+appraise = 2
+athletics = 2
+axes = 2
+blades = 2
+deception = 2
+disguise = 2
+dodge = 2
+escape = 2
+finesse = 2
+fly = 2
+forgery = 2
+fortitude = 2
+gambling = 2
+husbandry = 2
+medicine = 2
+miracles = 2
+missiles = 2
+navigation = 2
+observation = 2
+polearms = 2
+psionics = 2
+reflexes = 2
+stealth = 2
+streetwise = 2
+throwing = 2
+trickery = 2
+willpower = 2
+
+[[race]]
+name = "halfling"
+description = "Small, quick, and quiet -- built for slipping past trouble, not through it."
+
+[race.skill_dice]
+# Raised to 3D
+dodge = 3
+finesse = 3
+stealth = 3
+streetwise = 3
+# Lowered to 1D
+athletics = 1
+brawling = 1
+intimidation = 1
+strength = 1
+# Everything else stays at the human baseline of 2D
+acrobatics = 2
+appraise = 2
+arcane = 2
+artistry = 2
+axes = 2
+blades = 2
+charisma = 2
+deception = 2
+disguise = 2
+escape = 2
+fly = 2
+forgery = 2
+fortitude = 2
+gambling = 2
+husbandry = 2
+linguistics = 2
+medicine = 2
+miracles = 2
+missiles = 2
+navigation = 2
+observation = 2
+polearms = 2
+psionics = 2
+reflexes = 2
+survival = 2
+throwing = 2
+trickery = 2
+willpower = 2

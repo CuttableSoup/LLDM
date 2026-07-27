@@ -12,6 +12,14 @@ import numpy as np
 import pytest
 from sentence_transformers import SentenceTransformer
 
+from Character_Creation import (
+    build_character_skills,
+    get_race,
+    load_character_creation_data,
+    race_baseline_skills,
+    validate_allocation,
+)
+from Character_Creation_GUI import CharacterCreationDialog
 from DM_Core import DMCore
 from Event_Bus import EventBus
 from GUI_Core import GUICore
@@ -20,6 +28,30 @@ from LLM_Rag import RagIndex
 from NLP_Core import NLPCore
 from Textual_Core import TextualCore
 from textual.widgets import Button, Input, RichLog, TabbedContent
+
+
+def _new_tk_root_with_retry(attempts=3, delay=0.5):
+    """!
+    @brief Constructs a real tk.Tk() root, retrying on TclError -- creating a Tk() root is,
+        on this environment, an occasionally-flaky operation independent of how many other
+        Tk() roots have been created in this process (observed even with only one Tk() root
+        created in an entire test run, so it isn't purely a cumulative-churn issue reducing
+        Tk() creations elsewhere already helps with, just a residual one worth retrying
+        directly). Every TestCase class that needs a real Tk() root for setUpClass should
+        call this instead of tk.Tk() directly, so a single transient failure doesn't error
+        out an entire test class at once.
+    @param attempts How many times to try before giving up and letting the last TclError raise.
+    @param delay Seconds to wait between attempts.
+    @return A real, constructed tk.Tk() instance.
+    """
+    import time
+    for attempt in range(attempts):
+        try:
+            return tk.Tk()
+        except tk.TclError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(delay)
 
 
 class DMTestCase(unittest.TestCase):
@@ -1276,11 +1308,11 @@ class TestEntityBehavior(DMTestCase):
 
     def test_roll_initiative_pools_dodge_and_untrained_observation(self):
         # wolf has dodge 6D/0 pips and no observation skill at all -- rules.toml's [[initiative]]
-        # still pools it in at the same untrained 1D/0 pips resolve_action defaults missing
-        # skills to, for a combined 7D pool.
+        # still pools it in at the same untrained 0D/0 pips resolve_action defaults missing
+        # skills to, so the pool is just dodge's own 6D (observation contributes nothing).
         with patch("random.randint", return_value=4):
             initiative = self.dm_core.roll_initiative("wolf")
-        self.assertEqual(initiative, 28)
+        self.assertEqual(initiative, 24)
 
     def test_round_resolved_attaches_initiative_to_player_and_every_turn(self):
         with patch("random.randint", return_value=4):
@@ -1293,16 +1325,16 @@ class TestEntityBehavior(DMTestCase):
 
     def test_turns_are_ordered_by_initiative_descending(self):
         # arena.toml's default scene has two wolves plus thane. Both wolves share dodge (6D) +
-        # untrained observation (1D) = 7D, outrolling thane's dodge (3D) + untrained observation
-        # (1D) = 4D once every die lands the same (patched to 4) -- so both wolves (tied,
+        # untrained observation (0D) = 6D, outrolling thane's dodge (3D) + untrained observation
+        # (0D) = 3D once every die lands the same (patched to 4) -- so both wolves (tied,
         # stable-sorted in their original declaration order) sort ahead of thane in "turns".
         with patch("random.randint", return_value=4):
             self.dm_core._on_action_detected({"skill": "athletics", "input": "I brace myself"})
 
         turns = self.resolved[-1]["turns"]
         self.assertEqual([turn["actor"] for turn in turns], ["wolf", "wolf_2", "thane"])
-        self.assertEqual(turns[0]["initiative"], 28)
-        self.assertEqual(turns[1]["initiative"], 28)
+        self.assertEqual(turns[0]["initiative"], 24)
+        self.assertEqual(turns[1]["initiative"], 24)
         self.assertGreater(turns[0]["initiative"], turns[2]["initiative"])
 
     def test_current_target_advances_to_next_hostile_when_current_dies(self):
@@ -1571,6 +1603,135 @@ class TestScenarioLoading(DMTestCase):
         self.dm_core.scenario = {"entities": [{"name": "wolf", "band": 1}]}
         self.dm_core.load_scenario()
         self.assertEqual(self.dm_core.scenario_entities, ["wolf"])
+
+
+class TestCharacterCreation(unittest.TestCase):
+    """!
+    @brief Character_Creation.py's pure race/point-buy logic -- no DMCore, no GUI, just the
+        data + math (see Character_Creation.py's own module docstring for why it's
+        independent of DMCore in the first place).
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.skills, cls.races, cls.character_creation = load_character_creation_data()
+
+    def test_loads_real_rules_fantasy_races_and_constants(self):
+        self.assertEqual(
+            {r["name"] for r in self.races}, {"human", "elf", "dwarf", "half-orc", "halfling"}
+        )
+        self.assertEqual(self.character_creation, {"pool_dice": 15, "max_allocation_per_skill": 5})
+        self.assertIn("arcane", self.skills)
+
+    def test_human_is_defined_as_2d_in_every_skill(self):
+        # No implicit "base_dice" fallback -- human's own [race.skill_dice] table explicitly
+        # lists every skill at 2D, same as any other race would list its own values.
+        human = get_race(self.races, "human")
+        self.assertEqual(set(human["skill_dice"].keys()), set(self.skills.keys()))
+        baseline = race_baseline_skills(self.skills, human)
+        self.assertTrue(all(dice == 2 for dice in baseline.values()))
+
+    def test_get_race_returns_none_for_an_unknown_name(self):
+        self.assertIsNone(get_race(self.races, "griffin-kin"))
+
+    def test_race_baseline_uses_each_races_own_absolute_values(self):
+        elf = get_race(self.races, "elf")
+        baseline = race_baseline_skills(self.skills, elf)
+        self.assertEqual(baseline["arcane"], 3)  # elf's own absolute value
+        self.assertEqual(baseline["strength"], 1)  # elf's own absolute value
+        self.assertEqual(baseline["blades"], 2)  # elf's own absolute value, same as human's
+
+    def test_race_baseline_with_no_race_falls_back_to_untrained(self):
+        # A None race (ex: an unrecognized/omitted race name) declares no skills at all --
+        # every skill falls back to UNTRAINED_DICE (0), not human's own 2D.
+        baseline = race_baseline_skills(self.skills, None)
+        self.assertTrue(all(dice == 0 for dice in baseline.values()))
+
+    def test_race_baseline_floors_a_negative_value_at_zero_not_one(self):
+        # A miskeyed/negative override in race data must clamp to 0, not silently become a
+        # trained 1D the race data never actually declared.
+        race = {"name": "cursed", "skill_dice": {"arcane": -3}}
+        baseline = race_baseline_skills(self.skills, race)
+        self.assertEqual(baseline["arcane"], 0)
+
+    def test_validate_allocation_accepts_a_legal_spend(self):
+        allocation = {"arcane": 5, "stealth": 5, "observation": 5}
+        ok, reason = validate_allocation(self.skills, get_race(self.races, "elf"), self.character_creation, allocation)
+        self.assertTrue(ok)
+        self.assertIsNone(reason)
+
+    def test_validate_allocation_rejects_unknown_skill(self):
+        ok, reason = validate_allocation(
+            self.skills, None, self.character_creation, {"griffin-riding": 15}
+        )
+        self.assertFalse(ok)
+        self.assertIn("griffin-riding", reason)
+
+    def test_validate_allocation_rejects_negative_allocation(self):
+        allocation = {"arcane": -1, "stealth": 16}
+        ok, reason = validate_allocation(self.skills, None, self.character_creation, allocation)
+        self.assertFalse(ok)
+        self.assertIn("negative", reason)
+
+    def test_validate_allocation_rejects_over_the_per_skill_cap(self):
+        allocation = {"arcane": 6, "stealth": 9}
+        ok, reason = validate_allocation(self.skills, None, self.character_creation, allocation)
+        self.assertFalse(ok)
+        self.assertIn("arcane", reason)
+
+    def test_validate_allocation_rejects_total_other_than_the_pool(self):
+        ok, reason = validate_allocation(self.skills, None, self.character_creation, {"arcane": 5})
+        self.assertFalse(ok)
+        self.assertIn("5D", reason)
+
+    def test_build_character_skills_adds_allocation_onto_baseline(self):
+        allocation = {"arcane": 5, "stealth": 5, "observation": 5}
+        skills = build_character_skills(self.skills, get_race(self.races, "elf"), allocation)
+        self.assertEqual(skills["arcane"], {"dice": 8, "pips": 0})  # 3 baseline + 5 allocated
+        self.assertEqual(skills["strength"], {"dice": 1, "pips": 0})  # untouched, elf's own override
+        self.assertEqual(skills["blades"], {"dice": 2, "pips": 0})  # untouched, elf's own override
+
+
+class TestCharacterCreationDMCoreIntegration(DMTestCase):
+    def test_no_character_leaves_the_player_templates_own_skills_untouched(self):
+        # The default (character=None, what every existing caller already passes) --
+        # apply_character_creation must be a complete no-op.
+        self.assertEqual(self.dm_core.entities["gladstone"]["skills"]["blades"], {"dice": 5, "pips": 0})
+
+    def test_valid_character_creation_replaces_the_players_own_skills(self):
+        character = {
+            "race": "elf",
+            "allocation": {"arcane": 5, "stealth": 5, "observation": 5},
+        }
+        dm = DMCore(EventBus(), scenario_name="arena", character=character)
+        self.assertEqual(dm.entities["gladstone"]["skills"]["arcane"], {"dice": 8, "pips": 0})
+        self.assertEqual(dm.entities["gladstone"]["skills"]["strength"], {"dice": 1, "pips": 0})
+        # A skill the character sheet never touches still exists, at the elf's own baseline --
+        # not still carrying gladstone's own hand-authored value from characters.toml.
+        self.assertEqual(dm.entities["gladstone"]["skills"]["blades"], {"dice": 2, "pips": 0})
+        self.assertEqual(dm.entities["gladstone"]["qualities"]["race"], "elf")
+
+    def test_invalid_character_creation_is_rejected_and_leaves_the_template_intact(self):
+        errors = []
+        bus = EventBus()
+        bus.subscribe("log_error", errors.append)
+        character = {"race": "elf", "allocation": {"arcane": 20}}  # way over cap and under pool
+
+        dm = DMCore(bus, scenario_name="arena", character=character)
+
+        self.assertEqual(dm.entities["gladstone"]["skills"]["blades"], {"dice": 5, "pips": 0})
+        self.assertTrue(any("Character creation rejected" in message for message in errors))
+
+    def test_unrecognized_race_name_falls_back_to_untrained_not_human(self):
+        # Not itself an error -- get_race returns None, race_baseline_skills treats a missing
+        # race as declaring no skills at all, so every skill falls back to UNTRAINED_DICE (0),
+        # not human's own 2D -- only the allocation itself can fail validation.
+        character = {
+            "race": "griffin-kin",
+            "allocation": {"arcane": 5, "stealth": 5, "observation": 5},
+        }
+        dm = DMCore(EventBus(), scenario_name="arena", character=character)
+        self.assertEqual(dm.entities["gladstone"]["skills"]["arcane"], {"dice": 5, "pips": 0})
 
 
 class TestLockedChest(DMTestCase):
@@ -3515,13 +3676,147 @@ class TestRagIndex(unittest.TestCase):
             self.assertFalse(index.ready)
 
 
+class TestCharacterCreationDialog(unittest.TestCase):
+    """!
+    @brief Character_Creation_GUI.py's Tkinter dialog, exercised directly (no mainloop, no
+        wait_window -- same "construct it, drive its widgets synchronously, no real modal
+        block" pattern TestGUICore's own request_load tests already use). A small, hand-picked
+        fixture (3 skills, a 3-dice pool, a 2-dice max per skill) rather than the real
+        Rules/Fantasy data, so every expected number in these tests is easy to verify by hand.
+    """
+
+    # setUpClass (not setUp) so only one real Tk() root is ever created for this whole class --
+    # TestGUICore already creates one Tk() per test across ~20 tests; stacking a Tk() root per
+    # test here too pushed the total high enough to occasionally corrupt Tcl's own interpreter
+    # state later in the same pytest process (an intermittent "invalid command name" /
+    # tk-library TclError in an unrelated, later TestGUICore test -- a real, if rare,
+    # environment fragility around creating many Tk() roots in one process, not a bug in this
+    # dialog itself). Each test still gets its own fresh CharacterCreationDialog Toplevel,
+    # destroyed at the end of every test method (or by the dialog's own Create/Cancel), just
+    # not its own root.
+    @classmethod
+    def setUpClass(cls):
+        cls.root = _new_tk_root_with_retry()
+        cls.root.withdraw()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.root.destroy()
+
+    def setUp(self):
+        self.skills = {"alpha": {}, "beta": {}, "gamma": {}}
+        self.races = [
+            {
+                "name": "human", "description": "Baseline in everything.",
+                "skill_dice": {"alpha": 2, "beta": 2, "gamma": 2},
+            },
+            {
+                "name": "elf", "description": "Sharp senses, softer muscle.",
+                # Absolute dice, not deltas -- and (unlike the old base_dice-fallback design)
+                # every skill must be listed, "gamma" included, or it'd fall back to
+                # UNTRAINED_DICE (0) instead of a deliberate value.
+                "skill_dice": {"alpha": 3, "beta": 1, "gamma": 2},
+            },
+        ]
+        self.character_creation = {"pool_dice": 3, "max_allocation_per_skill": 2}
+
+    def _make_dialog(self):
+        return CharacterCreationDialog(self.root, self.skills, self.races, self.character_creation)
+
+    def test_dialog_defaults_to_the_first_race_with_nothing_allocated(self):
+        dialog = self._make_dialog()
+        self.assertEqual(dialog.race_combo.get(), "human")
+        self.assertEqual(dialog.remaining_label.cget("text"), "Dice remaining: 3 / 3")
+        self.assertEqual(str(dialog.create_button.cget("state")), "disabled")
+        dialog.destroy()
+
+    def test_allocating_the_full_pool_enables_create(self):
+        dialog = self._make_dialog()
+        dialog.allocation_vars["alpha"].set(2)
+        dialog.allocation_vars["beta"].set(1)
+
+        self.assertEqual(dialog.remaining_label.cget("text"), "Dice remaining: 0 / 3")
+        self.assertEqual(str(dialog.create_button.cget("state")), "normal")
+        dialog.destroy()
+
+    def test_over_allocating_a_single_skill_is_clamped_to_the_cap(self):
+        dialog = self._make_dialog()
+        dialog.allocation_vars["alpha"].set(5)  # cap is 2
+        self.assertEqual(dialog.allocation_vars["alpha"].get(), 2)
+        dialog.destroy()
+
+    def test_switching_race_resets_allocations_and_updates_baseline(self):
+        dialog = self._make_dialog()
+        dialog.allocation_vars["alpha"].set(2)
+
+        dialog.race_combo.set("elf")
+        dialog._on_race_selected()
+
+        self.assertEqual(dialog.allocation_vars["alpha"].get(), 0)  # reset by the race switch
+        self.assertEqual(dialog.baseline["alpha"], 3)  # elf's own absolute override
+        self.assertEqual(dialog.baseline["beta"], 1)  # elf's own absolute override
+        self.assertEqual(dialog.total_labels["alpha"]["baseline"].cget("text"), "3D")
+        dialog.destroy()
+
+    def test_create_sets_result_and_closes_the_dialog(self):
+        dialog = self._make_dialog()
+        dialog.allocation_vars["alpha"].set(2)
+        dialog.allocation_vars["gamma"].set(1)
+
+        dialog.create_button.invoke()
+
+        self.assertEqual(dialog.result, {"race": "human", "allocation": {"alpha": 2, "gamma": 1}})
+        self.assertEqual(dialog.winfo_exists(), 0)
+
+    def test_cancel_leaves_result_none(self):
+        dialog = self._make_dialog()
+        dialog.allocation_vars["alpha"].set(2)
+        dialog.allocation_vars["beta"].set(1)
+
+        button_row = next(
+            w for w in dialog.winfo_children()
+            if isinstance(w, tk.Frame) and any(
+                isinstance(c, tk.Button) and c.cget("text") == "Cancel" for c in w.winfo_children()
+            )
+        )
+        cancel_button = next(
+            w for w in button_row.winfo_children()
+            if isinstance(w, tk.Button) and w.cget("text") == "Cancel"
+        )
+        cancel_button.invoke()
+
+        self.assertIsNone(dialog.result)
+        self.assertEqual(dialog.winfo_exists(), 0)
+
+
 class TestGUICore(unittest.TestCase):
     """GUI_Core.py's Tkinter surface, exercised directly (no mainloop) -- see Textual_Core.py's
     own tests below for the headless-testable mirror this class doesn't duplicate."""
 
+    # setUpClass (not setUp) so only one real Tk() root is ever created for this whole class,
+    # the same fix TestCharacterCreationDialog uses -- creating ~20 real Tk() roots back to
+    # back (one per test) was occasionally corrupting Tcl's own shared interpreter state later
+    # in the same pytest process (an intermittent "invalid command name"/tk-library TclError in
+    # a seemingly unrelated, later test -- a real environment fragility around Tk() churn, not
+    # a bug in GUICore itself). Each test still gets its own fully independent GUICore instance
+    # (GUI_Core.py's own `master` param makes its root a Toplevel of the shared root instead of
+    # a brand new Tk()), destroyed at the end of every test, just not its own root interpreter.
+    # _new_tk_root_with_retry (not a bare tk.Tk()) covers the residual case: the *one* Tk() root
+    # this class does create can still occasionally fail the same way on its own, independent of
+    # how much churn preceded it -- without a retry there, that single failure would error out
+    # every test in the class at once instead of the pre-fix "one random test occasionally fails".
+    @classmethod
+    def setUpClass(cls):
+        cls.shared_root = _new_tk_root_with_retry()
+        cls.shared_root.withdraw()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.shared_root.destroy()
+
     def setUp(self):
         self.event_bus = EventBus()
-        self.gui = GUICore(self.event_bus)
+        self.gui = GUICore(self.event_bus, master=self.shared_root)
         self.gui.root.withdraw()  # keep the real window off-screen during tests
         self.slot_dirs = []
 

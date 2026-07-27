@@ -70,16 +70,55 @@ age = 35
 
 [entity.conditions]
 
+# A full, explicit entry for every skill -- not just the ones gladstone is actually good at --
+# is what makes this table something the race/point-buy character-creation system
+# (Character_Creation.py, "human" in races.toml) could actually have produced: 2D human
+# baseline everywhere, plus a legal 15D allocation (blades +3, finesse +1, dodge +3, stealth
+# +2, appraise +2, navigation +2, medicine +2 -- exactly 15D, nothing over the 5D-per-skill
+# cap). A skill left off entirely would default to untrained 0D (DM_Combat.py's
+# resolve_action), not the race's own 2D baseline -- unable to clear anything but an
+# auto-success (difficulty 0) check, which is exactly why every skill needs its own line here
+# rather than only the "trained" ones. observation stays at the plain 2D human baseline
+# (deliberately not boosted further) so items.toml's dart trap/scythe trap [entity.notice]
+# checks -- rolled the moment either is instanced, DM_Rules.py's _auto_roll_notice -- stay a
+# real, uncertain roll rather than a foregone conclusion either way.
 [entity.skills]
-blades = { dice = 5, pips = 0 }
-athletics = { dice = 2, pips = 2 }
+acrobatics = { dice = 2, pips = 0 }
+appraise = { dice = 4, pips = 0 }
 arcane = { dice = 2, pips = 0 }
-fortitude = { dice = 2, pips = 0 }
-willpower = { dice = 2, pips = 0 }
-reflexes = { dice = 2, pips = 0 }
-strength = { dice = 2, pips = 0 }
+artistry = { dice = 2, pips = 0 }
+athletics = { dice = 2, pips = 2 }
+axes = { dice = 2, pips = 0 }
+blades = { dice = 5, pips = 0 }
 brawling = { dice = 2, pips = 0 }
+charisma = { dice = 2, pips = 0 }
+deception = { dice = 2, pips = 0 }
+disguise = { dice = 2, pips = 0 }
+dodge = { dice = 5, pips = 0 }
+escape = { dice = 2, pips = 0 }
 finesse = { dice = 3, pips = 0 }
+fly = { dice = 2, pips = 0 }
+forgery = { dice = 2, pips = 0 }
+fortitude = { dice = 2, pips = 0 }
+gambling = { dice = 2, pips = 0 }
+husbandry = { dice = 2, pips = 0 }
+intimidation = { dice = 2, pips = 0 }
+linguistics = { dice = 2, pips = 0 }
+medicine = { dice = 4, pips = 0 }
+miracles = { dice = 2, pips = 0 }
+missiles = { dice = 2, pips = 0 }
+navigation = { dice = 4, pips = 0 }
+observation = { dice = 2, pips = 0 }
+polearms = { dice = 2, pips = 0 }
+psionics = { dice = 2, pips = 0 }
+reflexes = { dice = 2, pips = 0 }
+stealth = { dice = 4, pips = 0 }
+streetwise = { dice = 2, pips = 0 }
+strength = { dice = 2, pips = 0 }
+survival = { dice = 2, pips = 0 }
+throwing = { dice = 2, pips = 0 }
+trickery = { dice = 2, pips = 0 }
+willpower = { dice = 2, pips = 0 }
 
 [[entity]]
 name = "thane"
@@ -100,10 +139,50 @@ max_hp = 24
 [entity.attitudes]
 default = [ 40, 40, 40, 40, 40, 40 ]
 
+[entity.qualities]
+race = "human"
+
+# Every skill explicit, same reasoning as gladstone's own [entity.skills] comment above --
+# human 2D baseline everywhere, plus a legal 15D allocation (blades +2, fortitude +1, dodge
+# +1, brawling +2, athletics +2, strength +2, intimidation +2, streetwise +1, survival +2 --
+# exactly 15D, nothing over the 5D cap).
 [entity.skills]
+acrobatics = { dice = 2, pips = 0 }
+appraise = { dice = 2, pips = 0 }
+arcane = { dice = 2, pips = 0 }
+artistry = { dice = 2, pips = 0 }
+athletics = { dice = 4, pips = 0 }
+axes = { dice = 2, pips = 0 }
 blades = { dice = 4, pips = 0 }
-fortitude = { dice = 3, pips = 0 }
+brawling = { dice = 4, pips = 0 }
+charisma = { dice = 2, pips = 0 }
+deception = { dice = 2, pips = 0 }
+disguise = { dice = 2, pips = 0 }
 dodge = { dice = 3, pips = 0 }
+escape = { dice = 2, pips = 0 }
+finesse = { dice = 2, pips = 0 }
+fly = { dice = 2, pips = 0 }
+forgery = { dice = 2, pips = 0 }
+fortitude = { dice = 3, pips = 0 }
+gambling = { dice = 2, pips = 0 }
+husbandry = { dice = 2, pips = 0 }
+intimidation = { dice = 4, pips = 0 }
+linguistics = { dice = 2, pips = 0 }
+medicine = { dice = 2, pips = 0 }
+miracles = { dice = 2, pips = 0 }
+missiles = { dice = 2, pips = 0 }
+navigation = { dice = 2, pips = 0 }
+observation = { dice = 2, pips = 0 }
+polearms = { dice = 2, pips = 0 }
+psionics = { dice = 2, pips = 0 }
+reflexes = { dice = 2, pips = 0 }
+stealth = { dice = 2, pips = 0 }
+streetwise = { dice = 3, pips = 0 }
+strength = { dice = 4, pips = 0 }
+survival = { dice = 4, pips = 0 }
+throwing = { dice = 2, pips = 0 }
+trickery = { dice = 2, pips = 0 }
+willpower = { dice = 2, pips = 0 }
 
 [[entity.abilities]]
 name = "shortsword strike"
@@ -149,11 +228,52 @@ default = [ 30, 30, 30, 30, 30, 30 ]
 [[entity.attitudes.name]]
 gladstone = [ 100, 100, 100, 100, 100, 100 ]
 
+[entity.qualities]
+race = "elf"
+
+# Every skill explicit, same reasoning as gladstone's own [entity.skills] comment above --
+# note this starts from *elf's* own baseline (races.toml), not a flat 2D: arcane/stealth/
+# acrobatics/observation are 3D before any allocation, strength/brawling/fortitude/
+# intimidation are 1D. Allocation on top (arcane +1, willpower +1, fortitude +1, acrobatics
+# +2, stealth +2, observation +2, charisma +2, medicine +2, linguistics +2) is exactly 15D,
+# nothing over the 5D cap.
 [entity.skills]
+acrobatics = { dice = 5, pips = 0 }
+appraise = { dice = 2, pips = 0 }
 arcane = { dice = 4, pips = 0 }
-willpower = { dice = 3, pips = 0 }
-fortitude = { dice = 2, pips = 0 }
+artistry = { dice = 2, pips = 0 }
+athletics = { dice = 2, pips = 0 }
+axes = { dice = 2, pips = 0 }
+blades = { dice = 2, pips = 0 }
+brawling = { dice = 1, pips = 0 }
+charisma = { dice = 4, pips = 0 }
+deception = { dice = 2, pips = 0 }
+disguise = { dice = 2, pips = 0 }
 dodge = { dice = 2, pips = 1 }
+escape = { dice = 2, pips = 0 }
+finesse = { dice = 2, pips = 0 }
+fly = { dice = 2, pips = 0 }
+forgery = { dice = 2, pips = 0 }
+fortitude = { dice = 2, pips = 0 }
+gambling = { dice = 2, pips = 0 }
+husbandry = { dice = 2, pips = 0 }
+intimidation = { dice = 1, pips = 0 }
+linguistics = { dice = 4, pips = 0 }
+medicine = { dice = 4, pips = 0 }
+miracles = { dice = 2, pips = 0 }
+missiles = { dice = 2, pips = 0 }
+navigation = { dice = 2, pips = 0 }
+observation = { dice = 5, pips = 0 }
+polearms = { dice = 2, pips = 0 }
+psionics = { dice = 2, pips = 0 }
+reflexes = { dice = 2, pips = 0 }
+stealth = { dice = 5, pips = 0 }
+streetwise = { dice = 2, pips = 0 }
+strength = { dice = 1, pips = 0 }
+survival = { dice = 2, pips = 0 }
+throwing = { dice = 2, pips = 0 }
+trickery = { dice = 2, pips = 0 }
+willpower = { dice = 3, pips = 0 }
 
 [[entity.behavior]]
 requirements = [
