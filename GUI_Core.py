@@ -4,6 +4,9 @@ import tkinter as tk
 from tkinter import ttk, simpledialog
 from collections import Counter
 
+from Character_Creation import load_character_creation_data
+from Character_Creation_GUI import run_character_creation_dialog
+
 SAVES_DIR = "Saves"
 
 class GUICore:
@@ -32,13 +35,24 @@ class GUICore:
         self.root.title("LLDM Interface")
         self.root.geometry("1000x600")
 
-        # Save/Load lives in a dropdown File menu on the window's native menu bar, rather
-        # than always-visible buttons. Save prompts for a name via a popup; Load pops up a
-        # list of existing saves -- neither needs a permanently-visible slot-name field.
-        self.menu_bar = tk.Menu(self.root)
+        # Character (Create.../Load...) and File (Save...) live in dropdown menus on the
+        # window's native menu bar, rather than always-visible buttons/an automatic dialog at
+        # boot. Character is what actually starts a game -- neither LLDM.py nor GUICore loads
+        # any scenario on its own; "Create..." opens the same race/point-buy dialog LLDM.py
+        # used to launch unconditionally before constructing DMCore, and "Load..." (shared
+        # with request_save's own request_load below -- loading a save also fully determines
+        # which character/scenario to resume) pops up the existing-slots list. Both publish
+        # events only -- neither constructs a DMCore directly, since GUICore has no reference
+        # to one; LLDM.py's own main() is what's actually subscribed to react to them (see its
+        # own module docs) before any DMCore exists, exactly the same "communicate only
+        # through events, never a direct reference" rule every other core in this app follows.
+        self.menu_bar = tk.Menu(self.root, tearoff=0)
+        self.character_menu = tk.Menu(self.menu_bar, tearoff=0)
+        self.character_menu.add_command(label="Create...", command=self.request_character_creation)
+        self.character_menu.add_command(label="Load...", command=self.request_load)
+        self.menu_bar.add_cascade(label="Character", menu=self.character_menu)
         self.file_menu = tk.Menu(self.menu_bar, tearoff=0)
         self.file_menu.add_command(label="Save...", command=self.request_save)
-        self.file_menu.add_command(label="Load...", command=self.request_load)
         self.menu_bar.add_cascade(label="File", menu=self.file_menu)
         self.root.config(menu=self.menu_bar)
 
@@ -177,6 +191,27 @@ class GUICore:
             widget.delete("1.0", tk.END)
             widget.insert(tk.END, text)
             widget.config(state=tk.DISABLED)
+
+    def request_character_creation(self):
+        """!
+        @brief Opens the race/point-buy character-creation dialog (Character_Creation_GUI.py),
+            blocking modally the same way request_load's own picker does -- moved here from
+            LLDM.py's main(), which used to run this unconditionally, before DMCore even
+            existed, on every single boot. Publishes "character_created" with the dialog's own
+            result ({"race", "allocation", "name"}) only if "Create" was actually pressed;
+            cancelling leaves self.result None and nothing is published at all, so a cancelled
+            dialog can't be mistaken for "create a character with no race/allocation" by
+            whatever's listening. load_character_creation_data() re-scans Rules/Fantasy/*.toml
+            directly (see its own module docstring) rather than asking a DMCore for the same
+            data, since one may not exist yet -- the entire reason this event-published, no
+            direct reference, pattern exists in the first place (see this class's own
+            docstring further up).
+        """
+        skills, races, character_creation = load_character_creation_data()
+        character = run_character_creation_dialog(self.root, skills, races, character_creation)
+        if character is None:
+            return
+        self.event_bus.publish("character_created", {"character": character})
 
     def request_save(self):
         """!

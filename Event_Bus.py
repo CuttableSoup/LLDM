@@ -30,5 +30,13 @@ class EventBus:
         @param message The data payload of the event.
         """
         if event_type in self.subscribers:
-            for callback in self.subscribers[event_type]:
+            # Dispatches over a snapshot, not the live list -- a handler that itself
+            # subscribes a new callback for this same event_type mid-dispatch (ex: LLDM.py's
+            # own cold-start "load_requested" handler constructing a fresh DMCore, whose
+            # __init__ subscribes its own _on_load_requested) must not have that new callback
+            # also invoked within this same publish call; it should only ever fire starting
+            # from the *next* publish. Iterating the live list would otherwise pick up
+            # append()s that happen partway through this very loop, double-processing the
+            # event the moment it triggers its own new subscriber.
+            for callback in list(self.subscribers[event_type]):
                 callback(message)

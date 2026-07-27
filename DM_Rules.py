@@ -4,6 +4,14 @@ import tomllib
 
 from DM_Types import DMCoreProtocol
 
+# Reserved sentinel a scenario/room "entities" entry can use in place of a literal character
+# name to mean "whichever entity is currently the player" (self.player_name) -- resolved in
+# _instance_entities, below. This is what lets every scenario file stay agnostic of which
+# template is_player=true actually names, and of apply_character_creation's own optional
+# rename (DM_CharacterCreation.py) -- a scenario never has to be updated just because a
+# playthrough's character has a different name than the one its own template started with.
+PLAYER_PLACEHOLDER = "player"
+
 
 def scenario_file_path(scenario_name):
     """!
@@ -225,6 +233,13 @@ class RulesMixin(DMCoreProtocol):
             whole playthrough -- see load_scenario) and for a single room's own "entities"
             list (see _populate_room) -- a room's list never includes the player at all, so
             this never needs to special-case it.
+
+            An entry named PLAYER_PLACEHOLDER ("player") resolves to self.player_name instead
+            of being looked up literally -- no template is ever actually named "player"; every
+            shipped scenario/room references the player this way rather than a specific
+            character's own template name (ex: "gladstone"), so a scenario keeps working
+            unchanged regardless of which template is_player=true or whatever a freshly
+            created character was renamed to (see DM_CharacterCreation.py).
         @param entity_entries A list of {name, band} tables.
         @return The list of instance names created, in entity_entries order.
         """
@@ -233,6 +248,8 @@ class RulesMixin(DMCoreProtocol):
 
         for entry in entity_entries:
             template_name = entry.get("name")
+            if template_name == PLAYER_PLACEHOLDER:
+                template_name = self.player_name
             template = self.entities.get(template_name)
             if template is None:
                 self.event_bus.publish("log_error", f"Scenario references unknown entity: {template_name}")

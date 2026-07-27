@@ -44,7 +44,14 @@ description = "Flavor text shown to the LLM narrator and to a passed skill check
                                             # it does until identified).
 is_player = false                          # Exactly one loaded template must set this true
                                             # (characters.toml's gladstone) -- DMCore.__init__
-                                            # raises ValueError at boot if none does.
+                                            # raises ValueError at boot if none does. A
+                                            # scenario/room's own "entities" list never names
+                                            # this template literally -- it uses the reserved
+                                            # "player" placeholder instead (DM_Rules.py's
+                                            # PLAYER_PLACEHOLDER), resolved to whichever
+                                            # template this flag currently marks (and to
+                                            # whatever name apply_character_creation may have
+                                            # renamed it to -- see DM_CharacterCreation.py).
 is_party = false                           # Marks a non-player ally as part of the player's
                                             # own party (ex: characters.toml's thane) -- purely
                                             # a display flag read by GUICore's Party tab

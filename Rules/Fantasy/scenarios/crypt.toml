@@ -13,7 +13,7 @@ name = "The Sunken Crypt"
 description = "A crypt long since swallowed by the earth, its passages choked with rubble and the smell of old stone."
 start_room = "entrance"
 entities = [
-    { name = "gladstone", band = 1 },
+    { name = "player", band = 1 },
     { name = "thane", band = 1 },
     { name = "anne", band = 1 }
 ]

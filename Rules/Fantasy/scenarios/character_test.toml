@@ -1,0 +1,19 @@
+# A minimal scenario dedicated to exercising the generic "player" placeholder (see
+# DM_Rules.py's PLAYER_PLACEHOLDER/_instance_entities) and apply_character_creation's own
+# name/race/skill override (DM_CharacterCreation.py) -- deliberately not one of the "real"
+# scenarios above (arena/tavern/field/dungeon/crypt), so a future rebalance of those can't
+# accidentally change what this is testing, and so tests that boot a freshly-created,
+# arbitrarily-named character aren't coupled to any of that content either. "player" resolves
+# to whichever entity is currently self.player_name -- characters.toml's untouched "gladstone"
+# by default, or a freshly-created character's own chosen name -- not a literal template
+# lookup, which is exactly the mechanism this scenario exists to exercise. "wolf" gives every
+# test here a real hostile target to roll an opposed check/combat round against.
+[scenario]
+name = "The Testing Grounds"
+description = "A bare, featureless room built only to exercise the game engine."
+bands = 4
+enclosed = true
+entities = [
+    { name = "player", band = 1 },
+    { name = "wolf", band = 1 },
+]

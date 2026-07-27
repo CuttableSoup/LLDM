@@ -4,6 +4,6 @@ description = "A cozy tavern. A fire crackles in the hearth while a few locals n
 bands = 2
 enclosed = true
 entities = [
-    { name = "gladstone", band = 1 },
+    { name = "player", band = 1 },
     { name = "innkeeper", band = 1 }
 ]

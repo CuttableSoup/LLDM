@@ -13,14 +13,16 @@ from Character_Creation import get_race, race_baseline_skills, validate_allocati
 
 class CharacterCreationDialog(tk.Toplevel):
     """!
-    @brief A modal Toplevel: race selector up top, a scrollable per-skill allocation list
-        below (baseline dice, an editable spend, and the resulting total), a running "dice
-        remaining" counter, and Create/Cancel buttons. Blocks the caller via wait_window() --
-        LLDM.py's main() constructs this with GUICore's own root as parent, before DMCore
-        exists, the same way GUICore.request_load already blocks on a Toplevel/Listbox
-        selection (see GUI_Core.py). self.result is {"race": ..., "allocation": {...}} once
-        "Create" is pressed, or None if cancelled/closed -- the exact shape
-        DMCore.__init__'s own "character" param expects (see DM_CharacterCreation.py).
+    @brief A modal Toplevel: an optional name field, a race selector, a scrollable per-skill
+        allocation list below (baseline dice, an editable spend, and the resulting total), a
+        running "dice remaining" counter, and Create/Cancel buttons. Blocks the caller via
+        wait_window() -- LLDM.py's main() constructs this with GUICore's own root as parent,
+        before DMCore exists, the same way GUICore.request_load already blocks on a
+        Toplevel/Listbox selection (see GUI_Core.py). self.result is {"race": ..., "allocation":
+        {...}, "name": ...} once "Create" is pressed, or None if cancelled/closed -- the exact
+        shape DMCore.__init__'s own "character" param expects (see DM_CharacterCreation.py).
+        "name" is always present but may be "" (left blank), which apply_character_creation
+        treats as "keep the player template's own name" rather than renaming anything.
     """
 
     def __init__(self, parent, skills, races, character_creation):
@@ -41,6 +43,7 @@ class CharacterCreationDialog(tk.Toplevel):
         self.character_creation = character_creation
         self.pool_dice = character_creation.get("pool_dice", 15)
         self.max_per_skill = character_creation.get("max_allocation_per_skill", 5)
+        self.name_var = tk.StringVar(value="")
         self.result = None
 
         self.skill_names = sorted(skills.keys())
@@ -59,6 +62,14 @@ class CharacterCreationDialog(tk.Toplevel):
         @brief Lays out every widget once; _on_race_selected/_on_allocation_changed only ever
             update values on these same widgets afterward, never rebuild them.
         """
+        name_row = tk.Frame(self)
+        name_row.pack(fill=tk.X, padx=10, pady=(10, 0))
+        tk.Label(name_row, text="Name:").pack(side=tk.LEFT)
+        tk.Entry(name_row, textvariable=self.name_var, width=24).pack(side=tk.LEFT, padx=(5, 0))
+        tk.Label(
+            name_row, text="(optional -- leave blank to keep the default character's own name)",
+        ).pack(side=tk.LEFT, padx=(10, 0))
+
         race_row = tk.Frame(self)
         race_row.pack(fill=tk.X, padx=10, pady=(10, 5))
         tk.Label(race_row, text="Race:").pack(side=tk.LEFT)
@@ -194,7 +205,9 @@ class CharacterCreationDialog(tk.Toplevel):
         if not ok:
             self.remaining_label.config(text=reason)
             return
-        self.result = {"race": race_name, "allocation": allocation}
+        self.result = {
+            "race": race_name, "allocation": allocation, "name": self.name_var.get().strip(),
+        }
         self.destroy()
 
     def _on_cancel(self):
@@ -211,7 +224,7 @@ def run_character_creation_dialog(parent, skills, races, character_creation):
     @brief Constructs and blocks on a CharacterCreationDialog until it's closed.
     @param parent The Tk root/Toplevel to parent the dialog to.
     @param skills, races, character_creation See Character_Creation.load_character_creation_data.
-    @return {"race": ..., "allocation": {...}}, or None if cancelled -- ready to pass straight
+    @return {"race": ..., "allocation": {...}, "name": ...}, or None if cancelled -- ready to pass straight
             into DMCore's own "character" constructor param.
     """
     dialog = CharacterCreationDialog(parent, skills, races, character_creation)

@@ -48,6 +48,10 @@ class _LivePipelineTestCase(unittest.TestCase):
         scenario_name and call self._boot() from their own setUp.
     """
     scenario_name = "tavern"
+    # A finished character-creation result ({"race", "allocation", "name"}), or None (the
+    # default every existing subclass relies on) to boot with the player template's own
+    # untouched skills/name -- see DMCore.__init__'s own "character" param.
+    character = None
 
     def _boot(self):
         self.event_bus = EventBus()
@@ -56,7 +60,9 @@ class _LivePipelineTestCase(unittest.TestCase):
 
         self.nlp_core = NLPCore(self.event_bus)
         self.llm_core = LLMCore(self.event_bus)
-        self.dm_core = DMCore(self.event_bus, scenario_name=self.scenario_name)
+        self.dm_core = DMCore(
+            self.event_bus, scenario_name=self.scenario_name, character=self.character,
+        )
 
         self._wait_for_responses(1)  # the scene intro, fired during DMCore.__init__
 
@@ -229,6 +235,43 @@ class TestArenaCombatConversation(_LivePipelineTestCase):
         # lands a bite back, this doesn't depend on any roll's outcome.
         first_round_actors = [turn["actor"] for turn in round_events[0].get("turns", [])]
         self.assertIn("thane", first_round_actors)
+
+
+@unittest.skipUnless(_lm_studio_reachable(), "LM Studio not reachable at http://127.0.0.1:1234")
+class TestCreatedCharacterConversation(_LivePipelineTestCase):
+    """!
+    @brief End-to-end proof that a freshly created, custom-named, custom-race character --
+        not characters.toml's own hand-authored "gladstone" -- narrates and fights correctly
+        through the real pipeline. Uses Rules/Fantasy/scenarios/character_test.toml, a
+        scenario that never names any specific character by its literal template name (see
+        DM_Rules.py's PLAYER_PLACEHOLDER), so this is exercising the same generic-player
+        resolution real scenarios (arena/tavern/field/dungeon/crypt) now rely on too, without
+        coupling this test's own pass/fail to a rebalance of any of them.
+    """
+    scenario_name = "character_test"
+    character = {
+        "race": "elf",
+        "allocation": {"arcane": 5, "stealth": 5, "observation": 5},
+        "name": "Aria",
+    }
+
+    def setUp(self):
+        self._boot()
+
+    def test_scene_intro_and_combat_narrate_the_custom_character_not_gladstone(self):
+        self.assertEqual(self.dm_core.player_name, "Aria")
+        intro = self.responses[-1]
+        self.assertTrue(intro.strip())
+        self.assertNotIn("Could not connect to the local LLM", intro)
+
+        round_events = []
+        self.event_bus.subscribe("round_resolved", round_events.append)
+        response = self._say("I attack the wolf")
+
+        self.assertTrue(response.strip())
+        self.assertNotIn("Could not connect to the local LLM", response)
+        self.assertEqual(len(round_events), 1)
+        self.assertEqual(round_events[0]["entity"], "Aria")
 
 
 @unittest.skipUnless(_lm_studio_reachable(), "LM Studio not reachable at http://127.0.0.1:1234")

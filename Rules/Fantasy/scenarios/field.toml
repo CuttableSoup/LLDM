@@ -7,9 +7,9 @@ description = "Rolling grassland stretches to the horizon under a gray sky. A wo
 bands = 8
 enclosed = false
 entities = [
-    { name = "gladstone", band = 1 },
+    { name = "player", band = 1 },
     { name = "wolf", band = 3 },
-    # Starts at gap 4 from gladstone -- exactly the short bow's own range = 4 (items.toml), so
+    # Starts at gap 4 from the player -- exactly the short bow's own range = 4 (items.toml), so
     # the very first round already demonstrates its "distance_to_target" behavior favoring the
     # bow over its sword (creatures.toml).
     { name = "bandit", band = 5 },

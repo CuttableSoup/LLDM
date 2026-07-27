@@ -7,7 +7,7 @@ description = "A large arena. Dried blood spatters paint the dirt. The crowd dem
 bands = 4
 enclosed = true
 entities = [
-    { name = "gladstone", band = 1 },
+    { name = "player", band = 1 },
     { name = "wolf", band = 1 },
     { name = "wolf", band = 1 },
     { name = "thane", band = 1 }
