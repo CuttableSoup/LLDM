@@ -21,6 +21,7 @@ from Character_Creation import (
 )
 from Character_Creation_GUI import CharacterCreationDialog
 from DM_Core import DMCore
+from DM_Rules import list_available_scenarios
 from Event_Bus import EventBus
 from GUI_Core import GUICore
 import LLDM
@@ -1692,6 +1693,80 @@ class TestGUICore(unittest.TestCase):
                            "game_load_failed", "save_requested", "load_requested"):
             self.assertIn(event_name, self.event_bus.subscribers)
 
+    def test_menu_bar_layout_character_create_file_save_load_scenario_load(self):
+        self.assertEqual(self.gui.menu_bar.entrycget(0, "label"), "Character")
+        self.assertEqual(self.gui.menu_bar.entrycget(1, "label"), "File")
+        self.assertEqual(self.gui.menu_bar.entrycget(2, "label"), "Scenario")
+
+        self.assertEqual(self.gui.character_menu.index("end"), 0)
+        self.assertEqual(self.gui.character_menu.entrycget(0, "label"), "Create...")
+
+        self.assertEqual(self.gui.file_menu.index("end"), 1)
+        self.assertEqual(self.gui.file_menu.entrycget(0, "label"), "Save...")
+        self.assertEqual(self.gui.file_menu.entrycget(1, "label"), "Load...")
+
+        self.assertEqual(self.gui.scenario_menu.index("end"), 0)
+        self.assertEqual(self.gui.scenario_menu.entrycget(0, "label"), "Load...")
+        self.assertEqual(str(self.gui.scenario_menu.entrycget(0, "state")), tk.DISABLED)
+
+    @patch("GUI_Core.run_character_creation_dialog")
+    @patch("GUI_Core.load_character_creation_data", return_value=({}, [], {}))
+    def test_character_creation_unlocks_scenario_menu_and_load_publishes_scenario_selected(
+        self, mock_load, mock_dialog,
+    ):
+        mock_dialog.return_value = {"race": "elf", "allocation": {"arcane": 5}, "name": "Aria"}
+        self.gui.request_character_creation()
+
+        self.assertEqual(str(self.gui.scenario_menu.entrycget(0, "state")), tk.NORMAL)
+
+        events = []
+        self.event_bus.subscribe("scenario_selected", events.append)
+
+        self.gui.request_scenario_load()
+        picker = next(w for w in self.gui.root.winfo_children() if isinstance(w, tk.Toplevel))
+        listbox = next(w for w in picker.winfo_children() if isinstance(w, tk.Listbox))
+        scenario_keys = [key for key, _name, _description in list_available_scenarios()]
+        crypt_index = scenario_keys.index("crypt")
+        listbox.selection_clear(0, tk.END)
+        listbox.selection_set(crypt_index)
+        button_row = next(w for w in picker.winfo_children() if isinstance(w, tk.Frame))
+        load_button = next(
+            w for w in button_row.winfo_children()
+            if isinstance(w, tk.Button) and w.cget("text") == "Load"
+        )
+
+        load_button.invoke()
+
+        self.assertEqual(events, [{
+            "scenario_name": "crypt",
+            "character": {"race": "elf", "allocation": {"arcane": 5}, "name": "Aria"},
+        }])
+        self.assertIsNone(self.gui._pending_character)
+        self.assertEqual(str(self.gui.scenario_menu.entrycget(0, "state")), tk.DISABLED)
+        self.assertFalse(picker.winfo_exists())
+
+    def test_scenario_load_noops_when_no_character_is_pending(self):
+        self.gui.request_scenario_load()
+        self.assertEqual(
+            [w for w in self.gui.root.winfo_children() if isinstance(w, tk.Toplevel)], [],
+        )
+
+    def test_rules_loaded_locks_the_scenario_menu_shut_for_the_rest_of_the_session(self):
+        self.gui._pending_character = {"race": "human", "allocation": {}, "name": "Gladstone"}
+        self.gui._set_scenario_menu_enabled(True)
+
+        self.event_bus.publish("rules_loaded", {"entities": {}})
+
+        self.assertIsNone(self.gui._pending_character)
+        self.assertEqual(str(self.gui.scenario_menu.entrycget(0, "state")), tk.DISABLED)
+
+        # A later Create... doesn't reopen it once a game has actually started.
+        with patch("GUI_Core.load_character_creation_data", return_value=({}, [], {})), \
+             patch("GUI_Core.run_character_creation_dialog", return_value={"race": "human", "allocation": {}, "name": "X"}):
+            self.gui.request_character_creation()
+        self.assertIsNone(self.gui._pending_character)
+        self.assertEqual(str(self.gui.scenario_menu.entrycget(0, "state")), tk.DISABLED)
+
 
     def test_display_party_status_renders_equipment_skills_abilities_inventory_conditions(self):
         self.event_bus.publish("rules_loaded", {"entities": {
@@ -1748,17 +1823,6 @@ class TestGUICore(unittest.TestCase):
 
         self.assertEqual(load_events, [{"slot": "run2"}])
         self.assertFalse(picker.winfo_exists())
-
-    def test_character_menu_has_create_and_load_file_menu_has_only_save(self):
-        # Nothing loads a scenario automatically at boot anymore -- Character is the menu
-        # that actually starts a game (Create.../Load...); File is left with just Save...,
-        # since saving only makes sense once a game is already active.
-        self.assertEqual(self.gui.menu_bar.entrycget(0, "label"), "Character")
-        self.assertEqual(self.gui.menu_bar.entrycget(1, "label"), "File")
-        self.assertEqual(self.gui.character_menu.entrycget(0, "label"), "Create...")
-        self.assertEqual(self.gui.character_menu.entrycget(1, "label"), "Load...")
-        self.assertEqual(self.gui.file_menu.index("end"), 0)
-        self.assertEqual(self.gui.file_menu.entrycget(0, "label"), "Save...")
 
     @patch("GUI_Core.run_character_creation_dialog")
     @patch("GUI_Core.load_character_creation_data", return_value=({}, [], {}))

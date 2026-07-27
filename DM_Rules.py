@@ -23,6 +23,40 @@ def scenario_file_path(scenario_name):
     return os.path.join(base_dir, "Rules", "Fantasy", "scenarios", f"{scenario_name}.toml")
 
 
+def list_available_scenarios():
+    """!
+    @brief Every real gameplay scenario under Rules/Fantasy/scenarios/, for a UI to offer as
+        a choice before any DMCore exists -- same "pure, DMCore-independent, re-scan the TOML
+        directly" precedent Character_Creation.py's load_character_creation_data sets, since
+        GUICore needs this list before it can know whether a DMCore will ever exist.
+        character_test.toml is deliberately excluded -- it's a minimal scenario built solely
+        for TestCharacterCreationRename, not a real one to offer a player.
+    @return A list of (scenario_key, display_name, description) tuples, sorted by key. A
+        scenario file that's missing or fails to parse is silently skipped, the same
+        per-file leniency load_rules applies to every other TOML file.
+    """
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    scenarios_dir = os.path.join(base_dir, "Rules", "Fantasy", "scenarios")
+
+    results = []
+    if not os.path.isdir(scenarios_dir):
+        return results
+    for filename in sorted(os.listdir(scenarios_dir)):
+        if not filename.endswith(".toml"):
+            continue
+        key = filename[: -len(".toml")]
+        if key == "character_test":
+            continue
+        try:
+            with open(os.path.join(scenarios_dir, filename), "rb") as f:
+                data = tomllib.load(f)
+        except (OSError, tomllib.TOMLDecodeError):
+            continue
+        scenario_table = data.get("scenario", {})
+        results.append((key, scenario_table.get("name", key), scenario_table.get("description", "")))
+    return results
+
+
 class RulesMixin(DMCoreProtocol):
     """!
     @brief TOML rules/entity loading and scenario instancing (DMCore mixin -- only ever

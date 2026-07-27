@@ -37,12 +37,24 @@ when and how it's actually constructed.
   background thread, with a rolling 100-message context window. Subscribes to six narration
   triggers (see "Narration" below).
 - **`GUI_Core.py`** — Tkinter window: history pane + tabbed Party/Notes/Map/Debug panels, plus
-  a Character menu (Create.../Load...) and a File menu (Save... only) on the window's menu
-  bar. Character is what actually starts a game: Create... opens the race/point-buy dialog
-  (`Character_Creation_GUI.py`) and publishes `character_created`; Load... opens a slot-picker
-  popup (listing every subdirectory of `Saves/`) and publishes `load_requested`. `GUICore`
-  never constructs a `DMCore` itself — it only ever publishes; see "Booting the game" below for
-  who's listening. History mirrors `llm_response_ready`; Party redraws on `rules_loaded`/
+  three dropdown menus on the window's menu bar: Character (Create... only), File (Save.../
+  Load...), and Scenario (Load... only). Character -> Create... opens the race/point-buy
+  dialog (`Character_Creation_GUI.py`) and publishes `character_created`, then (if a game
+  hasn't already started — see `_on_game_started` below) stashes the result as
+  `self._pending_character` and unlocks Scenario -> Load...; File -> Load... opens a
+  slot-picker popup (listing every subdirectory of `Saves/`) and publishes `load_requested`
+  directly, since a save already carries its own scenario — it lives under File, not
+  Character, since it's a save-file operation rather than a character one. Scenario -> Load...
+  is `DISABLED` until a character is pending; picking it opens a popup listing every real
+  scenario (`list_available_scenarios`, `DM_Rules.py` — `character_test` excluded) and, on a
+  selection, publishes `scenario_selected {"scenario_name", "character"}` paired with
+  `self._pending_character`, then locks itself shut again. `_on_game_started` (subscribed to
+  `rules_loaded`, which fires once per `DMCore` construction across every boot route) sets
+  `self._game_started` and locks Scenario -> Load... shut for the rest of the session, so a
+  later Create... can't reopen it once a game already exists. `GUICore` never constructs a
+  `DMCore` itself — it only ever publishes; see "Booting the game" below for who's listening.
+  History mirrors
+  `llm_response_ready`; Party redraws on `rules_loaded`/
   `party_status_changed` as a `ttk.Treeview` (one node per `is_player`/`is_party` entity,
   expanding into Equipment/Skills/Abilities/Inventory/Conditions — Equipment lists every valid
   slot for the member's own supertype/subtype, filled or `(empty)`, via `get_equip_slots`'s
@@ -194,22 +206,27 @@ front end: an optional name field, a race dropdown, a per-skill allocation row, 
 remaining" counter gating Create until it hits exactly zero. `self.result` is always
 `{"race", "allocation", "name"}` once Create is pressed, or `None` if cancelled.
 `GUICore.request_character_creation` runs this and, only when not cancelled, publishes
-`"character_created"` — see "Booting the game" for who constructs `DMCore` in response.
+`"character_created"` — see "Booting the game" for what happens with the result.
 
 ## Booting the game
 
 `LLDM.py`'s `main()` never constructs `DMCore` unconditionally — no scenario loads and
-nothing is narrated until a player character exists, via whichever route fires first:
+nothing is narrated until a player character *and* a chosen scenario exist, via whichever
+route fires first:
 
 1. **CLI quick-boot** — `python LLDM.py <scenario> [character_name]`. Giving `scenario` skips
    the Character menu entirely and constructs `DMCore` immediately; `character_name`, if also
    given, is passed as `{"name": character_name}` (a rename, skills untouched). Omitting
    `scenario` leaves the window open with nothing loaded, for routes 2/3 below.
-2. **Character → Create...** — a non-cancelled dialog result publishes `"character_created"`,
-   which `main()`'s own `on_character_created` closure reacts to (not `DMCore` — nothing
-   exists yet to subscribe) by constructing `DMCore(scenario_name=<CLI scenario, or "arena">,
-   character=...)`.
-3. **Character → Load...** — `GUICore.request_load` publishes `"load_requested"`. Before any
+2. **Character → Create... then Scenario → Load...** — a non-cancelled dialog result publishes
+   `"character_created"` (see GUI_Core.py's own notes above), which `main()`'s
+   `on_character_created` closure only logs a warning for (if `DMCore` already exists) — it
+   doesn't construct anything. `GUICore` itself stashes the character and unlocks Scenario →
+   Load...; picking a scenario from that popup publishes `"scenario_selected"
+   {"scenario_name", "character"}`, which `main()`'s own `on_scenario_selected` closure reacts
+   to (not `DMCore` — nothing exists yet to subscribe) by constructing
+   `DMCore(scenario_name=..., character=...)`.
+3. **File → Load...** — `GUICore.request_load` publishes `"load_requested"`. Before any
    `DMCore` exists, `main()`'s own `on_load_requested` closure handles this instead of
    `DMCore`'s usual `_on_load_requested`: it peeks the chosen slot's `dm_state.json` for its
    `"scenario_key"` (`LLDM._peek_saved_scenario_key` — a plain file read, no live `DMCore`
@@ -218,10 +235,13 @@ nothing is narrated until a player character exists, via whichever route fires f
    before `load_game`'s own `"game_loaded"` corrects it — the same double-narration cost as
    loading a save immediately after any ordinary new game, not a cost unique to this path.
 
-`on_character_created` no-ops (with a logged warning) once `DMCore` already exists — Create...
-only ever starts the *first* game a session has. `on_load_requested` no-ops silently instead,
-since Load... is meaningful at any time: every load after the first is handled solely by
-`DMCore`'s own `_on_load_requested`, subscribed during its `__init__` as always.
+`on_character_created`/`on_scenario_selected` no-op (the former with a logged warning) once
+`DMCore` already exists — Create... (and, downstream of it, Scenario → Load...) only ever
+starts the *first* game a session has; `GUICore`'s own `_on_game_started` (see above) is what
+keeps Scenario → Load... from even being reachable again by that point. `on_load_requested`
+no-ops silently instead, since File → Load... is meaningful at any time: every load after the
+first is handled solely by `DMCore`'s own `_on_load_requested`, subscribed during its
+`__init__` as always.
 
 ## Scenarios and rooms
 

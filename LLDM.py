@@ -79,13 +79,15 @@ def main():
 
     # 2.5. No scenario/character is loaded automatically -- DMCore (and the scenario it
     # publishes "scenario_loaded" for during its own __init__) is only ever constructed in
-    # response to an actual choice: the "scenario" CLI argument below, GUICore's Character ->
-    # Create... dialog ("character_created"), or GUICore's Character -> Load... picker
-    # ("load_requested"). DMCore doesn't exist yet for either of the latter two to have
-    # anything to publish to, so this closure -- not DMCore itself -- is what's subscribed to
-    # react to them the very first time; DMCore's own _on_load_requested (subscribed inside
-    # its own __init__, once one exists) transparently takes back over for every subsequent
-    # load from then on, since this handler no-ops as soon as dm_core is no longer None.
+    # response to an actual choice: the "scenario" CLI argument below, GUICore's own Scenario ->
+    # Load... menu entry ("scenario_selected" -- unlocked only after Character -> Create...
+    # produces a character, see GUI_Core.py's request_character_creation/
+    # _set_scenario_menu_enabled), or GUICore's File -> Load... picker ("load_requested").
+    # DMCore doesn't exist yet for any of these to have anything to publish to, so this
+    # closure -- not DMCore itself -- is what's subscribed to react to them the very first
+    # time; DMCore's own _on_load_requested (subscribed inside its own __init__, once one
+    # exists) transparently takes back over for every subsequent load from then on, since this
+    # handler no-ops as soon as dm_core is no longer None.
     dm_core = None
 
     def start_game(scenario_name, character):
@@ -98,14 +100,22 @@ def main():
         dm_core = DMCore(event_bus, scenario_name=scenario_name, character=character)
 
     def on_character_created(data):
+        # Doesn't start a game itself -- GUICore holds the new character as its own
+        # "pending" until Scenario -> Load... picks a scenario for it (on_scenario_selected,
+        # below). This only ever logs the same "ignored" warning
+        # request_character_creation's own docstring describes for the case where a game is
+        # somehow already active by the time Create... is used again.
         if dm_core is not None:
             event_bus.publish(
                 "log_warning",
                 "character_created with a game already active; ignored (restart to create "
                 "a different character).",
             )
+
+    def on_scenario_selected(data):
+        if dm_core is not None:
             return
-        start_game(args.scenario or DEFAULT_SCENARIO, data.get("character"))
+        start_game(data.get("scenario_name"), data.get("character"))
 
     def on_load_requested(data):
         if dm_core is not None:
@@ -119,6 +129,7 @@ def main():
         dm_core.load_game(slot)
 
     event_bus.subscribe("character_created", on_character_created)
+    event_bus.subscribe("scenario_selected", on_scenario_selected)
     event_bus.subscribe("load_requested", on_load_requested)
 
     if args.scenario is not None:

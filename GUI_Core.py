@@ -6,6 +6,7 @@ from collections import Counter
 
 from Character_Creation import load_character_creation_data
 from Character_Creation_GUI import run_character_creation_dialog
+from DM_Rules import list_available_scenarios
 
 SAVES_DIR = "Saves"
 
@@ -35,25 +36,39 @@ class GUICore:
         self.root.title("LLDM Interface")
         self.root.geometry("1000x600")
 
-        # Character (Create.../Load...) and File (Save...) live in dropdown menus on the
-        # window's native menu bar, rather than always-visible buttons/an automatic dialog at
-        # boot. Character is what actually starts a game -- neither LLDM.py nor GUICore loads
-        # any scenario on its own; "Create..." opens the same race/point-buy dialog LLDM.py
-        # used to launch unconditionally before constructing DMCore, and "Load..." (shared
-        # with request_save's own request_load below -- loading a save also fully determines
-        # which character/scenario to resume) pops up the existing-slots list. Both publish
-        # events only -- neither constructs a DMCore directly, since GUICore has no reference
-        # to one; LLDM.py's own main() is what's actually subscribed to react to them (see its
-        # own module docs) before any DMCore exists, exactly the same "communicate only
-        # through events, never a direct reference" rule every other core in this app follows.
+        # Character/File/Scenario live in dropdown menus on the window's native menu bar,
+        # rather than always-visible buttons/an automatic dialog at boot. Character ->
+        # Create... is what actually starts building a game -- neither LLDM.py nor GUICore
+        # loads any scenario on its own -- opening the same race/point-buy dialog LLDM.py used
+        # to launch unconditionally before constructing DMCore; publishes "character_created"
+        # and (see request_character_creation) unlocks Scenario -> Load... rather than
+        # starting a game outright, so the player still gets to pick which scenario the new
+        # character starts in. File -> Load... (loading a save fully determines which
+        # character/scenario to resume, so it lives with Save... rather than under Character)
+        # pops up the existing-slots list. Scenario -> Load... pops up the list of real
+        # scenarios (list_available_scenarios(), DM_Rules.py) -- disabled until Character ->
+        # Create... has produced a pending character (see _set_scenario_menu_enabled). All
+        # three publish events only -- none construct a DMCore directly, since GUICore has no
+        # reference to one; LLDM.py's own main() is what's actually subscribed to react to
+        # them (see its own module docs) before any DMCore exists, exactly the same
+        # "communicate only through events, never a direct reference" rule every other core in
+        # this app follows.
+        self._pending_character = None
+        self._game_started = False
+
         self.menu_bar = tk.Menu(self.root, tearoff=0)
         self.character_menu = tk.Menu(self.menu_bar, tearoff=0)
         self.character_menu.add_command(label="Create...", command=self.request_character_creation)
-        self.character_menu.add_command(label="Load...", command=self.request_load)
         self.menu_bar.add_cascade(label="Character", menu=self.character_menu)
         self.file_menu = tk.Menu(self.menu_bar, tearoff=0)
         self.file_menu.add_command(label="Save...", command=self.request_save)
+        self.file_menu.add_command(label="Load...", command=self.request_load)
         self.menu_bar.add_cascade(label="File", menu=self.file_menu)
+        self.scenario_menu = tk.Menu(self.menu_bar, tearoff=0)
+        self.scenario_menu.add_command(
+            label="Load...", command=self.request_scenario_load, state=tk.DISABLED,
+        )
+        self.menu_bar.add_cascade(label="Scenario", menu=self.scenario_menu)
         self.root.config(menu=self.menu_bar)
 
         self.main_paned = tk.PanedWindow(self.root, orient=tk.HORIZONTAL)
@@ -139,6 +154,7 @@ class GUICore:
         self.event_bus.subscribe("llm_response_ready", self.display_llm_response)
         self.event_bus.subscribe("llm_debug_updated", self.display_llm_debug)
         self.event_bus.subscribe("rules_loaded", self.display_party_status)
+        self.event_bus.subscribe("rules_loaded", self._on_game_started)
         # "party_status_changed" is DMCore's cheap re-publish after anything that can change
         # a party member's HP/equipment/inventory/conditions (see DM_Core.py's
         # _publish_party_status) -- distinct from "rules_loaded", which NLPCore also rebuilds
@@ -206,12 +222,97 @@ class GUICore:
             data, since one may not exist yet -- the entire reason this event-published, no
             direct reference, pattern exists in the first place (see this class's own
             docstring further up).
+
+            A freshly-created character doesn't start a game by itself anymore -- it just
+            becomes self._pending_character and unlocks Scenario -> Load... (request_
+            scenario_load), so the player picks which scenario to start it in rather than
+            always landing in whatever LLDM.py's own default happens to be. No-ops (past
+            publishing the event) if a game is already active -- see _on_game_started.
         """
         skills, races, character_creation = load_character_creation_data()
         character = run_character_creation_dialog(self.root, skills, races, character_creation)
         if character is None:
             return
         self.event_bus.publish("character_created", {"character": character})
+        if self._game_started:
+            return
+        self._pending_character = character
+        self._set_scenario_menu_enabled(True)
+
+    def _set_scenario_menu_enabled(self, enabled):
+        """!
+        @brief Locks/unlocks the Scenario menu's own "Load..." entry.
+        @param enabled True to unlock (a character is pending and no game has started yet).
+        """
+        self.scenario_menu.entryconfig(0, state=tk.NORMAL if enabled else tk.DISABLED)
+
+    def request_scenario_load(self):
+        """!
+        @brief Scenario -> Load...: opens a popup listing every real scenario
+            (list_available_scenarios(), DM_Rules.py -- character_test excluded) for whichever
+            character is currently self._pending_character (set by request_character_creation,
+            which is also what unlocks this menu entry in the first place). Mirrors
+            request_load's own save-slot picker Toplevel almost exactly, just listing
+            scenarios instead of save slots. Publishes "scenario_selected" {"scenario_name",
+            "character"} for the chosen scenario -- LLDM.py's own on_scenario_selected is what
+            actually constructs DMCore with them, since GUICore never does that itself --
+            then locks this menu entry shut again, since Create... (and, downstream of it,
+            this picker) only ever starts the first game a session has.
+        """
+        if self._pending_character is None:
+            return
+
+        picker = tk.Toplevel(self.root)
+        picker.title("Load Scenario")
+        picker.transient(self.root)
+        picker.grab_set()
+
+        scenarios = list_available_scenarios()
+        if not scenarios:
+            tk.Label(picker, text="No scenarios found.").pack(padx=10, pady=10)
+            tk.Button(picker, text="Close", command=picker.destroy).pack(pady=(0, 10))
+            return
+
+        scenario_keys = [key for key, _name, _description in scenarios]
+        listbox = tk.Listbox(picker, width=50)
+        for _key, name, _description in scenarios:
+            listbox.insert(tk.END, name)
+        listbox.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        listbox.selection_set(0)
+
+        def load_selected(event=None):
+            selection = listbox.curselection()
+            if not selection:
+                return
+            scenario_name = scenario_keys[selection[0]]
+            picker.destroy()
+            character = self._pending_character
+            self._pending_character = None
+            self._set_scenario_menu_enabled(False)
+            self.event_bus.publish(
+                "scenario_selected", {"scenario_name": scenario_name, "character": character},
+            )
+
+        listbox.bind("<Double-Button-1>", load_selected)
+
+        button_row = tk.Frame(picker)
+        button_row.pack(fill=tk.X, padx=10, pady=(0, 10))
+        tk.Button(button_row, text="Load", command=load_selected).pack(side=tk.LEFT)
+        tk.Button(button_row, text="Cancel", command=picker.destroy).pack(side=tk.RIGHT)
+
+    def _on_game_started(self, rules_data):
+        """!
+        @brief Fired alongside display_party_status on every "rules_loaded" -- which fires
+            once per DMCore construction, covering every boot route (CLI quick-boot, Character
+            -> Create... + Scenario -> Load..., and File -> Load...) -- so Scenario -> Load...,
+            meaningful only in the narrow window before a game exists, can't be reopened by a
+            later Create... attempt once one actually has (see CLAUDE.md's "Booting the game":
+            Create... only ever starts the first game a session has).
+        @param rules_data The "rules_loaded" payload (unused -- only the event's firing matters).
+        """
+        self._game_started = True
+        self._pending_character = None
+        self._set_scenario_menu_enabled(False)
 
     def request_save(self):
         """!
