@@ -1,5 +1,6 @@
 import random
 
+from Challenge_Rating import calculate_challenge_rating, calculate_party_challenge_rating, skill_rating
 from DM_Types import DMCoreProtocol
 
 # Reserved [[entity.behavior]] action names -- resolve_behavior_action routes these straight to
@@ -269,8 +270,7 @@ class CombatMixin(DMCoreProtocol):
             stats = defender_skills.get(opposing_skill)
             if stats is None:
                 continue
-            # Pips convert to a die every 3 (see notes.txt), so rate skills on that common scale.
-            rating = stats.get("dice", 0) * 3 + stats.get("pips", 0)
+            rating = skill_rating(stats.get("dice", 0), stats.get("pips", 0))
             if best_rating is None or rating > best_rating:
                 best_rating = rating
                 best_skill = opposing_skill
@@ -398,7 +398,7 @@ class CombatMixin(DMCoreProtocol):
             stats = entity_skills.get(candidate)
             if stats is None:
                 continue
-            rating = stats.get("dice", 0) * 3 + stats.get("pips", 0)
+            rating = skill_rating(stats.get("dice", 0), stats.get("pips", 0))
             if best_rating is None or rating > best_rating:
                 best_rating = rating
                 best_skill = candidate
@@ -497,3 +497,77 @@ class CombatMixin(DMCoreProtocol):
             result["damage"] = self.calculate_damage(entity_name, target_name, ability)
 
         return result
+
+    def _best_damage_dice_pips(self, entity_name):
+        """!
+        @brief The dice/pips of entity_name's single best damage-dealing weapon/ability, by
+            skill_rating -- every equipped item with a damage_value, plus every resolved
+            ability (resolve_ability) with one: the same candidate pool find_attack_ability
+            draws from, just not filtered down to one particular skill_name, since nothing
+            here is about to be rolled -- there's no "which skill" to disambiguate by, only
+            "which single number best represents this entity's damage output" (powers
+            get_challenge_rating's own damage component).
+        @param entity_name The name of the entity to check.
+        @return (dice, pips) of the best candidate, or (0, 0) if it has no damage-dealing
+            weapon/ability at all, or none of its dice/pips fields actually resolve to a
+            number (ex: an ability referencing "user.weapon.dice" on an entity with nothing
+            equipped).
+        """
+        entity = self.entities.get(entity_name, {})
+        candidates = [
+            item for item in
+            (self.entities.get(item_name) for item_name in entity.get("equipped", {}).values())
+            if item and "damage_value" in item
+        ]
+        candidates += [
+            ability for ability in
+            (self.resolve_ability(entry) for entry in entity.get("abilities", []))
+            if ability and "damage_value" in ability
+        ]
+
+        best_dice, best_pips, best_rating = 0, 0, 0
+        for candidate in candidates:
+            damage_value = candidate["damage_value"]
+            dice = self.resolve_weapon_reference(entity_name, damage_value.get("dice", 0), "dice")
+            pips = self.resolve_weapon_reference(entity_name, damage_value.get("pips", 0), "pips")
+            if not isinstance(dice, (int, float)) or not isinstance(pips, (int, float)):
+                continue
+            rating = skill_rating(dice, pips)
+            if rating > best_rating:
+                best_dice, best_pips, best_rating = dice, pips, rating
+        return best_dice, best_pips
+
+    def get_challenge_rating(self, entity_name):
+        """!
+        @brief A single number describing how powerful entity_name currently is -- see
+            Challenge_Rating.py's calculate_challenge_rating for what it's built from.
+            Reflects live state (current max_hp/skills/equipped gear/abilities), not a fixed
+            character-creation-time value, so it changes across play as an entity is healed/
+            hurt long-term, re-equipped, or gains an ability.
+        @param entity_name The name of the entity to rate.
+        @return The entity's challenge rating (an int), or 0 if entity_name doesn't exist.
+        """
+        entity = self.entities.get(entity_name)
+        if entity is None:
+            return 0
+        damage_dice, damage_pips = self._best_damage_dice_pips(entity_name)
+        return calculate_challenge_rating(
+            entity.get("skills", {}), entity.get("max_hp", 0), damage_dice, damage_pips,
+        )
+
+    def get_party_challenge_rating(self):
+        """!
+        @brief The whole party's challenge rating -- every is_player/is_party entity actually
+            in play right now, its own get_challenge_rating summed (Challenge_Rating.py's
+            calculate_party_challenge_rating). Filtered through self.scenario_entities, not a
+            blind is_player/is_party scan of self.entities -- self.entities also still holds
+            every *uninstanced* template from every loaded TOML file (ex: characters.toml's
+            "anne", is_party=true, but not part of arena.toml's own entities list), and those
+            must not count just for existing on disk.
+        @return The party's combined challenge rating (an int).
+        """
+        return calculate_party_challenge_rating(
+            self.get_challenge_rating(name)
+            for name in self.scenario_entities
+            if self.entities.get(name, {}).get("is_player") or self.entities.get(name, {}).get("is_party")
+        )

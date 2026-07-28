@@ -85,6 +85,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             "skills": self.skills,
             "entities": self.entities,
             "equip_slots": self.rules.get("equip_slot", []),
+            "scenario_entities": self.scenario_entities,
         })
         self.event_bus.publish("scenario_loaded", {
             # For a multi-room dungeon this narrates the *starting room* specifically (ex:
@@ -155,12 +156,13 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             conditions (a resolved action, an item interaction, a game load). Deliberately
             not "rules_loaded" -- NLPCore also rebuilds its sentence-transformer embeddings
             from that event, which would be far too expensive to redo after every single
-            action; "party_status_changed" carries the same "entities"/"equip_slots" shape
-            but only GUICore listens for it.
+            action; "party_status_changed" carries the same "entities"/"equip_slots"/
+            "scenario_entities" shape but only GUICore listens for it.
         """
         self.event_bus.publish("party_status_changed", {
             "entities": self.entities,
             "equip_slots": self.rules.get("equip_slot", []),
+            "scenario_entities": self.scenario_entities,
         })
 
     def _resolve_action_skill(self, skill_name):

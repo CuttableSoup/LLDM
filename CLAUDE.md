@@ -53,12 +53,16 @@ when and how it's actually constructed.
   `self._game_started` and locks Scenario -> Load... shut for the rest of the session, so a
   later Create... can't reopen it once a game already exists. `GUICore` never constructs a
   `DMCore` itself — it only ever publishes; see "Booting the game" below for who's listening.
-  History mirrors
-  `llm_response_ready`; Party redraws on `rules_loaded`/
-  `party_status_changed` as a `ttk.Treeview` (one node per `is_player`/`is_party` entity,
-  expanding into Equipment/Skills/Abilities/Inventory/Conditions — Equipment lists every valid
-  slot for the member's own supertype/subtype, filled or `(empty)`, via `get_equip_slots`'s
-  same override precedence as `get_attitude`, see "Data/TOML conventions"). Notes is a
+  History mirrors `llm_response_ready`; Party redraws on `rules_loaded`/`party_status_changed`
+  as a `ttk.Treeview` (one node per `is_player`/`is_party` entity, expanding into Equipment/
+  Skills/Abilities/Inventory/Conditions — Equipment lists every valid slot for the member's own
+  supertype/subtype, filled or `(empty)`, via `get_equip_slots`'s same override precedence as
+  `get_attitude`, see "Data/TOML conventions"). Membership is filtered through the payload's
+  own `"scenario_entities"` list, not `is_player`/`is_party` alone — `self.entities` also still
+  holds every *uninstanced* template from every loaded TOML file (ex: `characters.toml`'s
+  `anne`, `is_party = true`, but not part of `arena.toml`'s own entities list), which must not
+  show up on the Party tab just for existing on disk; `DM_Combat.py`'s
+  `get_party_challenge_rating` filters the same way (see "Challenge rating"). Notes is a
   free-typed scratchpad with its own save/load slice. Map is a free-form drawing canvas the
   engine never reads. Debug overwrites (not appends) the most recent LLM request/response on
   every `llm_debug_updated`.
@@ -125,6 +129,40 @@ once `hp_per_remain` drops under 0.40 (the same cutoff `rules.toml`'s `"wounded"
 out at); an undead/construct entity has no such entry and fights on regardless. Separately,
 `resolve_behavior_action` falls back to `"advance"` on its own whenever its chosen action
 can't currently reach its target (`is_in_range`) — closing distance instead of standing idle.
+
+## Challenge rating
+
+`Challenge_Rating.py` is a pure, DMCore-independent module (same "pure, entity-shape-agnostic"
+precedent `Character_Creation.py` sets) computing a single number for "how powerful is this
+entity," built entirely from its own dice/pips — no separately-justified weighting constants.
+`skill_rating(dice, pips)` is `dice * 3 + pips`, the shared "3 pips = 1 die" scale
+`DM_Combat.py`'s `get_opposing_skill`/`select_ability_skill` already rated skills on before
+this module extracted it into one place. `calculate_challenge_rating(skills, max_hp,
+damage_dice=0, damage_pips=0, top_n=3)` sums three components on that same scale:
+- **skill** — the average `skill_rating` of the entity's `top_n` (default 3) best-*trained*
+  skills, not every skill it has. A flat sum would let a character trained broadly but
+  shallowly across dozens of noncombat skills (ex: a full 2D-baseline skill table) outrank a
+  boss creature authored with only 2-3 trained skills.
+- **hp** — `max_hp // 3`, the same `/3` scale as pips-to-dice, so a flat stat with no dice of
+  its own still lands in comparable units.
+- **damage** — `skill_rating` of the entity's single best damage-dealing weapon/ability's own
+  `dice`/`pips` — not its `bonus` field, which can be a `rules.toml` formula reference rather
+  than a flat number, and isn't "dice and pips" in the first place.
+
+`calculate_party_challenge_rating(member_ratings)` is a plain sum, not an average — a larger
+party of individually modest ratings can still outrate one strong boss.
+
+`DM_Combat.py`'s `get_challenge_rating(entity_name)`/`get_party_challenge_rating()` are the
+DMCore-touching glue (the same split `DM_CharacterCreation.py` is to `Character_Creation.py`):
+`_best_damage_dice_pips` finds the best `dice`/`pips` from every equipped item plus every
+resolved ability with a `damage_value` (the same candidate pool `find_attack_ability` draws
+from, just not filtered to one particular skill — nothing here is about to be rolled, so
+there's no skill to disambiguate by), resolving `"user.weapon.<field>"` indirection
+(`resolve_weapon_reference`) the same way a real attack would. `get_party_challenge_rating`
+filters through `self.scenario_entities`, not a blind `is_player`/`is_party` scan of
+`self.entities` — `self.entities` also still holds every *uninstanced* template from every
+loaded TOML file (ex: `characters.toml`'s `anne`, `is_party = true`, but not part of
+`arena.toml`'s own entities list), and those must not count just for existing on disk.
 
 ## Movement and range
 

@@ -419,19 +419,27 @@ class GUICore:
             "party_status_changed" (after anything that can change a party member's own
             state -- see DM_Core.py's _publish_party_status): one collapsible tree node per
             party member -- an entity with is_player = true (the player) or is_party = true
-            (an ally like thane, see entity_schema.toml's is_party) -- labeled with its
-            current/max HP and each expanding into its own Equipment/Skills/Abilities/
-            Inventory/Conditions groups.
-        @param rules_data The event payload ({"entities": ..., "equip_slots": ...}, plus
-            "skills" for "rules_loaded" specifically -- the skill catalog, unused here since
-            each member's own skills live on the entity itself).
+            (an ally like thane, see entity_schema.toml's is_party) that's actually part of
+            the current playthrough -- labeled with its current/max HP and each expanding
+            into its own Equipment/Skills/Abilities/Inventory/Conditions groups.
+        @param rules_data The event payload ({"entities": ..., "equip_slots": ...,
+            "scenario_entities": ...}, plus "skills" for "rules_loaded" specifically -- the
+            skill catalog, unused here since each member's own skills live on the entity
+            itself). "scenario_entities" is what keeps an is_party template not actually part
+            of the current scenario (ex: characters.toml's "anne" while playing "arena",
+            which never lists her) off the Party tab -- self.entities alone can't tell an
+            instanced party member apart from an uninstanced template sitting in the same
+            dict (see DM_Combat.py's get_party_challenge_rating, which filters the same way).
         """
         self.event_bus.publish("log_info", "Displaying party status.")
         self.party_tree.delete(*self.party_tree.get_children())
 
         entities = rules_data.get("entities", {})
         equip_slot_rules = rules_data.get("equip_slots", [])
+        scenario_entities = set(rules_data.get("scenario_entities", []))
         for entity_key, entity in entities.items():
+            if entity_key not in scenario_entities:
+                continue
             if not (entity.get("is_player") or entity.get("is_party")):
                 continue
             name = entity.get("name", entity_key)

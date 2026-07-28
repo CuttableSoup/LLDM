@@ -20,6 +20,7 @@ from Character_Creation import (
     validate_allocation,
 )
 from Character_Creation_GUI import CharacterCreationDialog
+from Challenge_Rating import calculate_challenge_rating, calculate_party_challenge_rating, skill_rating
 from DM_Core import DMCore
 from DM_Rules import list_available_scenarios
 from Event_Bus import EventBus
@@ -670,6 +671,73 @@ class TestCharacterCreation(unittest.TestCase):
         self.assertEqual(skills["arcane"], {"dice": 8, "pips": 0})  # 3 baseline + 5 allocated
         self.assertEqual(skills["strength"], {"dice": 1, "pips": 0})  # untouched, elf's own override
         self.assertEqual(skills["blades"], {"dice": 2, "pips": 0})  # untouched, elf's own override
+
+
+class TestChallengeRating(unittest.TestCase):
+    """!
+    @brief Challenge_Rating.py's pure "how powerful is this entity" math -- no DMCore, same
+        independence Character_Creation.py's own TestCharacterCreation exercises above.
+    """
+
+    def test_skill_rating_converts_pips_to_the_shared_pip_scale(self):
+        self.assertEqual(skill_rating(dice=5, pips=0), 15)
+        self.assertEqual(skill_rating(dice=2, pips=2), 8)
+        self.assertEqual(skill_rating(dice=0, pips=0), 0)
+
+    def test_calculate_challenge_rating_averages_only_the_top_n_skills(self):
+        # Six skills at 2D (rating 6) plus one standout at 5D (rating 15) -- top_n=3 should
+        # average the standout with two of the 2D skills (15+6+6)/3=9, not get diluted by
+        # every other 2D skill the entity also happens to have trained.
+        skills = {f"skill_{i}": {"dice": 2, "pips": 0} for i in range(6)}
+        skills["standout"] = {"dice": 5, "pips": 0}
+        rating = calculate_challenge_rating(skills, max_hp=0, top_n=3)
+        self.assertEqual(rating, 9)
+
+    def test_calculate_challenge_rating_sums_skill_hp_and_damage_components(self):
+        # gladstone's own numbers (characters.toml/items.toml/spells.toml): top-3 skill
+        # ratings blades 5D=15, dodge 5D=15, then one of the 4D=12 skills; max_hp=36; best
+        # damage is fireball's 5D=15 (beats the longsword's 1D+2=5 and cleave's weapon-scaled
+        # 1D+2=5) -- skill (15+15+12)/3=14, hp 36//3=12, damage 15 -> 41.
+        skills = {"blades": {"dice": 5, "pips": 0}, "dodge": {"dice": 5, "pips": 0},
+                  "appraise": {"dice": 4, "pips": 0}}
+        rating = calculate_challenge_rating(skills, max_hp=36, damage_dice=5, damage_pips=0)
+        self.assertEqual(rating, 41)
+
+    def test_calculate_challenge_rating_handles_an_entity_with_no_trained_skills(self):
+        self.assertEqual(calculate_challenge_rating({}, max_hp=9, damage_dice=1, damage_pips=1), 7)
+
+    def test_calculate_party_challenge_rating_is_the_sum_not_the_average(self):
+        self.assertEqual(calculate_party_challenge_rating([41, 26, 21]), 88)
+        self.assertEqual(calculate_party_challenge_rating([]), 0)
+
+
+class TestChallengeRatingDMCoreIntegration(DMTestCase):
+    """!
+    @brief get_challenge_rating/get_party_challenge_rating (DM_Combat.py) against arena.toml's
+        real gladstone/thane/wolf data -- confirms the DMCore-side glue (finding each entity's
+        best damage-dealing weapon/ability, filtering the party by is_player/is_party) feeds
+        Challenge_Rating.py's pure math the right numbers, not just that the math itself is
+        right (TestChallengeRating already covers that in isolation).
+    """
+
+    def test_gladstone_rating_picks_fireball_over_his_own_longsword_as_the_best_damage(self):
+        # skill (blades 5D=15, dodge 5D=15, one 4D skill=12) -> 14; hp 36//3=12; fireball's
+        # 5D=15 beats the longsword's 1D+2=5 and cleave's weapon-scaled 1D+2=5 -- 14+12+15=41.
+        self.assertEqual(self.dm_core.get_challenge_rating("gladstone"), 41)
+
+    def test_thane_rating_uses_his_own_innate_shortsword_strike(self):
+        # skill (three tied 4D skills=12 each) -> 12; hp 24//3=8; shortsword strike 2D=6.
+        self.assertEqual(self.dm_core.get_challenge_rating("thane"), 26)
+
+    def test_wolf_rating_uses_its_own_bite(self):
+        # skill (dodge 6D=18, brawling 5D=15, one 2D skill=6) -> 13; hp 16//3=5; bite 1D=3.
+        self.assertEqual(self.dm_core.get_challenge_rating("wolf"), 21)
+
+    def test_unknown_entity_rates_zero(self):
+        self.assertEqual(self.dm_core.get_challenge_rating("nobody"), 0)
+
+    def test_party_rating_sums_gladstone_and_thane_but_not_the_wolves(self):
+        self.assertEqual(self.dm_core.get_party_challenge_rating(), 41 + 26)
 
 
 class TestCharacterCreationDMCoreIntegration(DMTestCase):
@@ -1769,16 +1837,20 @@ class TestGUICore(unittest.TestCase):
 
 
     def test_display_party_status_renders_equipment_skills_abilities_inventory_conditions(self):
-        self.event_bus.publish("rules_loaded", {"entities": {
-            "gladstone": {
-                "is_player": True, "name": "Gladstone", "hp": 30, "max_hp": 36,
-                "equipped": {"rhand": "longsword"}, "abilities": ["cleave"],
-                "skills": {"blades": {"dice": 5, "pips": 0}, "athletics": {"dice": 2, "pips": 2}},
-                "inventory": ["torch", "torch"], "active_conditions": {"wounded": {}},
+        self.event_bus.publish("rules_loaded", {
+            "scenario_entities": ["gladstone", "thane", "wolf"],
+            "entities": {
+                "gladstone": {
+                    "is_player": True, "name": "Gladstone", "hp": 30, "max_hp": 36,
+                    "equipped": {"rhand": "longsword"}, "abilities": ["cleave"],
+                    "skills": {"blades": {"dice": 5, "pips": 0}, "athletics": {"dice": 2, "pips": 2}},
+                    "inventory": ["torch", "torch"], "active_conditions": {"wounded": {}},
+                },
+                "thane": {"is_party": True, "name": "Thane", "hp": 10, "max_hp": 10},
+                "wolf": {"name": "wolf", "hp": 10, "max_hp": 10},  # neither player nor party
+                "anne": {"is_party": True, "name": "Anne", "hp": 8, "max_hp": 8},  # not in scenario_entities
             },
-            "thane": {"is_party": True, "name": "Thane", "hp": 10, "max_hp": 10},
-            "wolf": {"name": "wolf", "hp": 10, "max_hp": 10},  # neither player nor party
-        }})
+        })
 
         members = self.gui.party_tree.get_children()
         labels = [self.gui.party_tree.item(m, "text") for m in members]
