@@ -68,11 +68,42 @@ class PersistenceMixin(DMCoreProtocol):
             one combined file. For a multi-room dungeon, also saves current_room_key and
             visited_rooms so a resumed save picks up in the same room with every previously
             visited room's state intact (see _all_known_instance_names/load_game).
+
+            A generated entity (DM_NpcGeneration.py -- entity["generated"] = True) also gets
+            its own skills/max_hp/name/description/qualities/attitudes saved, since (unlike
+            every other instance) it has no static TOML template to re-derive those from on
+            load -- they were decided once, at generation time (some of them randomly, per
+            entity_template's own varied fields -- see NPC_Generation.py's
+            resolve_varied_value), and have to round-trip explicitly or a reload would either
+            silently lose them or (worse) hand the entity a *different* random race/attitude
+            than the one actually saved. Abilities/equipment aren't generated at all (still
+            decided by whoever authors the entity_template, same as any hand-authored entity
+            -- see CLAUDE.md's "NPC generation"), so there's nothing dynamic to save there.
         @param slot_name The save slot's name (used as a directory name under Saves/).
         """
         slot_dir = self._save_slot_dir(slot_name)
         os.makedirs(slot_dir, exist_ok=True)
         instance_names = self._all_known_instance_names()
+
+        def _instance_state(name):
+            entity = self.entities.get(name, {})
+            state = {
+                "hp": self.get_current_hp(name),
+                "active_conditions": entity.get("active_conditions", {}),
+                "currency": entity.get("currency", 0),
+                "inventory": entity.get("inventory", []),
+                "band": self.get_band(name),
+            }
+            if entity.get("generated"):
+                state["generated"] = True
+                state["skills"] = entity.get("skills", {})
+                state["max_hp"] = entity.get("max_hp", 0)
+                state["name"] = entity.get("name", name)
+                state["description"] = entity.get("description", "")
+                state["qualities"] = entity.get("qualities", {})
+                state["attitudes"] = entity.get("attitudes", {})
+            return state
+
         data = {
             "version": 1,
             "scenario_key": self.scenario_key,
@@ -82,16 +113,7 @@ class PersistenceMixin(DMCoreProtocol):
             "scenario_entities": self.scenario_entities,
             "current_room_key": self.current_room_key,
             "visited_rooms": self.visited_rooms,
-            "instances": {
-                name: {
-                    "hp": self.get_current_hp(name),
-                    "active_conditions": self.entities.get(name, {}).get("active_conditions", {}),
-                    "currency": self.entities.get(name, {}).get("currency", 0),
-                    "inventory": self.entities.get(name, {}).get("inventory", []),
-                    "band": self.get_band(name),
-                }
-                for name in instance_names
-            },
+            "instances": {name: _instance_state(name) for name in instance_names},
         }
         with open(os.path.join(slot_dir, "dm_state.json"), "w") as f:
             json.dump(data, f, indent=2)
@@ -132,6 +154,13 @@ class PersistenceMixin(DMCoreProtocol):
             enter_room moves into whichever room the player actually saved in. This has to
             happen before the "instances" overlay loop below, so saved hp/inventory/etc. has
             a real entity dict to land on for every visited room, not just the starting one.
+
+            Every re-instancing call below passes skip_llm_generation=True: a generate=true
+            template (DM_NpcGeneration.py) would otherwise pay for a real LLM round trip here
+            just to have its result immediately overwritten by the saved skills/max_hp/name/
+            description a few lines down -- skip_llm_generation routes straight to the
+            offline fallback path instead (instant, no network dependency), and the overlay
+            loop below restores the entity's *actual* saved identity on top regardless.
         @param slot_name The save slot's name to load.
         """
         path = os.path.join(self._save_slot_dir(slot_name), "dm_state.json")
@@ -148,7 +177,7 @@ class PersistenceMixin(DMCoreProtocol):
         self.scenario_key = data.get("scenario_key", self.scenario_key)
         self.load_rules(os.path.join("Rules", "Fantasy"))
         self.load_scenario_definition(self.scenario_key)
-        self.load_scenario()
+        self.load_scenario(skip_llm_generation=True)
 
         if self.rooms:
             for room_key in data.get("visited_rooms", {}):
@@ -156,12 +185,15 @@ class PersistenceMixin(DMCoreProtocol):
                     continue  # load_scenario() (above) already instanced the starting room
                 room = self.rooms.get(room_key)
                 if room:
-                    self.visited_rooms[room_key] = self._instance_entities(room.get("entities", []))
+                    self.visited_rooms[room_key] = self._instance_entities(
+                        room.get("entities", []), party_pool=self.persistent_entities,
+                        skip_llm_generation=True,
+                    )
             saved_room_key = data.get("current_room_key")
             if saved_room_key and saved_room_key != self.current_room_key:
                 # arrival_band doesn't matter here -- the "instances" overlay loop below
                 # restores the player's real saved band on top regardless.
-                self.enter_room(saved_room_key)
+                self.enter_room(saved_room_key, skip_llm_generation=True)
 
         for name, state in data.get("instances", {}).items():
             entity = self.entities.get(name)
@@ -172,6 +204,14 @@ class PersistenceMixin(DMCoreProtocol):
             entity["currency"] = state.get("currency", entity.get("currency", 0))
             entity["inventory"] = state.get("inventory", entity.get("inventory", []))
             entity["band"] = state.get("band", entity.get("band", 1))
+            if state.get("generated"):
+                entity["generated"] = True
+                entity["skills"] = state.get("skills", {})
+                entity["max_hp"] = state.get("max_hp", entity.get("max_hp", 0))
+                entity["name"] = state.get("name", entity.get("name", name))
+                entity["description"] = state.get("description", entity.get("description", ""))
+                entity["qualities"] = state.get("qualities", entity.get("qualities", {}))
+                entity["attitudes"] = state.get("attitudes", entity.get("attitudes", {}))
 
         # load_scenario()/enter_room (above) already reset current_target to a freshly-
         # computed default -- overlay the saved value on top, same pattern as player_name, so

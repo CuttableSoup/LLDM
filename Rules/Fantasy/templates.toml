@@ -1,0 +1,108 @@
+# Stub templates for NPC generation (see NPC_Generation.py/DM_NpcGeneration.py, CLAUDE.md's
+# "NPC generation") -- [[entity_template]], not [[entity]]: loaded into their own
+# self.entity_templates namespace (DM_Rules.py's load_rules), never self.entities, so one
+# can never collide with (or be accidentally referenced as) a real, directly usable entity/
+# creature template. A scenario/room entry opts into one via its own "template" field
+# ({ template = "generated_stranger", band = 2 }), never "name" (see DM_Rules.py's
+# _instance_entities) -- referencing one twice gets two independent instances
+# (generated_stranger, generated_stranger_2), each with its own LLM call.
+#
+# None of these author [entity.skills]/max_hp/name/description -- NPC_Generation.py fills
+# those in at instancing time, fit to a target challenge rating. Everything else
+# (attitudes, qualities.race, is_party, ...) is hand-authored normally, and deliberately
+# varied between templates below -- different race, different attitude shape (a flat
+# "default" only, vs. "default" plus a specific supertype/name override) -- so generated
+# NPCs don't all read as the same person wearing a different name tag.
+
+[[entity_template]]
+name = "generated_stranger"
+supertype = "creature"
+subtype = "humanoid"
+hint = [
+    {"a stranger passing through, keeping mostly to themselves" = 30},
+    {"a wandering merchant looking to trade" = 30},
+    {"an adventerer looking for a party to tackle a nearby dungeon" = 40},
+]
+target_cr = "player"
+cr_multiplier = {min = 0.8, max = 1.2} # can vary from weaker to stronger
+
+currency = {min = 10, max = 50}
+max_bulk = 5
+
+[entity_template.attitudes]
+default = [ 
+    {min = -40, max = 40}, # disposition varies from wary to warm
+    0, # trust remain zero
+    0, # confidence remain zero
+    10, # respect remain zero
+    -20, # obligation remains low for a stranger
+    {min = -40, max = 40} # intimacy varies from wary to warm
+]
+# A specific override alongside the flat default (same shape gladstone's own
+# [[entity.attitudes.name]] uses in characters.toml). "player" (lowercase, matching the same
+# literal token scenario "entities" lists use) is resolved to whoever the live player_name
+# actually is (DM_NpcGeneration.py's _resolve_generated_attitudes) -- not the Python constant
+# name PLAYER_PLACEHOLDER, which is code, not data.
+[[entity_template.attitudes.name]]
+player = [ 40, 0, 0, 0, 0, 0 ] # trusts the player for some reaseon
+
+[entity_template.qualities]
+# relative weights
+race = [
+    {"halfling" = 20},
+    {"dwarf" = 20},
+    {"elf" = 20},
+    {"human" = 60},
+    {"half-orc" = 20}
+]
+# posssible for any with multiple options
+gender = [
+    {"male" = 50},
+    {"female" = 50}
+]
+# for ranges, use a minimum and maximum -- one {min, max} table, same shape as cr_multiplier/
+# currency above (not list-wrapped -- a list here means a weighted-choice list instead, see
+# NPC_Generation.py's resolve_varied_value).
+age = { min = 18, max = 50 }
+
+# ----------------------------------------------------------
+
+[[entity_template]]
+name = "generated_innkeeper"
+supertype = "creature"
+subtype = "humanoid"
+hint = "the innkeeper running the bar tonight"
+target_cr = "player"
+
+currency = 40
+max_bulk = 5
+
+[entity_template.attitudes]
+# Just a flat default -- warm toward everyone alike, no special-cased exceptions.
+default = [ 30, 0, 10, 0, 0, 0 ]
+
+[entity_template.qualities]
+race = "dwarf"
+
+# ----------------------------------------------------------
+
+[[entity_template]]
+name = "generated_regular"
+supertype = "creature"
+subtype = "humanoid"
+hint = "a regular who's had one too many and is in a talkative mood"
+target_cr = "player"
+cr_multiplier = 0.6                         # a background patron, not meant to rival the player
+
+currency = 5
+max_bulk = 5
+
+[entity_template.attitudes]
+default = [ 15, -5, 0, 0, 0, 0 ]
+# A supertype override this time, not a name override -- simple folk, uneasy around the
+# undead in particular.
+[[entity_template.attitudes.supertype]]
+undead = [ -60, -60, 40, -60, -60, -60 ]
+
+[entity_template.qualities]
+race = "halfling"

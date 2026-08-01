@@ -32,20 +32,33 @@ class SocialMixin(DMCoreProtocol):
 
     def is_hostile(self, entity_name, toward_name):
         """!
-        @brief Whether entity_name is hostile enough toward toward_name to be treated as a combat
-            target rather than a dialogue partner. An entity with no attitude data defaults to
-            neutral (0), which still counts as combat-ready; only a positive (Friendly-leaning)
-            disposition opts an entity out of combat routing. Inanimate objects (ex: a locked
-            chest) are never hostile regardless of attitude data -- they have no combat intent,
-            so a lockpicking attempt against one must not get batched into "round_resolved".
+        @brief Whether entity_name is hostile enough toward toward_name to be treated as a
+            combat target rather than a dialogue partner. Two distinct defaults, deliberately
+            not collapsed into one:
+            - No `[entity.attitudes]` table at all (ex: creatures.toml's wolf/bandit, which
+              declare no attitude data whatsoever) -- treated as hostile unconditionally. A
+              monster that never bothered to author a disposition is still a monster; this is
+              what keeps every existing hostile creature fighting exactly as before.
+            - `[entity.attitudes]` *is* declared -- disposition has to actually reach true
+              hostility (<= -100) to fight. A merely wary/negative-but-not-murderous
+              disposition (ex: -40) is dialogue, not combat -- "you can dislike someone and
+              not be hostile." This is what a generated NPC's own resolved disposition (see
+              NPC_Generation.py's variance) is checked against.
+            Inanimate objects (ex: a locked chest) are never hostile regardless of attitude
+            data -- they have no combat intent, so a lockpicking attempt against one must not
+            get batched into "round_resolved".
         @param entity_name The name of the entity being checked.
         @param toward_name The name of the entity it might be hostile toward.
-        @return True if disposition (the attitude array's first value) is 0 or negative.
+        @return True if entity_name has no attitude data at all, or its disposition (the
+            attitude array's first value) is -100 or lower.
         """
-        if self.entities.get(entity_name, {}).get("supertype") == "object":
+        entity = self.entities.get(entity_name, {})
+        if entity.get("supertype") == "object":
             return False
+        if "attitudes" not in entity:
+            return True
         disposition = self.get_attitude(entity_name, toward_name)[0]
-        return disposition <= 0
+        return disposition <= -100
 
     def get_attitude_tier(self, value):
         """!
@@ -103,7 +116,11 @@ class SocialMixin(DMCoreProtocol):
             descriptive data at all, still surface something to the LLM (how hostile it is),
             rather than contributing nothing to the roster/defender_details.
         @return A formatted description string, or "" if the entity has no descriptive data
-                (and no attitude phrase was added).
+                (and no attitude phrase was added). Leads with the entity's own "name" field
+                rather than entity_name (its self.entities dict key) when the two differ --
+                every hand-authored template has "name" == its own dict key by construction,
+                so this only actually changes anything for a generated NPC (DM_NpcGeneration.py),
+                whose LLM-invented name would otherwise never reach this text at all.
         """
         entity = self.entities.get(entity_name, {})
         parts = []
@@ -131,4 +148,4 @@ class SocialMixin(DMCoreProtocol):
 
         if not parts:
             return ""
-        return f"{entity_name} - " + " | ".join(parts)
+        return f"{entity.get('name', entity_name)} - " + " | ".join(parts)

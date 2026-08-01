@@ -1,0 +1,50 @@
+"""!
+@file LLM_Client.py
+@brief A small, stateless, synchronous helper for talking to LM Studio's OpenAI-compatible
+    chat/completions endpoint. Deliberately standalone -- not shared with LLM_Core.py's own
+    async fetch_from_llm (see NPC_Generation.py's own notes on why): that call always runs on
+    its own background thread and must never raise (it always publishes llm_response_ready,
+    even on failure); this one is called synchronously, in place, by whatever needs the result
+    immediately (NPC_Generation.py's generate_npc_stats, during scenario/room loading), and
+    must raise cleanly on any failure so its caller's own fallback path can take over.
+"""
+
+import json
+import urllib.request
+
+DEFAULT_TIMEOUT = 20
+
+
+def call_chat_completion(
+    api_url, messages, tools=None, tool_choice=None, temperature=0.7, max_tokens=1024,
+    timeout=DEFAULT_TIMEOUT,
+):
+    """!
+    @brief Posts one chat/completions request and returns the parsed JSON response.
+    @param api_url The full chat/completions endpoint URL.
+    @param messages The OpenAI-style messages list ({"role", "content"} dicts).
+    @param tools Optional OpenAI-style "tools" list (function-calling schema).
+    @param tool_choice Optional "tool_choice" value (ex: "auto") -- only meaningful alongside
+        tools.
+    @param temperature/max_tokens Standard OpenAI-style sampling params.
+    @param timeout Seconds to wait before giving up -- a hard requirement here (unlike
+        fetch_from_llm's own unbounded call), since a caller of this function is blocking
+        synchronously, in place, potentially on the GUI thread; a hung LM Studio must not be
+        able to freeze the whole app indefinitely.
+    @return The parsed JSON response body.
+    @raises Exception (network error, non-2xx response, invalid JSON) -- callers are expected
+        to catch broadly and fall back, not to inspect the specific error type.
+    """
+    payload = {"messages": messages, "temperature": temperature, "max_tokens": max_tokens}
+    if tools is not None:
+        payload["tools"] = tools
+    if tool_choice is not None:
+        payload["tool_choice"] = tool_choice
+
+    request = urllib.request.Request(
+        api_url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))

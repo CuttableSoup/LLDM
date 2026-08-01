@@ -157,7 +157,7 @@ disposition = "is cold and standoffish around them"
 trust = "is guarded and skeptical around them"
 confidence = "feels intimidated and uneasy around them"
 respect = "is privately unimpressed by them"
-obligation = "feels only a slight, easily-dismissed debt to them"
+obligation = "feels no debt to them"
 intimacy = "feels a mild aversion to them"
 
 [[attitude_tier]]

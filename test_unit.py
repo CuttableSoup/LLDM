@@ -29,6 +29,13 @@ import LLDM
 from LLM_Core import LLMCore
 from LLM_Rag import RagIndex
 from NLP_Core import NLPCore
+from NPC_Generation import (
+    _describe_qualities,
+    fit_skills_to_cr,
+    generate_npc_stats,
+    load_npc_keywords,
+    resolve_varied_value,
+)
 from Textual_Core import TextualCore
 from textual.widgets import Button, RichLog
 
@@ -740,6 +747,327 @@ class TestChallengeRatingDMCoreIntegration(DMTestCase):
         self.assertEqual(self.dm_core.get_party_challenge_rating(), 41 + 26)
 
 
+class TestNpcGeneration(unittest.TestCase):
+    """!
+    @brief NPC_Generation.py's pure math/parsing -- no DMCore, no live LLM (see
+        TestNpcGenerationDMCoreIntegration for the DMCore-side glue). generate_npc_stats'
+        own dependency-injection seam (call_chat_completion) is exercised directly here
+        rather than through DMCore.
+    """
+
+    def test_fit_skills_to_cr_round_trips_through_calculate_challenge_rating(self):
+        # Every case should land *exactly* on target_cr -- fit_skills_to_cr is meant to be an
+        # exact inverse of calculate_challenge_rating's own math, not just "close".
+        cases = [
+            (20, ["blades", "dodge", "athletics"]),       # exactly 3 key skills
+            (41, ["arcane", "linguistics"]),               # fewer than 3
+            (10, ["stealth"]),                              # just 1
+            (60, ["blades", "dodge", "athletics", "strength", "brawling"]),  # more than 3
+        ]
+        for target_cr, key_skills in cases:
+            skills, max_hp = fit_skills_to_cr(key_skills, target_cr)
+            self.assertEqual(
+                calculate_challenge_rating(skills, max_hp), target_cr,
+                f"key_skills={key_skills} target_cr={target_cr}",
+            )
+
+    def test_fit_skills_to_cr_never_produces_negative_or_zero_dice(self):
+        skills, max_hp = fit_skills_to_cr(["blades", "dodge"], target_cr=1)
+        self.assertGreaterEqual(max_hp, 0)
+        for stats in skills.values():
+            self.assertGreaterEqual(stats["dice"], 1)
+
+    def test_fit_skills_to_cr_dedupes_and_only_the_first_three_affect_cr(self):
+        skills, max_hp = fit_skills_to_cr(
+            ["blades", "blades", "dodge", "athletics", "strength"], target_cr=30,
+        )
+        self.assertEqual(len(skills), 4)  # deduped from 5 to 4
+        self.assertEqual(calculate_challenge_rating(skills, max_hp), 30)
+
+        primary_ratings = [skill_rating(skills[n]["dice"], skills[n]["pips"]) for n in ("blades", "dodge", "athletics")]
+        flavor_rating = skill_rating(skills["strength"]["dice"], skills["strength"]["pips"])
+        self.assertEqual(len(set(primary_ratings)), 1)  # all three tied
+        self.assertLess(flavor_rating, primary_ratings[0])  # the 4th is CR-free flavor only
+
+    def test_fit_skills_to_cr_empty_key_skills_still_produces_hp(self):
+        skills, max_hp = fit_skills_to_cr([], target_cr=30)
+        self.assertEqual(skills, {})
+        self.assertGreater(max_hp, 0)
+
+    def test_resolve_varied_value_passes_a_plain_scalar_through_unchanged(self):
+        self.assertEqual(resolve_varied_value(0.6), 0.6)
+        self.assertEqual(resolve_varied_value(40), 40)
+        self.assertEqual(resolve_varied_value("the innkeeper running the bar tonight"), "the innkeeper running the bar tonight")
+
+    def test_resolve_varied_value_range_picks_int_or_float_by_the_bounds_own_type(self):
+        for _ in range(20):
+            value = resolve_varied_value({"min": 10, "max": 50})
+            self.assertIsInstance(value, int)
+            self.assertTrue(10 <= value <= 50)
+        for _ in range(20):
+            value = resolve_varied_value({"min": 0.8, "max": 1.2})
+            self.assertIsInstance(value, float)
+            self.assertTrue(0.8 <= value <= 1.2)
+
+    def test_resolve_varied_value_weighted_list_only_ever_returns_one_of_the_keys(self):
+        options = [{"halfling": 20}, {"dwarf": 20}, {"elf": 20}, {"human": 60}, {"half-orc": 20}]
+        for _ in range(20):
+            self.assertIn(resolve_varied_value(options), {"halfling", "dwarf", "elf", "human", "half-orc"})
+
+    def test_describe_qualities_covers_every_combination_of_gender_race_age(self):
+        self.assertEqual(_describe_qualities(None), "")
+        self.assertEqual(_describe_qualities({}), "")
+        self.assertEqual(_describe_qualities({"race": "dwarf"}), "They are a dwarf.")
+        self.assertEqual(
+            _describe_qualities({"gender": "female", "race": "elf"}), "They are a female elf.",
+        )
+        self.assertEqual(
+            _describe_qualities({"gender": "male", "race": "halfling", "age": 37}),
+            "They are a male halfling, about 37 years old.",
+        )
+        self.assertEqual(_describe_qualities({"age": 40}), "They are about 40 years old.")
+
+    def test_resolve_varied_value_weighted_list_weights_neednt_sum_to_100(self):
+        # Relative weights, not percentages -- random.choices normalizes internally, so a
+        # heavily lopsided list (99 vs 1) should still overwhelmingly favor the heavy option.
+        options = [{"rare": 1}, {"common": 99}]
+        picks = [resolve_varied_value(options) for _ in range(200)]
+        self.assertGreater(picks.count("common"), picks.count("rare"))
+
+    def test_load_npc_keywords_reads_the_real_catalog(self):
+        keywords = load_npc_keywords()
+        self.assertIn("warrior", keywords)
+        self.assertIn("blades", keywords["warrior"])
+
+    def test_generate_npc_stats_uses_the_injected_call_chat_completion(self):
+        def fake_call(api_url, messages, tools=None, tool_choice=None):
+            return {"choices": [{"message": {"tool_calls": [{"function": {"arguments": json.dumps({
+                "name": "Test Name", "backstory": "A test backstory.", "keywords": ["warrior"],
+            })}}]}}]}
+
+        npc_keywords = {"warrior": ["blades", "axes", "athletics", "strength"]}
+        result = generate_npc_stats(npc_keywords, target_cr=20, variance=0, call_chat_completion=fake_call)
+
+        self.assertEqual(result["name"], "Test Name")
+        self.assertEqual(result["description"], "A test backstory.")
+        self.assertEqual(set(result["skills"]), set(npc_keywords["warrior"]))
+
+    def test_generate_npc_stats_falls_back_when_call_chat_completion_raises(self):
+        def failing_call(*args, **kwargs):
+            raise ConnectionError("no LM Studio")
+
+        npc_keywords = {"warrior": ["blades", "axes", "athletics", "strength"]}
+        result = generate_npc_stats(npc_keywords, target_cr=20, call_chat_completion=failing_call)
+
+        self.assertEqual(result["name"], "Unnamed Stranger")
+        self.assertTrue(result["skills"])
+
+    def test_generate_npc_stats_falls_back_when_llm_names_an_unrecognized_keyword(self):
+        def fake_call(api_url, messages, tools=None, tool_choice=None):
+            return {"choices": [{"message": {"tool_calls": [{"function": {"arguments": json.dumps({
+                "name": "X", "backstory": "Y", "keywords": ["not_a_real_keyword"],
+            })}}]}}]}
+
+        npc_keywords = {"warrior": ["blades"]}
+        result = generate_npc_stats(npc_keywords, target_cr=20, call_chat_completion=fake_call)
+
+        self.assertEqual(result["name"], "Unnamed Stranger")
+
+    def test_generate_npc_stats_skip_llm_generation_never_calls_the_injected_callable(self):
+        def exploding_call(*args, **kwargs):
+            raise AssertionError("should never be called when skip_llm_generation is True")
+
+        npc_keywords = {"warrior": ["blades", "axes", "athletics", "strength"]}
+        result = generate_npc_stats(
+            npc_keywords, target_cr=20, call_chat_completion=exploding_call, skip_llm_generation=True,
+        )
+        self.assertTrue(result["skills"])
+
+
+class TestNpcGenerationDMCoreIntegration(DMTestCase):
+    """!
+    @brief _instance_entities' entity_template branch (DM_Rules.py/DM_NpcGeneration.py)
+        against npc_generation_test.toml's own "generated_stranger" (templates.toml) -- no live
+        LLM, NPC_Generation._real_call_chat_completion is patched with a deterministic fake
+        so this stays part of the fast offline suite (see test_integration.py for a real
+        end-to-end LM Studio round trip).
+    """
+    scenario_name = "npc_generation_test"
+
+    def setUp(self):
+        self.fake_call_log = []
+        self.fake_call_prompts = []
+
+        def fake_call(api_url, messages, tools=None, tool_choice=None):
+            self.fake_call_log.append(1)
+            self.fake_call_prompts.append(messages[-1]["content"])
+            return {"choices": [{"message": {"tool_calls": [{"function": {"arguments": json.dumps({
+                "name": f"Generated NPC {len(self.fake_call_log)}",
+                "backstory": "A backstory from the fake LLM.",
+                "keywords": ["warrior"],
+            })}}]}}]}
+
+        self._fake_call = fake_call
+        with patch("NPC_Generation._real_call_chat_completion", new=fake_call):
+            super().setUp()
+
+        self.slot_dirs = []
+
+    def tearDown(self):
+        for slot_dir in self.slot_dirs:
+            shutil.rmtree(slot_dir, ignore_errors=True)
+
+    def _track(self, slot_name):
+        self.slot_dirs.append(self.dm_core._save_slot_dir(slot_name))
+        return slot_name
+
+    def test_generate_true_template_gets_real_skills_name_and_generated_flag(self):
+        entity = self.dm_core.entities["generated_stranger"]
+        self.assertEqual(entity["name"], "Generated NPC 1")
+        self.assertTrue(entity["generated"])
+        self.assertEqual(set(entity["skills"]), {"blades", "axes", "athletics", "strength"})
+        self.assertGreater(entity["max_hp"], 0)
+        self.assertEqual(len(self.fake_call_log), 1)
+
+    def test_qualities_are_resolved_before_and_fed_into_the_llm_prompt(self):
+        # gender/race/age must already be concrete by the time the LLM is asked for a name --
+        # otherwise the two are decided independently and can disagree (ex: an invented name
+        # that reads as feminine paired with a separately-rolled gender = "male").
+        entity = self.dm_core.entities["generated_stranger"]
+        qualities = entity["qualities"]
+        prompt = self.fake_call_prompts[0]
+        self.assertIn(qualities["gender"], prompt)
+        self.assertIn(qualities["race"], prompt)
+        self.assertIn(str(qualities["age"]), prompt)
+
+    def test_varied_currency_qualities_and_attitudes_all_resolve_to_concrete_values(self):
+        # generated_stranger's own currency/qualities/attitudes mix fixed and varied fields
+        # (templates.toml) -- every one of them should come out a plain scalar, never a
+        # leftover {"min", "max"} dict or a weighted-choice list.
+        entity = self.dm_core.entities["generated_stranger"]
+
+        self.assertIsInstance(entity["currency"], int)
+        self.assertTrue(10 <= entity["currency"] <= 50)
+
+        qualities = entity["qualities"]
+        self.assertIn(qualities["race"], {"halfling", "dwarf", "elf", "human", "half-orc"})
+        self.assertIn(qualities["gender"], {"male", "female"})
+        self.assertIsInstance(qualities["age"], int)
+        self.assertTrue(18 <= qualities["age"] <= 50)
+
+        default = entity["attitudes"]["default"]
+        self.assertTrue(all(isinstance(axis, (int, float)) for axis in default))
+        disposition, trust, confidence, respect, obligation, intimacy = default
+        self.assertTrue(-40 <= disposition <= 40)
+        self.assertEqual(trust, 0)
+        self.assertEqual(confidence, 0)
+        self.assertEqual(respect, 10)
+        self.assertEqual(obligation, -20)
+        self.assertTrue(-40 <= intimacy <= 40)
+
+    def test_player_attitude_token_is_substituted_with_the_live_player_name(self):
+        # templates.toml authors this override toward the literal token "player" -- it must
+        # resolve to whichever entity is actually is_player = true (gladstone), not stay
+        # keyed to a string no live entity is ever named.
+        name_overrides = self.dm_core.entities["generated_stranger"]["attitudes"]["name"]
+        self.assertEqual(len(name_overrides), 1)
+        override = name_overrides[0]
+        self.assertIn(self.dm_core.player_name, override)
+        self.assertNotIn("player", override)
+        self.assertEqual(override[self.dm_core.player_name], [40, 0, 0, 0, 0, 0])
+
+    def test_generation_never_touches_abilities_equipped_or_inventory(self):
+        # Combat/dialogue capability is decided separately, by whoever authors the
+        # entity_template -- generation only ever fills in the stat block + flavor text (name/
+        # description/skills/max_hp/currency/qualities/attitudes), never gear. generated_stranger
+        # authors no [entity_template.equipped]/abilities/inventory of its own, so a generated
+        # instance should end up with none either.
+        entity = self.dm_core.entities["generated_stranger"]
+        self.assertEqual(entity.get("equipped", {}), {})
+        self.assertEqual(entity.get("abilities", []), [])
+        self.assertEqual(entity.get("inventory", []), [])
+
+    def test_target_cr_player_resolves_against_the_live_player(self):
+        # generated_stranger's own target_cr = "player" -- generated with variance=0.15 (the
+        # module default, since npcs.toml's own template doesn't override it), so it should
+        # land in a generous but bounded band around gladstone's own real CR, not some
+        # unrelated fixed number.
+        npc_cr = self.dm_core.get_challenge_rating("generated_stranger")
+        player_cr = self.dm_core.get_challenge_rating(self.dm_core.player_name)
+        self.assertLess(abs(npc_cr - player_cr), player_cr * 0.5)
+
+    def test_describe_character_surfaces_the_generated_name_not_the_template_key(self):
+        description = self.dm_core.describe_character("generated_stranger")
+        self.assertTrue(description.startswith("Generated NPC 1"))
+        self.assertNotIn("generated_stranger -", description)
+
+    def test_save_then_load_restores_the_original_generation_not_a_new_one(self):
+        original = self.dm_core.entities["generated_stranger"]
+        original_name = original["name"]
+        original_skills = dict(original["skills"])
+        original_max_hp = original["max_hp"]
+        # Also captured: the newer, randomly-varied fields (currency/qualities/attitudes) --
+        # these have no static template to fall back to at all (unlike skills/max_hp/name/
+        # description, which at least *look* like ordinary entity fields), so a reload that
+        # regenerated fresh values for them instead of restoring the saved ones would be a
+        # real, visible bug (a different race/attitude after every load).
+        original_currency = original["currency"]
+        original_qualities = dict(original["qualities"])
+        original_attitudes = json.loads(json.dumps(original["attitudes"]))
+        slot = self._track("npc_gen_test_slot")
+        self.dm_core.save_game(slot)
+
+        # A *different* fake generation, proving the overlay -- not this call -- is what the
+        # reloaded entity actually reflects (skip_llm_generation routes load's own
+        # re-instancing to the offline fallback path, so this is never even invoked -- see
+        # the log length assertion below).
+        def different_fake_call(api_url, messages, tools=None, tool_choice=None):
+            return {"choices": [{"message": {"tool_calls": [{"function": {"arguments": json.dumps({
+                "name": "A Completely Different NPC", "backstory": "Different.", "keywords": ["scholar"],
+            })}}]}}]}
+
+        with patch("NPC_Generation._real_call_chat_completion", new=different_fake_call):
+            self.dm_core.load_game(slot)
+
+        reloaded = self.dm_core.entities["generated_stranger"]
+        self.assertEqual(reloaded["name"], original_name)
+        self.assertEqual(reloaded["skills"], original_skills)
+        self.assertEqual(reloaded["max_hp"], original_max_hp)
+        self.assertEqual(reloaded["currency"], original_currency)
+        self.assertEqual(reloaded["qualities"], original_qualities)
+        self.assertEqual(reloaded["attitudes"], original_attitudes)
+        self.assertEqual(len(self.fake_call_log), 1)  # only the original setUp() generation
+
+    def test_entity_templates_are_never_accidentally_referenced(self):
+        # A fresh "arena" boot -- never references "generated_stranger" itself, so unlike
+        # self.dm_core (this class's own npc_generation_test fixture, which already has a
+        # *live*, generated "generated_stranger" instance sitting in self.entities under that
+        # same key -- self.entities holds templates and live instances under the same keys,
+        # see CLAUDE.md's "Scenarios and rooms"), self.entities here has no "generated_stranger"
+        # at all -- only self.entity_templates does, proving the lookup itself is what's
+        # isolated, not just that this particular scenario never happens to collide.
+        with patch("NPC_Generation._real_call_chat_completion", new=self._fake_call):
+            dm = DMCore(EventBus(), scenario_name="arena")
+        self.assertIn("generated_stranger", dm.entity_templates)
+        self.assertNotIn("generated_stranger", dm.entities)
+
+        errors = []
+        dm.event_bus.subscribe("log_error", errors.append)
+
+        # A scenario entry naming an entity_template via "name" (the field real entities use)
+        # must fail the same "unknown entity" way a real typo would, not silently resolve it.
+        result = dm._instance_entities([{"name": "generated_stranger", "band": 1}])
+        self.assertEqual(result, [])
+        self.assertTrue(any("unknown entity" in e for e in errors))
+
+        # Conversely, a real entity/creature template can't be pulled through "template"
+        # either -- self.entity_templates has no "wolf" entry to find.
+        errors.clear()
+        result = dm._instance_entities([{"template": "wolf", "band": 1}])
+        self.assertEqual(result, [])
+        self.assertTrue(any("unknown entity template" in e for e in errors))
+
+
 class TestCharacterCreationDMCoreIntegration(DMTestCase):
 
     def test_valid_character_creation_replaces_the_players_own_skills(self):
@@ -1258,6 +1586,36 @@ class TestAttitudePhrases(DMTestCase):
         self.assertIn("treats them as an active threat", description)  # trust: hostile
         self.assertIn("feels bold and confident around them", description)  # confidence: friendly (100 boundary)
         self.assertIn("is repulsed by them", description)  # intimacy: hostile
+
+
+class TestIsHostileThreshold(DMTestCase):
+    """!
+    @brief is_hostile's two distinct defaults (DM_Social.py): an entity with no
+        [entity.attitudes] table at all (ex: creatures.toml's wolf/bandit) is hostile
+        unconditionally, regardless of the -100 threshold below -- otherwise every existing
+        hostile creature with no authored attitude data would stop fighting the moment the
+        threshold tightened from "<= 0" to "<= -100".
+    """
+
+    def test_no_attitude_table_at_all_is_still_hostile(self):
+        self.assertNotIn("attitudes", self.dm_core.entities["wolf"])
+        self.assertTrue(self.dm_core.is_hostile("wolf", self.dm_core.player_name))
+
+    def test_declared_attitude_data_requires_true_hostility_not_just_a_negative_disposition(self):
+        self.dm_core.entities["wary_npc"] = {
+            "supertype": "creature", "attitudes": {"default": [-40, 0, 0, 0, 0, 0]},
+        }
+        self.dm_core.entities["hostile_npc"] = {
+            "supertype": "creature", "attitudes": {"default": [-100, 0, 0, 0, 0, 0]},
+        }
+        self.assertFalse(self.dm_core.is_hostile("wary_npc", self.dm_core.player_name))
+        self.assertTrue(self.dm_core.is_hostile("hostile_npc", self.dm_core.player_name))
+
+    def test_object_supertype_is_never_hostile_regardless_of_attitude_data(self):
+        self.dm_core.entities["angry_chest"] = {
+            "supertype": "object", "attitudes": {"default": [-100, 0, 0, 0, 0, 0]},
+        }
+        self.assertFalse(self.dm_core.is_hostile("angry_chest", self.dm_core.player_name))
 
 
 class TestEquipSlots(DMTestCase):

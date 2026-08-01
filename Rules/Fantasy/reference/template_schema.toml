@@ -1,0 +1,128 @@
+# Reference only -- every field specific to an [[entity_template]] table (NPC generation, see
+# NPC_Generation.py/DM_NpcGeneration.py, CLAUDE.md's "NPC generation"), in one place. Not real
+# game data and never loaded (same reason entity_schema.toml itself isn't -- see its own header).
+#
+# An entity_template is a genuinely different top-level table from [[entity]] -- loaded into
+# its own self.entity_templates dict (DM_Rules.py's load_rules), never self.entities, so one
+# can never collide with (or be accidentally referenced as) a real, directly usable entity/
+# creature template. A scenario/room entry opts into one via its own "template" field
+# ({ template = "generated_stranger", band = 2 }), never "name" (that field only ever looks
+# up self.entities) -- see DM_Rules.py's _instance_entities.
+#
+# Every field entity_schema.toml documents for a real [[entity]] -- [entity.attitudes],
+# [[entity.behavior]], abilities, equipped, inventory, currency, is_party, supertype, subtype,
+# description, qualities, ... -- is authored on an entity_template exactly the same way, with
+# the same meaning; copy what you need from entity_schema.toml directly. Generation never
+# touches any of it -- abilities/equipped/inventory are still decided entirely by whoever
+# authors the entity_template, same as any hand-authored entity, not generated. The one real
+# exception: [entity.skills]/max_hp/name are never authored here at all -- NPC_Generation.py
+# fills those in at instancing time, fit to a target challenge rating (Challenge_Rating.py),
+# so an entity_template simply omits them rather than declaring a placeholder value.
+
+[[entity_template]]
+
+# ---------------------------------------------------------------------------------------------
+# Generation inputs
+#
+# hint (a plain string, ex: "a suspicious traveling merchant") -- flavor text fed into the LLM
+# prompt; omit for a generic NPC. May instead be a varied value -- see the worked weighted-
+# choice example further down, in "Varied values" (not shown here too, since a TOML key can
+# only be assigned once per table).
+target_cr = "player"                        # A number, or the literal strings "player"/"party"
+                                            # (the acting player's or whole party's own live
+                                            # get_challenge_rating/get_party_challenge_rating,
+                                            # resolved fresh at instancing time -- not a value
+                                            # baked in at authoring time). NOT itself a varied
+                                            # value -- cr_multiplier/variance below are the
+                                            # mechanism for spreading the resulting CR out.
+cr_multiplier = 1.0                         # Flat multiplier on target_cr, applied before
+                                            # variance (ex: 1.5 for a deliberately tougher
+                                            # unique NPC). Defaults to 1.0. May be a varied
+                                            # value.
+variance = 0.15                             # Fractional random spread applied to target_cr
+                                            # (default 0.15 = +/-15%) -- this, plus which
+                                            # archetype keyword(s) the LLM happens to pick, is
+                                            # where generated NPCs vary from each other. NOT
+                                            # itself a varied value.
+
+# ---------------------------------------------------------------------------------------------
+# Varied values -- NPC_Generation.py's resolve_varied_value. Every leaf below may be authored
+# as a *varied* value instead of a fixed one: hint/cr_multiplier/currency above (currency is a
+# straight-copied entity field, see entity_schema.toml), and every leaf of
+# [entity_template.qualities]/[entity_template.attitudes] below -- each attitude axis
+# individually, not the six-value array as a whole, so a template can mix fixed and varied
+# axes freely in the same array (see "default" below). Two shapes; a worked example of each
+# kind of field follows.
+#
+#   { min = ..., max = ... }        -- a uniform random pick in that range. An int result if
+#                                       both bounds are ints, else a float.
+#   [ { "choice" = weight }, ... ]  -- a list of single-key tables; a weighted random pick of
+#                                       the *key* (random.choices) -- weights are relative, not
+#                                       required to sum to 100 or 1.
+# Anything else (a plain string/int/float/bool, ex: qualities.race = "dwarf" below) is used
+# as-is, unresolved -- this is what lets a template mix fixed and varied fields freely.
+
+# A range -- an int in [10, 50] (both bounds are ints).
+currency = { min = 10, max = 50 }
+
+# A weighted-choice list on hint itself -- one of these three flavor lines each time, "an
+# adventurer..." about 1.33x as likely as either of the other two (40 vs. 30 vs. 30, relative
+# weights, not percentages).
+hint = [
+    { "a stranger passing through, keeping mostly to themselves" = 30 },
+    { "a wandering merchant looking to trade" = 30 },
+    { "an adventurer looking for a party to tackle a nearby dungeon" = 40 },
+]
+
+[entity_template.qualities]
+# A weighted-choice list -- mostly human, sometimes one of the others.
+race = [
+    { "human" = 60 },
+    { "elf" = 20 },
+    { "dwarf" = 20 },
+    { "halfling" = 20 },
+    { "half-orc" = 20 },
+]
+# A weighted-choice list with just two options -- an even split.
+gender = [ { "male" = 50 }, { "female" = 50 } ]
+# A range -- an int in [18, 50].
+age = { min = 18, max = 50 }
+# A fixed value right alongside varied ones on the very same table -- perfectly legal; only
+# resolve_varied_value's own two shapes above are treated as varied, everything else passes
+# through unchanged (see generated_innkeeper in templates.toml, which fixes race = "dwarf"
+# outright with no variance at all).
+# body = "stout"
+
+[entity_template.attitudes]
+# Each of the six axes -- disposition/trust/confidence/respect/obligation/intimacy -- is
+# resolved individually, so a template can mix fixed and varied axes freely in the very same
+# array, exactly like templates.toml's own generated_stranger does:
+default = [
+    { min = -40, max = 40 },   # disposition -- wary to warm
+    0,                          # trust -- always exactly neutral
+    0,                          # confidence -- always exactly neutral
+    10,                         # respect -- always slightly positive
+    -20,                        # obligation -- always slightly negative
+    { min = -40, max = 40 },   # intimacy -- wary to warm
+]
+# A specific override alongside "default" (same shape gladstone's own
+# [[entity.attitudes.name]] uses in characters.toml), targeting the literal token "player"
+# (lowercase -- data, not a Python constant name) in place of a real entity name -- an
+# entity_template can't know ahead of time what a freshly-created/renamed character will
+# actually be called (see DM_CharacterCreation.py), so it authors toward this reserved
+# placeholder instead, the same way a scenario's own "entities" list uses DM_Rules.py's
+# PLAYER_PLACEHOLDER. Resolved to whichever entity is actually is_player = true, fresh at
+# instancing time. Its own six axes may be varied or fixed too, same as "default" above.
+[[entity_template.attitudes.name]]
+player = [ 40, 0, 0, 0, 0, 0 ]
+
+# ---------------------------------------------------------------------------------------------
+generated = false                           # Never authored by hand -- appears only on a
+                                            # *live instance* (self.entities), never the
+                                            # entity_template itself. Set to true by
+                                            # DM_NpcGeneration.py the moment an entity_template
+                                            # is actually instanced, so save_game knows to
+                                            # persist its dynamically-decided skills/max_hp/
+                                            # name/description/qualities/attitudes (see
+                                            # DM_Persistence.py) alongside the usual
+                                            # hp/inventory/etc. every instance already saves.

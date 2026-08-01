@@ -5,12 +5,13 @@ from DM_CharacterCreation import CharacterCreationMixin
 from DM_Combat import CombatMixin
 from DM_Inventory import InventoryMixin
 from DM_Movement import MovementMixin
+from DM_NpcGeneration import NpcGenerationMixin
 from DM_Persistence import PersistenceMixin
 from DM_Rules import RulesMixin, scenario_file_path
 from DM_Social import SocialMixin
 from DM_Status import StatusMixin
 
-class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixin, RulesMixin, PersistenceMixin, CharacterCreationMixin):
+class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixin, RulesMixin, PersistenceMixin, CharacterCreationMixin, NpcGenerationMixin):
     """!
     @brief Main class handling the core mechanics of the RPG system. The implementation is
         composed from domain mixins in sibling files -- DM_Rules.py (rules/scenario
@@ -18,9 +19,11 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         status/condition system and entity tests), DM_Inventory.py (currency/item
         transfer), DM_Social.py (attitudes and character description), DM_Movement.py
         (distance tracking, advance/retreat, range-based difficulty), DM_Persistence.py
-        (save/load), and DM_CharacterCreation.py (baking a finished character-creation
+        (save/load), DM_CharacterCreation.py (baking a finished character-creation
         result -- race + point-buy skill allocation, see Character_Creation.py's own
-        module docstring -- onto the player entity) -- so that every dm_core.<method>(...)
+        module docstring -- onto the player entity), and DM_NpcGeneration.py (turning a
+        generate=true template into a real stat block at instancing time, see
+        NPC_Generation.py's own module docstring) -- so that every dm_core.<method>(...)
         call site throughout the codebase and test_all.py keeps working unchanged
         regardless of which file actually defines a given method (Python's MRO flattens
         every mixin method onto this one class). DM_Core.py itself is reduced to __init__
@@ -45,6 +48,14 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         self.event_bus = event_bus
         self.skills = {}
         self.entities = {}
+        # Stub templates for NPC generation (see NPC_Generation.py/DM_NpcGeneration.py,
+        # CLAUDE.md's "NPC generation") -- kept in their own namespace, loaded from
+        # [[entity_template]] tables (Rules/Fantasy/templates.toml), not [[entity]] ones, so
+        # they can never collide with (or be mistakenly referenced as) a real, directly
+        # usable entity/creature template in self.entities. A scenario/room entry opts into
+        # one via its own "template" field, never "name" -- see DM_Rules.py's
+        # _instance_entities.
+        self.entity_templates = {}
         self.scenario = {}
         self.scenario_entities = []
         # The instance names from [scenario].entities (ex: the player, plus any ally like

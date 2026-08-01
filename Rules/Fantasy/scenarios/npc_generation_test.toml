@@ -1,0 +1,15 @@
+# A minimal scenario dedicated to exercising NPC generation (DM_NpcGeneration.py/
+# NPC_Generation.py) -- deliberately not one of the "real" scenarios (arena/tavern/field/
+# dungeon/crypt), so a future rebalance of those can't accidentally change what this is
+# testing, the same reasoning character_test.toml already follows. Reuses templates.toml's
+# own "generated_stranger" (an entity_template) rather than inventing a dedicated test-only
+# one -- the same "reuse real data" approach character_test.toml takes with "wolf".
+[scenario]
+name = "The Generation Grounds"
+description = "A bare, featureless room built only to exercise NPC generation."
+bands = 4
+enclosed = true
+entities = [
+    { name = "player", band = 1 },
+    { template = "generated_stranger", band = 2 },
+]

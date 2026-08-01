@@ -1,0 +1,86 @@
+# Archetype keywords for NPC generation (NPC_Generation.py's load_npc_keywords). The LLM's
+# own function call is constrained to picking 1-2 of these names (an enum, not free text --
+# see NPC_Generation.py's _build_tool_schema), each of which resolves to a small, curated set
+# of real skills.toml skill names -- "keywords which specify the key skills," not the LLM
+# naming skills directly. Not every skill is covered by a keyword (ex: fly, forgery) -- that's
+# fine, and easy to extend later since this is pure data, no code change required.
+
+[[npc_keyword]]
+name = "warrior"
+description = "A frontline melee fighter, trained for direct combat."
+skills = ["blades", "axes", "athletics", "strength"]
+
+[[npc_keyword]]
+name = "brute"
+description = "Overwhelming physical force, more menace than finesse."
+skills = ["brawling", "strength", "intimidation", "fortitude"]
+
+[[npc_keyword]]
+name = "duelist"
+description = "Quick, precise, and hard to land a hit on."
+skills = ["blades", "finesse", "dodge", "reflexes"]
+
+[[npc_keyword]]
+name = "marksman"
+description = "Deadly at range, patient and observant."
+skills = ["missiles", "throwing", "observation", "dodge"]
+
+[[npc_keyword]]
+name = "guardian"
+description = "A steadfast defender, hard to move and harder to intimidate."
+skills = ["polearms", "fortitude", "willpower", "intimidation"]
+
+[[npc_keyword]]
+name = "rogue"
+description = "Slips past trouble rather than fighting through it."
+skills = ["stealth", "trickery", "escape", "finesse"]
+
+[[npc_keyword]]
+name = "trickster"
+description = "Cunning, deceptive, hard to pin down."
+skills = ["deception", "disguise", "trickery", "charisma"]
+
+[[npc_keyword]]
+name = "infiltrator"
+description = "Moves unseen and unheard through hostile territory."
+skills = ["stealth", "acrobatics", "escape", "observation"]
+
+[[npc_keyword]]
+name = "scholar"
+description = "Learned, well-traveled, values knowledge over strength."
+skills = ["arcane", "linguistics", "navigation", "appraise"]
+
+[[npc_keyword]]
+name = "healer"
+description = "Tends to the wounded and the sick."
+skills = ["medicine", "miracles", "willpower", "survival"]
+
+[[npc_keyword]]
+name = "mystic"
+description = "Touched by arcane or otherworldly power."
+skills = ["arcane", "miracles", "psionics", "willpower"]
+
+[[npc_keyword]]
+name = "diplomat"
+description = "Silver-tongued, well-connected, prefers words to blows."
+skills = ["charisma", "deception", "linguistics", "streetwise"]
+
+[[npc_keyword]]
+name = "performer"
+description = "Draws a crowd, thrives on attention."
+skills = ["artistry", "charisma", "deception", "acrobatics"]
+
+[[npc_keyword]]
+name = "survivalist"
+description = "At home in the wild, far from any city."
+skills = ["survival", "navigation", "fortitude", "observation"]
+
+[[npc_keyword]]
+name = "criminal"
+description = "Knows the underworld and how to work its angles."
+skills = ["streetwise", "trickery", "stealth", "gambling"]
+
+[[npc_keyword]]
+name = "laborer"
+description = "Hardened by physical work, not by combat."
+skills = ["strength", "athletics", "husbandry", "fortitude"]

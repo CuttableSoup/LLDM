@@ -89,6 +89,51 @@ value = 3
 fortitude = { dice = 2, pips = 0 }
 
 [[entity]]
+name = "hand axe"
+supertype = "object"
+subtype = "weapon"
+skill = "axes"
+description = "A well-worn hand axe, its edge notched from hard use."
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 8
+damage_value = { dice = 1, pips = 1, bonus = "strength_damage" }
+damage_tags = [ "slashing" ]
+bulk = 1
+value = 12
+[entity.skills]
+fortitude = { dice = 3, pips = 0 }
+
+[[entity]]
+name = "club"
+supertype = "object"
+subtype = "weapon"
+skill = "brawling"
+description = "A heavy wooden club, crude but effective."
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 8
+damage_value = { dice = 1, pips = 0, bonus = "strength_damage" }
+damage_tags = [ "bludgeoning" ]
+bulk = 1
+value = 5
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "dagger"
+supertype = "object"
+subtype = "weapon"
+skill = "finesse"
+description = "A slim, balanced dagger built for speed rather than force."
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 6
+damage_value = { dice = 1, pips = 0, bonus = "strength_damage" }
+damage_tags = [ "piercing" ]
+bulk = 1
+value = 8
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+
+[[entity]]
 name = "chain mail"
 supertype = "object"
 subtype = "armor"

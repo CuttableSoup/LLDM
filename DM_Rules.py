@@ -137,8 +137,11 @@ class RulesMixin(DMCoreProtocol):
                     if "entity" in data:
                         for entity in data["entity"]:
                             self.entities[entity.get("name")] = entity
+                    if "entity_template" in data:
+                        for entity_template in data["entity_template"]:
+                            self.entity_templates[entity_template.get("name")] = entity_template
                     for key, value in data.items():
-                        if key not in ("skill", "entity"):
+                        if key not in ("skill", "entity", "entity_template"):
                             self.rules[key] = value
                 except Exception as e:
                     self.event_bus.publish("log_error", f"Error loading {filename}: {e}")
@@ -258,7 +261,7 @@ class RulesMixin(DMCoreProtocol):
         # stays empty) instead of respawning fresh from template on every visit.
         self.visited_rooms = {}
 
-    def _instance_entities(self, entity_entries):
+    def _instance_entities(self, entity_entries, party_pool=None, skip_llm_generation=False):
         """!
         @brief Instantiates a list of entity entries as independent copies of their
             templates, so duplicate creatures (ex: two wolves) get separate HP/conditions
@@ -268,26 +271,58 @@ class RulesMixin(DMCoreProtocol):
             list (see _populate_room) -- a room's list never includes the player at all, so
             this never needs to special-case it.
 
-            An entry named PLAYER_PLACEHOLDER ("player") resolves to self.player_name instead
-            of being looked up literally -- no template is ever actually named "player"; every
-            shipped scenario/room references the player this way rather than a specific
-            character's own template name (ex: "gladstone"), so a scenario keeps working
-            unchanged regardless of which template is_player=true or whatever a freshly
-            created character was renamed to (see DM_CharacterCreation.py).
-        @param entity_entries A list of {name, band} tables.
+            An entry names its template one of two mutually exclusive ways:
+            - "name" -- looked up in self.entities, a real, directly usable entity/creature
+              template. PLAYER_PLACEHOLDER ("player") resolves to self.player_name instead of
+              being looked up literally -- no template is ever actually named "player"; every
+              shipped scenario/room references the player this way rather than a specific
+              character's own template name (ex: "gladstone"), so a scenario keeps working
+              unchanged regardless of which template is_player=true or whatever a freshly
+              created character was renamed to (see DM_CharacterCreation.py).
+            - "template" -- looked up in self.entity_templates instead (see
+              Rules/Fantasy/templates.toml), a stub with no hand-authored [entity.skills]/
+              max_hp/name of its own. NpcGenerationMixin._apply_npc_generation fills those in
+              immediately after the instance is stored, mutating it in place (it has to
+              already be in self.entities by then, since the CR-fitting math calls back into
+              get_challenge_rating/_best_damage_dice_pips, both keyed off self.entities[name]).
+              Keeping these in a separate dict, resolved only via "template" (never "name"),
+              is what makes a generation stub impossible to reference by accident -- a typo'd
+              `name = "generated_innkeeper"` fails the same "unknown entity" way a typo'd real
+              name would, rather than silently working.
+        @param entity_entries A list of {name, band} or {template, band} tables.
+        @param party_pool Forwarded to _apply_npc_generation for a "template" entry's own
+            target_cr = "party" resolution -- entities already known to be part of the party
+            *before* this call started (self.persistent_entities for a room-level call, []
+            for the top-level scenario call; see _apply_npc_generation's own docstring for why
+            self.scenario_entities itself can't be used here). Ignored by every "name" entry.
+        @param skip_llm_generation Forwarded to _apply_npc_generation -- true while
+            re-instancing during a save-game load, where whatever a fresh generation call
+            would produce is about to be overwritten by the saved values anyway (see
+            DM_Persistence.py's load_game).
         @return The list of instance names created, in entity_entries order.
         """
+        party_pool = party_pool if party_pool is not None else []
         instance_names = []
         occurrence_counts = {}
 
         for entry in entity_entries:
-            template_name = entry.get("name")
-            if template_name == PLAYER_PLACEHOLDER:
-                template_name = self.player_name
-            template = self.entities.get(template_name)
-            if template is None:
-                self.event_bus.publish("log_error", f"Scenario references unknown entity: {template_name}")
-                continue
+            is_generated_template = "template" in entry
+            if is_generated_template:
+                template_name = entry.get("template")
+                template = self.entity_templates.get(template_name)
+                if template is None:
+                    self.event_bus.publish(
+                        "log_error", f"Scenario references unknown entity template: {template_name}"
+                    )
+                    continue
+            else:
+                template_name = entry.get("name")
+                if template_name == PLAYER_PLACEHOLDER:
+                    template_name = self.player_name
+                template = self.entities.get(template_name)
+                if template is None:
+                    self.event_bus.publish("log_error", f"Scenario references unknown entity: {template_name}")
+                    continue
 
             occurrence_counts[template_name] = occurrence_counts.get(template_name, 0) + 1
             occurrence = occurrence_counts[template_name]
@@ -304,6 +339,8 @@ class RulesMixin(DMCoreProtocol):
             # mutate, so it must start as its own copy rather than sharing the template's dict.
             instance["active_conditions"] = dict(instance.get("conditions", {}))
             self.entities[instance_name] = instance
+            if is_generated_template:
+                self._apply_npc_generation(instance_name, party_pool, instance_names, skip_llm_generation)
             self._auto_roll_notice(instance_name)
             instance_names.append(instance_name)
 
@@ -335,7 +372,7 @@ class RulesMixin(DMCoreProtocol):
         if result["success"]:
             self.dismiss_condition(instance_name, "hidden")
 
-    def _populate_room(self, room_key):
+    def _populate_room(self, room_key, skip_llm_generation=False):
         """!
         @brief Instances (or, for a room visited before, restores) room_key's own "entities"
             list and merges it with whatever's already persistent in self.persistent_entities
@@ -348,16 +385,26 @@ class RulesMixin(DMCoreProtocol):
             looted chest stays empty) without needing to reconcile a player entry that would
             otherwise appear once per room in the TOML for no reason beyond bookkeeping.
         @param room_key The room to populate, matching a key in self.rooms.
+        @param skip_llm_generation Forwarded to _instance_entities -- see its own docstring.
         """
         room = self.rooms.get(room_key, {})
         if room_key in self.visited_rooms:
             room_entities = list(self.visited_rooms[room_key])
         else:
-            room_entities = self._instance_entities(room.get("entities", []))
+            # self.persistent_entities is already finalized by the time any room is
+            # populated (load_scenario sets it right before its own _populate_room call
+            # below; every later call is via enter_room, long after) -- safe to pass as the
+            # live party pool for a room-local generate=true template's own target_cr =
+            # "party" resolution, unlike self.scenario_entities itself (see
+            # _apply_npc_generation's docstring).
+            room_entities = self._instance_entities(
+                room.get("entities", []), party_pool=self.persistent_entities,
+                skip_llm_generation=skip_llm_generation,
+            )
             self.visited_rooms[room_key] = list(room_entities)
         self.scenario_entities = list(self.persistent_entities) + room_entities
 
-    def load_scenario(self):
+    def load_scenario(self, skip_llm_generation=False):
         """!
         @brief Instances the scenario's own top-level "entities" list -- for a plain
             single-room scenario (arena/tavern/field/dungeon) that's everyone in the scene;
@@ -367,11 +414,22 @@ class RulesMixin(DMCoreProtocol):
             via _populate_room. Always a fresh instancing (covers __init__, load_game, and
             ad-hoc test scenarios that reassign self.scenario/self.rooms directly and call
             this again) -- see "Scenario instancing" in CLAUDE.md.
+        @param skip_llm_generation Forwarded to _instance_entities/_populate_room -- true only
+            from DM_Persistence.py's load_game (re-instancing a save shouldn't pay for a real
+            LLM round trip just to immediately overwrite the result with saved values).
         """
-        self.scenario_entities = self._instance_entities(self.scenario.get("entities", []))
+        # party_pool = [] for this top-level call: nothing persistent exists yet (this is
+        # what's *building* self.persistent_entities), so a generate=true template at the
+        # scenario's own top level resolving target_cr = "party" can only see whichever
+        # player/is_party entities have already been instanced earlier in this same list --
+        # see _apply_npc_generation's own docstring for why self.scenario_entities itself
+        # isn't usable here.
+        self.scenario_entities = self._instance_entities(
+            self.scenario.get("entities", []), party_pool=[], skip_llm_generation=skip_llm_generation,
+        )
         self.persistent_entities = list(self.scenario_entities)
         if self.rooms:
-            self._populate_room(self.current_room_key)
+            self._populate_room(self.current_room_key, skip_llm_generation=skip_llm_generation)
 
         # Snaps thane/anne/etc. into formation around wherever the player actually starts --
         # a party member's own TOML-authored "band" is a starting guess, not authoritative,
@@ -388,12 +446,15 @@ class RulesMixin(DMCoreProtocol):
 
         self.event_bus.publish("log_info", f"Scenario loaded: {self.scenario_entities}")
 
-    def enter_room(self, room_key, arrival_band=1):
+    def enter_room(self, room_key, arrival_band=1, skip_llm_generation=False):
         """!
         @brief Moves the player to a different room in the same multi-room dungeon --
-            DMCore._on_item_interaction_detected's "move" handling is the only caller, gated
-            there on the current room actually declaring a matching exit (see
-            DMCore._find_room_exit) and being clear of living hostiles first. Never touches
+            DMCore._on_item_interaction_detected's "move" handling is the only live-gameplay
+            caller (gated there on the current room actually declaring a matching exit -- see
+            DMCore._find_room_exit -- and being clear of living hostiles first), always with
+            skip_llm_generation left at its default (a real move should really generate);
+            DM_Persistence.py's load_game is the only caller that ever passes True, to restore
+            a saved current room without paying for a throwaway LLM call. Never touches
             the player's own live instance beyond repositioning their band (see
             _populate_room) -- HP, inventory, currency, and conditions carry over across
             rooms exactly as combat/looting left them. A room visited before is restored
@@ -407,6 +468,8 @@ class RulesMixin(DMCoreProtocol):
         @param arrival_band Where the player ends up in the new room -- the exit's own
             "arrival_band" (defaulting to 1, "just past the doorway", if the exit doesn't
             specify one).
+        @param skip_llm_generation Forwarded to _populate_room -- see load_scenario's own
+            docstring.
         @return True if room_key names a real room and the move happened, False otherwise
                 (ex: a stale/typo'd exit reference -- callers are expected to have already
                 validated room_key came from the current room's own declared exits).
@@ -416,7 +479,7 @@ class RulesMixin(DMCoreProtocol):
 
         self.current_room_key = room_key
         self.entities[self.player_name]["band"] = arrival_band
-        self._populate_room(room_key)
+        self._populate_room(room_key, skip_llm_generation=skip_llm_generation)
         self._apply_party_formation()
 
         self.current_target = self._choose_combat_target()

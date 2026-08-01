@@ -98,9 +98,16 @@ Inside `DMCore._on_action_detected`:
 
 ## Combat
 
-Combat is a target being present *and* `is_hostile(target_name, player_name)` — an entity
-with no `[entity.attitudes]` table defaults to neutral disposition, which still counts as
-hostile/combat-ready. An entity with `supertype == "object"` is never treated as hostile
+Combat is a target being present *and* `is_hostile(target_name, player_name)`, which has two
+distinct defaults, deliberately not collapsed into one: an entity with **no**
+`[entity.attitudes]` table at all (ex: `creatures.toml`'s wolf/bandit, which declare no
+attitude data whatsoever) is hostile unconditionally — a monster that never bothered to
+author a disposition is still a monster. An entity that **does** declare attitude data
+instead has to reach true hostility, `disposition <= -100`, to actually fight — a merely
+wary/negative-but-not-murderous disposition (ex: -40) is dialogue, not combat ("you can
+dislike someone and not be hostile"), which is what lets a generated NPC's own resolved
+disposition (see "NPC generation") land anywhere from wary to warm without every non-friendly
+roll turning into a fight. An entity with `supertype == "object"` is never treated as hostile
 regardless of attitude data. `is_hostile(entity, player_name)` distinguishes enemies (attack
 the player) from allies (attack `self.current_target` instead, if they carry their own
 `[[entity.behavior]]` data).
@@ -163,6 +170,145 @@ filters through `self.scenario_entities`, not a blind `is_player`/`is_party` sca
 `self.entities` — `self.entities` also still holds every *uninstanced* template from every
 loaded TOML file (ex: `characters.toml`'s `anne`, `is_party = true`, but not part of
 `arena.toml`'s own entities list), and those must not count just for existing on disk.
+
+## NPC generation
+
+`Rules/Fantasy/templates.toml` holds `[[entity_template]]` tables — a genuinely different
+top-level key from `[[entity]]`, loaded by `load_rules` (`DM_Rules.py`) into their own
+`self.entity_templates` dict, never `self.entities`. This is deliberate: keeping generation
+stubs in a separate namespace is what makes one impossible to reference by accident — a
+scenario/room entry names a real entity via `{ name = "wolf", band = 1 }` (looked up in
+`self.entities`, unchanged) but an entity_template via `{ template = "generated_stranger", band =
+2 }` (looked up in `self.entity_templates` instead) — `_instance_entities` (`DM_Rules.py`)
+checks which key an entry actually has and resolves accordingly; a `name` that only exists as
+an entity_template, or a `template` that only exists as a real entity, both fail the same
+`log_error`-and-skip "unknown entity"/"unknown entity template" way a genuine typo would,
+never silently resolving through the wrong dict. An entity_template skips authoring its own
+`[entity.skills]`/`max_hp`/`name` — those are decided the moment it's instanced into a live
+scene instead, via a local-LLM function call fit to a target challenge rating. Everything else
+about it (`[entity.attitudes]`/`[[entity.behavior]]`/`abilities`/`equipped`/`is_party`/
+`qualities.race`/...) is still hand-authored normally, exactly like any real entity —
+generation only ever fills in the stat block + flavor text, and is deliberately varied per
+template (different `qualities.race`, different attitude shape — some just a flat `default`,
+others also carrying a specific `[[entity_template.attitudes.name]]`/`[[entity_template.
+attitudes.supertype]]` override) so generated NPCs don't all read as the same person wearing a
+different name tag. Referencing the same entity_template twice gets two independent instances
+(`generated_stranger`, `generated_stranger_2`, via `_instance_entities`'s existing occurrence-
+counting), each with its own LLM call — different name, different skills, not just a CR wobble.
+
+**Varied fields.** Beyond the LLM-driven skill fit, an entity_template's own scalar fields can
+be authored as a range or a weighted choice instead of a fixed value —
+`NPC_Generation.py`'s `resolve_varied_value(value)` is the one shared vocabulary every such
+field uses: `{min, max}` (a uniform random pick — an int result if both bounds are ints, else
+a float) or a list of single-key `{"choice" = weight}` tables (a `random.choices` pick of the
+*key*; weights are relative, not required to sum to 100 or 1). Applied per-leaf, not to a
+whole structure at once — `DM_NpcGeneration.py`'s `_resolve_generated_qualities`/
+`_resolve_generated_attitudes` walk `[entity_template.qualities]`'s own fields and
+`[entity_template.attitudes]`'s six-axis arrays (`default` plus every `name`/`supertype`
+override) element by element, which is what lets a template mix fixed and varied entries
+freely (ex: `generated_stranger`'s own `default` keeping trust/confidence at a flat `0` while
+disposition/intimacy each vary across `{min = -40, max = 40}`). `hint`/`cr_multiplier` are
+resolved the same way, before the LLM call itself (they feed the prompt/target-CR math);
+`qualities` resolves before the call too and is folded into the same prompt
+(`_describe_qualities`, `NPC_Generation.py`) — gender/race/age have to already be concrete by
+the time the LLM invents a name, or the two can disagree (ex: a name that reads as feminine
+paired with a separately-rolled `gender = "male"`); `currency`/attitudes resolve independently,
+any time after.
+
+An `[[entity_template.attitudes.name]]` override can target the literal token `"player"`
+instead of a real entity name — the same reserved placeholder `DM_Rules.py`'s
+`PLAYER_PLACEHOLDER` uses for a scenario's own `entities` list, since a template authored
+ahead of time can't know what a freshly-created or renamed character will actually be called
+(`DM_CharacterCreation.py`). `_resolve_generated_attitudes` substitutes it for the live
+`self.player_name` the moment the template is baked into an instance — the token is data
+(`player`, lowercase), never the Python constant's own name.
+
+Generation deliberately never touches `abilities`/`equipped`/`inventory` at all — whether (and
+how) a generated NPC can fight or what it carries is still decided entirely by whoever authors
+the entity_template, same as any hand-authored entity (a scenario author adds those fields to
+the template directly, exactly like `characters.toml`'s `gladstone` does).
+
+`Rules/Fantasy/reference/template_schema.toml` is the entity_template field reference (sibling
+to `entity_schema.toml`, which still covers every field an entity_template shares with a real
+`[[entity]]` unchanged) — it doubles as a worked-examples file for the varied-value vocabulary
+below: a concrete `{min, max}` range and weighted-choice list for each field that supports one
+(`cr_multiplier`, `currency`, `hint`, `qualities.race`/`gender`/`age`,
+`attitudes.default`/`[[attitudes.name]]`), not just the prose description.
+
+`Rules/Fantasy/npc_keywords.toml` is a small, hand-authored catalog of ~16 archetype keywords
+(`warrior`, `trickster`, `scholar`, ...), each naming 3-4 real skills. `NPC_Generation.py`
+(pure, same "pure, entity-shape-agnostic" precedent `Character_Creation.py`/
+`Challenge_Rating.py` set) builds an OpenAI-style `tools` payload constraining the LLM's own
+function call to 1-2 of those keyword *names* (an enum, not free text — far more reliable with
+small local models than asking it to name skills directly), not skills themselves;
+`generate_npc_stats` resolves the chosen keyword(s) to their union of real skills before
+fitting. `fit_skills_to_cr(key_skills, target_cr, hp_share=0.3, damage_dice=0, damage_pips=0)`
+is the deterministic inverse of `calculate_challenge_rating`: `hp_units = round(target_cr *
+hp_share)`, `max_hp = hp_units * 3` (exact, no rounding loss); the remaining budget becomes a
+single rating `R` (floored at 3 — a named "key skill" at 0D would read as broken, not weak)
+given identically to each of the first 3 key skills (their average is then exactly `R`, no
+drift, and this generalizes across 2/3/4 key skills with no special-casing); any 4th+ key skill
+(CR-free, per `calculate_challenge_rating`'s own `top_n=3`) gets a lower flavor-only rating.
+`generate_npc_stats` itself rolls `target_cr * cr_multiplier * random.uniform(1-variance,
+1+variance)` before fitting — this, plus which keyword(s) the LLM happens to pick, is where
+"random variance for uniqueness" actually comes from; `fit_skills_to_cr` stays fully
+deterministic and directly testable. On any failure (no `tool_calls`, malformed JSON, network
+error, timeout, or `skip_llm_generation=True` — see below) it falls back to a random keyword
+pick with no network call at all — matching the rest of the app's "LM Studio is best-effort,
+never blocks core gameplay" posture (`RagIndex` returns `[]` until ready;
+`generate_load_failed_response` still narrates on failure).
+
+`LLM_Client.py`'s `call_chat_completion` is a small, synchronous, stateless POST to LM
+Studio's chat/completions endpoint — deliberately not shared with `LLM_Core.py`'s own async
+`fetch_from_llm` (different payload/response shapes, and critically different failure
+contracts: `fetch_from_llm` must never raise, this one must raise cleanly so
+`generate_npc_stats`'s fallback triggers). It carries a hard `timeout` (default 20s) that
+`fetch_from_llm` doesn't need — generation runs synchronously, in place, on whatever thread is
+currently instancing the scene (`DMCore.__init__`/`enter_room`, always the GUI/main thread in
+practice), so an unbounded call could freeze the whole app, not just error out. This is a
+known, accepted v1 limitation: a scenario/room with one or more entity_template entries
+visibly pauses for ~5s per generated NPC on a fresh load (a `log_info` line fires first so it
+reads as a deliberate wait, not a hang). A true fix would need a two-phase "placeholder now,
+patch via an event later" redesign — out of scope for now.
+
+`DM_NpcGeneration.py`'s `NpcGenerationMixin` is the DMCore-touching glue (the same split
+`DM_CharacterCreation.py` is to `Character_Creation.py`), called from `RulesMixin`'s
+`_instance_entities` immediately after an instance resolved from an entity_template is stored
+into `self.entities` (has to be stored first — the CR-fitting math calls back into
+`get_challenge_rating`/`_best_damage_dice_pips`, both keyed off `self.entities[name]`).
+`_resolve_npc_target_cr` resolves a template's own `target_cr` field — a number, or the
+literal strings `"player"`/`"party"` (live `get_challenge_rating`/summed party CR, resolved
+fresh at instancing time, not baked in at authoring time). `"party"` deliberately does not
+call `get_party_challenge_rating()` directly: `self.scenario_entities` isn't finalized until
+the whole `_instance_entities` call returns, so it's empty (fresh boot) or stale (a
+`load_game` re-run) for exactly the entries being resolved mid-loop. Instead
+`_instance_entities` threads a `party_pool` param (`load_scenario()` passes `[]`;
+`_populate_room()` passes `self.persistent_entities`, already finalized by the time any room
+is populated) that `_resolve_npc_target_cr` combines with whoever's been instanced earlier in
+the same loop to build a live party roster, bypassing `self.scenario_entities` entirely for
+this one computation. The result is tagged `entity["generated"] = True`.
+
+**Save/load.** `skills`/`max_hp`/`name`/`description`/`qualities`/`attitudes` don't round-trip
+for an ordinary entity (save_game only diffs `hp`/`active_conditions`/`currency`/`inventory`/
+`band` — everything else re-derives from the static TOML template on reload) — fine normally,
+broken for a generated entity, which has no static template to re-derive those from (and, for
+`qualities`/`attitudes` specifically — randomly varied per entity_template, see "Varied
+fields" above — re-deriving would mean a *different* value than what was actually saved, not
+just a missing one). `save_game` conditionally saves those six fields too when
+`entity["generated"]` is true; `load_game` threads
+`skip_llm_generation=True` through its own `load_scenario()`/per-room `_instance_entities()`
+calls (both already re-run on every load) so re-instancing takes generation's offline fallback
+path unconditionally — instant, no network dependency — and the existing overlay loop applies
+the real saved values on top, exactly like it already does for `hp`/`inventory`. This is
+better than "regenerate then overwrite" (which would cost a real LLM round trip on every load
+of a save with generated NPCs, forever, for a value about to be discarded).
+
+One pre-existing bug fixed alongside this: `DM_Social.py`'s `describe_character` used to
+prepend `entity_name` (the `self.entities` dict key) rather than `entity.get("name")` to its
+roster/`defender_details` text. Every hand-authored template already has `name` equal to its
+own dict key by construction, so this never mattered before — but it silently discarded a
+generated NPC's own LLM-invented name from everything the player actually sees narrated. Fixed
+to `entity.get("name", entity_name)`, backward-compatible for every existing template.
 
 ## Movement and range
 
@@ -531,10 +677,13 @@ directly in input can resolve it via `map_to_action` before a bare skill would.
 ## Data/TOML conventions
 
 - `Rules/Fantasy/reference/entity_schema.toml` catalogs every field the engine reads off an
-  entity. Reference/documentation only, never loaded as game data (`load_rules` only
-  `os.listdir()`s the top level of `Rules/Fantasy/`, one directory shallower).
-- `load_rules` special-cases only `skill` and `entity` top-level keys; everything else in any
-  flat `Rules/Fantasy/*.toml` file lands generically in `self.rules[key]`.
+  entity; the sibling `template_schema.toml` does the same for an `[[entity_template]]`'s own
+  fields (NPC generation — see "NPC generation"). Reference/documentation only, never loaded
+  as game data (`load_rules` only `os.listdir()`s the top level of `Rules/Fantasy/`, one
+  directory shallower).
+- `load_rules` special-cases only `skill`, `entity`, and `entity_template` top-level keys;
+  everything else in any flat `Rules/Fantasy/*.toml` file lands generically in
+  `self.rules[key]`.
 - `[entity.attitudes]` is `{default, name, supertype}`; `name`/`supertype` are TOML
   arrays-of-one-key-tables — `get_attitude` loops over the list checking `if toward_name in
   override`.
@@ -610,6 +759,14 @@ Practical constraints when touching this file:
   forwarded straight into `DMCore`'s `character` param — used by
   `TestCreatedCharacterConversation` to check real narration/combat work end-to-end against a
   custom-named, custom-race character, not just `characters.toml`'s `gladstone`.
+  `TestNpcGenerationLive` is a plain `unittest.TestCase` (no `_LivePipelineTestCase`, no
+  NLPCore/LLMCore) since NPC generation runs synchronously during `DMCore`'s own construction
+  — a real tool-calling round trip against `Rules/Fantasy/scenarios/npc_generation_test.toml`.
+  The pure fitting math (`TestNpcGeneration`) and the DMCore-side wiring
+  (`TestNpcGenerationDMCoreIntegration`, patching `NPC_Generation._real_call_chat_completion`
+  with a deterministic fake) both live in `test_unit.py` instead, so most of NPC generation stays
+  covered by the fast offline suite — only the "does the currently-loaded model actually
+  return a valid tool call" question needs a live LM Studio.
 
 `python -m pytest -q` runs both files; `python -m pytest -q test_unit.py` runs the fast,
 offline subset only.
@@ -620,10 +777,16 @@ offline subset only.
   embedding match (ex: "identify the dagger" resolves to the wrong skill); no multi-instance
   disambiguation (ex: "the wounded wolf" vs. "the other wolf").
 - Dropped items (`"ground"`) aren't saved/restored across a save/load round trip.
+- `[entity.equipped]`'s own slot mapping doesn't round-trip across a save/load for *any*
+  entity — only `inventory` (the item names) does; a reload re-derives `equipped` from the
+  static template's own hand-authored mapping instead of whatever was actually equipped at
+  save time. Worked around for generated entities specifically (see "NPC generation"'s own
+  Save/load note), since they have no static template to fall back to at all — the general
+  case (an ordinary entity re-equipping differently mid-session) is still open.
 
 ## Extended goals
 
-Not yet started; no code or TODO markers exist for these:
+Not yet started, except where noted:
 - Characters are language-dependent — an entity's own comprehension of the language it's
   addressed in should gate dialogue/narration, not just its attitude data.
 - Dialogue sentiment sways attitudes — the sentiment of what the player says, not just which
@@ -631,8 +794,12 @@ Not yet started; no code or TODO markers exist for these:
 - Actions sway attitudes by varying degrees — a resolved action (combat, theft, a favor)
   should nudge attitude axes proportionally, not just be gated by attitude that already exists.
 - Random encounters, enemy generator — procedurally populate a scene/room with creatures
-  instead of every encounter being scenario-authored.
+  instead of every encounter being scenario-authored. **Partially started**: "NPC generation"
+  above fits a `generate = true` template's *stats* to a target CR at instancing time, but the
+  template itself (attitudes/behavior/abilities/equipment, and whether/where it appears at
+  all) is still hand-authored — nothing yet actually populates a scene/room on its own.
 - Scenario, quest, NPC, item, and location generators — procedurally author the TOML data
-  itself rather than every scenario/entity being hand-written.
+  itself rather than every scenario/entity being hand-written. Same caveat as above — NPC
+  generation fills in runtime *data* on an existing template, it doesn't author TOML.
 - A 'dungeon master' persona the LLM can speak directly to the player as.
 - Tools that the LLM may call to directly interact with the scene.

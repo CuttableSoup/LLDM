@@ -5,7 +5,9 @@
 # fields you need into characters.toml/npcs.toml/creatures.toml/items.toml/spells.toml/
 # techniques.toml; nothing here is required, and no single real entity uses all of it at once
 # (a wolf has no [entity.test], a chest has no [entity.skills]) -- see those files for
-# realistic combinations.
+# realistic combinations. NPC-generation stubs are a different top-level table entirely --
+# [[entity_template]], not [[entity]] -- see the sibling template_schema.toml for that shape's
+# own field reference, and Rules/Fantasy/templates.toml for real examples.
 #
 # Every field is read with .get(), so an absent field just means "code that reads it falls
 # back to a default" (0, {}, [], or a hardcoded fallback like "untrained" 0D) rather than an
@@ -90,6 +92,13 @@ speed = 1                                   # Only ever read off the player's ow
                                             # nothing but the player currently moves.
 # "band" is never set in a template -- it's assigned per-instance at scenario-load time from
 # the scenario/room's own "entities" list ({name, band}), not authored here.
+#
+# NPC-generation stubs are a different top-level table entirely -- [[entity_template]], loaded
+# into self.entity_templates, never self.entities -- with their own field reference,
+# template_schema.toml (sibling file). Every field on *this* page still applies to an
+# entity_template unchanged (it's authored the same way, means the same thing); the one
+# exception is [entity.skills]/max_hp/name, which an entity_template never authors at all --
+# NPC_Generation.py fills those in at instancing time instead.
 
 # ---------------------------------------------------------------------------------------------
 # Skills -- {dice, pips} per skill name, read by resolve_action/resolve_opposed_action/

@@ -634,6 +634,48 @@ class TestSaveAndResumeConversation(unittest.TestCase):
         print(f"> have you heard anything about trouble on the road\n{resumed_response}")
 
 
+@unittest.skipUnless(_lm_studio_reachable(), "LM Studio not reachable at http://127.0.0.1:1234")
+class TestNpcGenerationLive(unittest.TestCase):
+    """!
+    @brief A real, live tool-calling round trip against LM Studio -- test_unit.py's own
+        TestNpcGeneration/TestNpcGenerationDMCoreIntegration cover the pure math and the
+        DMCore-side wiring with an injected fake, but only a real call actually proves the
+        currently-loaded model reliably returns a valid tool_calls response shaped the way
+        NPC_Generation.py expects (enum-constrained keywords, a real backstory) rather than
+        silently falling back every time. No NLPCore/LLMCore needed -- generation happens
+        synchronously during DMCore's own construction, nothing here narrates.
+    """
+
+    def test_generated_stranger_generates_a_real_npc_fit_to_the_players_own_cr(self):
+        dm_core = DMCore(EventBus(), scenario_name="npc_generation_test")
+        entity = dm_core.entities["generated_stranger"]
+
+        self.assertTrue(entity["generated"])
+        self.assertTrue(entity["name"])
+        self.assertNotEqual(entity["name"], "Unnamed Stranger")  # the offline-fallback name
+        self.assertTrue(entity["description"])
+        self.assertTrue(entity["skills"])
+        self.assertGreater(entity["max_hp"], 0)
+
+        npc_cr = dm_core.get_challenge_rating("generated_stranger")
+        player_cr = dm_core.get_challenge_rating(dm_core.player_name)
+        # variance=0.15 (the module default) plus this template's own hp_share/keyword-count
+        # slop -- a generous band, since this is checking "the whole pipeline produced a
+        # sane, roughly-matched NPC," not pinning down the exact fitting math (already
+        # covered exactly by test_unit.py's own round-trip test).
+        self.assertLess(
+            abs(npc_cr - player_cr), player_cr * 0.5,
+            f"generated CR {npc_cr} too far from player CR {player_cr}",
+        )
+
+        print(f"\n=== Generated NPC ===\n{entity['name']} (CR {npc_cr}, player CR {player_cr})")
+        print(f"{entity['description']}")
+        print(f"skills: {entity['skills']}")
+
+        roster_line = dm_core.describe_character("generated_stranger")
+        self.assertTrue(roster_line.startswith(entity["name"]))
+
+
 @pytest.mark.skipif(not _lm_studio_reachable(), reason="LM Studio not reachable at 127.0.0.1:1234")
 @pytest.mark.asyncio
 async def test_innkeeper_dialogue_through_textual():
