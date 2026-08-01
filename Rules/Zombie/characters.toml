@@ -1,0 +1,135 @@
+[[entity]]
+name = "riley"
+supertype = "creature"
+subtype = "survivor"
+description = "A road-worn survivor in a scavenged jacket, more scars than they had a month ago."
+is_player = true
+
+max_hp = 30
+
+currency = 0
+max_bulk = 5
+weight = 160
+
+inventory = [
+    "pistol",
+    "crowbar",
+    "first aid kit",
+    "pain pills",
+]
+
+languages = [ "common" ]
+memories = [ "A sister, last seen heading for the coast" ]
+quotes = [ "Stay close and keep quiet." ]
+
+abilities = [
+    { name = "punch", supertype = "innate", subtype = "weapon", skill = "brawling", damage_tags = [ "bludgeoning" ], damage_value = { dice = 0, pips = 0, bonus = "user.strength_damage" } },
+]
+
+[entity.equipped]
+secondary = "pistol"
+melee = "crowbar"
+medkit = "first aid kit"
+
+[entity.attitudes]
+default = [ 0, 0, 0, 0, 0, 0 ]
+# disposition   Hostile <-> Friendly
+# trust         Suspicious <-> Trusting
+# confidence    Fearful <-> Confident
+# respect       Disdainful <-> Admiring
+# obligation    Unfettered <-> Indebted
+# intimacy      Disgusted <-> Enamored
+
+[[entity.attitudes.supertype]]
+infected = [ -100, -100, -100, -100, -100, -100 ]
+
+[[entity.attitudes.name]]
+marcus = [ 60, 60, 60, 60, 60, 60 ]
+
+[entity.qualities]
+body = "lean"
+eye = "brown"
+gender = "female"
+hair = "black"
+height = "average"
+skin = "tan"
+size = "medium"
+age = 29
+
+[entity.conditions]
+
+[entity.skills]
+firearms = { dice = 4, pips = 0 }
+melee = { dice = 3, pips = 0 }
+brawling = { dice = 2, pips = 0 }
+throwing = { dice = 2, pips = 0 }
+strength = { dice = 2, pips = 0 }
+athletics = { dice = 3, pips = 0 }
+reflexes = { dice = 2, pips = 1 }
+dodge = { dice = 3, pips = 0 }
+stealth = { dice = 2, pips = 0 }
+observation = { dice = 3, pips = 0 }
+fortitude = { dice = 2, pips = 0 }
+willpower = { dice = 3, pips = 0 }
+medicine = { dice = 2, pips = 0 }
+survival = { dice = 2, pips = 0 }
+mechanics = { dice = 2, pips = 0 }
+charisma = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "marcus"
+supertype = "creature"
+subtype = "survivor"
+description = "A stocky ex-mechanic who talks too much and shoots straighter than anyone gives him credit for."
+is_party = true                            # Shows marcus on GUICore's Party tab alongside
+                                            # riley -- see entity_schema.toml's is_party.
+follow_offset = 0                          # Walks abreast -- see DM_Movement.py's
+                                            # _apply_party_formation.
+
+max_hp = 26
+
+inventory = [ "pump shotgun" ]
+
+# Flat list, same convention as riley's own "abilities" -- must stay above every [entity.xxx]
+# sub-table below, or TOML would fold it into whichever one came last instead of the
+# top-level [[entity]] table (see Rules/Fantasy/characters.toml's own "anne" comment).
+abilities = [ "pump shotgun" ]
+
+[entity.equipped]
+primary = "pump shotgun"
+
+# Positive default disposition toward everyone is what makes is_hostile(marcus, riley) false
+# -- combined with having its own [[entity.behavior]], that's what makes it act as an ally
+# rather than an enemy once combat starts (see DMCore._on_action_detected).
+[entity.attitudes]
+default = [ 40, 40, 40, 40, 40, 40 ]
+
+[[entity.attitudes.name]]
+riley = [ 60, 60, 60, 60, 60, 60 ]
+
+[entity.qualities]
+age = 41
+
+[entity.skills]
+firearms = { dice = 5, pips = 0 }
+melee = { dice = 2, pips = 0 }
+brawling = { dice = 2, pips = 0 }
+throwing = { dice = 2, pips = 0 }
+strength = { dice = 3, pips = 0 }
+athletics = { dice = 2, pips = 0 }
+reflexes = { dice = 2, pips = 0 }
+dodge = { dice = 2, pips = 0 }
+stealth = { dice = 1, pips = 0 }
+observation = { dice = 3, pips = 0 }
+fortitude = { dice = 3, pips = 0 }
+willpower = { dice = 3, pips = 0 }
+medicine = { dice = 1, pips = 0 }
+survival = { dice = 2, pips = 0 }
+mechanics = { dice = 4, pips = 0 }
+charisma = { dice = 2, pips = 0 }
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "pump shotgun"

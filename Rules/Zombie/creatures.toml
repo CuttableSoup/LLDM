@@ -1,0 +1,166 @@
+# The infected. None of these declare an [entity.attitudes] table -- same "a monster that
+# never bothered to author a disposition is still a monster" default is_hostile falls back to
+# (see CLAUDE.md's "Combat"), which is exactly right here: nothing infected is capable of
+# being talked down. None of them retreat, either -- unlike Fantasy's wolf/giant spider/bandit
+# (which value their own lives below 40% hp_per_remain), the infected have no self-preservation
+# instinct at all, so every behavior list here is just "attack, unconditionally" -- the same
+# precedent Fantasy's own mindless undead (skeleton warrior/the bone warden) already set.
+
+[[entity]]
+name = "common infected"
+supertype = "creature"
+subtype = "infected"
+description = "A shambling wreck of a person, clothes shredded, eyes glassy and empty. It hasn't noticed you yet -- but it will."
+
+max_hp = 6
+
+[[entity.abilities]]
+name = "infected claws"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "piercing" ]
+damage_value = { dice = 1, pips = 0, bonus = "user.strength_damage" }
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "infected claws"
+
+[entity.skills]
+fortitude = { dice = 1, pips = 0 }
+willpower = { dice = 0, pips = 0 }
+reflexes = { dice = 1, pips = 0 }
+dodge = { dice = 1, pips = 0 }
+strength = { dice = 2, pips = 0 }
+brawling = { dice = 3, pips = 0 }
+
+[[entity]]
+name = "boomer"
+supertype = "creature"
+subtype = "infected"
+description = "A grotesquely bloated infected, skin stretched taut and weeping bile. Getting close is a mistake -- it doesn't need to touch you to ruin your day."
+
+max_hp = 10
+
+# A ranged spit rather than a melee claw -- a Boomer's whole role is fouling a survivor's
+# vision/aim from a distance, not brawling; range = 3 keeps it well clear of melee.
+[[entity.abilities]]
+name = "bile spray"
+supertype = "innate"
+subtype = "weapon"
+skill = "throwing"
+damage_tags = [ "acid" ]
+damage_value = { dice = 1, pips = 0, bonus = 0 }
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "bile spray"
+
+[entity.skills]
+fortitude = { dice = 1, pips = 0 }
+willpower = { dice = 0, pips = 0 }
+reflexes = { dice = 1, pips = 0 }
+dodge = { dice = 1, pips = 0 }
+throwing = { dice = 3, pips = 0 }
+
+[[entity]]
+name = "hunter"
+supertype = "creature"
+subtype = "infected"
+description = "A crouched, hooded infected, muscles coiled tight. It's watching the rooftops, not the street -- and it can close twenty feet in a single leap."
+
+max_hp = 20
+
+# range = 2 -- the leap itself, not a reach weapon (see DM_Movement.py's own reach-weapon
+# convention); a Hunter can pounce from a band away that a claw-swiping common infected can't.
+[[entity.abilities]]
+name = "pounce"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "slashing", "piercing" ]
+damage_value = { dice = 2, pips = 1, bonus = "user.strength_damage" }
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "pounce"
+
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+willpower = { dice = 1, pips = 0 }
+reflexes = { dice = 4, pips = 0 }
+dodge = { dice = 4, pips = 0 }
+athletics = { dice = 5, pips = 0 }
+strength = { dice = 3, pips = 0 }
+brawling = { dice = 5, pips = 0 }
+
+[[entity]]
+name = "smoker"
+supertype = "creature"
+subtype = "infected"
+description = "A gaunt infected wreathed in a haze of its own smoke, an impossibly long tongue coiled and ready. It would rather drag you away from the group than fight you outright."
+
+max_hp = 16
+
+# range = 4 -- the tongue's own reach, well past a common infected's claw and even a
+# Hunter's pounce.
+[[entity.abilities]]
+name = "tongue lash"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "constricting" ]
+damage_value = { dice = 1, pips = 1, bonus = 0 }
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "tongue lash"
+
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+willpower = { dice = 1, pips = 0 }
+reflexes = { dice = 2, pips = 0 }
+dodge = { dice = 2, pips = 0 }
+strength = { dice = 2, pips = 0 }
+brawling = { dice = 3, pips = 0 }
+
+[[entity]]
+name = "tank"
+supertype = "creature"
+subtype = "infected"
+description = "A hulking, muscle-bound monstrosity, easily eight feet tall, knuckles dragging along the pavement. Everything about it says run."
+
+max_hp = 60
+
+[[entity.abilities]]
+name = "haymaker"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "bludgeoning" ]
+damage_value = { dice = 3, pips = 0, bonus = "user.strength_damage" }
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "haymaker"
+
+# High fortitude/strength/brawling, low dodge/reflexes -- a Tank tanks through sheer HP and
+# hitting power, not evasion (same design reasoning Rules/Fantasy's own "the bone warden"
+# comment already spells out for a different boss).
+[entity.skills]
+fortitude = { dice = 6, pips = 0 }
+willpower = { dice = 4, pips = 0 }
+reflexes = { dice = 1, pips = 0 }
+dodge = { dice = 1, pips = 0 }
+strength = { dice = 6, pips = 0 }
+brawling = { dice = 6, pips = 0 }

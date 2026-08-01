@@ -13,29 +13,35 @@ from NLP_Core import NLPCore
 DEFAULT_SCENARIO = "arena"
 
 
-def _peek_saved_scenario_key(slot_name, fallback):
+def _peek_saved_scenario_key(slot_name, fallback, fallback_setting="Fantasy"):
     """!
-    @brief Reads just a save slot's own "scenario_key" straight out of its dm_state.json --
-        without needing a live DMCore to ask (see DM_Persistence.py's save_game/load_game) --
-        so main()'s own cold-start "Load..." handler knows which scenario to construct a
-        brand new DMCore against *before* DMCore.load_game() itself has anything to run
-        against. Mirrors DM_Persistence.py's own _save_slot_dir sanitizing (os.path.basename,
+    @brief Reads just a save slot's own "scenario_key"/"setting" straight out of its
+        dm_state.json -- without needing a live DMCore to ask (see DM_Persistence.py's
+        save_game/load_game) -- so main()'s own cold-start "Load..." handler knows which
+        scenario/setting to construct a brand new DMCore against *before* DMCore.load_game()
+        itself has anything to run against. Both matter: DMCore.__init__ resolves scenario_key
+        against Rules/<setting>/scenarios/ before load_game ever gets to overlay the save's
+        own state, so a setting mismatch here would fail scenario lookup outright rather than
+        just cosmetically narrating the wrong intro (see load_game's own "throwaway intro"
+        note). Mirrors DM_Persistence.py's own _save_slot_dir sanitizing (os.path.basename,
         stripped) so this reads the exact same directory a real load_game would.
     @param slot_name The save slot name, as picked from GUICore's own load-slot picker.
-    @param fallback Returned if the slot doesn't exist or its dm_state.json can't be read/
-        parsed -- DMCore.load_game itself is what surfaces a real "no such slot" error to the
-        player (via "game_load_failed"); this only ever has to pick *some* scenario to
-        construct DMCore with in the first place.
-    @return The slot's own scenario_key, or fallback.
+    @param fallback Returned as the scenario key if the slot doesn't exist or its
+        dm_state.json can't be read/parsed -- DMCore.load_game itself is what surfaces a real
+        "no such slot" error to the player (via "game_load_failed"); this only ever has to
+        pick *some* scenario to construct DMCore with in the first place.
+    @param fallback_setting Returned as the setting under the same failure conditions.
+    @return (scenario_key, setting) -- either or both may be the given fallbacks.
     """
     base_dir = os.path.dirname(os.path.abspath(__file__))
     safe_name = os.path.basename(slot_name.strip()) or "unnamed"
     path = os.path.join(base_dir, "Saves", safe_name, "dm_state.json")
     try:
         with open(path, "r") as f:
-            return json.load(f).get("scenario_key", fallback)
+            data = json.load(f)
+        return data.get("scenario_key", fallback), data.get("setting", fallback_setting)
     except (OSError, ValueError):
-        return fallback
+        return fallback, fallback_setting
 
 
 def main():
@@ -56,13 +62,23 @@ def main():
              "the default player template (its own hand-authored skills untouched) instead of "
              "opening the race/point-buy dialog. Ignored if 'scenario' isn't also given.",
     )
+    parser.add_argument(
+        "--setting",
+        default="Fantasy",
+        help="Which Rules/ subdirectory to boot from (ex: 'Fantasy', 'Zombie') -- each is a "
+             "self-contained TOML data pack (skills/entities/rules/scenarios). Only meaningful "
+             "alongside 'scenario'. Defaults to 'Fantasy'.",
+    )
     args = parser.parse_args()
 
     # Fail fast on a bad scenario name before spending ~15-20s loading NLPCore's
     # sentence-transformers model, rather than silently continuing with no scenario
     # data (which used to let the LLM hallucinate a scene from nothing).
-    if args.scenario is not None and not os.path.exists(scenario_file_path(args.scenario)):
-        print(f"Error: scenario '{args.scenario}' not found in Rules/Fantasy/scenarios/.", file=sys.stderr)
+    if args.scenario is not None and not os.path.exists(scenario_file_path(args.scenario, args.setting)):
+        print(
+            f"Error: scenario '{args.scenario}' not found in Rules/{args.setting}/scenarios/.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     # 1. Initialize Event Bus and Logger
@@ -90,14 +106,14 @@ def main():
     # handler no-ops as soon as dm_core is no longer None.
     dm_core = None
 
-    def start_game(scenario_name, character):
+    def start_game(scenario_name, character, setting="Fantasy"):
         nonlocal dm_core
         if dm_core is not None:
             return
         # 3. Constructed last, as it publishes 'rules_loaded' in its __init__ and needs to
         # hear 'action_detected' from NLPCore -- both already subscribed above regardless of
         # when this actually fires.
-        dm_core = DMCore(event_bus, scenario_name=scenario_name, character=character)
+        dm_core = DMCore(event_bus, scenario_name=scenario_name, character=character, setting=setting)
 
     def on_character_created(data):
         # Doesn't start a game itself -- GUICore holds the new character as its own
@@ -124,8 +140,10 @@ def main():
         if not slot:
             event_bus.publish("log_warning", "load_requested with no slot name; ignored.")
             return
-        scenario_name = _peek_saved_scenario_key(slot, args.scenario or DEFAULT_SCENARIO)
-        start_game(scenario_name, None)
+        scenario_name, setting = _peek_saved_scenario_key(
+            slot, args.scenario or DEFAULT_SCENARIO, args.setting,
+        )
+        start_game(scenario_name, None, setting=setting)
         dm_core.load_game(slot)
 
     event_bus.subscribe("character_created", on_character_created)
@@ -140,7 +158,7 @@ def main():
         # is skipped whenever "allocation" is absent); leave it off to keep that template's
         # own name and skills exactly as characters.toml authored them.
         character = {"name": args.character_name} if args.character_name else None
-        start_game(args.scenario, character)
+        start_game(args.scenario, character, setting=args.setting)
 
     event_bus.publish("log_info", "Application started successfully.")
 

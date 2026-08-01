@@ -1,0 +1,216 @@
+# Same shape as Rules/Fantasy/rules.toml -- [[status]]/[[condition]] wound ladder,
+# [strength_damage], [character_creation], [[initiative]], [[attitude_tier]], [[equip_slot]]
+# are all generic engine mechanisms (DM_Status.py/DM_Combat.py/Character_Creation.py read
+# these fields the same way regardless of setting); only the flavor text and which skills/
+# subtypes get named actually differ from the Fantasy version.
+
+[[status]]
+name = "bruised"
+trigger = "on_damage"
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.81 },
+    { field = "hp_per_remain", operator = "<=", value = 0.99 },
+]
+description = "Took a glancing hit -- a scratch, a bruise, nothing that slows you down."
+
+[[status]]
+name = "stunned"
+trigger = "on_damage"
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.60 },
+    { field = "hp_per_remain", operator = "<=", value = 0.80 },
+]
+apply = { condition = "stunned", duration = "fleeting", dismiss = "" }
+description = "A real hit -- a raked claw, a solid bite. It stings, and it's bleeding."
+
+[[status]]
+name = "wounded"
+trigger = "on_damage"
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.40 },
+    { field = "hp_per_remain", operator = "<=", value = 0.59 },
+]
+apply = { condition = "wounded", duration = "permanent", dismiss = "" }
+description = "A deep bite or a torn-open gash. This needs a medkit, not a bandage."
+
+[[status]]
+name = "severe"
+trigger = "on_damage"
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.20 },
+    { field = "hp_per_remain", operator = "<=", value = 0.39 },
+]
+apply = { condition = "severe", duration = "permanent", dismiss = "" }
+description = "Mauled badly -- torn muscle, maybe a cracked rib. Every movement hurts."
+
+[[status]]
+name = "incapacitated"
+trigger = "on_damage"
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.10 },
+    { field = "hp_per_remain", operator = "<=", value = 0.19 },
+]
+apply = { condition = "incapacitated", duration = "permanent", dismiss = "" }
+description = "Barely standing -- blood loss and shock are setting in fast."
+
+[[status]]
+name = "mortal"
+trigger = "on_damage"
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+    { field = "hp_per_remain", operator = "<=", value = 0.09 },
+]
+apply = { condition = "unconscious", duration = "scene", dismiss = "" }
+description = "Down and not getting back up without help -- someone needs to pull you out."
+
+[[status]]
+name = "dead"
+trigger = "on_damage"
+requirements = [
+    { field = "hp_per_remain", operator = "==", value = 0 },
+]
+apply = { condition = "dead", duration = "permanent", dismiss = "resurrection" }
+description = "Torn apart. There's no coming back from this."
+
+[[condition]]
+name = "stunned"
+modifier = { dice = -1, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "wounded"
+modifier = { dice = -1, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "severe"
+modifier = { dice = -2, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "incapacitated"
+modifier = { dice = -3, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "mortal"
+modifier = { dice = -3, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "dead"
+modifier = { dice = 0, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "locked"
+modifier = { dice = 0, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "jammed"
+modifier = { dice = 0, pips = 0, bonus = 0 }
+
+[strength_damage]
+skill = "strength"
+divisor = 2
+
+# Same point-buy constants as Fantasy's -- a generic character-creation mechanism, not a
+# setting-specific balance choice (see Character_Creation.py).
+[character_creation]
+pool_dice = 15
+max_allocation_per_skill = 5
+
+# reflexes (reacting to a lunge/ambush) + observation (spotting trouble before it's on top
+# of you) -- the zombie-survival equivalent of Fantasy's dodge + observation pairing.
+[[initiative]]
+skill = "reflexes"
+
+[[initiative]]
+skill = "observation"
+
+# Same seven bands/phrasing as Fantasy's -- these describe a relationship's own sentiment in
+# purely generic terms ("wants them gone", "trusts them readily"), which reads just as well
+# for a fellow survivor as for a tavern innkeeper.
+[[attitude_tier]]
+name = "hostile"
+minimum = -150
+maximum = -100
+disposition = "wants them gone, one way or another"
+trust = "treats them as an active threat"
+confidence = "is terrified of them, ready to flee or freeze"
+respect = "holds them in open contempt"
+obligation = "resents any suggestion that they owe them anything"
+intimacy = "is repulsed by them"
+
+[[attitude_tier]]
+name = "unfriendly"
+minimum = -100
+maximum = -60
+disposition = "is openly unfriendly toward them"
+trust = "is deeply suspicious of their motives"
+confidence = "is visibly afraid around them"
+respect = "looks down on them"
+obligation = "feels entirely free of any obligation to them"
+intimacy = "finds them distasteful"
+
+[[attitude_tier]]
+name = "wary"
+minimum = -60
+maximum = -20
+disposition = "is cold and standoffish around them"
+trust = "is guarded and skeptical around them"
+confidence = "feels intimidated and uneasy around them"
+respect = "is privately unimpressed by them"
+obligation = "feels no debt to them"
+intimacy = "feels a mild aversion to them"
+
+[[attitude_tier]]
+name = "neutral"
+minimum = -20
+maximum = 20
+disposition = "feels nothing in particular toward them"
+trust = "neither trusts nor distrusts them"
+confidence = "feels neither confident nor afraid around them"
+respect = "has no particular opinion of their worth"
+obligation = "feels no meaningful obligation either way"
+intimacy = "feels no particular closeness or distance"
+
+[[attitude_tier]]
+name = "warm"
+minimum = 20
+maximum = 60
+disposition = "is warm and well-disposed toward them"
+trust = "generally trusts them"
+confidence = "feels self-assured dealing with them"
+respect = "thinks well of them"
+obligation = "feels they owe them something"
+intimacy = "feels a real fondness for them"
+
+[[attitude_tier]]
+name = "friendly"
+minimum = 60
+maximum = 100
+disposition = "is genuinely friendly toward them"
+trust = "trusts them readily, taking them at their word"
+confidence = "feels bold and confident around them"
+respect = "genuinely admires them"
+obligation = "feels genuinely indebted to them"
+intimacy = "feels genuinely enamored with them"
+
+[[attitude_tier]]
+name = "devoted"
+minimum = 100
+maximum = 150
+disposition = "would put themselves between danger and them without a second thought"
+trust = "trusts them completely, without a shred of doubt"
+confidence = "feels utterly fearless around them"
+respect = "regards them with total reverence"
+obligation = "feels they owe them a debt that can never be repaid"
+intimacy = "is utterly devoted to them"
+
+# A survivor carries a real loadout (primary/secondary/melee/throwable/medkit); an infected
+# carries nothing at all -- it fights with what it was turned with (see creatures.toml),
+# same reasoning Fantasy's own animal/elemental subtype gets an empty slot list.
+[[equip_slot]]
+supertype = "creature"
+subtype = "survivor"
+slots = [ "primary", "secondary", "melee", "throwable", "medkit" ]
+
+[[equip_slot]]
+supertype = "creature"
+subtype = "infected"
+slots = []

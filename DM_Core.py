@@ -32,20 +32,28 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         orchestrate calls across every mixin and don't belong to any single domain.
     """
 
-    def __init__(self, event_bus, scenario_name="arena", character=None):
+    def __init__(self, event_bus, scenario_name="arena", character=None, setting="Fantasy"):
         """!
         @brief Initializes the DM core and loads system references.
         @param event_bus The central event bus instance.
         @param scenario_name Which scenario to load, matching a file in
-            Rules/Fantasy/scenarios/ (ex: "arena" loads scenarios/arena.toml).
+            Rules/<setting>/scenarios/ (ex: "arena" loads scenarios/arena.toml).
         @param character An optional finished character-creation result
             ({"race": race_name, "allocation": {skill_name: dice_int}}), applied to the
             player entity via apply_character_creation (DM_CharacterCreation.py) right
             after self.player_name is resolved, before any scenario is loaded. None (the
             default) leaves the player template's own hand-authored skills untouched --
             every existing caller that doesn't pass this keeps working exactly as before.
+        @param setting Which Rules/ subdirectory to load everything from (skills/entities/
+            rules/scenarios) -- each setting is a self-contained, independently-authored TOML
+            data pack (see CLAUDE.md's own top-level architecture note); nothing about the
+            engine itself is fantasy-specific, "Fantasy" is just the one setting shipped as
+            the default (every existing caller that doesn't pass this keeps loading from
+            Rules/Fantasy exactly as before). "Zombie" is a second, bare-bones setting proving
+            that out.
         """
         self.event_bus = event_bus
+        self.setting = setting
         self.skills = {}
         self.entities = {}
         # Stub templates for NPC generation (see NPC_Generation.py/DM_NpcGeneration.py,
@@ -81,7 +89,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         # own "name" field (a display string, ex: "The Arena") -- kept so save_game/load_game
         # know which scenarios/*.toml file a saved slot belongs to.
         self.scenario_key = scenario_name
-        self.load_rules(os.path.join("Rules", "Fantasy"))
+        self.load_rules(os.path.join("Rules", self.setting))
         # No party/character selection exists yet, so the one entity template marked
         # is_player = true (characters.toml's gladstone) stands in as the active player
         # character. Resolved once here, from templates, rather than per-scenario-load, so

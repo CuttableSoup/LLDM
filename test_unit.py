@@ -1169,7 +1169,13 @@ class TestPeekSavedScenarioKey(unittest.TestCase):
 
     def test_reads_the_slots_own_scenario_key(self):
         slot = self._write_slot("test_peek_scenario_key", {"scenario_key": "crypt"})
-        self.assertEqual(LLDM._peek_saved_scenario_key(slot, "arena"), "crypt")
+        self.assertEqual(LLDM._peek_saved_scenario_key(slot, "arena"), ("crypt", "Fantasy"))
+
+    def test_reads_the_slots_own_setting(self):
+        slot = self._write_slot(
+            "test_peek_scenario_key_setting", {"scenario_key": "rooftop", "setting": "Zombie"},
+        )
+        self.assertEqual(LLDM._peek_saved_scenario_key(slot, "arena"), ("rooftop", "Zombie"))
 
 
 class TestLockedChest(DMTestCase):

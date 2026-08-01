@@ -3,7 +3,23 @@
 An autonomous dungeon master: the player types free-text actions, NLP maps them to a skill,
 a simplified D6 (West End Games) engine rolls dice and resolves outcomes, and a local LLM
 (currently Gemma via LM Studio at `http://127.0.0.1:1234`) narrates what happened. Skills,
-entities, items, spells, rules, and scenarios are all data-driven via TOML in `Rules/Fantasy/`.
+entities, items, spells, rules, and scenarios are all data-driven via TOML, organized into
+"settings" — self-contained sibling directories under `Rules/` (`Rules/Fantasy/`,
+`Rules/Zombie/`), each independently scanned by `load_rules`. None of the engine itself is
+fantasy-specific — `DMCore(event_bus, scenario_name, setting="Fantasy")`'s own `setting` param
+picks which one to boot from (`Rules/<setting>/scenarios/<scenario_name>.toml` and every
+sibling `Rules/<setting>/*.toml`), and it round-trips through a save file (`dm_state.json`'s
+own `"setting"` key) so a resumed save reloads from the same setting it was saved under.
+`Rules/Fantasy/` is the original, deep setting; `Rules/Zombie/` is a bare-bones second one (a
+Left 4 Dead-inspired survival shooter — common/special infected, firearms/melee/throwables) that
+exists specifically to prove the engine out as setting-agnostic rather than quietly fantasy-
+coupled — see its own scenario at `Rules/Zombie/scenarios/rooftop.toml` (`python LLDM.py
+rooftop --setting Zombie` boots straight into it). Every setting authors its own skills/rules/
+races from scratch — nothing is shared or inherited between settings, deliberately, so one
+setting's own data can never silently leak into another's. GUI-driven character creation
+(Character → Create...) and NPC generation are still wired to `Rules/Fantasy/` only; a second
+setting today is reachable only via `LLDM.py`'s own CLI quick-boot (`--setting`) or a save file
+that already carries its own `"setting"`.
 
 ## Architecture
 
@@ -398,10 +414,13 @@ remaining" counter gating Create until it hits exactly zero. `self.result` is al
 nothing is narrated until a player character *and* a chosen scenario exist, via whichever
 route fires first:
 
-1. **CLI quick-boot** — `python LLDM.py <scenario> [character_name]`. Giving `scenario` skips
-   the Character menu entirely and constructs `DMCore` immediately; `character_name`, if also
-   given, is passed as `{"name": character_name}` (a rename, skills untouched). Omitting
-   `scenario` leaves the window open with nothing loaded, for routes 2/3 below.
+1. **CLI quick-boot** — `python LLDM.py <scenario> [character_name] [--setting SETTING]`. Giving
+   `scenario` skips the Character menu entirely and constructs `DMCore` immediately;
+   `character_name`, if also given, is passed as `{"name": character_name}` (a rename, skills
+   untouched). `--setting` (default `"Fantasy"`) picks which `Rules/<setting>/` data pack
+   `scenario` is resolved against (ex: `--setting Zombie rooftop`) — see this doc's own top-level
+   "settings" note. Omitting `scenario` leaves the window open with nothing loaded, for routes
+   2/3 below.
 2. **Character → Create... then Scenario → Load...** — a non-cancelled dialog result publishes
    `"character_created"` (see GUI_Core.py's own notes above), which `main()`'s
    `on_character_created` closure only logs a warning for (if `DMCore` already exists) — it
@@ -413,9 +432,9 @@ route fires first:
 3. **File → Load...** — `GUICore.request_load` publishes `"load_requested"`. Before any
    `DMCore` exists, `main()`'s own `on_load_requested` closure handles this instead of
    `DMCore`'s usual `_on_load_requested`: it peeks the chosen slot's `dm_state.json` for its
-   `"scenario_key"` (`LLDM._peek_saved_scenario_key` — a plain file read, no live `DMCore`
-   needed), constructs `DMCore` against that scenario, then calls `dm_core.load_game(slot)` to
-   overlay the rest of the saved state. This costs one throwaway `scenario_loaded` narration
+   `"scenario_key"`/`"setting"` (`LLDM._peek_saved_scenario_key` — a plain file read, no live
+   `DMCore` needed), constructs `DMCore` against that scenario/setting, then calls
+   `dm_core.load_game(slot)` to overlay the rest of the saved state. This costs one throwaway `scenario_loaded` narration
    before `load_game`'s own `"game_loaded"` corrects it — the same double-narration cost as
    loading a save immediately after any ordinary new game, not a cost unique to this path.
 
@@ -642,8 +661,8 @@ has no request/response mechanism, so each core owns and persists its own slice.
 `NLPCore._detect_save_load_intent`, by `GUICore`'s File → Save... / Character → Load... popups
 (see "Booting the game" for the cold-start case), or by `Textual_Core`'s Save/Load buttons.
 
-`DMCore.save_game` writes a diff from a fresh instantiation: `scenario_key`, `player_name`,
-`round_number`, `current_room_key`, `scenario_entities`, and per-instance
+`DMCore.save_game` writes a diff from a fresh instantiation: `setting`, `scenario_key`,
+`player_name`, `round_number`, `current_room_key`, `scenario_entities`, and per-instance
 `{hp, active_conditions, currency, inventory, band}`. `load_game` re-runs `load_rules()`, then
 the same scenario-load path `__init__` uses, then overlays each saved instance's mutable
 fields; a saved instance with no post-reload match is skipped. Publishes `game_loaded` on

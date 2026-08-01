@@ -13,30 +13,36 @@ from DM_Types import DMCoreProtocol
 PLAYER_PLACEHOLDER = "player"
 
 
-def scenario_file_path(scenario_name):
+def scenario_file_path(scenario_name, setting="Fantasy"):
     """!
-    @brief Resolves a scenario name to its file path under Rules/Fantasy/scenarios/.
+    @brief Resolves a scenario name to its file path under Rules/<setting>/scenarios/.
     @param scenario_name The scenario's filename without extension (ex: "arena", "tavern").
+    @param setting Which Rules/ subdirectory to resolve against (ex: "Fantasy", "Zombie") --
+        each setting is a self-contained TOML data pack (its own skills/rules/entities/
+        scenarios), never mixed with another setting's, so a scenario name only has to be
+        unique within its own setting. Defaults to "Fantasy" so every existing call site
+        that predates settings plural keeps resolving exactly where it always has.
     @return The absolute filepath, whether or not it actually exists.
     """
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(base_dir, "Rules", "Fantasy", "scenarios", f"{scenario_name}.toml")
+    return os.path.join(base_dir, "Rules", setting, "scenarios", f"{scenario_name}.toml")
 
 
-def list_available_scenarios():
+def list_available_scenarios(setting="Fantasy"):
     """!
-    @brief Every real gameplay scenario under Rules/Fantasy/scenarios/, for a UI to offer as
+    @brief Every real gameplay scenario under Rules/<setting>/scenarios/, for a UI to offer as
         a choice before any DMCore exists -- same "pure, DMCore-independent, re-scan the TOML
         directly" precedent Character_Creation.py's load_character_creation_data sets, since
         GUICore needs this list before it can know whether a DMCore will ever exist.
         character_test.toml is deliberately excluded -- it's a minimal scenario built solely
         for TestCharacterCreationRename, not a real one to offer a player.
+    @param setting Which Rules/ subdirectory to scan -- see scenario_file_path.
     @return A list of (scenario_key, display_name, description) tuples, sorted by key. A
         scenario file that's missing or fails to parse is silently skipped, the same
         per-file leniency load_rules applies to every other TOML file.
     """
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    scenarios_dir = os.path.join(base_dir, "Rules", "Fantasy", "scenarios")
+    scenarios_dir = os.path.join(base_dir, "Rules", setting, "scenarios")
 
     results = []
     if not os.path.isdir(scenarios_dir):
@@ -245,7 +251,7 @@ class RulesMixin(DMCoreProtocol):
                 opening scene with no name/description, which the LLM would happily hallucinate
                 (ex: a "featureless gray void") with no indication anything had gone wrong.
         """
-        filepath = scenario_file_path(scenario_name)
+        filepath = scenario_file_path(scenario_name, self.setting)
 
         if not os.path.exists(filepath):
             raise FileNotFoundError(f"Scenario '{scenario_name}' not found (expected {filepath}).")

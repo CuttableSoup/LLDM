@@ -1,0 +1,119 @@
+# Skills for the Zombie setting -- a separate, self-contained TOML data pack
+# (Rules/Zombie/, loaded independently of Rules/Fantasy/ -- see DMCore's own "setting"
+# param, DM_Rules.py's load_rules). Deliberately smaller than Rules/Fantasy/skills.toml
+# (16 skills vs. 30-ish) -- "bare-bones," proving the point that a second setting doesn't
+# need to match the first one's breadth, just its shape: name/description/keywords/opposes/
+# specializations, the same fields NLPCore/DM_Combat.py read off any skill regardless of
+# which setting loaded it.
+
+[[skill]]
+name = "firearms"
+description = "Using pistols, shotguns, and rifles."
+keywords = ["combat", "ranged", "gun", "pistol", "shoot", "shotgun", "rifle", "fire", "aim", "trigger", "ammo"]
+opposes = ["dodge", "reflexes"]
+specializations = ["pistols", "shotguns", "rifles"]
+
+[[skill]]
+name = "melee"
+description = "Fighting with a handheld melee weapon."
+keywords = ["combat", "melee", "armed", "bat", "crowbar", "machete", "axe", "swing", "bludgeon", "slash", "strike", "weapon"]
+opposes = ["dodge", "reflexes", "melee", "brawling"]
+specializations = ["blunt weapons", "edged weapons", "improvised weapons"]
+
+[[skill]]
+name = "brawling"
+description = "Unarmed striking, shoving, and grappling."
+keywords = ["combat", "melee", "unarmed", "punch", "kick", "fist", "shove", "push", "grapple", "wrestle"]
+opposes = ["dodge", "reflexes", "brawling", "melee"]
+specializations = ["shoving", "grappling", "striking"]
+
+[[skill]]
+name = "throwing"
+description = "Hurling molotovs, pipe bombs, and other throwables."
+keywords = ["combat", "ranged", "throw", "toss", "hurl", "molotov", "pipe bomb", "grenade", "lob"]
+opposes = ["dodge", "reflexes"]
+specializations = ["incendiaries", "explosives", "distraction devices"]
+
+[[skill]]
+name = "strength"
+description = "Feats of raw physical power."
+keywords = ["exertion", "lifting", "force", "power", "push", "pull", "break", "smash", "shove"]
+opposes = ["strength", "brawling", "fortitude"]
+specializations = ["breaking barricades", "prying doors", "carrying"]
+
+[[skill]]
+name = "athletics"
+description = "Running, climbing, jumping, and vaulting obstacles."
+keywords = ["movement", "exertion", "physical", "run", "sprint", "climb", "jump", "vault", "scramble", "flee"]
+opposes = ["athletics", "observation"]
+specializations = ["sprinting", "climbing", "vaulting"]
+
+[[skill]]
+name = "reflexes"
+description = "Quick physical reactions to sudden danger."
+keywords = ["defense", "reaction", "speed", "quick", "fast", "react", "duck", "flinch"]
+opposes = ["stealth"]
+specializations = ["reacting to ambush", "catching objects", "initiative"]
+
+[[skill]]
+name = "dodge"
+description = "Avoiding melee, unarmed, and thrown attacks."
+keywords = ["defense", "evasion", "reaction", "avoid", "duck", "sidestep", "weave"]
+opposes = ["firearms", "melee", "brawling", "throwing"]
+specializations = ["dodging swings", "dodging lunges", "dodging thrown objects"]
+
+[[skill]]
+name = "stealth"
+description = "Moving quietly and staying out of sight."
+keywords = ["movement", "concealment", "covert", "sneak", "hide", "quiet", "silent", "crouch", "shadow"]
+opposes = ["observation", "reflexes"]
+specializations = ["sneaking past hordes", "hiding", "silent movement"]
+
+[[skill]]
+name = "observation"
+description = "Spotting infected, hazards, and useful supplies."
+keywords = ["perception", "investigation", "awareness", "look", "spot", "notice", "see", "hear", "listen", "search", "scan"]
+opposes = ["stealth"]
+specializations = ["spotting threats", "searching rooms", "listening for infected"]
+
+[[skill]]
+name = "fortitude"
+description = "Enduring exhaustion, pain, and physical strain."
+keywords = ["defense", "resistance", "passive", "endure", "survive", "toughness", "exhaustion", "pain", "stamina"]
+opposes = []
+specializations = ["pain tolerance", "exhaustion resistance", "blood loss"]
+
+[[skill]]
+name = "willpower"
+description = "Keeping your nerve under horror and panic."
+keywords = ["defense", "resistance", "mental", "fear", "panic", "nerve", "resolve", "calm", "steady", "courage"]
+opposes = []
+specializations = ["resisting panic", "resisting despair", "keeping calm"]
+
+[[skill]]
+name = "medicine"
+description = "Treating wounds with first aid and pills."
+keywords = ["healing", "recovery", "treatment", "heal", "bandage", "first aid", "treat", "medkit", "wound", "bleeding"]
+opposes = []
+specializations = ["first aid", "trauma care", "triage"]
+
+[[skill]]
+name = "survival"
+description = "Scavenging supplies and navigating a ruined city."
+keywords = ["wilderness", "exploration", "foraging", "scavenge", "track", "navigate", "camp", "supplies"]
+opposes = []
+specializations = ["scavenging", "navigation", "tracking"]
+
+[[skill]]
+name = "mechanics"
+description = "Barricading, hotwiring, and jury-rigging equipment."
+keywords = ["repair", "engineering", "barricade", "hotwire", "repair", "rig", "jury-rig", "fix"]
+opposes = []
+specializations = ["barricading", "hotwiring", "improvised repairs"]
+
+[[skill]]
+name = "charisma"
+description = "Rallying, persuading, or calming down other survivors."
+keywords = ["social", "persuasion", "influence", "talk", "persuade", "convince", "rally", "negotiate", "lead"]
+opposes = ["willpower", "charisma"]
+specializations = ["rallying others", "persuasion", "calming panic"]

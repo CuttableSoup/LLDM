@@ -1,0 +1,141 @@
+# Weapons and consumables for the Zombie setting. Same [[entity]] shape Rules/Fantasy/
+# items.toml uses (skill/equip_slot/damage_value/damage_tags/bulk/value/usable/...) --
+# nothing here is a new engine mechanism, just new data. Deliberately no ammo/charge
+# tracking on any weapon (charges is reserved for a consumable's own limited uses -- see
+# health potion's own [entity.skills] comment in Rules/Fantasy/items.toml) -- the engine has
+# no ammo mechanic for any setting today, so a firearm here is exactly as "unlimited" as
+# Fantasy's own longbow/short bow are with their own arrows.
+
+[[entity]]
+name = "pistol"
+supertype = "object"
+subtype = "weapon"
+skill = "firearms"
+description = "A worn semi-auto pistol, slide scratched from hard use but still reliable."
+equip_slot = "secondary"
+max_hp = 8
+range = 5
+damage_value = { dice = 1, pips = 2, bonus = 0 }
+damage_tags = [ "ballistic" ]
+bulk = 1
+value = 5
+[entity.skills]
+fortitude = { dice = 1, pips = 0 }
+
+[[entity]]
+name = "pump shotgun"
+supertype = "object"
+subtype = "weapon"
+skill = "firearms"
+description = "A sawn-down pump shotgun -- devastating up close, useless at range."
+equip_slot = "primary"
+max_hp = 10
+range = 2
+damage_value = { dice = 3, pips = 0, bonus = 0 }
+damage_tags = [ "ballistic" ]
+bulk = 2
+value = 20
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "combat rifle"
+supertype = "object"
+subtype = "weapon"
+skill = "firearms"
+description = "A military-pattern rifle, its stock wrapped in duct tape."
+equip_slot = "primary"
+max_hp = 10
+range = 6
+damage_value = { dice = 2, pips = 1, bonus = 0 }
+damage_tags = [ "ballistic" ]
+bulk = 2
+value = 25
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "crowbar"
+supertype = "object"
+subtype = "weapon"
+skill = "melee"
+description = "A solid steel crowbar, equally handy on a skull or a locked door."
+equip_slot = "melee"
+max_hp = 14
+damage_value = { dice = 1, pips = 1, bonus = "strength_damage" }
+damage_tags = [ "bludgeoning" ]
+bulk = 1
+value = 3
+[entity.skills]
+fortitude = { dice = 4, pips = 0 }
+
+[[entity]]
+name = "machete"
+supertype = "object"
+subtype = "weapon"
+skill = "melee"
+description = "A long, single-edged blade, its edge kept wickedly sharp."
+equip_slot = "melee"
+max_hp = 10
+damage_value = { dice = 1, pips = 2, bonus = "strength_damage" }
+damage_tags = [ "slashing" ]
+bulk = 1
+value = 8
+[entity.skills]
+fortitude = { dice = 3, pips = 0 }
+
+[[entity]]
+name = "molotov"
+supertype = "object"
+subtype = "weapon"
+skill = "throwing"
+description = "A liquor bottle stuffed with a burning rag, sloshing with gasoline."
+equip_slot = "throwable"
+max_hp = 1
+range = 4
+damage_value = { dice = 2, pips = 0, bonus = 0 }
+damage_tags = [ "fire" ]
+bulk = 1
+value = 10
+[entity.skills]
+fortitude = { dice = 0, pips = 0 }
+
+[[entity]]
+name = "pipe bomb"
+supertype = "object"
+subtype = "weapon"
+skill = "throwing"
+description = "A length of pipe packed with powder and nails, wired to a cheap timer."
+equip_slot = "throwable"
+max_hp = 1
+range = 3
+damage_value = { dice = 3, pips = 1, bonus = 0 }
+damage_tags = [ "explosive" ]
+bulk = 1
+value = 15
+[entity.skills]
+fortitude = { dice = 0, pips = 0 }
+
+[[entity]]
+name = "first aid kit"
+supertype = "object"
+subtype = "medkit"
+description = "A red nylon pouch stocked with gauze, splints, and antiseptic."
+equip_slot = "medkit"
+usable = true
+bulk = 1
+value = 20
+[entity.skills]
+healing = { dice = 4, pips = 0 }
+fortitude = { dice = 1, pips = 0 }
+
+[[entity]]
+name = "pain pills"
+supertype = "object"
+subtype = "consumable"
+description = "A rattling orange bottle of prescription painkillers."
+usable = true
+bulk = 0
+value = 8
+[entity.skills]
+healing = { dice = 2, pips = 0 }

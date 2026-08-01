@@ -1,0 +1,18 @@
+# A bare-bones single-room scenario, same shape as Rules/Fantasy/scenarios/arena.toml -- one
+# flat combat encounter, no room graph. enclosed = true: there's nowhere left to retreat to
+# but the ledge, same reasoning arena.toml's own walled combat ring uses (see
+# DM_Movement.py's "Movement and range").
+
+[scenario]
+name = "The Rooftop"
+description = "A gravel rooftop, six stories up, the fire escape kicked away behind you. Downtown burns orange on the skyline. The door back inside is barricaded -- for now."
+bands = 5
+enclosed = true
+entities = [
+    { name = "player", band = 1 },
+    { name = "marcus", band = 1 },
+    { name = "common infected", band = 4 },
+    { name = "common infected", band = 4 },
+    { name = "common infected", band = 5 },
+    { name = "hunter", band = 5 },
+]

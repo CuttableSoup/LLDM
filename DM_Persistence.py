@@ -106,6 +106,7 @@ class PersistenceMixin(DMCoreProtocol):
 
         data = {
             "version": 1,
+            "setting": self.setting,
             "scenario_key": self.scenario_key,
             "player_name": self.player_name,
             "round_number": self.round_number,
@@ -175,7 +176,8 @@ class PersistenceMixin(DMCoreProtocol):
         self.player_name = data.get("player_name", self.player_name)
         self.round_number = data.get("round_number", 0)
         self.scenario_key = data.get("scenario_key", self.scenario_key)
-        self.load_rules(os.path.join("Rules", "Fantasy"))
+        self.setting = data.get("setting", self.setting)
+        self.load_rules(os.path.join("Rules", self.setting))
         self.load_scenario_definition(self.scenario_key)
         self.load_scenario(skip_llm_generation=True)
 
