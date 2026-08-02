@@ -1,3 +1,5 @@
+import re
+
 from DM_Types import DMCoreProtocol
 
 
@@ -275,3 +277,110 @@ class MovementMixin(DMCoreProtocol):
             return True
         max_range = ability.get("range", 0)
         return self.get_distance_between(attacker_name, defender_name) <= max_range
+
+    def _find_room_exit(self, room, direction):
+        """!
+        @brief Finds the current room's own declared [[room.exit]] usable right now for the
+            given direction -- "usable" meaning both the direction matches *and* the player
+            is currently standing in the exact band that exit is declared at (DM_Rules.py's
+            room-graph notes). This band gate is what actually enables a branch: a room can
+            declare more than one exit (ex: one "right" at band 2, another "forward" at band
+            3), and which one resolves depends on where the player has actually moved to
+            (via ordinary advance/retreat) within the room, not just which word they said.
+        @param room The current room's own table, or None (a plain, non-room scenario).
+        @param direction "forward"/"back"/"left"/"right" (see NLP_Core.py's DIRECTION_PHRASES).
+        @return (exit_table, None) if a usable match was found; (None, "no_exit") if the
+                room has no exit at all in that direction; (None, "wrong_band") if it does,
+                but not from the player's current band.
+        """
+        if not room:
+            return None, "no_exit"
+        matching_direction = [e for e in room.get("exit", []) if e.get("direction") == direction]
+        if not matching_direction:
+            return None, "no_exit"
+        player_band = self.get_band(self.player_name)
+        for exit_def in matching_direction:
+            if exit_def.get("band") == player_band:
+                return exit_def, None
+        return None, "wrong_band"
+
+    def _resolve_room_transition_intent(self, direction, resolved):
+        """!
+        @brief Handles "move" -- taking a declared exit to a different room of the current
+            multi-room dungeon (see DM_Rules.py's "Scenario instancing"/room-graph notes and
+            _find_room_exit). Denied (reason "no_exit") if the current room has no exit at
+            all in that direction -- including every plain, single-room scenario (arena/
+            tavern/field/dungeon), which has no rooms/exits to speak of and so always fails
+            this check, same as a "close" aimed at a creature fails "not_openable"; denied
+            (reason "wrong_band") if that direction exists in this room but not from the
+            player's current band; denied (reason "blocked_by_enemies") if any living
+            hostile creature remains in the current room -- a dungeon-crawl convention: a
+            room is cleared before moving past it, not slipped around while something is
+            still actively fighting the player.
+        @param direction "forward"/"back"/"left"/"right", from NLPCore's direction match.
+        @param resolved The item_interaction_resolved publisher closure from
+            DMCore._on_item_interaction_detected.
+        """
+        exit_def, reason = self._find_room_exit(self._current_room(), direction)
+        if exit_def is None:
+            resolved(False, reason=reason)
+            return
+
+        for entity_name in self.scenario_entities:
+            if entity_name == self.player_name:
+                continue
+            if self.is_hostile(entity_name, self.player_name) and self.get_current_hp(entity_name) > 0:
+                resolved(False, reason="blocked_by_enemies")
+                return
+
+        self.enter_room(exit_def["destination"], exit_def.get("arrival_band", 1))
+        new_room = self._current_room()
+        resolved(
+            True,
+            room_name=new_room.get("name", "") if new_room else "",
+            room_description=new_room.get("description", "") if new_room else "",
+            characters=self._describe_scenario_characters(),
+        )
+
+    def _resolve_formation_intent(self, intent, input_text, resolved):
+        """!
+        @brief Handles "formation_behind"/"formation_abreast" -- a player-issued party
+            positioning command (ex: "stay behind me, anne"), covering CLAUDE.md's "Party
+            formation" own noted gap: follow_offset already lived on the entity instance for
+            exactly this, nothing previously wrote to it in play. Which party member(s) get
+            addressed is resolved by a plain, whole-word, case-insensitive search of the raw
+            input for any currently-in-scene party member's own name (NLPCore never parses
+            this out itself -- unlike map_to_item/map_to_target's embedding matches, a party
+            member's own name either is or isn't literally said, so there's no ambiguity worth
+            spending a semantic match on) -- if none is named, every party member currently
+            present is addressed instead, so a bare "stay behind me" still does something
+            sensible. The new follow_offset takes effect immediately (_apply_party_formation),
+            not just on the party's next move.
+        @param intent "formation_behind" (follow_offset -1, one band back) or
+            "formation_abreast" (follow_offset 0, walks alongside).
+        @param input_text The raw (lowercased, prefix-stripped) player input, searched for
+            party member names.
+        @param resolved The item_interaction_resolved publisher closure from
+            DMCore._on_item_interaction_detected.
+        """
+        offset = -1 if intent == "formation_behind" else 0
+        stance = "behind" if intent == "formation_behind" else "abreast"
+
+        party_present = [
+            name for name in self.scenario_entities
+            if name != self.player_name and self.entities.get(name, {}).get("is_party")
+        ]
+        named = [
+            name for name in party_present
+            if re.search(rf"\b{re.escape(name.lower())}\b", input_text or "")
+        ]
+        addressed = named or party_present
+
+        if not addressed:
+            resolved(False, reason="no_party")
+            return
+
+        for name in addressed:
+            self.entities[name]["follow_offset"] = offset
+        self._apply_party_formation()
+        resolved(True, members=addressed, stance=stance)
