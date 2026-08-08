@@ -31,26 +31,29 @@ event it's currently handling doesn't have that callback also invoked within the
 `GUICore` in that order at startup, but **not** `DMCore` — see "Booting the game" below for
 when and how it's actually constructed.
 
-- **`DM_Core.py`** — `DMCore`'s `__init__` plus its two event handlers
-  (`_on_action_detected`, `_on_item_interaction_detected`) and their direct helpers: the
-  orchestration that spans every domain mixin. The class itself is composed from sibling
-  mixin files, each owning one concern: `DM_Rules.py` (TOML/scenario/room loading),
-  `DM_Combat.py` (dice rolling, opposed checks, damage, ability/behavior resolution),
-  `DM_Status.py` (statuses/conditions, entity tests), `DM_Inventory.py`
-  (currency/item transfer), `DM_Social.py` (attitudes, character description),
-  `DM_Movement.py` (bands, range), `DM_Persistence.py` (save/load), and
-  `DM_CharacterCreation.py` (baking a finished character-creation result onto the player
-  entity — see "Character creation" below). Python's MRO flattens every mixin method onto
+- **`DM_Core.py`** — `DMCore`'s `__init__` plus its three event handlers
+  (`_on_action_detected`, `_on_item_interaction_detected`, `_on_dialogue_detected`) and their
+  direct helpers: the orchestration that spans every domain mixin. The class itself is
+  composed from sibling mixin files, each owning one concern: `DM_Rules.py` (TOML/scenario/room
+  loading), `DM_Combat.py` (dice rolling, opposed checks, damage, ability/behavior resolution),
+  `DM_Status.py` (statuses/conditions, entity tests), `DM_Inventory.py` (currency/item transfer,
+  plus the equip/unequip/drop/use/container item-interaction intents), `DM_Social.py`
+  (attitudes, character description), `DM_Movement.py` (bands, range, plus the room-transition/
+  formation item-interaction intents), `DM_Persistence.py` (save/load), `DM_CharacterCreation.py`
+  (baking a finished character-creation result onto the player entity — see "Character
+  creation" below), and `DM_Dialogue.py` (resolving who's being directly addressed in
+  free-form conversation — see "Dialogue" below). Python's MRO flattens every mixin method onto
   one `DMCore` instance, so `dm_core.<method>(...)` call sites don't care which file defines
   a given method.
 - **`NLP_Core.py`** — `sentence-transformers` (`all-MiniLM-L6-v2`) embeds each skill's
   name/description/keywords as separate phrases, then cosine-matches player input against all
   of them. Also matches free text against item names/directions/save-load prefixes for
-  non-skill intents (see "Items and movement as intents" below), checked before skill
+  non-skill intents (see "Items and movement as intents" below) and against `DIALOGUE_KEYWORDS`
+  for free-form conversational address (see "Dialogue" below), both checked before skill
   matching. Publishes `action_detected {skill, score, input, target?}` only when the score
   clears `confidence_threshold` (`0.5`); below it, publishes `action_not_understood` instead.
 - **`LLM_Core.py`** — posts to LM Studio's OpenAI-compatible `/v1/chat/completions` on a
-  background thread, with a rolling 100-message context window. Subscribes to six narration
+  background thread, with a rolling 100-message context window. Subscribes to seven narration
   triggers (see "Narration" below).
 - **`GUI_Core.py`** — Tkinter window: history pane + tabbed Party/Notes/Map/Debug panels, plus
   three dropdown menus on the window's menu bar: Character (Create... only), File (Save.../
@@ -630,10 +633,64 @@ also attaches a fresh `result["defender_details"]` per action.
 `self.player_name` is resolved once in `__init__` via `_resolve_player_name()`, which scans
 loaded templates for the one with `is_player = true` and raises `ValueError` if none is marked.
 
+## Dialogue
+
+Directly addressing someone (`"talk to the innkeeper"`, `"ask the guard about the road"`) is a
+third diceless channel, alongside skill/dice actions and item/scene intents — genuinely
+distinct from both, not a fourteenth item-interaction intent: there's no item involved, the
+addressee is resolved from the scene itself rather than looked up, and the result is a
+generated in-character reply rather than a structured mechanical outcome. It's also distinct
+from a *skill-based* social check (persuade/intimidate/deceive) — those still roll dice through
+`resolve_opposed_action` and narrate in third person as the omniscient Game Master exactly as
+before; free-form talking never rolls anything and always speaks as the addressed entity
+instead. `NLPCore._detect_dialogue_intent` recognizes `DIALOGUE_KEYWORDS` phrases (`"talk
+to"`/`"speak to"`/`"speak with"`/`"ask"`/`"tell"`/`"say to"`/`"greet"`/`"chat with"`), checked
+after item-interaction detection has already had its shot (so a genuine item verb naming an
+entity, ex: `"give the sword to Anne"`, is never swallowed as dialogue) and before skill
+matching, publishing `dialogue_detected {input, score}` with no further resolution — unlike
+item intents there's no name to look up here, since NLPCore has no visibility into who's
+actually in the current scene.
+
+`DMCore._on_dialogue_detected` is thin, delegating to `DM_Dialogue.py`'s `DialogueMixin`:
+`_resolve_dialogue_target` searches the raw input for any currently-present entity's own name
+(a literal, whole-word match against `self.scenario_entities`, excluding the player — the same
+"DMCore, not NLPCore, decides who's named" approach `_resolve_formation_intent` already uses
+for party positioning, just generalized to every entity, not only party members), falling back
+to `_get_target_name()`'s own default scene target if none is named. `_resolve_dialogue` then
+gates on the resolved target actually being present/alive/noticed (`reason: "not_present"`) and
+not an inanimate `"object"` supertype (`reason: "cant_talk"`) — but deliberately **not** on
+hostility: unlike combat targeting, addressing a hostile entity is allowed (shouting a question
+mid-fight, taunting), and whatever the model produces is free to read as hostile/dismissive in
+character rather than being denied outright. A found target's `persona`/`attitude`
+(`describe_character`/`describe_attitude`, `DM_Social.py`) are attached for `LLMCore` to speak
+from. Publishes `dialogue_resolved {target, input, found, present_entities, persona?,
+attitude?, reason?}` — no `_publish_party_status()` call, since dialogue never changes HP/
+equipment/inventory/conditions.
+
+**Room-level presence.** Every DM-published narration-triggering event (`scenario_loaded`,
+`action_resolved`/`round_resolved`, `item_interaction_resolved`, `dialogue_resolved`) now
+carries `present_entities`: a snapshot of `self.scenario_entities` at publish time — who was
+actually in the current room to witness it. `LLMCore` tags each `context_window` entry it
+appends with this same snapshot (`"present"`, see `_queue_narration`'s own param) and
+`generate_npc_dialogue` uses `_filter_present_history(target)` to ground a specific NPC's own
+reply only in what that NPC has actually witnessed, rather than the DM's own always-full,
+omniscient window (which stays untouched — the player's own point of view is deliberately still
+everything, not scoped down). An entity instanced mid-dungeon, or left behind in a previous
+room of a multi-room scenario, simply has no access to entries tagged before/without it — no
+special-casing needed, since `present_entities` is already just whichever room-scoped list
+`_populate_room` was already maintaining. An untagged entry (`action_not_understood`/
+`game_load_failed` — neither ever goes through `DMCore`, so there's no `scenario_entities` to
+tag them with) is excluded from every per-entity view rather than assumed witnessed. The
+exchange itself (the player's question, the NPC's own reply) is still appended to the *shared*
+`context_window`, tagged the same way any other narration is — so it becomes part of what
+everyone in the room, including the omniscient narrator and any other NPC present, has now
+witnessed, which is what lets a second NPC in the same room later recall what was just said to
+the first one.
+
 ## Narration
 
 `LLMCore` subscribes to narration-relevant events, sharing outcome-text building
-(`_describe_outcome`) and background-fetch plumbing (`_queue_narration`):
+(`_describe_outcome`) and background-fetch plumbing (`_queue_narration`/`_fetch_and_publish`):
 - `scenario_loaded` → `generate_scene_intro` — once, from `DMCore.__init__`.
 - `round_resolved` → `generate_round_response` — combat, once per round.
 - `action_resolved` → `generate_response` — non-combat, once per skill use.
@@ -641,15 +698,21 @@ loaded templates for the one with `is_player = true` and raises `ValueError` if 
   didn't resolve to any action.
 - `item_interaction_resolved` → `generate_item_interaction_response` — covers examine/take/
   give/trade/open/close/use/equip/unequip/drop and room transitions.
+- `dialogue_resolved` → `generate_npc_dialogue` — a found target routes through
+  `_queue_dialogue` (see "Dialogue" above); a denied one falls back to an ordinary
+  `_queue_narration` explanation, same shape as any other denied item interaction.
 - `game_load_failed` → `generate_load_failed_response`.
 
 The scenario/room setting and character roster are re-injected into the system message on
 every request, so narration stays grounded even after the intro scrolls out of the rolling
-100-message `context_window`.
+100-message `context_window`. `generate_npc_dialogue`'s own system message (built by
+`_build_dialogue_system_message`) is different in kind, not just content — it speaks as the
+addressed entity, grounded in `persona`/`attitude` plus that entity's own presence-filtered
+history, never the standing GM framing.
 
-Every `_queue_narration` call's background fetch also publishes `llm_debug_updated
-{"query", "response"}` alongside `llm_response_ready` — consumed only by `GUICore`'s Debug
-tab, never stored in `context_window` itself.
+Every `_queue_narration`/`_queue_dialogue` call's background fetch also publishes
+`llm_debug_updated {"query", "response"}` alongside `llm_response_ready` — consumed only by
+`GUICore`'s Debug tab, never stored in `context_window` itself.
 
 ## Saving and loading
 
@@ -771,7 +834,12 @@ Practical constraints when touching this file:
   plus `_capture`/`_capture_any` helpers) and `LLMTestCase`. `TestCharacterCreationRename`
   covers the "player" placeholder and the rename path against
   `Rules/Fantasy/scenarios/character_test.toml` — a minimal scenario built solely for this,
-  kept separate from the real gameplay scenarios.
+  kept separate from the real gameplay scenarios. `TestFreeformDialogue` covers
+  `DialogueMixin`'s own addressee resolution/gating (named vs. default target, hostile-allowed,
+  not-present/object denials); `TestRoomLevelPresenceScoping` wires a real `DMCore` and
+  `LLMCore` together over one event bus (no `NLPCore`) against `crypt.toml`'s room graph to
+  prove `present_entities` tagging/filtering actually scopes a specific NPC's own witnessed
+  history to the room(s) it was present for, not the DM's own omniscient window.
 - **`test_integration.py`** — every test needing a real, running LM Studio, gated on
   `_lm_studio_reachable()` so they skip together when nothing's listening on
   `127.0.0.1:1234`. `_LivePipelineTestCase`'s own optional `character` class attribute is

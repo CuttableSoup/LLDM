@@ -82,6 +82,23 @@ FORMATION_ABREAST_KEYWORDS = (
 # forward/back corridor. Phrasing deliberately spells out "room"/"door"/"deeper"/"way" so this
 # can't be confused with plain intra-room advance/retreat, which say nothing about leaving the
 # room at all.
+# Free-form conversational address -- bypasses the skill/dice system entirely, the same as
+# every item/movement intent above (see DM_Core.py's "Items and movement as intents"), but
+# checked only after item-interaction detection has already had its shot, so a genuine item
+# verb never gets swallowed as dialogue just because it happens to also name an entity (ex:
+# "give the sword to Anne" stays "give", never reaches this check at all). Phrases, not bare
+# words, for the same collision-avoidance reason every other keyword tuple in this file
+# follows -- "talk to "/"speak to "/"speak with " avoid colliding with the languages skill's
+# own "speak" keyword and the persuasion-family skill's own "talk" keyword (skills.toml) the
+# same way EXAMINE_KEYWORDS avoids a bare "close ". Unlike item intents, there's no item name
+# (or, really, any name) resolved here at all -- DMCore's own DialogueMixin (DM_Dialogue.py)
+# is what figures out *who* is being addressed, the same "search the raw input for a
+# currently-present entity's own name" approach DM_Movement.py's formation handling already
+# uses, rather than a second global embedding catalog.
+DIALOGUE_KEYWORDS = (
+    "talk to ", "speak to ", "speak with ", "ask ", "tell ", "say to ", "greet ", "chat with ",
+)
+
 DIRECTION_PHRASES = {
     "forward": (
         "next room", "proceed deeper", "continue deeper", "go deeper", "through the door",
@@ -198,6 +215,10 @@ class NLPCore:
             # fall through to skill matching below rather than silently dropping it (ex: could
             # still be a legitimate skill phrase that happens to contain one of these words).
 
+        if self._detect_dialogue_intent(processed):
+            self.event_bus.publish("dialogue_detected", {"input": processed, "score": None})
+            return
+
         skill, score = self.map_to_action(processed)
         if skill:
             payload = {"skill": skill, "score": score, "input": processed}
@@ -260,6 +281,21 @@ class NLPCore:
         if any(keyword in processed_text for keyword in RETREAT_KEYWORDS):
             return "retreat"
         return None
+
+    def _detect_dialogue_intent(self, processed_text):
+        """!
+        @brief Checks processed input for conversational-address phrasing, checked last among
+            the pre-skill-matching intents -- after direction and item-interaction detection
+            have both already had their shot -- so a genuine movement phrase or item verb
+            always wins over a coincidental dialogue-keyword substring. Unlike
+            _detect_item_intent, there's no further NLPCore-side resolution to do (no item to
+            look up) -- this is purely a yes/no "does this look like the player talking to
+            someone" call; DMCore's DialogueMixin (DM_Dialogue.py) resolves who's actually
+            being addressed once this fires.
+        @param processed_text The cleaned and processed player input.
+        @return True if processed_text contains any DIALOGUE_KEYWORDS phrase, else False.
+        """
+        return any(keyword in processed_text for keyword in DIALOGUE_KEYWORDS)
 
     def _detect_direction(self, processed_text):
         """!

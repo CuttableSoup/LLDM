@@ -245,6 +245,29 @@ class TestNlpConfidenceThreshold(unittest.TestCase):
         self.assertIsNone(self.nlp_core._detect_item_intent("attack with my sword"))
 
 
+    def test_detect_dialogue_intent_vs_item_and_skill_phrasing(self):
+        self.assertTrue(self.nlp_core._detect_dialogue_intent("talk to the innkeeper"))
+        self.assertTrue(self.nlp_core._detect_dialogue_intent("ask the guard about the road"))
+        self.assertFalse(self.nlp_core._detect_dialogue_intent("take the gold"))
+        self.assertFalse(self.nlp_core._detect_dialogue_intent("attack with my sword"))
+
+    def test_dialogue_phrase_publishes_dialogue_detected_not_action_detected(self):
+        # Full pipeline: a real "talk to" phrase should never reach map_to_action at all --
+        # item-interaction detection is checked first and finds nothing here, so this is what
+        # actually proves dialogue detection is wired into _on_user_input, not just callable
+        # in isolation.
+        dialogue_events = []
+        action_events = []
+        self.event_bus.subscribe("dialogue_detected", dialogue_events.append)
+        self.event_bus.subscribe("action_detected", action_events.append)
+
+        self.event_bus.publish("user_input_submitted", "I want to talk to the wolf")
+
+        self.assertEqual(len(dialogue_events), 1)
+        self.assertEqual(action_events, [])
+        self.assertIn("wolf", dialogue_events[0]["input"])
+
+
     def test_detect_save_load_intent_parses_slot_names(self):
         self.assertEqual(self.nlp_core._detect_save_load_intent("save as arena run 1"), ("save", "arena run 1"))
         self.assertEqual(
@@ -280,6 +303,64 @@ class TestClarificationResponse(LLMTestCase):
         }
         description = self.llm_core._describe_outcome(result)
         self.assertIn("20 currency", description)
+
+
+class TestFreeformDialogueNarration(LLMTestCase):
+    """!
+    @brief LLMCore's own side of DM_Dialogue.py's channel: generate_npc_dialogue, and the
+        presence-tagging/filtering machinery every _queue_narration/_queue_dialogue call now
+        threads through (see _filter_present_history). Exercised directly against
+        "dialogue_resolved" payloads -- no DMCore involved -- the same "prompt shape, not the
+        LLM's actual reply" scope TestClarificationResponse already keeps to.
+    """
+
+    def test_found_dialogue_queues_a_first_person_prompt_via_the_dialogue_path(self):
+        self.event_bus.publish("dialogue_resolved", {
+            "target": "innkeeper", "input": "have you heard anything from the road",
+            "found": True, "persona": "innkeeper - A weary tavern keeper.",
+            "attitude": "Attitude toward gladstone: is warm and well-disposed toward them.",
+            "present_entities": ["gladstone", "innkeeper"],
+        })
+
+        entry = self.llm_core.context_window[-1]
+        self.assertIn("have you heard anything from the road", entry["content"])
+        self.assertEqual(entry["present"], ["gladstone", "innkeeper"])
+
+    def test_not_found_dialogue_falls_back_to_ordinary_gm_narration(self):
+        self.event_bus.publish("dialogue_resolved", {
+            "target": None, "input": "hello?", "found": False, "reason": "no_one_here",
+            "present_entities": ["gladstone"],
+        })
+
+        prompt = self.llm_core.context_window[-1]["content"]
+        self.assertIn("no one here to talk to", prompt)
+
+    def test_filter_present_history_excludes_entries_the_entity_never_witnessed(self):
+        self.llm_core.context_window = [
+            {"role": "user", "content": "entrance room narration", "present": ["gladstone", "dart trap"]},
+            {"role": "assistant", "content": "...", "present": ["gladstone", "dart trap"]},
+            {"role": "user", "content": "hall of webs narration", "present": ["gladstone", "giant spider"]},
+        ]
+
+        spider_history = self.llm_core._filter_present_history("giant spider")
+        trap_history = self.llm_core._filter_present_history("dart trap")
+
+        self.assertEqual([e["content"] for e in spider_history], ["hall of webs narration"])
+        self.assertEqual(
+            [e["content"] for e in trap_history], ["entrance room narration", "..."],
+        )
+
+    def test_untagged_entries_are_excluded_from_every_filtered_view(self):
+        # A clarification/load-failed prompt (no DMCore scenario_entities to tag it with --
+        # see _queue_narration's own present_entities docstring) must never leak into a
+        # specific NPC's own witnessed history just because it's untagged.
+        self.llm_core.context_window = [{"role": "user", "content": "no one understood that"}]
+
+        self.assertEqual(self.llm_core._filter_present_history("innkeeper"), [])
+
+    def test_api_messages_strips_the_present_bookkeeping_tag(self):
+        entries = [{"role": "user", "content": "hi", "present": ["gladstone"]}]
+        self.assertEqual(self.llm_core._api_messages(entries), [{"role": "user", "content": "hi"}])
 
 
 class TestOpposedResolution(DMTestCase):
@@ -1564,6 +1645,76 @@ class TestNpcDialogue(DMTestCase):
         self.assertEqual(self.round_events[0]["round"], 1)
 
 
+class TestFreeformDialogue(DMTestCase):
+    """!
+    @brief DM_Dialogue.py's DialogueMixin -- the new diceless "directly address someone"
+        channel, distinct from TestNpcDialogue above (which is the pre-existing, still-valid
+        charisma skill check path). scenario "tavern" puts the player with a friendly NPC
+        (npcs.toml's innkeeper), same fixture TestNpcDialogue itself uses.
+    """
+    scenario_name = "tavern"
+
+    def setUp(self):
+        super().setUp()
+        self.dialogue_events = self._capture("dialogue_resolved")
+
+    def _talk(self, input_text):
+        self.dm_core._on_dialogue_detected({"input": input_text})
+        return self.dialogue_events[-1]
+
+    def test_named_target_resolves_over_the_default(self):
+        result = self._talk("i ask the innkeeper about the road")
+
+        self.assertTrue(result["found"])
+        self.assertEqual(result["target"], "innkeeper")
+        self.assertIn("innkeeper", result["persona"])
+
+    def test_hostile_target_is_still_addressable(self):
+        # Unlike combat targeting, dialogue never gates on hostility -- addressing something
+        # hostile (ex: shouting at a wolf mid-fight) is allowed. "wolf" is already loaded as a
+        # template (creatures.toml, via load_rules) even though tavern.toml never instances
+        # it -- just needs to be added to the live scene for this one check.
+        self.dm_core.scenario_entities.append("wolf")
+        self.assertTrue(self.dm_core.is_hostile("wolf", self.dm_core.player_name))
+
+        result = self._talk("i talk to the wolf")
+
+        self.assertTrue(result["found"])
+        self.assertEqual(result["target"], "wolf")
+
+    def test_absent_or_dead_target_is_denied(self):
+        dead_result = self._talk("i talk to the innkeeper")
+        self.dm_core.apply_damage("innkeeper", 9999)
+
+        result = self._talk("i talk to the innkeeper")
+
+        self.assertTrue(dead_result["found"])  # sanity: alive, this would have worked before
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "not_present")
+
+    def test_object_entity_cannot_be_addressed(self):
+        self.dm_core.entities["stone idol"] = {"name": "stone idol", "supertype": "object", "hp": 1}
+        self.dm_core.scenario_entities.append("stone idol")
+
+        result = self._talk("i talk to the stone idol")
+
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "cant_talk")
+
+    def test_no_addressee_at_all_is_denied(self):
+        self.dm_core.scenario = {"entities": [{"name": "gladstone", "band": 1}]}
+        self.dm_core.load_scenario()
+
+        result = self._talk("hello? is anyone there")
+
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "no_one_here")
+
+    def test_every_dialogue_resolution_is_tagged_with_current_presence(self):
+        result = self._talk("i talk to the innkeeper")
+        self.assertEqual(set(result["present_entities"]), set(self.dm_core.scenario_entities))
+
+
 class TestAttitudePhrases(DMTestCase):
     def _tier_name(self, value):
         tier = self.dm_core.get_attitude_tier(value)
@@ -1814,6 +1965,53 @@ class TestMultiRoomDungeon(DMTestCase):
         self.assertEqual(self.dm_core.get_current_hp("giant spider"), 0)
         # current_target re-falls-back past the dead spider since nothing else is hostile/alive.
         self.assertNotEqual(self.dm_core.current_target, "giant spider")
+
+
+class TestRoomLevelPresenceScoping(unittest.TestCase):
+    """!
+    @brief The actual payoff of room-level presence tagging: DMCore and LLMCore wired
+        together over one real event bus (crypt.toml, same room graph TestMultiRoomDungeon
+        exercises) -- an entity met only after a room transition has no access to what was
+        narrated before it existed, while a party member who traveled through both rooms
+        does. NLPCore is deliberately left out (dialogue/movement are triggered directly on
+        dm_core, the same way TestMultiRoomDungeon's own _move helper does) -- this is about
+        presence tagging flowing correctly between the two real cores, not NLP matching.
+    """
+
+    def setUp(self):
+        self.event_bus = EventBus()
+        # LLMCore must exist (and be subscribed) before DMCore's own __init__ publishes its
+        # first "scenario_loaded" -- same ordering TestGameBoot already requires for NLPCore's
+        # "rules_loaded" subscription, for the exact same reason.
+        self.llm_core = LLMCore(self.event_bus, rag_source_dir=os.path.join("Rules", "Fantasy"))
+        self.dm_core = DMCore(self.event_bus, scenario_name="crypt")
+
+    def test_dialogue_history_is_scoped_to_who_was_actually_in_the_room(self):
+        # Entrance room: gladstone/thane/anne/dart trap. This narration entry is tagged with
+        # that roster -- "giant spider" was never present for it.
+        entrance_entries = len(self.llm_core.context_window)
+        self.assertGreater(entrance_entries, 0)
+
+        self.dm_core.advance_or_retreat("advance")  # band 1 -> 2, the exit band
+        self.dm_core._on_item_interaction_detected(
+            {"intent": "move", "item_name": None, "direction": "forward", "input": "go forward"}
+        )
+        self.assertEqual(self.dm_core.current_room_key, "hall_of_webs")
+
+        self.dm_core._on_dialogue_detected({"input": "i talk to the giant spider"})
+
+        spider_history = self.llm_core._filter_present_history("giant spider")
+        thane_history = self.llm_core._filter_present_history("thane")
+
+        # The spider only ever witnessed what happened after the room transition -- none of
+        # the entrance room's own narration/dialogue setup entries.
+        self.assertEqual(len(spider_history), len(self.llm_core.context_window) - entrance_entries)
+        for entry in spider_history:
+            self.assertNotIn("dart trap", entry.get("present") or [])
+
+        # thane persisted across both rooms (crypt.toml's own [scenario].entities), so his own
+        # witnessed history spans the entrance narration *and* everything since.
+        self.assertEqual(len(thane_history), len(self.llm_core.context_window))
 
 
 class TestMultiRoomSaveLoad(DMTestCase):

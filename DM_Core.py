@@ -3,6 +3,7 @@ import re
 
 from DM_CharacterCreation import CharacterCreationMixin
 from DM_Combat import CombatMixin
+from DM_Dialogue import DialogueMixin
 from DM_Inventory import InventoryMixin
 from DM_Movement import MovementMixin
 from DM_NpcGeneration import NpcGenerationMixin
@@ -11,25 +12,28 @@ from DM_Rules import RulesMixin, scenario_file_path
 from DM_Social import SocialMixin
 from DM_Status import StatusMixin
 
-class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixin, RulesMixin, PersistenceMixin, CharacterCreationMixin, NpcGenerationMixin):
+class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixin, RulesMixin, PersistenceMixin, CharacterCreationMixin, NpcGenerationMixin, DialogueMixin):
     """!
     @brief Main class handling the core mechanics of the RPG system. The implementation is
         composed from domain mixins in sibling files -- DM_Rules.py (rules/scenario
         loading), DM_Combat.py (dice/damage/ability resolution), DM_Status.py (the
         status/condition system and entity tests), DM_Inventory.py (currency/item
-        transfer), DM_Social.py (attitudes and character description), DM_Movement.py
-        (distance tracking, advance/retreat, range-based difficulty), DM_Persistence.py
-        (save/load), DM_CharacterCreation.py (baking a finished character-creation
-        result -- race + point-buy skill allocation, see Character_Creation.py's own
-        module docstring -- onto the player entity), and DM_NpcGeneration.py (turning a
-        generate=true template into a real stat block at instancing time, see
-        NPC_Generation.py's own module docstring) -- so that every dm_core.<method>(...)
-        call site throughout the codebase and test_all.py keeps working unchanged
-        regardless of which file actually defines a given method (Python's MRO flattens
-        every mixin method onto this one class). DM_Core.py itself is reduced to __init__
-        (boot wiring) plus the two real event handlers, _on_action_detected and
-        _on_item_interaction_detected, and their direct helpers -- the pieces that
-        orchestrate calls across every mixin and don't belong to any single domain.
+        transfer, plus the equip/drop/use/container item-interaction intents), DM_Social.py
+        (attitudes and character description), DM_Movement.py (distance tracking,
+        advance/retreat, range-based difficulty, plus the room-transition/formation
+        item-interaction intents), DM_Persistence.py (save/load), DM_CharacterCreation.py
+        (baking a finished character-creation result -- race + point-buy skill allocation,
+        see Character_Creation.py's own module docstring -- onto the player entity),
+        DM_NpcGeneration.py (turning a generate=true template into a real stat block at
+        instancing time, see NPC_Generation.py's own module docstring), and DM_Dialogue.py
+        (resolving who's being directly addressed in free-form conversation) -- so that
+        every dm_core.<method>(...) call site throughout the codebase and test_all.py keeps
+        working unchanged regardless of which file actually defines a given method (Python's
+        MRO flattens every mixin method onto this one class). DM_Core.py itself is reduced
+        to __init__ (boot wiring) plus the three real event handlers, _on_action_detected,
+        _on_item_interaction_detected, and _on_dialogue_detected, and their direct helpers --
+        the pieces that orchestrate calls across every mixin and don't belong to any single
+        domain.
     """
 
     def __init__(self, event_bus, scenario_name="arena", character=None, setting="Fantasy"):
@@ -113,9 +117,17 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             "name": self._current_scene_name(),
             "description": self._current_scene_description(),
             "characters": self._describe_scenario_characters(),
+            # Room-level presence snapshot (see DM_Dialogue.py's own module docstring and
+            # LLMCore._filter_present_history) -- who was actually here to witness this
+            # narration, tagged onto every DM-published narration-triggering event the same
+            # way (see _on_action_detected/_on_item_interaction_detected/_on_dialogue_detected
+            # below), so a later per-entity dialogue query can tell what a given NPC has
+            # actually seen apart from the DM's own always-omniscient narration.
+            "present_entities": list(self.scenario_entities),
         })
         self.event_bus.subscribe("action_detected", self._on_action_detected)
         self.event_bus.subscribe("item_interaction_detected", self._on_item_interaction_detected)
+        self.event_bus.subscribe("dialogue_detected", self._on_dialogue_detected)
         self.event_bus.subscribe("save_requested", self._on_save_requested)
         self.event_bus.subscribe("load_requested", self._on_load_requested)
 
@@ -149,6 +161,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         explicit_target = data.get("target")
         item_result = self._try_item_test_action(explicit_target, skill_name, data.get("input"))
         if item_result is not None:
+            item_result["present_entities"] = list(self.scenario_entities)
             self.event_bus.publish("action_resolved", item_result)
             self._publish_party_status()
             return
@@ -160,6 +173,9 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         self._apply_damage_if_hit(result, skill_name, named_ability, ability, target_name, via_test)
         self._attach_defender_details(result, target_name)
         result["input"] = data.get("input")
+        # Room-level presence snapshot -- see scenario_loaded's own publish for why every
+        # DM-published narration-triggering event carries one.
+        result["present_entities"] = list(self.scenario_entities)
 
         if target_name is not None and self.is_hostile(target_name, self.player_name):
             self._resolve_combat_round(result)
@@ -463,7 +479,15 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
 
         def resolved(found, **extra):
             self.event_bus.publish("item_interaction_resolved", {
-                "intent": intent, "item_name": item_name, "input": input_text, "found": found, **extra,
+                "intent": intent, "item_name": item_name, "input": input_text, "found": found,
+                # Room-level presence snapshot -- see scenario_loaded's own publish for why
+                # every DM-published narration-triggering event carries one. Read fresh here
+                # (not captured at the top of this handler) since a "move" intent's own
+                # enter_room call already changed self.scenario_entities to the *new* room's
+                # roster by the time this fires -- correct, since this narration is witnessed
+                # by whoever's present now, not whoever was present when the input arrived.
+                "present_entities": list(self.scenario_entities),
+                **extra,
             })
             self._publish_party_status()
 
@@ -586,6 +610,27 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         else:
             self.transfer_item(source_name, destination_name, item_name)
             resolved(True, container=target_name)
+
+    def _on_dialogue_detected(self, data):
+        """!
+        @brief Event handler for a free-text dialogue match (see NLPCore.DIALOGUE_KEYWORDS/
+            _detect_dialogue_intent): the player directly addressing someone, as opposed to a
+            skill-based social check (persuade/intimidate/deceive, still resolved the ordinary
+            dice way through _on_action_detected) or any of the item/scene intents
+            _on_item_interaction_detected covers. Bypasses the skill/dice system entirely, the
+            same as every intent above -- there's nothing to roll for simply talking. Thin by
+            design (see this class's own docstring): the actual addressee resolution and
+            gating live in DialogueMixin._resolve_dialogue (DM_Dialogue.py); this handler only
+            threads the raw input through and tags the result with who's currently present,
+            the same "present_entities" snapshot every other narration-triggering event
+            carries (see scenario_loaded's own publish for why).
+        @param data The dialogue_detected payload from NLPCore ({input, score}).
+        """
+        input_text = data.get("input")
+        result = self._resolve_dialogue(input_text)
+        result["input"] = input_text
+        result["present_entities"] = list(self.scenario_entities)
+        self.event_bus.publish("dialogue_resolved", result)
 
     def _resolve_item_test_target(self, target_name, skill_name):
         """!

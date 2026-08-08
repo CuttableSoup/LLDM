@@ -36,6 +36,7 @@ class LLMCore:
         self.event_bus.subscribe("action_resolved", self.generate_response)
         self.event_bus.subscribe("action_not_understood", self.generate_clarification_response)
         self.event_bus.subscribe("item_interaction_resolved", self.generate_item_interaction_response)
+        self.event_bus.subscribe("dialogue_resolved", self.generate_npc_dialogue)
         self.event_bus.subscribe("save_requested", self._on_save_requested)
         self.event_bus.subscribe("load_requested", self._on_load_requested)
         self.event_bus.subscribe("game_load_failed", self.generate_load_failed_response)
@@ -185,7 +186,10 @@ class LLMCore:
         )
         # No player input exists yet for this one -- the scenario's own name/description is
         # already a clean, undiluted query (see _queue_narration's rag_query docstring).
-        self._queue_narration(prompt, rag_query=f"{self.scenario_name} {self.scenario_description}")
+        self._queue_narration(
+            prompt, rag_query=f"{self.scenario_name} {self.scenario_description}",
+            present_entities=scenario_data.get("present_entities"),
+        )
 
     def generate_round_response(self, action_result):
         """!
@@ -207,7 +211,10 @@ class LLMCore:
             f"Narrate the end of this combat round in 2-3 sentences as the Game Master, "
             f"covering both allies and enemies who acted."
         )
-        self._queue_narration(prompt, rag_query=action_result.get("input"))
+        self._queue_narration(
+            prompt, rag_query=action_result.get("input"),
+            present_entities=action_result.get("present_entities"),
+        )
 
     def generate_response(self, action_result):
         """!
@@ -220,7 +227,10 @@ class LLMCore:
             f"{self._describe_outcome(action_result)}\n"
             f"Narrate the outcome in 2-3 sentences as the Game Master."
         )
-        self._queue_narration(prompt, rag_query=action_result.get("input"))
+        self._queue_narration(
+            prompt, rag_query=action_result.get("input"),
+            present_entities=action_result.get("present_entities"),
+        )
 
     def generate_clarification_response(self, data):
         """!
@@ -458,7 +468,48 @@ class LLMCore:
                 f"The player takes \"{item_name}\" and adds it to their own inventory.\n"
                 f"Narrate this in 1-2 sentences as the Game Master."
             )
-        self._queue_narration(prompt, rag_query=data.get("input"))
+        self._queue_narration(
+            prompt, rag_query=data.get("input"), present_entities=data.get("present_entities"),
+        )
+
+    def generate_npc_dialogue(self, data):
+        """!
+        @brief Narrates a direct, in-character reply from whoever the player addressed (see
+            DM_Dialogue.py's DialogueMixin/NLP_Core.py's DIALOGUE_KEYWORDS) -- unlike every
+            other narration trigger here, which speaks as the omniscient third-person Game
+            Master, this one has the model answer *as* the named entity, first person,
+            grounded only in what that entity has actually witnessed (see
+            _filter_present_history) rather than the DM's own always-full context_window.
+            Addressing a hostile entity is allowed (see DialogueMixin._resolve_dialogue) --
+            whatever the model produces is free to read as hostile/dismissive in character,
+            but the attempt itself is never denied for it.
+        @param data The "dialogue_resolved" payload ({target, input, found, present_entities,
+            persona?, attitude?, reason?}).
+        """
+        target = data.get("target")
+        self.event_bus.publish("log_info", f"Generating NPC dialogue response ({target}).")
+
+        if not data.get("found"):
+            reason_text = {
+                "no_one_here": "there's no one here to talk to",
+                "not_present": f"{target or 'that'} isn't here to respond",
+                "cant_talk": f"{target or 'that'} isn't something that can hold a conversation",
+            }.get(data.get("reason"), "there's no one who can answer that right now")
+            prompt = (
+                f"The player tries to say something (input: \"{data.get('input', '')}\"), but "
+                f"{reason_text} -- no reply is possible.\n"
+                f"Narrate a brief, in-character explanation in 1-2 sentences as the Game Master."
+            )
+            self._queue_narration(
+                prompt, rag_query=data.get("input"), present_entities=data.get("present_entities"),
+            )
+            return
+
+        prompt = f"The player says: \"{data.get('input', '')}\""
+        self._queue_dialogue(
+            target, data.get("persona", ""), data.get("attitude", ""), prompt,
+            rag_query=data.get("input"), present_entities=data.get("present_entities"),
+        )
 
     def _build_system_message(self, rag_query):
         """!
@@ -490,7 +541,74 @@ class LLMCore:
             )
         return system_message
 
-    def _queue_narration(self, prompt, rag_query=None):
+    @staticmethod
+    def _api_messages(entries):
+        """!
+        @brief Projects context_window entries down to the bare {"role", "content"} shape the
+            chat-completions API actually expects, stripping the "present" bookkeeping tag
+            (see _queue_narration's own present_entities param) that never leaves this process
+            -- it's local presence metadata for _filter_present_history, not something LM
+            Studio has any use for.
+        @param entries A list of context_window-shaped entries.
+        @return The same entries, each reduced to just role/content.
+        """
+        return [{"role": entry["role"], "content": entry["content"]} for entry in entries]
+
+    def _filter_present_history(self, entity_name):
+        """!
+        @brief The subset of context_window entity_name was actually present for -- room-level
+            presence (see _queue_narration's present_entities param), not the DM's own always-
+            full context_window. An entry with no "present" tag at all (ex:
+            generate_clarification_response/generate_load_failed_response, neither of which
+            DMCore is involved in producing, so there's no scenario_entities to tag them with)
+            is excluded rather than assumed witnessed, the same for any entry from before
+            entity_name existed or was ever in the same room as whatever it describes. This is
+            what generate_npc_dialogue grounds a specific NPC's own reply in, instead of the
+            omniscient window every other narration trigger reads from.
+        @param entity_name The entity whose own witnessed history is being built.
+        @return The ordered subset of context_window entries entity_name's own "present" tag
+                includes -- same relative order and the same 100-message ceiling context_window
+                itself already enforces; no separate cap here.
+        """
+        return [entry for entry in self.context_window if entity_name in (entry.get("present") or ())]
+
+    def _fetch_and_publish(self, messages, present_entities):
+        """!
+        @brief The network call + response handling shared by _queue_narration and
+            _queue_dialogue's own background fetch threads -- everything downstream of "here
+            are the messages to send" is identical either way: POST to LM Studio, append the
+            reply to the shared context_window (tagged with present_entities, same as the
+            prompt that prompted it, so it becomes part of what everyone present has now
+            witnessed), and publish llm_response_ready/llm_debug_updated. Must never raise --
+            runs on a background thread with nothing to catch an exception it doesn't handle
+            itself (see this file's own module note on LLM_Client.py's different contract).
+        @param messages The complete [{"role", "content"}, ...] list to send, system message
+            included.
+        @param present_entities The presence tag to attach to the appended assistant turn.
+        """
+        data = {"messages": messages, "temperature": 0.7, "max_tokens": 4096}
+        # Exactly what's about to go over the wire, formatted for a human -- see
+        # display_llm_debug (GUI_Core.py)'s Debug tab, not narration itself.
+        query_text = "\n\n".join(f"[{m['role']}]\n{m['content']}" for m in messages)
+        req = urllib.request.Request(
+            self.api_url,
+            data=json.dumps(data).encode('utf-8'),
+            headers={'Content-Type': 'application/json'}
+        )
+
+        try:
+            response = urllib.request.urlopen(req)
+            result = json.loads(response.read().decode('utf-8'))
+            llm_text = result['choices'][0]['message']['content']
+            self.context_window.append({"role": "assistant", "content": llm_text, "present": present_entities})
+            self.event_bus.publish("llm_response_ready", llm_text)
+            self.event_bus.publish("llm_debug_updated", {"query": query_text, "response": llm_text})
+        except Exception as e:
+            self.event_bus.publish("log_error", f"LLM connection failed: {e}")
+            self.event_bus.publish("llm_response_ready", "System: Could not connect to the local LLM.")
+            self.event_bus.publish("llm_debug_updated", {"query": query_text, "response": f"[ERROR] {e}"})
+
+    def _queue_narration(self, prompt, rag_query=None, present_entities=None):
         """!
         @brief Appends a narration prompt to the rolling context window and fetches the LLM's response in the background.
         @param prompt The user-role prompt describing what just happened.
@@ -503,8 +621,14 @@ class LLMCore:
             threshold -- the exact same dilution problem NLPCore's own map_to_action already
             has to work around (see NLP_Core.py's module notes) -- so the bare player input,
             when available, is a meaningfully better query than the full prompt.
+        @param present_entities Room-level presence snapshot (DMCore's own scenario_entities
+            at publish time) to tag this exchange with -- see _filter_present_history for what
+            consumes it. None (the default) leaves the entry untagged, which excludes it from
+            every per-entity dialogue view -- the events that don't carry this yet (ex:
+            action_not_understood, game_load_failed) are meta/OOC anyway, nothing an NPC
+            should be treated as having "witnessed".
         """
-        self.context_window.append({"role": "user", "content": prompt})
+        self.context_window.append({"role": "user", "content": prompt, "present": present_entities})
 
         if len(self.context_window) > 100:
             self.context_window = self.context_window[-100:]
@@ -512,32 +636,80 @@ class LLMCore:
         system_message = self._build_system_message(rag_query if rag_query else prompt)
 
         def fetch_from_llm():
-            messages = [{"role": "system", "content": system_message}] + self.context_window
-            data = {
-                "messages": messages,
-                "temperature": 0.7,
-                "max_tokens": 4096
-            }
-            # Exactly what's about to go over the wire, formatted for a human -- see
-            # display_llm_debug (GUI_Core.py)'s Debug tab, not narration itself.
-            query_text = "\n\n".join(f"[{m['role']}]\n{m['content']}" for m in messages)
-            req = urllib.request.Request(
-                self.api_url,
-                data=json.dumps(data).encode('utf-8'),
-                headers={'Content-Type': 'application/json'}
-            )
+            messages = [{"role": "system", "content": system_message}] + self._api_messages(self.context_window)
+            self._fetch_and_publish(messages, present_entities)
 
-            try:
-                response = urllib.request.urlopen(req)
-                result = json.loads(response.read().decode('utf-8'))
-                llm_text = result['choices'][0]['message']['content']
-                self.context_window.append({"role": "assistant", "content": llm_text})
-                self.event_bus.publish("llm_response_ready", llm_text)
-                self.event_bus.publish("llm_debug_updated", {"query": query_text, "response": llm_text})
-            except Exception as e:
-                self.event_bus.publish("log_error", f"LLM connection failed: {e}")
-                self.event_bus.publish("llm_response_ready", "System: Could not connect to the local LLM.")
-                self.event_bus.publish("llm_debug_updated", {"query": query_text, "response": f"[ERROR] {e}"})
+        threading.Thread(target=fetch_from_llm, daemon=True).start()
+
+    def _build_dialogue_system_message(self, target, persona, attitude, rag_query):
+        """!
+        @brief The dialogue counterpart to _build_system_message -- speaks as target instead
+            of the omniscient Game Master, grounded only in target's own persona/attitude
+            rather than the standing GM framing/full scenario roster.
+        @param target The entity being addressed, in-character.
+        @param persona describe_character(target)'s own flavor text (DM_Social.py) -- who
+            target is, purely descriptive data (no mechanical stats).
+        @param attitude describe_attitude(target, player)'s own prose -- target's own
+            disposition toward the player, to ground tone (warm, wary, hostile, ...).
+        @param rag_query What to retrieve sourcebook lore against (see perform_rag).
+        @return The complete system message string for this one dialogue request.
+        """
+        system_message = f"You are {target}, a character in an ongoing tabletop scene."
+        if persona:
+            system_message += f" {persona}"
+        if attitude:
+            system_message += f" {attitude}"
+        system_message += (
+            " Reply only as yourself, in first person -- never narrate, never speak as anyone "
+            "else, and never act as the Game Master. A few sentences of spoken dialogue only."
+        )
+
+        rag_context = self.perform_rag(rag_query)
+        if rag_context:
+            system_message += (
+                "\nReference lore from the campaign sourcebook, relevant to this moment "
+                f"(use only what applies; don't contradict it):\n{rag_context}"
+            )
+        return system_message
+
+    def _queue_dialogue(self, target, persona, attitude, prompt, rag_query=None, present_entities=None):
+        """!
+        @brief The dialogue counterpart to _queue_narration -- same rolling-window/background-
+            fetch machinery, except the request sent to the model is built from target's own
+            presence-filtered view of context_window (_filter_present_history), not the full
+            window, under a system message that speaks as target rather than the omniscient
+            Game Master (_build_dialogue_system_message). The exchange itself (the player's
+            question, target's own reply) is still appended to the *shared* context_window,
+            tagged with present_entities the same way any other narration is -- so it becomes
+            part of what everyone in the room (including the omniscient narrator, and any
+            other NPC present) has now witnessed, letting a second NPC in the same room later
+            recall what was just said to the first one.
+        @param target The entity being addressed, in-character.
+        @param persona describe_character(target)'s own flavor text.
+        @param attitude describe_attitude(target, player)'s own prose.
+        @param prompt The user-role prompt: the player's own words.
+        @param rag_query What to retrieve sourcebook lore against -- the player's own raw
+            input, same convention every other narration trigger follows.
+        @param present_entities Room-level presence snapshot to tag this exchange with (see
+            _queue_narration's own param).
+        """
+        self.context_window.append({"role": "user", "content": prompt, "present": present_entities})
+
+        if len(self.context_window) > 100:
+            self.context_window = self.context_window[-100:]
+
+        system_message = self._build_dialogue_system_message(
+            target, persona, attitude, rag_query if rag_query else prompt,
+        )
+
+        def fetch_from_llm():
+            # Read live at fetch time, not captured up front -- same reasoning
+            # _queue_narration's own fetch_from_llm already follows for self.context_window:
+            # another narration/dialogue call could append to the shared window between
+            # queueing and actually fetching.
+            history = self._filter_present_history(target)
+            messages = [{"role": "system", "content": system_message}] + self._api_messages(history)
+            self._fetch_and_publish(messages, present_entities)
 
         threading.Thread(target=fetch_from_llm, daemon=True).start()
 
