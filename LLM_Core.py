@@ -162,6 +162,28 @@ class LLMCore:
             f"- the action {outcome}.{damage_text}{revealed_text}{loot_text}{details_text}"
         )
 
+    def _describe_player_actions(self, action_result):
+        """!
+        @brief Describes every action the player attempted this turn (see
+            DMCore._on_action_detected's own "Multiple actions" docstring) -- one
+            _describe_outcome line per entry in action_result["actions"] (NLPCore always
+            publishes this as a list, even for the ordinary single-action turn -- see
+            NLP_Core.py's ACTION_CLAUSE_PATTERN/_split_action_clauses), preceded by a note
+            naming the shared -1D-per-additional-action penalty whenever there was more than
+            one, so the model's narration reads as one character splitting their attention
+            across several things at once, not N independent, equally-precise attacks.
+        @param action_result The "action_resolved"/"round_resolved" payload.
+        @return The combined description string for every action the player attempted this turn.
+        """
+        actions = action_result.get("actions", [])
+        penalty_text = ""
+        if len(actions) > 1:
+            penalty_text = (
+                f"The player attempts {len(actions)} actions this turn -- each one rolls at "
+                f"-{len(actions) - 1}D for splitting their attention.\n"
+            )
+        return penalty_text + "\n".join(self._describe_outcome(action) for action in actions)
+
     def generate_scene_intro(self, scenario_data):
         """!
         @brief Narrates the opening scene once, when a scenario is loaded, and remembers the
@@ -207,7 +229,7 @@ class LLMCore:
         )
         prompt = (
             f"Combat round {action_result.get('round')}:\n"
-            f"{self._describe_outcome(action_result)}{turns_text}\n"
+            f"{self._describe_player_actions(action_result)}{turns_text}\n"
             f"Narrate the end of this combat round in 2-3 sentences as the Game Master, "
             f"covering both allies and enemies who acted."
         )
@@ -224,7 +246,7 @@ class LLMCore:
         self.event_bus.publish("log_info", "Generating LLM response.")
 
         prompt = (
-            f"{self._describe_outcome(action_result)}\n"
+            f"{self._describe_player_actions(action_result)}\n"
             f"Narrate the outcome in 2-3 sentences as the Game Master."
         )
         self._queue_narration(

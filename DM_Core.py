@@ -133,51 +133,100 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
 
     def _on_action_detected(self, data):
         """!
-        @brief Event handler that resolves a detected player action, opposed by the player's
-            current combat target if one exists, and applies damage if the action hit with
-            an attack ability. Combat (a target present that is hostile toward the player)
-            narrates once per round via "round_resolved"; everything else (no target, or a
-            non-hostile target like a tavern NPC) narrates immediately via "action_resolved".
-            The body below is a thin sequencer over the phase helpers just under it
-            (_resolve_action_skill, _try_item_test_action, _apply_target_redirect,
-            _resolve_roll, _apply_damage_if_hit, _attach_defender_details,
-            _resolve_combat_round) -- each one is independently callable/testable the same
-            way every other dm_core.<method>(...) call site already is.
-        @param data The action_detected payload from NLPCore ({skill, score, input, target?}).
-            "skill" is usually a plain skill name, but may also be a named technique/spell
-            the player owns (ex: "cleave") -- resolve_named_ability/select_ability_skill are
-            what convert that into the skill it's actually rolled with, while keeping the
-            named ability itself to use directly for damage further down. "target", if
-            present, is NLPCore's best-guess entity name match (see map_to_target) -- honored
-            as an item-test target (see _resolve_item_test_target) if it names a reachable,
-            testable item; otherwise as a combat redirect if it names a live, hostile,
-            in-scene entity; otherwise the persisted self.current_target is left alone.
+        @brief Event handler that resolves every action the player attempted this turn,
+            opposed by the player's current combat target where one applies, and applies
+            damage for each that hit with an attack ability. Combat (the player's own
+            current_target ends the turn hostile toward the player) narrates once per round
+            via "round_resolved"; everything else narrates immediately via "action_resolved" --
+            exactly once either way, no matter how many actions the player attempted, since
+            _resolve_combat_round is only ever called once, after every one of the player's own
+            actions has already resolved (see "Multiple actions" below).
+
+            **Multiple actions.** NLPCore splits a single input into one or more independent
+            action clauses (see NLP_Core.py's ACTION_CLAUSE_PATTERN/_split_action_clauses) and
+            always publishes a plural "actions" list, even for the overwhelmingly common
+            single-clause case -- so this handler, DM_Combat.py's resolve_action/
+            resolve_opposed_action, and every "action_resolved"/"round_resolved" consumer
+            (LLM_Core.py) are all built around one consistent shape rather than a flat
+            single-action payload for N=1 and a list for N>=2. This is the West End Games D6
+            "multiple actions" rule: a character may attempt as many actions as they want in
+            one turn, but every action beyond the first (movement and speech excepted --
+            neither ever reaches this handler at all, see DM_Movement.py/DM_Dialogue.py) costs
+            every one of that turn's actions a cumulative -1D. dice_penalty below is exactly
+            that: 0 for a single action (unchanged from before this mechanic existed), N-1 for
+            N. Diceless item-test/no-roll outcomes still go through the same loop (so a batch
+            can freely mix "pick the lock" with "attack the orc"), but the *penalty* only ever
+            reduces an actual dice pool -- see resolve_action's own docstring. Diceless
+            item-*interaction* (give/take/equip/...) is a wholly separate event/pipeline
+            (_on_item_interaction_detected) and was never part of this count at all.
+        @param data The action_detected payload from NLPCore ({actions: [{skill, score,
+            target?}, ...], input}). Each entry's "skill" is usually a plain skill name, but
+            may also be a named technique/spell the player owns (ex: "cleave") --
+            resolve_named_ability/select_ability_skill are what convert that into the skill
+            it's actually rolled with, while keeping the named ability itself to use directly
+            for damage further down. Each entry's own "target", if present, is NLPCore's
+            best-guess entity name match for that one clause (see map_to_target) -- honored as
+            an item-test target (see _resolve_item_test_target) if it names a reachable,
+            testable item; otherwise as a combat redirect if it names a live, hostile, in-scene
+            entity; otherwise the persisted self.current_target is left alone.
         """
-        skill_name = data.get("skill")
-        if not skill_name:
+        actions = data.get("actions")
+        if not actions:
             return
-        skill_name, named_ability = self._resolve_action_skill(skill_name)
+        input_text = data.get("input")
+        # Every action attempted this turn beyond the first costs every one of them -1D (see
+        # this method's own "Multiple actions" note) -- 0 for the ordinary single-action turn,
+        # unchanged from every existing call site's behavior before this mechanic existed.
+        dice_penalty = max(0, len(actions) - 1)
 
-        explicit_target = data.get("target")
-        item_result = self._try_item_test_action(explicit_target, skill_name, data.get("input"))
-        if item_result is not None:
-            item_result["present_entities"] = list(self.scenario_entities)
-            self.event_bus.publish("action_resolved", item_result)
-            self._publish_party_status()
+        player_actions = []
+        # Whether any sub-action this turn actually went through target-based resolution, as
+        # opposed to every one of them being an item test (which never engages self.current_
+        # target at all, and must never trigger a round just because that persistent, cross-
+        # turn field happens to already be hostile from some earlier turn -- ex: identifying a
+        # potion while a dead-but-still-nominally-current wolf sits in self.current_target).
+        engaged_combat_target = False
+        for entry in actions:
+            skill_name = entry.get("skill")
+            if not skill_name:
+                continue
+            skill_name, named_ability = self._resolve_action_skill(skill_name)
+
+            explicit_target = entry.get("target")
+            item_result = self._try_item_test_action(explicit_target, skill_name, input_text, dice_penalty)
+            if item_result is not None:
+                player_actions.append(item_result)
+                continue
+
+            self._apply_target_redirect(explicit_target)
+            target_name = self.current_target
+            engaged_combat_target = True
+
+            result, ability, via_test = self._resolve_roll(skill_name, named_ability, target_name, dice_penalty)
+            self._apply_damage_if_hit(result, skill_name, named_ability, ability, target_name, via_test)
+            self._attach_defender_details(result, target_name)
+            player_actions.append(result)
+
+        if not player_actions:
             return
 
-        self._apply_target_redirect(explicit_target)
-        target_name = self.current_target
+        result = {
+            "actions": player_actions,
+            "input": input_text,
+            # Room-level presence snapshot -- see scenario_loaded's own publish for why every
+            # DM-published narration-triggering event carries one.
+            "present_entities": list(self.scenario_entities),
+        }
 
-        result, ability, via_test = self._resolve_roll(skill_name, named_ability, target_name)
-        self._apply_damage_if_hit(result, skill_name, named_ability, ability, target_name, via_test)
-        self._attach_defender_details(result, target_name)
-        result["input"] = data.get("input")
-        # Room-level presence snapshot -- see scenario_loaded's own publish for why every
-        # DM-published narration-triggering event carries one.
-        result["present_entities"] = list(self.scenario_entities)
-
-        if target_name is not None and self.is_hostile(target_name, self.player_name):
+        # Checked once, after every one of the player's own actions this turn has already
+        # resolved (and any explicit per-action target redirect has already happened) -- not
+        # per action, which is what actually keeps a multi-action turn to exactly one round
+        # (see this method's own "Multiple actions" note).
+        if (
+            engaged_combat_target
+            and self.current_target is not None
+            and self.is_hostile(self.current_target, self.player_name)
+        ):
             self._resolve_combat_round(result)
             self.event_bus.publish("round_resolved", result)
         else:
@@ -217,7 +266,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             skill_name = self.select_ability_skill(self.player_name, named_ability) or skill_name
         return skill_name, named_ability
 
-    def _try_item_test_action(self, explicit_target, skill_name, input_text):
+    def _try_item_test_action(self, explicit_target, skill_name, input_text, dice_penalty=0):
         """!
         @brief Tries to resolve explicit_target as a named item one level deeper than the
             scene itself (ex: "the cursed dagger" already in inventory, or sitting in an
@@ -232,6 +281,10 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         @param explicit_target NLPCore's best-guess target name (map_to_target), or None.
         @param skill_name The skill being used, already resolved from any named ability.
         @param input_text The player's raw input, attached to the result for narration.
+        @param dice_penalty Forwarded to _resolve_item_test -- an item test still rolls dice
+            (see resolve_action's own docstring), so it shares this turn's multi-action
+            penalty exactly like an opposed roll does (see _on_action_detected's own
+            "Multiple actions" note).
         @return A publish-ready action_resolved result dict, or None if explicit_target isn't
             a reachable, testable item.
         """
@@ -243,7 +296,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
                 skill_name = rescued_skill
         if not item_test_target:
             return None
-        result = self._resolve_item_test(item_test_target, skill_name)
+        result = self._resolve_item_test(item_test_target, skill_name, dice_penalty)
         result["input"] = input_text
         return result
 
@@ -295,7 +348,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         ):
             self.current_target = explicit_target
 
-    def _resolve_roll(self, skill_name, named_ability, target_name):
+    def _resolve_roll(self, skill_name, named_ability, target_name, dice_penalty=0):
         """!
         @brief Rolls the actual check for this action: a flat difficulty check against the
             target's own [entity.test] if one applies (ex: a chest's lock), a range-gated
@@ -304,6 +357,10 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         @param skill_name The skill being used, already resolved from any named ability.
         @param named_ability The resolved ability entity (technique/spell), or None.
         @param target_name self.current_target, or None.
+        @param dice_penalty Forwarded to resolve_action/resolve_opposed_action for the
+            player's own roll only -- see _on_action_detected's own "Multiple actions" note.
+            0 for an ordinary single action, unchanged from this method's behavior before that
+            mechanic existed.
         @return (result, ability, via_test) -- ability is the attack ability resolved for the
             roll, if any, needed again by _apply_damage_if_hit; via_test is True if this was a
             flat [entity.test] check, which must never also roll bonus weapon damage.
@@ -320,7 +377,9 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             # *other* skill against this same target (ex: forcing the chest with "strength")
             # still falls through to the normal opposed-skill path below, e.g. resolved
             # against its "fortitude" if it has one.
-            result = self.resolve_action(self.player_name, skill_name, test.get("difficulty", 0))
+            result = self.resolve_action(
+                self.player_name, skill_name, test.get("difficulty", 0), dice_penalty=dice_penalty,
+            )
             result["defender"] = target_name
             result["opposing_skill"] = None
             outcome = test.get("pass") if result["success"] else test.get("fail")
@@ -350,9 +409,11 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
                     "reason": "out_of_range",
                 }
             else:
-                result = self.resolve_opposed_action(self.player_name, skill_name, target_name)
+                result = self.resolve_opposed_action(
+                    self.player_name, skill_name, target_name, dice_penalty=dice_penalty,
+                )
         else:
-            result = self.resolve_action(self.player_name, skill_name)
+            result = self.resolve_action(self.player_name, skill_name, dice_penalty=dice_penalty)
         return result, ability, via_test
 
     def _apply_damage_if_hit(self, result, skill_name, named_ability, ability, target_name, via_test):
@@ -668,7 +729,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
 
         return None
 
-    def _resolve_item_test(self, item_name, skill_name):
+    def _resolve_item_test(self, item_name, skill_name, dice_penalty=0):
         """!
         @brief Resolves a flat [entity.test] check against a reachable item (see
             _resolve_item_test_target) -- the item-level counterpart to _on_action_detected's
@@ -677,11 +738,15 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         @param item_name The item entity's name (already confirmed reachable/testable by
             _resolve_item_test_target).
         @param skill_name The skill the player is attempting to use.
+        @param dice_penalty Forwarded to resolve_action -- see _on_action_detected's own
+            "Multiple actions" note.
         @return A resolve_action-shaped result dict, plus "revealed" (the item's own "tags"
                 list) if the check passed and its outcome had a truthy "reveal" key.
         """
         test = self.entities[item_name]["test"]
-        result = self.resolve_action(self.player_name, skill_name, test.get("difficulty", 0))
+        result = self.resolve_action(
+            self.player_name, skill_name, test.get("difficulty", 0), dice_penalty=dice_penalty,
+        )
         result["defender"] = item_name
         result["opposing_skill"] = None
         outcome = test.get("pass") if result["success"] else test.get("fail")

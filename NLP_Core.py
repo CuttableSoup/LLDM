@@ -113,6 +113,17 @@ DIRECTION_PHRASES = {
     "right": ("go right", "head right", "turn right", "to the right", "the right passage", "the right exit"),
 }
 
+# Multi-action detection (the West End Games D6 "multiple actions" rule -- see DM_Core.py's
+# own "Multiple actions" docstring): splits the final skill-matching fallback into one or more
+# independently-matched clauses, so "I attack the orc and cast a ward" resolves as two separate
+# actions rather than one diluted embedding match across the whole sentence. Deliberately a
+# *different*, wider delimiter set than CLAUSE_SEPARATORS below (which exists purely to
+# generate alternate *phrasings* of what's still treated as one action) -- "and"/"then" name
+# real action boundaries here, not just punctuation a single sentence happens to contain.
+# \b-anchored so "and"/"then" only ever splits on the standalone word, never a substring inside
+# another word (ex: "handle", "sandbox").
+ACTION_CLAUSE_PATTERN = re.compile(r"--|[,;:?]|\band\b|\bthen\b")
+
 # map_to_item checks these before any embedding match -- currency is a plain integer field
 # (entity["currency"]), not an object-supertype entity with a name/description to embed.
 CURRENCY_SYNONYMS = ("gold", "coin", "currency", "money")
@@ -219,23 +230,37 @@ class NLPCore:
             self.event_bus.publish("dialogue_detected", {"input": processed, "score": None})
             return
 
-        skill, score = self.map_to_action(processed)
-        if skill:
-            payload = {"skill": skill, "score": score, "input": processed}
+        actions = []
+        best_score = 0.0
+        for clause in self._split_action_clauses(processed):
+            clause_skill, clause_score = self.map_to_action(clause)
+            best_score = max(best_score, clause_score)
+            if not clause_skill:
+                continue
+            action = {"skill": clause_skill, "score": clause_score}
             # A confidently-matched creature name (ex: "attack the second wolf") is attached
             # as a target hint alongside the matched skill -- unlike item/save-load intent,
             # this never gates or replaces skill matching, it only enriches the same
             # action_detected payload. DMCore is what actually decides whether to honor it
             # (see _on_action_detected's explicit_target validation) -- matching here is
-            # global/scene-unaware, same division of labor as map_to_item.
-            target_name, target_score = self.map_to_target(processed)
+            # global/scene-unaware, same division of labor as map_to_item. Resolved per clause,
+            # not against the whole input, so "attack the orc and cast a ward on thane" can
+            # redirect each action at its own named target.
+            target_name, target_score = self.map_to_target(clause)
             if target_name:
-                payload["target"] = target_name
-            self.event_bus.publish("action_detected", payload)
+                action["target"] = target_name
+            actions.append(action)
+
+        if actions:
+            # Always plural, even for the overwhelmingly common single-clause case -- see
+            # DM_Core.py's own "Multiple actions" docstring for why the whole downstream
+            # pipeline (DMCore, LLMCore) is built around one consistent shape rather than a
+            # flat single-action payload for N=1 and a list for N>=2.
+            self.event_bus.publish("action_detected", {"actions": actions, "input": processed})
         else:
-            # Below confidence_threshold: publish this instead of staying silent, so the
-            # player gets some response rather than the app appearing to stall.
-            self.event_bus.publish("action_not_understood", {"input": processed, "score": score})
+            # Below confidence_threshold on every clause: publish this instead of staying
+            # silent, so the player gets some response rather than the app appearing to stall.
+            self.event_bus.publish("action_not_understood", {"input": processed, "score": best_score})
 
     def _detect_item_intent(self, processed_text):
         """!
@@ -478,6 +503,24 @@ class NLPCore:
 
         self.event_bus.publish("log_info", f"Processing player input: {player_input} -> {processed_text}")
         return processed_text
+
+    def _split_action_clauses(self, processed_text):
+        """!
+        @brief Splits processed_text into one or more independent action clauses on
+            ACTION_CLAUSE_PATTERN, only ever reached once save/load, direction, item-
+            interaction, and dialogue detection have all already missed (see _on_user_input) --
+            by this point the input is squarely skill/ability territory, so splitting on
+            "and"/"then" here doesn't risk cutting into item or dialogue phrasing those earlier
+            tiers already had first refusal on. A plain single-action input (no "and"/"then"/
+            punctuation at all) splits into exactly one clause -- the whole text, unchanged --
+            so this is a strict generalization of the old single-match path, not a special
+            case bolted on top of it: _on_user_input's own loop over this method's result
+            behaves identically to the pre-multi-action code whenever it returns one clause.
+        @param processed_text The cleaned and processed player input.
+        @return A list of one or more non-empty, stripped clause strings, in input order.
+        """
+        clauses = [clause.strip() for clause in ACTION_CLAUSE_PATTERN.split(processed_text)]
+        return [clause for clause in clauses if clause]
 
     def _generate_match_candidates(self, processed_text):
         """!

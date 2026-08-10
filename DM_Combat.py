@@ -228,7 +228,7 @@ class CombatMixin(DMCoreProtocol):
             pips += stats.get("pips", 0)
         return self.roll_dice(dice, pips)
 
-    def resolve_action(self, entity_name, skill_name, difficulty=0):
+    def resolve_action(self, entity_name, skill_name, difficulty=0, dice_penalty=0):
         """!
         @brief Resolves the outcome of an entity using a skill against a difficulty. A skill
             entity_name's own [entity.skills] doesn't list at all is untrained -- 0D/0 pips,
@@ -237,11 +237,19 @@ class CombatMixin(DMCoreProtocol):
         @param entity_name The name of the entity performing the action.
         @param skill_name The skill being used.
         @param difficulty The target number the roll must meet or beat. Defaults to 0 (auto-success) when not supplied.
+        @param dice_penalty Whole dice subtracted from entity_name's own pool before rolling,
+            floored at 0 dice (pips are never touched) -- the West End Games D6 multiple-
+            actions rule: attempting more than one action in a turn costs every one of those
+            actions -1D per action beyond the first (see DM_Core.py's own multi-action
+            docstring for where this is computed). 0 (the default) is every existing call
+            site's behavior, unchanged -- movement/speech/item-interactions never pass this at
+            all, and a lone action always resolves at full dice.
         @return A dict describing the roll and whether it succeeded.
         """
         entity = self.entities.get(entity_name, {})
         skill_stats = entity.get("skills", {}).get(skill_name, {"dice": 0, "pips": 0})
-        roll = self.roll_dice(skill_stats.get("dice", 0), skill_stats.get("pips", 0))
+        dice = max(0, skill_stats.get("dice", 0) - dice_penalty)
+        roll = self.roll_dice(dice, skill_stats.get("pips", 0))
         success = roll >= difficulty
         self.event_bus.publish(
             "log_info",
@@ -276,7 +284,7 @@ class CombatMixin(DMCoreProtocol):
                 best_skill = opposing_skill
         return best_skill
 
-    def resolve_opposed_action(self, attacker_name, skill_name, defender_name):
+    def resolve_opposed_action(self, attacker_name, skill_name, defender_name, dice_penalty=0):
         """!
         @brief Resolves a skill roll opposed by a defending entity's matching skill. Range
             (see DM_Movement.py's is_in_range) is checked by the caller *before* this is
@@ -285,6 +293,11 @@ class CombatMixin(DMCoreProtocol):
         @param attacker_name The name of the acting entity.
         @param skill_name The skill being used by the attacker.
         @param defender_name The name of the opposing entity.
+        @param dice_penalty Forwarded to resolve_action for attacker_name's own roll only --
+            the defender isn't the one splitting their attention across multiple actions this
+            turn, so defender_stats' own roll below is never penalized regardless of this
+            value (see resolve_action's own docstring for the West End Games rule this
+            implements).
         @return A dict describing the roll, the opposing skill used (if any), and the outcome.
         """
         opposing_skill = self.get_opposing_skill(skill_name, defender_name)
@@ -294,7 +307,7 @@ class CombatMixin(DMCoreProtocol):
         else:
             difficulty = 0
 
-        result = self.resolve_action(attacker_name, skill_name, difficulty)
+        result = self.resolve_action(attacker_name, skill_name, difficulty, dice_penalty=dice_penalty)
         result["defender"] = defender_name
         result["opposing_skill"] = opposing_skill
         return result

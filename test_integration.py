@@ -134,8 +134,9 @@ class TestInnkeeperConversation(_LivePipelineTestCase):
         # one turn that did resolve as a real action should be about the innkeeper specifically.
         self.assertEqual(round_events, [])
         self.assertEqual(len(action_events), 1)
-        self.assertEqual(action_events[0]["defender"], "innkeeper")
-        self.assertIn("innkeeper", action_events[0]["defender_details"])
+        action = action_events[0]["actions"][0]
+        self.assertEqual(action["defender"], "innkeeper")
+        self.assertIn("innkeeper", action["defender_details"])
 
         # Deliberately NOT asserting on exact narrative content past this point (ex: that the
         # husband question literally says "bandit"/"husband") -- a real run showed the LLM can
@@ -238,6 +239,68 @@ class TestArenaCombatConversation(_LivePipelineTestCase):
 
 
 @unittest.skipUnless(_lm_studio_reachable(), "LM Studio not reachable at http://127.0.0.1:1234")
+class TestMultiActionCombatConversation(_LivePipelineTestCase):
+    """!
+    @brief The West End Games multi-action rule's own live-pipeline proof (see DM_Core.py's
+        "Multiple actions" docstring) -- real NLPCore clause-splitting a genuinely
+        conjunction-phrased turn ("...and...") into more than one action, and real DMCore
+        still batching all of it into exactly one round. The penalty math itself
+        (dice_penalty reducing the pool, never the defender's own roll) and the
+        engaged_combat_target regression are already exhaustively unit-tested with no LLM
+        involved at all (TestMultipleActions, test_unit.py); this is only checking that a
+        real, unseeded roll_dice and a real LLM narration call don't trip over the batch
+        shape end to end.
+    """
+    scenario_name = "arena"
+
+    def setUp(self):
+        self._boot()
+
+    def test_two_actions_in_one_turn_narrate_as_one_round(self):
+        round_events = []
+        action_events = []
+        self.event_bus.subscribe("round_resolved", round_events.append)
+        self.event_bus.subscribe("action_resolved", action_events.append)
+
+        response = self._say("I attack the wolf and attack it again")
+
+        self.assertTrue(response.strip())
+        self.assertNotIn("Could not connect to the local LLM", response)
+        print(f"\n=== Multi-action turn ===\n> I attack the wolf and attack it again\n{response}\n")
+
+        # Two clauses, both hostile-target attacks -- one round, not two, and the player's own
+        # "actions" list actually has both entries (see DM_Core.py's engaged_combat_target note
+        # for why this used to be at risk of silently dropping to zero or one).
+        self.assertEqual(action_events, [])
+        self.assertEqual(len(round_events), 1)
+        self.assertEqual(round_events[0]["round"], 1)
+        actions = round_events[0]["actions"]
+        self.assertEqual(len(actions), 2)
+        self.assertEqual([a["skill"] for a in actions], ["blades", "blades"])
+
+    def test_a_multi_action_turn_does_not_leak_state_into_the_next_ordinary_turn(self):
+        round_events = []
+        self.event_bus.subscribe("round_resolved", round_events.append)
+
+        first = self._say("I attack the wolf and attack it again")
+        second = self._say("I attack the wolf")
+
+        for response in (first, second):
+            self.assertTrue(response.strip())
+            self.assertNotIn("Could not connect to the local LLM", response)
+
+        # The batch machinery is entirely local to one _on_action_detected call (dice_penalty
+        # is recomputed fresh from len(actions) every time) -- this is the live-pipeline check
+        # that nothing about resolving a 2-action round leaves any stray state (an inflated
+        # penalty, an extra queued action, ...) behind for the very next, perfectly ordinary
+        # single-action turn.
+        self.assertEqual(len(round_events), 2)
+        self.assertEqual([r["round"] for r in round_events], [1, 2])
+        self.assertEqual(len(round_events[0]["actions"]), 2)
+        self.assertEqual(len(round_events[1]["actions"]), 1)
+
+
+@unittest.skipUnless(_lm_studio_reachable(), "LM Studio not reachable at http://127.0.0.1:1234")
 class TestCreatedCharacterConversation(_LivePipelineTestCase):
     """!
     @brief End-to-end proof that a freshly created, custom-named, custom-race character --
@@ -271,7 +334,7 @@ class TestCreatedCharacterConversation(_LivePipelineTestCase):
         self.assertTrue(response.strip())
         self.assertNotIn("Could not connect to the local LLM", response)
         self.assertEqual(len(round_events), 1)
-        self.assertEqual(round_events[0]["entity"], "Aria")
+        self.assertEqual(round_events[0]["actions"][0]["entity"], "Aria")
 
 
 @unittest.skipUnless(_lm_studio_reachable(), "LM Studio not reachable at http://127.0.0.1:1234")
@@ -334,9 +397,10 @@ class TestChestSagaConversation(_LivePipelineTestCase):
         self.assertEqual(resolved_events[-1]["reason"], "locked")
 
         say("pick the lock")
-        self.assertEqual(action_events[-1]["skill"], "finesse")
+        pick_result = action_events[-1]["actions"][0]
+        self.assertEqual(pick_result["skill"], "finesse")
         self.assertTrue(
-            action_events[-1]["success"], "Seeded roll should have passed -- see the seed comment above."
+            pick_result["success"], "Seeded roll should have passed -- see the seed comment above."
         )
         self.assertFalse(self.dm_core.is_locked("chest"))
 
@@ -362,7 +426,7 @@ class TestChestSagaConversation(_LivePipelineTestCase):
         # one was verified live to clear confidence_threshold on "arcane" instead.
         say("I channel arcane mana into the dagger")
         self.assertEqual(round_events, [])  # inspecting an item is never combat
-        check_result = action_events[-1]
+        check_result = action_events[-1]["actions"][0]
         self.assertEqual(check_result["skill"], "arcane")
         self.assertEqual(check_result["defender"], "cursed dagger")
         self.assertTrue(check_result["success"], "Seeded roll should have passed -- see the seed comment above.")
@@ -493,8 +557,8 @@ class TestCryptDungeonConversation(_LivePipelineTestCase):
             return response
 
         say("I disarm the trap")
-        self.assertTrue(action_events[-1]["success"])
-        self.assertNotIn("damage", action_events[-1])  # a passed disarm never damages the player
+        self.assertTrue(action_events[-1]["actions"][0]["success"])
+        self.assertNotIn("damage", action_events[-1]["actions"][0])  # a passed disarm never damages the player
 
         say("I advance")
         say("continue deeper")
@@ -519,7 +583,7 @@ class TestCryptDungeonConversation(_LivePipelineTestCase):
         self.assertEqual(self.dm_core.current_room_key, "hidden_alcove")
 
         say("I pick the lock")
-        self.assertTrue(action_events[-1]["success"])
+        self.assertTrue(action_events[-1]["actions"][0]["success"])
         say("open the coffer")
         say("take the health potion")
         self.assertIn("health potion", self.dm_core.entities[player_name]["inventory"])
@@ -529,7 +593,7 @@ class TestCryptDungeonConversation(_LivePipelineTestCase):
         self.assertEqual(self.dm_core.current_room_key, "guard_chamber")
         say("I advance")
         say("I pick the lock")
-        self.assertTrue(action_events[-1]["success"])
+        self.assertTrue(action_events[-1]["actions"][0]["success"])
         say("open the chest")
         say("take the health potion")
 
@@ -756,7 +820,7 @@ async def test_innkeeper_dialogue_through_textual():
         # just observed through the UI's own event subscriptions instead of a direct call.
         assert round_events == []
         assert len(action_events) == 1
-        assert action_events[0]["defender"] == "innkeeper"
+        assert action_events[0]["actions"][0]["defender"] == "innkeeper"
         assert len(responses) == len(turns) + 1
 
 

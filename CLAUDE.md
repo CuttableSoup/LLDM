@@ -50,8 +50,11 @@ when and how it's actually constructed.
   of them. Also matches free text against item names/directions/save-load prefixes for
   non-skill intents (see "Items and movement as intents" below) and against `DIALOGUE_KEYWORDS`
   for free-form conversational address (see "Dialogue" below), both checked before skill
-  matching. Publishes `action_detected {skill, score, input, target?}` only when the score
-  clears `confidence_threshold` (`0.5`); below it, publishes `action_not_understood` instead.
+  matching. What's left is split into one or more action clauses (`_split_action_clauses`, see
+  "Multiple actions" below) and each matched independently; publishes `action_detected
+  {actions: [{skill, score, target?}, ...], input}` — always a list, even for the ordinary
+  single-clause input — whenever at least one clause clears `confidence_threshold` (`0.5`); if
+  none do, publishes `action_not_understood` instead.
 - **`LLM_Core.py`** — posts to LM Studio's OpenAI-compatible `/v1/chat/completions` on a
   background thread, with a rolling 100-message context window. Subscribes to seven narration
   triggers (see "Narration" below).
@@ -92,15 +95,17 @@ when and how it's actually constructed.
 
 ## Action resolution pipeline
 
-`user_input_submitted` → `NLPCore` → `action_detected {skill, score, input, target?}` →
-`DMCore` resolves it → `round_resolved` (combat) or `action_resolved` (no combat) → `LLMCore`
-narrates → `llm_response_ready` → GUI/Textual display it. `_on_action_detected` and
-`_on_item_interaction_detected` (see "Items and movement as intents" below) both also call
-`_publish_party_status`, which re-publishes `party_status_changed {"entities": self.entities}`
-so `GUICore`'s Party tab redraws after anything that could have changed a party member's own
-HP/equipment/inventory/conditions.
+`user_input_submitted` → `NLPCore` → `action_detected {actions: [{skill, score, target?},
+...], input}` → `DMCore` resolves every entry in `actions` → `round_resolved` (combat) or
+`action_resolved` (no combat) → `LLMCore` narrates → `llm_response_ready` → GUI/Textual
+display it. `actions` is always a list, even for the overwhelmingly common single-clause
+input — see "Multiple actions" below for why, and for how more than one entry changes
+resolution. `_on_action_detected` and `_on_item_interaction_detected` (see "Items and
+movement as intents" below) both also call `_publish_party_status`, which re-publishes
+`party_status_changed {"entities": self.entities}` so `GUICore`'s Party tab redraws after
+anything that could have changed a party member's own HP/equipment/inventory/conditions.
 
-Inside `DMCore._on_action_detected`:
+Inside `DMCore._on_action_detected`, for each entry in `actions`:
 1. Resolves the acting skill's ability (weapon/spell/technique/innate) via
    `resolve_named_ability`/`select_ability_skill` if the matched name is an ability, else
    `find_attack_ability` for a bare skill.
@@ -108,12 +113,19 @@ Inside `DMCore._on_action_detected`:
    immediately with `reason = "out_of_range"` — no roll happens.
 3. Otherwise resolves against `self.current_target` (see "Combat" below), or against an
    item-level `[entity.test]` target one level deeper (a container's contents or something
-   already in inventory — see "Entity tests"), or with no target at all (difficulty 0).
+   already in inventory — see "Entity tests"), or with no target at all (difficulty 0). Every
+   dice roll here (opposed or item-test) is reduced by this turn's own `dice_penalty` — see
+   "Multiple actions".
 4. On a hit, `calculate_damage` rolls damage, resolves the `bonus` field (plain number or
    `"user.<rule>"` reference into `rules.toml`), applies armor/resistance reduction and
-   vulnerability bonus, and `apply_damage` applies net damage to HP.
+   vulnerability bonus, and `apply_damage` applies net damage to HP. Damage itself is never
+   reduced by `dice_penalty` — only the skill/action roll that earned it.
 5. `apply_damage` also calls `evaluate_statuses(entity_name, "on_damage")` (see "Status and
    conditions").
+
+Once every entry has resolved, `DMCore` decides `round_resolved` vs. `action_resolved` — and,
+for combat, runs every other scene entity's own turn — exactly once for the whole batch, not
+once per entry (see "Multiple actions").
 
 ## Combat
 
@@ -135,8 +147,9 @@ If in combat, `round_number` increments and the round publishes as `round_resolv
 narration per round). Otherwise it publishes as `action_resolved` (one narration per skill
 use) — the path a dialogue check against a friendly NPC also takes.
 
-A `round_resolved` payload carries the player's own resolved action plus `"turns"`: every
-other living scene entity's own resolved action via `resolve_behavior_action`
+A `round_resolved` payload carries the player's own resolved actions (`"actions"`, a list —
+see "Multiple actions") plus `"turns"`: every other living scene entity's own resolved action
+via `resolve_behavior_action`
 (`DM_Combat.py`), driven by each entity's `[[entity.behavior]]` table — a declaration-order
 list of `{requirements, action}` entries, matched top-down (requirements compared the same
 way `[[status]]` requirements are — see "Status and conditions"). `turns` is sorted by
@@ -155,6 +168,56 @@ once `hp_per_remain` drops under 0.40 (the same cutoff `rules.toml`'s `"wounded"
 out at); an undead/construct entity has no such entry and fights on regardless. Separately,
 `resolve_behavior_action` falls back to `"advance"` on its own whenever its chosen action
 can't currently reach its target (`is_in_range`) — closing distance instead of standing idle.
+
+## Multiple actions
+
+The player may attempt more than one action in a single turn — the West End Games D6
+"multiple actions" rule: every action beyond the first, movement and speech excepted, costs
+every one of that turn's actions a cumulative -1D (two actions: -1D each; three: -2D each;
+...). Movement (`advance`/`retreat`) and speech (see "Dialogue") never reach
+`_on_action_detected` at all — they're their own diceless event/pipelines — so they're free by
+construction, not by a special case inside this mechanic. Diceless item-*interaction*
+(examine/take/give/equip/... — see "Items and movement as intents") is likewise a wholly
+separate pipeline and was never part of this count. An item *test* (ex: picking a chest's
+lock, appraising a potion) does roll dice, though, so it shares the turn's penalty exactly
+like an opposed attack does — only the underlying game state (does this roll dice at all)
+decides what counts, not which of `_on_action_detected`'s internal branches handles it.
+
+**Detection.** `NLPCore._split_action_clauses` (on `ACTION_CLAUSE_PATTERN`: `--`, `?`, `,`,
+`;`, `:`, and the standalone words `"and"`/`"then"`, `\b`-anchored so a word merely containing
+one of those substrings — ex: "handle", "sandbox" — never splits) breaks the input into one or
+more clauses once save/load, direction, item-interaction, and dialogue detection have all
+already missed — by that point the input is squarely skill/ability territory, so splitting on
+conjunctions here doesn't risk cutting into phrasing an earlier tier had first refusal on.
+Each clause is matched independently (`map_to_action`, `map_to_target`) — a clause that misses
+`confidence_threshold` is simply dropped, not counted, and not reported as
+`action_not_understood` on its own (only the whole input is, and only if *no* clause matched
+anything). A plain single-clause input (the overwhelming common case) always resolves to a
+list of exactly one action — this is a strict generalization of the pre-existing single-match
+path, not a special case bolted on top of it. Same-skill-multiplier phrasing (ex: "attack it
+twice") is explicitly out of scope — only distinct clauses are detected as distinct actions.
+
+**Resolution.** `dice_penalty = max(0, len(actions) - 1)`, computed once per turn and threaded
+through every dice-rolling action this turn: `resolve_action`/`resolve_opposed_action`
+(`DM_Combat.py`) both accept an optional `dice_penalty` param that subtracts whole dice (never
+pips) from the *acting* entity's own pool before rolling, floored at 0 dice. For an opposed
+roll, only the attacker's own roll is reduced — the defender isn't the one splitting their
+attention across multiple actions this turn, so `resolve_opposed_action`'s own difficulty roll
+is computed from `defender_stats` before `dice_penalty` is ever applied. `_on_action_detected`
+loops every entry in `actions`, resolving each exactly the way a lone action always has (same
+phase helpers — `_resolve_action_skill`, `_try_item_test_action`, `_apply_target_redirect`,
+`_resolve_roll`, `_apply_damage_if_hit`, `_attach_defender_details`), collecting each into
+`player_actions` — the whole turn still only ever calls `_resolve_combat_round` once, after
+every one of the player's own actions has resolved (tracked via `engaged_combat_target`: an
+item-test-only turn never engages `self.current_target` at all and must never trigger a round
+just because that persistent, cross-turn field happens to already be hostile from some earlier
+turn). This is what keeps a multi-action turn to exactly one round, no matter how many actions
+it contains — everyone else in the scene still only ever gets their own one turn per round.
+
+`LLMCore._describe_player_actions` describes every entry in `"actions"` (one
+`_describe_outcome` line each), preceded by a line naming the shared penalty whenever there's
+more than one, so the narration reads as one character splitting their attention across
+several things at once rather than several independent, equally-precise attacks.
 
 ## Challenge rating
 
@@ -840,6 +903,12 @@ Practical constraints when touching this file:
   `LLMCore` together over one event bus (no `NLPCore`) against `crypt.toml`'s room graph to
   prove `present_entities` tagging/filtering actually scopes a specific NPC's own witnessed
   history to the room(s) it was present for, not the DM's own omniscient window.
+  `TestMultipleActions` covers the West End Games multi-action penalty end to end: the dice
+  math (`resolve_action`/`resolve_opposed_action`'s own `dice_penalty` param, including that a
+  defender's own opposed roll is never penalized), that N actions in one turn still resolve as
+  exactly one round, and the `engaged_combat_target` regression this mechanic's own batching
+  introduced (an item-test-only turn must never trigger a round just because
+  `self.current_target` happens to already be hostile from an earlier turn).
 - **`test_integration.py`** — every test needing a real, running LM Studio, gated on
   `_lm_studio_reachable()` so they skip together when nothing's listening on
   `127.0.0.1:1234`. `_LivePipelineTestCase`'s own optional `character` class attribute is
