@@ -192,9 +192,9 @@ class InventoryMixin(DMCoreProtocol):
             own "ground" key for a multi-room dungeon (persists across a revisit the same way
             a cleared trap does -- see DM_Rules.py's room-graph notes), or the flat
             scenario's own "ground" key otherwise. Created empty on first use; never
-            authored in TOML. Known gap: unlike scenario_entities, nothing here is written to
-            or restored from a save slot yet (see DM_Persistence.py's "Saving and loading"),
-            so a drop made since the last save doesn't survive a save/load round trip.
+            authored in TOML. Saved/restored by DM_Persistence.py's save_game/load_game (keyed
+            per room_key for a dungeon, a flat list otherwise), same shape this method itself
+            branches on.
         @return The mutable ground list itself (not a copy) -- callers append/remove in place.
         """
         room = self._current_room()

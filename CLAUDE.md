@@ -418,7 +418,7 @@ this one computation. The result is tagged `entity["generated"] = True`.
 
 **Save/load.** `skills`/`max_hp`/`name`/`description`/`qualities`/`attitudes` don't round-trip
 for an ordinary entity (save_game only diffs `hp`/`active_conditions`/`currency`/`inventory`/
-`band` — everything else re-derives from the static TOML template on reload) — fine normally,
+`equipped`/`band` — everything else re-derives from the static TOML template on reload) — fine normally,
 broken for a generated entity, which has no static template to re-derive those from (and, for
 `qualities`/`attitudes` specifically — randomly varied per entity_template, see "Varied
 fields" above — re-deriving would mean a *different* value than what was actually saved, not
@@ -841,12 +841,18 @@ has no request/response mechanism, so each core owns and persists its own slice.
 (see "Booting the game" for the cold-start case), or by `Textual_Core`'s Save/Load buttons.
 
 `DMCore.save_game` writes a diff from a fresh instantiation: `setting`, `scenario_key`,
-`player_name`, `round_number`, `current_room_key`, `scenario_entities`, and per-instance
-`{hp, active_conditions, currency, inventory, band}`. `load_game` re-runs `load_rules()`, then
-the same scenario-load path `__init__` uses, then overlays each saved instance's mutable
-fields; a saved instance with no post-reload match is skipped. Publishes `game_loaded` on
-success (not `scenario_loaded`, which would re-narrate an opening scene) or `game_load_failed
-{"slot", "reason"}` on failure, then re-publishes `party_status_changed`.
+`player_name`, `round_number`, `current_room_key`, `scenario_entities`, `ground`, and
+per-instance `{hp, active_conditions, currency, inventory, equipped, band}`. `load_game`
+re-runs `load_rules()`, then the same scenario-load path `__init__` uses, then overlays each
+saved instance's mutable fields; a saved instance with no post-reload match is skipped.
+Publishes `game_loaded` on success (not `scenario_loaded`, which would re-narrate an opening
+scene) or `game_load_failed {"slot", "reason"}` on failure, then re-publishes
+`party_status_changed`.
+
+`ground` (items dropped since the scenario started — see "Items and movement as intents")
+round-trips too: a flat list for a single-room scenario, or a dict keyed by `room_key` for a
+multi-room dungeon, mirroring the same branch `_current_ground_items` (`DM_Inventory.py`)
+already makes between `self.scenario["ground"]` and `self.rooms[room_key]["ground"]`.
 
 `LLMCore.save_game`/`load_game` persist/restore `context_window` plus scenario name/
 description/characters; loading is silent. `GUICore.save_game`/`load_game` persist/restore the
@@ -991,13 +997,6 @@ offline subset only.
 - `NLP_Core.py` — a keyword-driven skill match can still dominate an unrelated whole-sentence
   embedding match (ex: "identify the dagger" resolves to the wrong skill); no multi-instance
   disambiguation (ex: "the wounded wolf" vs. "the other wolf").
-- Dropped items (`"ground"`) aren't saved/restored across a save/load round trip.
-- `[entity.equipped]`'s own slot mapping doesn't round-trip across a save/load for *any*
-  entity — only `inventory` (the item names) does; a reload re-derives `equipped` from the
-  static template's own hand-authored mapping instead of whatever was actually equipped at
-  save time. Worked around for generated entities specifically (see "NPC generation"'s own
-  Save/load note), since they have no static template to fall back to at all — the general
-  case (an ordinary entity re-equipping differently mid-session) is still open.
 
 ## Extended goals
 

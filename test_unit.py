@@ -2106,8 +2106,9 @@ class TestSaveLoad(DMTestCase):
 
     def test_save_writes_a_diff_not_a_raw_entity_dump(self):
         # Only the fields anything actually mutates at runtime should be saved -- not a dump
-        # of the whole template (ex: no "skills"/"equipped"/"max_hp" keys, which never change
-        # post-instancing today).
+        # of the whole template (ex: no "skills"/"max_hp" keys, which never change
+        # post-instancing today). "equipped" *is* included -- see
+        # test_equipped_slot_mapping_round_trips_through_save_load below for why.
         slot = self._track("test_save_writes_diff")
         self.dm_core.save_game(slot)
         data = self._read_dm_state(slot)
@@ -2117,7 +2118,8 @@ class TestSaveLoad(DMTestCase):
         self.assertEqual(data["scenario_entities"], self.dm_core.scenario_entities)
         gladstone_state = data["instances"]["gladstone"]
         self.assertEqual(
-            set(gladstone_state.keys()), {"hp", "active_conditions", "currency", "inventory", "band"}
+            set(gladstone_state.keys()),
+            {"hp", "active_conditions", "currency", "inventory", "equipped", "band"},
         )
 
 
@@ -2138,6 +2140,45 @@ class TestSaveLoad(DMTestCase):
         saves_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Saves")
         slot_dir = self.dm_core._save_slot_dir("../../evil")
         self.assertEqual(os.path.dirname(slot_dir), saves_root)
+
+
+    def test_equipped_slot_mapping_round_trips_through_save_load(self):
+        # gladstone starts with rhand="longsword"/chest="chain mail" (characters.toml). Without
+        # this fix, a reload always re-derives "equipped" from that static template mapping,
+        # silently re-equipping the longsword regardless of what was actually equipped at save
+        # time -- so this test unequips it first, proving the *cleared* slot survives a reload
+        # rather than snapping back to the template's own default.
+        slot = self._track("test_equipped_round_trip")
+        self.dm_core._on_item_interaction_detected({
+            "intent": "unequip", "item_name": "longsword", "input": "I unequip the longsword",
+        })
+        self.assertEqual(self.dm_core.entities["gladstone"]["equipped"], {"chest": "chain mail"})
+        self.dm_core.save_game(slot)
+
+        fresh_dm = DMCore(EventBus(), scenario_name="arena")  # boots with the template default
+        fresh_dm.load_game(slot)
+
+        self.assertEqual(fresh_dm.entities["gladstone"]["equipped"], {"chest": "chain mail"})
+        self.assertIn("longsword", fresh_dm.entities["gladstone"]["inventory"])
+
+
+    def test_dropped_items_round_trip_through_save_load(self):
+        # arena is a plain single-room scenario, so ground state lives on self.scenario
+        # directly (a flat list), not per-room -- see TestMultiRoomSaveLoad's own version of
+        # this test for the per-room dict shape a dungeon uses instead.
+        slot = self._track("test_ground_round_trip")
+        self.dm_core._on_item_interaction_detected({
+            "intent": "drop", "item_name": "health potion", "input": "I drop a health potion",
+        })
+        self.assertIn("health potion", self.dm_core._current_ground_items())
+        self.dm_core.save_game(slot)
+
+        fresh_dm = DMCore(EventBus(), scenario_name="arena")  # boots with an empty ground list
+        self.assertEqual(fresh_dm._current_ground_items(), [])
+        fresh_dm.load_game(slot)
+
+        self.assertEqual(fresh_dm._current_ground_items(), ["health potion"])
+        self.assertEqual(fresh_dm.entities["gladstone"]["inventory"].count("health potion"), 2)
 
 
 class TestMultiRoomDungeon(DMTestCase):
@@ -2343,6 +2384,27 @@ class TestMultiRoomSaveLoad(DMTestCase):
         self.assertEqual(fresh_dm.current_room_key, "hall_of_webs")
         self.assertEqual(fresh_dm.scenario_entities, ["gladstone", "thane", "anne", "giant spider"])
         self.assertEqual(fresh_dm.get_current_hp("giant spider"), 9)
+
+
+    def test_dropped_items_round_trip_per_room(self):
+        # An item dropped in a room the player has since left has to be saved/restored keyed
+        # to *that* room specifically -- not the room the player is standing in when they save
+        # -- since _current_ground_items() always reads/writes the current room's own "ground"
+        # key (DM_Inventory.py).
+        slot = self._track("test_crypt_ground_round_trip")
+        self.dm_core._on_item_interaction_detected({
+            "intent": "drop", "item_name": "health potion", "input": "I drop a health potion",
+        })
+        self.assertEqual(self.dm_core.rooms["entrance"].get("ground"), ["health potion"])
+        self.dm_core.enter_room("hall_of_webs")
+        self.dm_core.save_game(slot)
+
+        fresh_dm = DMCore(EventBus(), scenario_name="crypt")  # boots back at "entrance"
+        fresh_dm.load_game(slot)
+
+        self.assertEqual(fresh_dm.rooms["entrance"].get("ground"), ["health potion"])
+        self.assertEqual(fresh_dm.current_room_key, "hall_of_webs")
+        self.assertEqual(fresh_dm.entities["gladstone"]["inventory"].count("health potion"), 2)
 
 
 class TestLLMSaveLoad(LLMTestCase):

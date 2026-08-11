@@ -59,8 +59,8 @@ class PersistenceMixin(DMCoreProtocol):
         """!
         @brief Writes this core's mechanical state to Saves/<slot_name>/dm_state.json -- a
             diff from a fresh instantiation (round_number, scenario_entities, and each
-            instance's hp/active_conditions/currency/inventory/band), not a raw dump of
-            self.entities, which also holds every static template. Loading re-instantiates
+            instance's hp/active_conditions/currency/inventory/equipped/band), not a raw dump
+            of self.entities, which also holds every static template. Loading re-instantiates
             fresh from Rules/Fantasy TOML and overlays this diff on top, so a save doesn't
             freeze stale stats if templates are edited between sessions. LLMCore
             independently saves its own sibling file (context_window) for the same slot --
@@ -68,6 +68,19 @@ class PersistenceMixin(DMCoreProtocol):
             one combined file. For a multi-room dungeon, also saves current_room_key and
             visited_rooms so a resumed save picks up in the same room with every previously
             visited room's state intact (see _all_known_instance_names/load_game).
+
+            Also saves "equipped" per instance -- unlike inventory (the item names), the
+            [entity.equipped] slot mapping otherwise re-derives from the static template's own
+            hand-authored mapping on reload, silently discarding whatever was actually equipped
+            at save time for any entity that re-equipped differently mid-session.
+
+            Also saves "ground" -- items dropped since the scenario started, which
+            _current_ground_items (DM_Inventory.py) stores directly on the current room's own
+            table (or the flat scenario's, for a single-room scenario), neither of which is
+            otherwise part of any instance's own state. Keyed per room_key for a multi-room
+            dungeon (mirroring visited_rooms), or a flat list for a single-room scenario --
+            self.rooms being populated is what distinguishes the two shapes, same branch
+            _current_ground_items itself already makes.
 
             A generated entity (DM_NpcGeneration.py -- entity["generated"] = True) also gets
             its own skills/max_hp/name/description/qualities/attitudes saved, since (unlike
@@ -92,6 +105,7 @@ class PersistenceMixin(DMCoreProtocol):
                 "active_conditions": entity.get("active_conditions", {}),
                 "currency": entity.get("currency", 0),
                 "inventory": entity.get("inventory", []),
+                "equipped": entity.get("equipped", {}),
                 "band": self.get_band(name),
             }
             if entity.get("generated"):
@@ -104,6 +118,13 @@ class PersistenceMixin(DMCoreProtocol):
                 state["attitudes"] = entity.get("attitudes", {})
             return state
 
+        if self.rooms:
+            ground_state = {
+                room_key: list(room["ground"]) for room_key, room in self.rooms.items() if room.get("ground")
+            }
+        else:
+            ground_state = list(self.scenario.get("ground", []))
+
         data = {
             "version": 1,
             "setting": self.setting,
@@ -114,6 +135,7 @@ class PersistenceMixin(DMCoreProtocol):
             "scenario_entities": self.scenario_entities,
             "current_room_key": self.current_room_key,
             "visited_rooms": self.visited_rooms,
+            "ground": ground_state,
             "instances": {name: _instance_state(name) for name in instance_names},
         }
         with open(os.path.join(slot_dir, "dm_state.json"), "w") as f:
@@ -130,8 +152,17 @@ class PersistenceMixin(DMCoreProtocol):
             Rules/Fantasy/*.toml template fresh via load_rules, then reloads the saved
             scenario via the same load_scenario_definition/load_scenario path __init__
             uses, then overlays each instance's saved hp/active_conditions/currency/
-            inventory on top. A saved instance with no matching entity after re-instancing
-            (ex: the scenario file changed) is skipped rather than crashing.
+            inventory/equipped on top. A saved instance with no matching entity after
+            re-instancing (ex: the scenario file changed) is skipped rather than crashing.
+
+            "ground" is restored right after load_scenario() -- before the per-room
+            re-instancing loop below, since it only needs self.rooms/self.scenario populated
+            (both already are by then), not any particular room's entities -- onto
+            self.rooms[room_key]["ground"] for a multi-room dungeon (only for room keys that
+            still exist; a stale key from a since-edited scenario file is dropped rather than
+            resurrecting a room reference) or self.scenario["ground"] for a single-room
+            scenario, mirroring exactly where save_game read it from and
+            _current_ground_items (DM_Inventory.py) itself looks for it during play.
 
             The load_rules call is not optional: self.entities holds both static templates
             and live instances under the same keys (a single-occurrence instance like
@@ -181,6 +212,16 @@ class PersistenceMixin(DMCoreProtocol):
         self.load_scenario_definition(self.scenario_key)
         self.load_scenario(skip_llm_generation=True)
 
+        saved_ground = data.get("ground")
+        if saved_ground:
+            if self.rooms:
+                for room_key, items in saved_ground.items():
+                    room = self.rooms.get(room_key)
+                    if room is not None:
+                        room["ground"] = list(items)
+            else:
+                self.scenario["ground"] = list(saved_ground)
+
         if self.rooms:
             for room_key in data.get("visited_rooms", {}):
                 if room_key == self.current_room_key:
@@ -205,6 +246,7 @@ class PersistenceMixin(DMCoreProtocol):
             entity["active_conditions"] = state.get("active_conditions", {})
             entity["currency"] = state.get("currency", entity.get("currency", 0))
             entity["inventory"] = state.get("inventory", entity.get("inventory", []))
+            entity["equipped"] = state.get("equipped", entity.get("equipped", {}))
             entity["band"] = state.get("band", entity.get("band", 1))
             if state.get("generated"):
                 entity["generated"] = True
