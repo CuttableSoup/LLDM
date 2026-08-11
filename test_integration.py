@@ -289,8 +289,8 @@ class TestMultiActionCombatConversation(_LivePipelineTestCase):
             self.assertTrue(response.strip())
             self.assertNotIn("Could not connect to the local LLM", response)
 
-        # The batch machinery is entirely local to one _on_action_detected call (dice_penalty
-        # is recomputed fresh from len(actions) every time) -- this is the live-pipeline check
+        # The batch machinery is entirely local to one _on_turn_detected call (dice_penalty
+        # is recomputed fresh from len(clauses) every time) -- this is the live-pipeline check
         # that nothing about resolving a 2-action round leaves any stray state (an inflated
         # penalty, an extra queued action, ...) behind for the very next, perfectly ordinary
         # single-action turn.

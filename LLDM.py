@@ -111,7 +111,7 @@ def main():
         if dm_core is not None:
             return
         # 3. Constructed last, as it publishes 'rules_loaded' in its __init__ and needs to
-        # hear 'action_detected' from NLPCore -- both already subscribed above regardless of
+        # hear 'turn_detected' from NLPCore -- both already subscribed above regardless of
         # when this actually fires.
         dm_core = DMCore(event_bus, scenario_name=scenario_name, character=character, setting=setting)
 

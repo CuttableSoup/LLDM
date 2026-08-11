@@ -132,7 +132,7 @@ class InventoryMixin(DMCoreProtocol):
         @param from_name The name of the entity being looted (ex: a chest).
         @param to_name The name of the entity receiving the loot (ex: the player).
         @return A {currency, items} summary of what actually moved, so callers (ex:
-                _on_action_detected, for narration) know what was gained without the LLM having
+                _on_turn_detected, for narration) know what was gained without the LLM having
                 to invent it.
         """
         currency_moved = self.transfer_currency(from_name, to_name)

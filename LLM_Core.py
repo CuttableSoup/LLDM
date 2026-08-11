@@ -101,7 +101,7 @@ class LLMCore:
                 f"({action_result.get('before')} -> {action_result.get('after')} bands away)."
             )
 
-        # Set only by DMCore._on_action_detected/resolve_behavior_action when get_range_modifier
+        # Set only by DMCore._on_turn_detected/resolve_behavior_action when get_range_modifier
         # (DM_Movement.py) says the target is too far away for this weapon/ability to reach at
         # all -- no roll was attempted (unlike every other outcome this builds a line for), so
         # this is worded as a distance problem rather than a missed attack.
@@ -165,7 +165,7 @@ class LLMCore:
     def _describe_player_actions(self, action_result):
         """!
         @brief Describes every action the player attempted this turn (see
-            DMCore._on_action_detected's own "Multiple actions" docstring) -- one
+            DMCore._on_turn_detected's own "Multiple actions" docstring) -- one
             _describe_outcome line per entry in action_result["actions"] (NLPCore always
             publishes this as a list, even for the ordinary single-action turn -- see
             NLP_Core.py's ACTION_CLAUSE_PATTERN/_split_action_clauses), preceded by a note
@@ -219,7 +219,7 @@ class LLMCore:
         @param action_result The "round_resolved" payload (an action_resolved dict plus "round"
             and, if anyone else acted this round, "turns" -- a list of every other
             participant's resolved action, enemies and allies alike, each already tagged
-            with "actor" by DMCore._on_action_detected).
+            with "actor" by DMCore._on_turn_detected).
         """
         self.event_bus.publish("log_info", f"Generating LLM response for combat round {action_result.get('round')}.")
 

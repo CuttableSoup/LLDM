@@ -124,6 +124,18 @@ DIRECTION_PHRASES = {
 # another word (ex: "handle", "sandbox").
 ACTION_CLAUSE_PATTERN = re.compile(r"--|[,;:?]|\band\b|\bthen\b")
 
+# Partitions _detect_item_intent's own return set for _on_user_input's per-clause turn
+# classification (see DM_Core.py's "Multiple actions" docstring) -- two independent axes, not
+# one: EXEMPT_ITEM_INTENTS is a *rules* distinction (movement/directing-the-party are free per
+# West End Games' own exceptions, same as speech, so a clause classified this way is published
+# immediately as its own free-standing item_interaction_detected and never joins the shared
+# per-turn action count at all); NO_ITEM_LOOKUP_INTENTS is a purely *technical* one (these two
+# act on the current scene target directly, so map_to_item never runs for them) that's
+# independent of whether the intent is exempt -- "open"/"close" still cost a turn action (see
+# DM_Core.py) despite needing no item lookup, the same way "give"/"take"/etc. do.
+EXEMPT_ITEM_INTENTS = frozenset({"advance", "retreat", "formation_behind", "formation_abreast"})
+NO_ITEM_LOOKUP_INTENTS = frozenset({"open", "close"})
+
 # map_to_item checks these before any embedding match -- currency is a plain integer field
 # (entity["currency"]), not an object-supertype entity with a name/description to embed.
 CURRENCY_SYNONYMS = ("gold", "coin", "currency", "money")
@@ -182,7 +194,25 @@ class NLPCore:
 
     def _on_user_input(self, player_input):
         """!
-        @brief Event handler for user input.
+        @brief Event handler for user input. Splits the input into one or more clauses (see
+            _split_action_clauses) and classifies each independently as an item interaction or
+            a skill/ability action, merging both kinds into a single "turn_detected" event --
+            see DM_Core.py's own "Multiple actions" docstring for why these two used to be
+            entirely separate pipelines and why that was wrong (drawing a weapon, picking
+            something up, and swinging a sword all cost the same shared per-turn action
+            economy in West End Games D6; only movement and speech are actually free).
+
+            Two whole-input checks still run *ahead* of clause splitting, exactly as before
+            this merge: save/load (a meta-command, never split at all) and inter-room movement
+            (_detect_direction -- a different axis from advance/retreat below, see
+            DIRECTION_PHRASES' own module note). Dialogue detection also still runs against
+            the *whole* input, not per clause (left that way deliberately for now -- full
+            multi-intent-type composition involving dialogue is still out of scope), but only
+            once no clause resolved to an item interaction or an exempt movement/formation
+            intent -- preserving the exact priority order the old single-clause code already
+            gave item intents over dialogue (so a genuine item verb naming an entity, ex:
+            "give the sword to Anne", is never swallowed as dialogue).
+        @param player_input The raw string from "user_input_submitted".
         """
         processed = self.process_input(player_input)
 
@@ -203,63 +233,79 @@ class NLPCore:
             })
             return
 
-        intent = self._detect_item_intent(processed)
-        if intent in ("open", "close", "advance", "retreat", "formation_behind", "formation_abreast"):
-            # These act on the current scene target directly (ex: "open the chest" opens
-            # *the* chest, not some named item inside it), or on the scene as a whole (ex:
-            # "advance" moves relative to every living entity, "formation_behind" directs
-            # whichever party member is named in the input, or everyone present if none is --
-            # see DMCore._resolve_formation_intent) -- no item name to resolve at all, so
-            # map_to_item never runs for any of them either.
-            self.event_bus.publish("item_interaction_detected", {
-                "intent": intent, "item_name": None, "input": processed, "score": None,
-            })
-            return
-        if intent:
-            item_name, item_score = self.map_to_item(processed)
-            if item_name:
+        # Pass 1: item-interaction classification, per clause. EXEMPT_ITEM_INTENTS (movement/
+        # directing the party) publish their own free-standing item_interaction_detected
+        # immediately, in clause order, and never join the shared turn -- same as _detect_
+        # direction above, just resolved per clause instead of against the whole input (ex:
+        # "attack the wolf and retreat" still lets the retreat through even though the whole
+        # sentence isn't a pure movement command). Everything else that resolves as an item
+        # interaction (NO_ITEM_LOOKUP_INTENTS' "open"/"close", or any other intent with a
+        # confidently-matched item_name) joins turn_clauses -- these *do* cost a turn action
+        # (see DM_Core.py's "Multiple actions"), just never a dice roll. A clause that doesn't
+        # resolve as an item interaction at all is deferred to pass 2 below.
+        turn_clauses = []
+        remaining_clauses = []
+        found_exempt = False
+        for clause in self._split_action_clauses(processed):
+            clause_intent = self._detect_item_intent(clause)
+            if clause_intent in EXEMPT_ITEM_INTENTS:
+                found_exempt = True
                 self.event_bus.publish("item_interaction_detected", {
-                    "intent": intent, "item_name": item_name, "input": processed, "score": item_score,
+                    "intent": clause_intent, "item_name": None, "input": processed, "score": None,
                 })
-                return
-            # A recognized "examine"/"take"/"give"/"trade" verb but no matching item name --
-            # fall through to skill matching below rather than silently dropping it (ex: could
-            # still be a legitimate skill phrase that happens to contain one of these words).
+                continue
+            if clause_intent in NO_ITEM_LOOKUP_INTENTS:
+                turn_clauses.append({"kind": "item", "intent": clause_intent, "item_name": None})
+                continue
+            if clause_intent:
+                item_name, item_score = self.map_to_item(clause)
+                if item_name:
+                    turn_clauses.append({"kind": "item", "intent": clause_intent, "item_name": item_name})
+                    continue
+                # A recognized "examine"/"take"/"give"/"trade" verb but no matching item name --
+                # fall through to skill matching below rather than silently dropping it (ex:
+                # could still be a legitimate skill phrase that happens to contain one of
+                # these words).
+            remaining_clauses.append(clause)
 
-        if self._detect_dialogue_intent(processed):
+        # Dialogue is checked once, on the whole input, only once pass 1 found nothing at all
+        # (no item interaction, no exempt movement/formation clause) -- the same priority the
+        # old single-clause code already gave item intents over dialogue.
+        if not turn_clauses and not found_exempt and self._detect_dialogue_intent(processed):
             self.event_bus.publish("dialogue_detected", {"input": processed, "score": None})
             return
 
-        actions = []
+        # Pass 2: skill/ability matching for whatever clauses pass 1 didn't already claim.
         best_score = 0.0
-        for clause in self._split_action_clauses(processed):
+        for clause in remaining_clauses:
             clause_skill, clause_score = self.map_to_action(clause)
             best_score = max(best_score, clause_score)
             if not clause_skill:
                 continue
-            action = {"skill": clause_skill, "score": clause_score}
+            action = {"kind": "action", "skill": clause_skill, "score": clause_score}
             # A confidently-matched creature name (ex: "attack the second wolf") is attached
             # as a target hint alongside the matched skill -- unlike item/save-load intent,
-            # this never gates or replaces skill matching, it only enriches the same
-            # action_detected payload. DMCore is what actually decides whether to honor it
-            # (see _on_action_detected's explicit_target validation) -- matching here is
+            # this never gates or replaces skill matching, it only enriches the same turn
+            # entry. DMCore is what actually decides whether to honor it (see
+            # _on_turn_detected's explicit_target validation) -- matching here is
             # global/scene-unaware, same division of labor as map_to_item. Resolved per clause,
             # not against the whole input, so "attack the orc and cast a ward on thane" can
             # redirect each action at its own named target.
             target_name, target_score = self.map_to_target(clause)
             if target_name:
                 action["target"] = target_name
-            actions.append(action)
+            turn_clauses.append(action)
 
-        if actions:
-            # Always plural, even for the overwhelmingly common single-clause case -- see
-            # DM_Core.py's own "Multiple actions" docstring for why the whole downstream
-            # pipeline (DMCore, LLMCore) is built around one consistent shape rather than a
-            # flat single-action payload for N=1 and a list for N>=2.
-            self.event_bus.publish("action_detected", {"actions": actions, "input": processed})
-        else:
-            # Below confidence_threshold on every clause: publish this instead of staying
-            # silent, so the player gets some response rather than the app appearing to stall.
+        if turn_clauses:
+            # Always published this way, even for the overwhelmingly common single-clause,
+            # single-kind case -- see DM_Core.py's own "Multiple actions" docstring for why
+            # the whole downstream pipeline (DMCore, LLMCore) is built around one consistent
+            # shape rather than special-casing N=1 or a single clause kind.
+            self.event_bus.publish("turn_detected", {"clauses": turn_clauses, "input": processed})
+        elif not found_exempt:
+            # Below confidence_threshold on every remaining clause, and pass 1 found nothing
+            # either: publish this instead of staying silent, so the player gets some response
+            # rather than the app appearing to stall.
             self.event_bus.publish("action_not_understood", {"input": processed, "score": best_score})
 
     def _detect_item_intent(self, processed_text):

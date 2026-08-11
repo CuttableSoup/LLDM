@@ -142,11 +142,11 @@ class TestGameBoot(unittest.TestCase):
         # 1. Initialize Event Bus
         event_bus = EventBus()
 
-        # 2. Track action_detected events
+        # 2. Track turn_detected events
         detected_actions = []
-        def on_action_detected(data):
+        def on_turn_detected(data):
             detected_actions.append(data)
-        event_bus.subscribe("action_detected", on_action_detected)
+        event_bus.subscribe("turn_detected", on_turn_detected)
 
         # 3. Initialize NLPCore FIRST so it doesn't miss rules_loaded
         nlp_core = NLPCore(event_bus)
@@ -162,8 +162,8 @@ class TestGameBoot(unittest.TestCase):
         event_bus.publish("user_input_submitted", test_input)
 
         # 6. Verify skill identification
-        self.assertGreater(len(detected_actions), 0, "No action detected event published")
-        last_action = detected_actions[-1]["actions"][0]
+        self.assertGreater(len(detected_actions), 0, "No turn_detected event published")
+        last_action = detected_actions[-1]["clauses"][0]
         self.assertEqual(last_action["skill"], "blades")
         self.assertGreater(last_action["score"], 0.5)
         print(f"Integration Test Success: '{test_input}' -> {last_action['skill']} ({last_action['score']:.4f})")
@@ -201,7 +201,7 @@ class TestNlpConfidenceThreshold(unittest.TestCase):
         # phrase happens to score highest (previously this mapped to "artistry" at ~0.32).
         detected_actions = []
         not_understood = []
-        self.event_bus.subscribe("action_detected", detected_actions.append)
+        self.event_bus.subscribe("turn_detected", detected_actions.append)
         self.event_bus.subscribe("action_not_understood", not_understood.append)
 
         self.event_bus.publish("user_input_submitted", "Hey there innkeeper")
@@ -214,12 +214,12 @@ class TestNlpConfidenceThreshold(unittest.TestCase):
 
     def test_clear_action_still_triggers_above_threshold(self):
         detected_actions = []
-        self.event_bus.subscribe("action_detected", detected_actions.append)
+        self.event_bus.subscribe("turn_detected", detected_actions.append)
 
         self.event_bus.publish("user_input_submitted", "I attack with my sword")
 
         self.assertEqual(len(detected_actions), 1)
-        action = detected_actions[0]["actions"][0]
+        action = detected_actions[0]["clauses"][0]
         self.assertEqual(action["skill"], "blades")
         self.assertGreaterEqual(action["score"], self.nlp_core.confidence_threshold)
 
@@ -230,12 +230,12 @@ class TestNlpConfidenceThreshold(unittest.TestCase):
         # appraise's own best embedding score (still ~0.30) clearing the much lower
         # keyword_fallback_floor rather than being accepted on keyword evidence alone.
         detected_actions = []
-        self.event_bus.subscribe("action_detected", detected_actions.append)
+        self.event_bus.subscribe("turn_detected", detected_actions.append)
 
         self.event_bus.publish("user_input_submitted", "I'll bargain with her over the cost of supper")
 
         self.assertEqual(len(detected_actions), 1)
-        action = detected_actions[0]["actions"][0]
+        action = detected_actions[0]["clauses"][0]
         self.assertEqual(action["skill"], "appraise")
         self.assertLess(action["score"], self.nlp_core.confidence_threshold)
         self.assertGreaterEqual(action["score"], self.nlp_core.keyword_fallback_floor)
@@ -261,7 +261,7 @@ class TestNlpConfidenceThreshold(unittest.TestCase):
         dialogue_events = []
         action_events = []
         self.event_bus.subscribe("dialogue_detected", dialogue_events.append)
-        self.event_bus.subscribe("action_detected", action_events.append)
+        self.event_bus.subscribe("turn_detected", action_events.append)
 
         self.event_bus.publish("user_input_submitted", "I want to talk to the wolf")
 
@@ -293,13 +293,60 @@ class TestNlpConfidenceThreshold(unittest.TestCase):
     def test_multi_clause_input_publishes_multiple_actions(self):
         # Full pipeline: NLPCore's own conjunction-aware split, not just the pure method above.
         detected_actions = []
-        self.event_bus.subscribe("action_detected", detected_actions.append)
+        self.event_bus.subscribe("turn_detected", detected_actions.append)
 
         self.event_bus.publish("user_input_submitted", "I attack with my sword and pick the lock")
 
         self.assertEqual(len(detected_actions), 1)
-        skills = [action["skill"] for action in detected_actions[0]["actions"]]
+        skills = [action["skill"] for action in detected_actions[0]["clauses"]]
         self.assertEqual(skills, ["blades", "finesse"])
+
+    def test_mixed_item_and_action_clause_publishes_one_merged_turn(self):
+        # The pipeline merge: an item-interaction clause and a skill/ability clause in one
+        # input now join the same turn_detected event, not two separate, uncoordinated ones.
+        turn_events = []
+        item_events = []
+        self.event_bus.subscribe("turn_detected", turn_events.append)
+        self.event_bus.subscribe("item_interaction_detected", item_events.append)
+
+        self.event_bus.publish("user_input_submitted", "I take the longsword and attack the wolf")
+
+        self.assertEqual(item_events, [])  # "take" no longer publishes on its own
+        self.assertEqual(len(turn_events), 1)
+        clauses = turn_events[0]["clauses"]
+        self.assertEqual(len(clauses), 2)
+        self.assertEqual(clauses[0], {"kind": "item", "intent": "take", "item_name": "longsword"})
+        self.assertEqual(clauses[1]["kind"], "action")
+        self.assertEqual(clauses[1]["skill"], "blades")
+
+    def test_exempt_clause_mixed_with_an_item_clause_still_publishes_separately(self):
+        # "retreat" stays free (West End Games' own movement exception) and never joins the
+        # shared turn, even when another clause in the same input is a genuine item action.
+        turn_events = []
+        item_events = []
+        self.event_bus.subscribe("turn_detected", turn_events.append)
+        self.event_bus.subscribe("item_interaction_detected", item_events.append)
+
+        self.event_bus.publish("user_input_submitted", "take the longsword and retreat")
+
+        self.assertEqual(len(item_events), 1)
+        self.assertEqual(item_events[0]["intent"], "retreat")
+        self.assertEqual(len(turn_events), 1)
+        self.assertEqual(turn_events[0]["clauses"], [{"kind": "item", "intent": "take", "item_name": "longsword"}])
+
+    def test_item_verb_still_takes_priority_over_dialogue(self):
+        # Preserves the old single-clause priority: a genuine item verb naming an entity is
+        # never swallowed as dialogue, even now that item detection runs per clause.
+        turn_events = []
+        dialogue_events = []
+        self.event_bus.subscribe("turn_detected", turn_events.append)
+        self.event_bus.subscribe("dialogue_detected", dialogue_events.append)
+
+        self.event_bus.publish("user_input_submitted", "give the longsword to thane")
+
+        self.assertEqual(dialogue_events, [])
+        self.assertEqual(len(turn_events), 1)
+        self.assertEqual(turn_events[0]["clauses"], [{"kind": "item", "intent": "give", "item_name": "longsword"}])
 
     def test_detect_save_load_intent_parses_slot_names(self):
         self.assertEqual(self.nlp_core._detect_save_load_intent("save as arena run 1"), ("save", "arena run 1"))
@@ -574,8 +621,8 @@ class TestMultipleActions(DMTestCase):
         starting_round = self.dm_core.round_number
 
         with patch("random.randint", return_value=3):
-            self.dm_core._on_action_detected({
-                "actions": [{"skill": "blades"}, {"skill": "blades"}],
+            self.dm_core._on_turn_detected({
+                "clauses": [{"kind": "action", "skill": "blades"}, {"kind": "action", "skill": "blades"}],
                 "input": "I attack the practice dummy and attack it again",
             })
 
@@ -595,8 +642,11 @@ class TestMultipleActions(DMTestCase):
         round_events = self._capture("round_resolved")
 
         with patch("random.randint", return_value=3):
-            self.dm_core._on_action_detected({
-                "actions": [{"skill": "blades"}, {"skill": "blades"}, {"skill": "blades"}],
+            self.dm_core._on_turn_detected({
+                "clauses": [
+                    {"kind": "action", "skill": "blades"}, {"kind": "action", "skill": "blades"},
+                    {"kind": "action", "skill": "blades"},
+                ],
                 "input": "I attack it, attack it again, and attack it once more",
             })
 
@@ -617,8 +667,8 @@ class TestMultipleActions(DMTestCase):
         self.assertTrue(self.dm_core.is_hostile(self.dm_core.current_target, self.dm_core.player_name))
 
         self.dm_core.roll_dice = lambda dice, pips: 99
-        self.dm_core._on_action_detected({
-            "actions": [{"skill": "appraise", "target": "health potion"}],
+        self.dm_core._on_turn_detected({
+            "clauses": [{"kind": "action", "skill": "appraise", "target": "health potion"}],
             "input": "I appraise the health potion",
         })
 
@@ -626,19 +676,19 @@ class TestMultipleActions(DMTestCase):
         self.assertEqual(len(action_events), 1)
 
     def test_mixed_item_test_and_attack_batch_shares_the_penalty_and_still_one_round(self):
-        # Diceless item-*interactions* (give/take/equip/...) never count toward this at all --
-        # they're a wholly separate event/pipeline. An item *test* does roll dice, though, so
-        # it shares the turn's penalty just like an opposed attack does.
+        # An item *test* (ex: appraising a potion) rolls dice, so it shares the turn's penalty
+        # just like an opposed attack does -- distinct from a diceless item *interaction*
+        # (give/take/equip/...), covered by the tests below.
         self.dm_core.entities["practice_dummy"] = {"name": "practice_dummy", "max_hp": 20, "skills": {}}
         self.dm_core.scenario = {"entities": [{"name": "gladstone", "band": 1}, {"name": "practice_dummy", "band": 1}]}
         self.dm_core.load_scenario()
         round_events = self._capture("round_resolved")
 
         with patch("random.randint", return_value=3):
-            self.dm_core._on_action_detected({
-                "actions": [
-                    {"skill": "appraise", "target": "health potion"},
-                    {"skill": "blades"},
+            self.dm_core._on_turn_detected({
+                "clauses": [
+                    {"kind": "action", "skill": "appraise", "target": "health potion"},
+                    {"kind": "action", "skill": "blades"},
                 ],
                 "input": "I appraise the potion and attack the dummy",
             })
@@ -652,6 +702,52 @@ class TestMultipleActions(DMTestCase):
         self.assertTrue(actions[0]["success"])
         # blades is 5D+0 -- at -1D rolls 4D @ 3 = 12.
         self.assertEqual(actions[1]["roll"], 12)
+
+    def test_item_interaction_clause_shares_the_penalty_but_never_rolls_itself(self):
+        # Drawing a weapon, picking something up, giving/opening/using an item all cost the
+        # same shared per-turn action economy a skill/ability action does in West End Games
+        # D6 -- only movement and speech are actually free. An item-interaction clause resolves
+        # via the ordinary, unchanged item-interaction pipeline (narrating separately, via its
+        # own item_interaction_resolved) and never receives dice_penalty itself (it has
+        # nothing to roll), but it still counts toward this turn's total N.
+        item_events = self._capture("item_interaction_resolved")
+        round_events = self._capture("round_resolved")
+
+        with patch("random.randint", return_value=3):
+            self.dm_core._on_turn_detected({
+                "clauses": [
+                    {"kind": "item", "intent": "drop", "item_name": "health potion"},
+                    {"kind": "action", "skill": "blades"},
+                ],
+                "input": "I drop a health potion and attack the wolf",
+            })
+
+        self.assertEqual(len(item_events), 1)
+        self.assertEqual(item_events[0]["intent"], "drop")
+        self.assertTrue(item_events[0]["found"])
+        self.assertIn("health potion", self.dm_core._current_ground_items())
+
+        self.assertEqual(len(round_events), 1)
+        actions = round_events[0]["actions"]
+        self.assertEqual(len(actions), 1)
+        # blades is 5D+0 -- at -1D (the drop counts as this turn's other action, even though
+        # it never rolls) rolls 4D @ 3 = 12, not the unpenalized 5D @ 3 = 15 a lone attack
+        # would get.
+        self.assertEqual(actions[0]["roll"], 12)
+
+    def test_item_only_turn_publishes_via_item_interaction_resolved_not_action_resolved(self):
+        action_events = self._capture("action_resolved")
+        round_events = self._capture("round_resolved")
+        item_events = self._capture("item_interaction_resolved")
+
+        self.dm_core._on_turn_detected({
+            "clauses": [{"kind": "item", "intent": "drop", "item_name": "health potion"}],
+            "input": "I drop a health potion",
+        })
+
+        self.assertEqual(len(item_events), 1)
+        self.assertEqual(action_events, [])
+        self.assertEqual(round_events, [])
 
 
 class TestCombatLoop(DMTestCase):
@@ -684,7 +780,7 @@ class TestCombatLoop(DMTestCase):
     def test_missed_attack_does_not_apply_damage(self):
         # wolf's dodge (6 dice) will always beat gladstone's blades (2 dice) at this fixed roll.
         with patch("random.randint", return_value=1):
-            self.dm_core._on_action_detected({"actions": [{"skill": "blades"}], "input": "I attack with my sword"})
+            self.dm_core._on_turn_detected({"clauses": [{"kind": "action", "skill": "blades"}], "input": "I attack with my sword"})
 
         result = self.resolved[-1]
         action = result["actions"][0]
@@ -700,7 +796,7 @@ class TestCombatLoop(DMTestCase):
         self.dm_core.load_scenario()
 
         with patch("random.randint", return_value=3):
-            self.dm_core._on_action_detected({"actions": [{"skill": "blades"}], "input": "I attack with my sword"})
+            self.dm_core._on_turn_detected({"clauses": [{"kind": "action", "skill": "blades"}], "input": "I attack with my sword"})
 
         result = self.resolved[-1]
         action = result["actions"][0]
@@ -780,7 +876,7 @@ class TestMovementAndRange(DMTestCase):
     def test_out_of_range_attack_is_denied_without_a_roll(self):
         self.dm_core.entities["wolf"]["band"] = 3  # longsword needs gap 0
 
-        self.dm_core._on_action_detected({"actions": [{"skill": "blades"}], "input": "I attack with my sword"})
+        self.dm_core._on_turn_detected({"clauses": [{"kind": "action", "skill": "blades"}], "input": "I attack with my sword"})
 
         result = self.resolved[-1]
         action = result["actions"][0]
@@ -866,7 +962,7 @@ class TestEntityBehavior(DMTestCase):
     def test_current_target_advances_to_next_hostile_when_current_dies(self):
         self.dm_core.apply_damage("wolf", 999)
         with patch("random.randint", return_value=1):
-            self.dm_core._on_action_detected({"actions": [{"skill": "athletics"}], "input": "I reposition"})
+            self.dm_core._on_turn_detected({"clauses": [{"kind": "action", "skill": "athletics"}], "input": "I reposition"})
         self.assertEqual(self.dm_core.current_target, "wolf_2")
 
 
@@ -1481,7 +1577,7 @@ class TestLockedChest(DMTestCase):
 
     def test_failed_pick_leaves_it_locked_and_applies_jammed_on_fail(self):
         with patch("random.randint", return_value=1):  # 3 dice @ 1 = 3, well under test difficulty 12
-            self.dm_core._on_action_detected({"actions": [{"skill": "finesse"}], "input": "I pick the lock"})
+            self.dm_core._on_turn_detected({"clauses": [{"kind": "action", "skill": "finesse"}], "input": "I pick the lock"})
 
         self.assertTrue(self.dm_core.is_locked("chest"))
         self.assertEqual(self.round_events, [])
@@ -1499,7 +1595,7 @@ class TestLockedChest(DMTestCase):
         # TestItemInteraction for the separate examine/take mechanism.
         starting_currency = self.dm_core.entities["gladstone"]["currency"]
         with patch("random.randint", return_value=6):  # 3 dice @ 6 = 18, clears test difficulty 12
-            self.dm_core._on_action_detected({"actions": [{"skill": "finesse"}], "input": "I pick the lock"})
+            self.dm_core._on_turn_detected({"clauses": [{"kind": "action", "skill": "finesse"}], "input": "I pick the lock"})
 
         self.assertFalse(self.dm_core.is_locked("chest"))
         self.assertNotIn("jammed", self.dm_core.entities["chest"]["active_conditions"])
@@ -1533,7 +1629,7 @@ class TestItemInteraction(DMTestCase):
 
     def _unlock_the_chest(self):
         self.dm_core.roll_dice = lambda dice, pips: 99
-        self.dm_core._on_action_detected({"actions": [{"skill": "finesse"}], "input": "I pick the lock"})
+        self.dm_core._on_turn_detected({"clauses": [{"kind": "action", "skill": "finesse"}], "input": "I pick the lock"})
 
     def _open_the_chest(self):
         # Unlocking and opening are independent conditions -- picking the lock only dismisses
@@ -1580,8 +1676,8 @@ class TestItemTargetedSkillCheck(DMTestCase):
 
     def _check_the_dagger(self, roll_result):
         self.dm_core.roll_dice = lambda dice, pips: roll_result
-        self.dm_core._on_action_detected({
-            "actions": [{"skill": "arcane", "target": "cursed dagger"}],
+        self.dm_core._on_turn_detected({
+            "clauses": [{"kind": "action", "skill": "arcane", "target": "cursed dagger"}],
             "input": "I check the dagger for curses",
         })
 
@@ -1610,8 +1706,8 @@ class TestHealthPotionIdentify(DMTestCase):
 
     def _check_the_potion(self, skill_name, roll_result):
         self.dm_core.roll_dice = lambda dice, pips: roll_result
-        self.dm_core._on_action_detected({
-            "actions": [{"skill": skill_name, "target": "health potion"}],
+        self.dm_core._on_turn_detected({
+            "clauses": [{"kind": "action", "skill": skill_name, "target": "health potion"}],
             "input": "I appraise the health potion",
         })
 
@@ -1633,7 +1729,7 @@ class TestOpenClose(DMTestCase):
 
     def _unlock_the_chest(self):
         self.dm_core.roll_dice = lambda dice, pips: 99
-        self.dm_core._on_action_detected({"actions": [{"skill": "finesse"}], "input": "I pick the lock"})
+        self.dm_core._on_turn_detected({"clauses": [{"kind": "action", "skill": "finesse"}], "input": "I pick the lock"})
 
     def _open(self):
         self.dm_core._on_item_interaction_detected({
@@ -1820,8 +1916,8 @@ class TestNpcDialogue(DMTestCase):
 
 
     def test_talking_to_the_innkeeper_narrates_immediately_as_dialogue(self):
-        self.dm_core._on_action_detected({
-            "actions": [{"skill": "charisma"}],
+        self.dm_core._on_turn_detected({
+            "clauses": [{"kind": "action", "skill": "charisma"}],
             "input": "I ask the innkeeper if she's heard any news from the road",
         })
 
@@ -1843,7 +1939,7 @@ class TestNpcDialogue(DMTestCase):
         }
         self.dm_core.load_scenario()
 
-        self.dm_core._on_action_detected({"actions": [{"skill": "blades"}], "input": "I attack the wolf"})
+        self.dm_core._on_turn_detected({"clauses": [{"kind": "action", "skill": "blades"}], "input": "I attack the wolf"})
 
         self.assertEqual(len(self.round_events), 1)
         self.assertEqual(self.action_events, [])
@@ -2110,7 +2206,7 @@ class TestMultiRoomDungeon(DMTestCase):
     def test_failed_disarm_damages_the_player_and_arms_blocks_further_attempts(self):
         starting_hp = self.dm_core.get_current_hp("gladstone")
         with patch("random.randint", return_value=1):  # finesse 3d1=3, well under difficulty 9
-            self.dm_core._on_action_detected({"actions": [{"skill": "finesse"}], "input": "I try to disarm the trap"})
+            self.dm_core._on_turn_detected({"clauses": [{"kind": "action", "skill": "finesse"}], "input": "I try to disarm the trap"})
 
         result = self.action_events[-1]["actions"][0]
         self.assertFalse(result["success"])
@@ -2126,14 +2222,14 @@ class TestMultiRoomDungeon(DMTestCase):
         # opposed path (difficulty 0, no HP loss) instead of rolling and re-damaging again.
         hp_after_first_hit = self.dm_core.get_current_hp("gladstone")
         with patch("random.randint", return_value=6):
-            self.dm_core._on_action_detected({"actions": [{"skill": "finesse"}], "input": "I try again"})
+            self.dm_core._on_turn_detected({"clauses": [{"kind": "action", "skill": "finesse"}], "input": "I try again"})
         self.assertEqual(self.action_events[-1]["actions"][0]["difficulty"], 0)
         self.assertEqual(self.dm_core.get_current_hp("gladstone"), hp_after_first_hit)
 
 
     def test_forward_succeeds_once_the_player_reaches_the_exit_band(self):
         with patch("random.randint", return_value=6):
-            self.dm_core._on_action_detected({"actions": [{"skill": "finesse"}], "input": "I disarm the trap"})
+            self.dm_core._on_turn_detected({"clauses": [{"kind": "action", "skill": "finesse"}], "input": "I disarm the trap"})
         self.dm_core.advance_or_retreat("advance")  # band 1 -> 2, toward the trap/exit
         self.assertEqual(self.dm_core.get_band("gladstone"), 2)
 

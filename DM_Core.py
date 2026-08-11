@@ -30,10 +30,11 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         every dm_core.<method>(...) call site throughout the codebase and test_all.py keeps
         working unchanged regardless of which file actually defines a given method (Python's
         MRO flattens every mixin method onto this one class). DM_Core.py itself is reduced
-        to __init__ (boot wiring) plus the three real event handlers, _on_action_detected,
+        to __init__ (boot wiring) plus the three real event handlers, _on_turn_detected,
         _on_item_interaction_detected, and _on_dialogue_detected, and their direct helpers --
         the pieces that orchestrate calls across every mixin and don't belong to any single
-        domain.
+        domain. _on_turn_detected also calls _on_item_interaction_detected directly, once per
+        item-kind clause in a mixed turn -- see its own "Multiple actions" docstring.
     """
 
     def __init__(self, event_bus, scenario_name="arena", character=None, setting="Fantasy"):
@@ -120,73 +121,98 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             # Room-level presence snapshot (see DM_Dialogue.py's own module docstring and
             # LLMCore._filter_present_history) -- who was actually here to witness this
             # narration, tagged onto every DM-published narration-triggering event the same
-            # way (see _on_action_detected/_on_item_interaction_detected/_on_dialogue_detected
+            # way (see _on_turn_detected/_on_item_interaction_detected/_on_dialogue_detected
             # below), so a later per-entity dialogue query can tell what a given NPC has
             # actually seen apart from the DM's own always-omniscient narration.
             "present_entities": list(self.scenario_entities),
         })
-        self.event_bus.subscribe("action_detected", self._on_action_detected)
+        self.event_bus.subscribe("turn_detected", self._on_turn_detected)
         self.event_bus.subscribe("item_interaction_detected", self._on_item_interaction_detected)
         self.event_bus.subscribe("dialogue_detected", self._on_dialogue_detected)
         self.event_bus.subscribe("save_requested", self._on_save_requested)
         self.event_bus.subscribe("load_requested", self._on_load_requested)
 
-    def _on_action_detected(self, data):
+    def _on_turn_detected(self, data):
         """!
-        @brief Event handler that resolves every action the player attempted this turn,
-            opposed by the player's current combat target where one applies, and applies
-            damage for each that hit with an attack ability. Combat (the player's own
+        @brief Event handler that resolves everything the player attempted this turn --
+            item interactions and skill/ability actions alike, arbitrarily mixed in one input
+            -- opposed by the player's current combat target where one applies, and applies
+            damage for each action that hit with an attack ability. Combat (the player's own
             current_target ends the turn hostile toward the player) narrates once per round
             via "round_resolved"; everything else narrates immediately via "action_resolved" --
             exactly once either way, no matter how many actions the player attempted, since
             _resolve_combat_round is only ever called once, after every one of the player's own
-            actions has already resolved (see "Multiple actions" below).
+            skill/ability actions has already resolved (see "Multiple actions" below).
 
             **Multiple actions.** NLPCore splits a single input into one or more independent
-            action clauses (see NLP_Core.py's ACTION_CLAUSE_PATTERN/_split_action_clauses) and
-            always publishes a plural "actions" list, even for the overwhelmingly common
-            single-clause case -- so this handler, DM_Combat.py's resolve_action/
-            resolve_opposed_action, and every "action_resolved"/"round_resolved" consumer
-            (LLM_Core.py) are all built around one consistent shape rather than a flat
-            single-action payload for N=1 and a list for N>=2. This is the West End Games D6
-            "multiple actions" rule: a character may attempt as many actions as they want in
-            one turn, but every action beyond the first (movement and speech excepted --
-            neither ever reaches this handler at all, see DM_Movement.py/DM_Dialogue.py) costs
-            every one of that turn's actions a cumulative -1D. dice_penalty below is exactly
-            that: 0 for a single action (unchanged from before this mechanic existed), N-1 for
-            N. Diceless item-test/no-roll outcomes still go through the same loop (so a batch
-            can freely mix "pick the lock" with "attack the orc"), but the *penalty* only ever
-            reduces an actual dice pool -- see resolve_action's own docstring. Diceless
-            item-*interaction* (give/take/equip/...) is a wholly separate event/pipeline
-            (_on_item_interaction_detected) and was never part of this count at all.
-        @param data The action_detected payload from NLPCore ({actions: [{skill, score,
-            target?}, ...], input}). Each entry's "skill" is usually a plain skill name, but
-            may also be a named technique/spell the player owns (ex: "cleave") --
-            resolve_named_ability/select_ability_skill are what convert that into the skill
-            it's actually rolled with, while keeping the named ability itself to use directly
-            for damage further down. Each entry's own "target", if present, is NLPCore's
-            best-guess entity name match for that one clause (see map_to_target) -- honored as
-            an item-test target (see _resolve_item_test_target) if it names a reachable,
-            testable item; otherwise as a combat redirect if it names a live, hostile, in-scene
-            entity; otherwise the persisted self.current_target is left alone.
+            clauses (see NLP_Core.py's ACTION_CLAUSE_PATTERN/_split_action_clauses) and
+            classifies each as either an item interaction or a skill/ability action, publishing
+            both kinds together in one "clauses" list -- always plural, even for the
+            overwhelmingly common single-clause case, so this handler, DM_Combat.py's
+            resolve_action/resolve_opposed_action, and every "action_resolved"/"round_resolved"
+            consumer (LLM_Core.py) are all built around one consistent shape. This is the West
+            End Games D6 "multiple actions" rule: a character may attempt as many actions as
+            they want in one turn, but every action beyond the first (movement and speech
+            excepted -- neither ever reaches this handler at all, see DM_Movement.py/
+            DM_Dialogue.py) costs every one of that turn's actions a cumulative -1D. Drawing a
+            weapon, picking something up, giving/trading/opening/using an item are all "an
+            action" the same way swinging a sword is -- item interactions cost a turn slot in
+            `clauses` exactly like a skill/ability entry does, they just never receive
+            dice_penalty themselves, since they never rolled anything to begin with (same
+            treatment a future reload entry would get). dice_penalty below is computed from the
+            *combined* clause count -- 0 for a single clause of either kind (unchanged from
+            before this mechanic existed), N-1 for N. Diceless item-*test* outcomes (ex:
+            picking a lock) still go through the skill/ability loop below and do receive
+            dice_penalty, since they do roll dice -- distinct from an item *interaction*
+            (give/take/equip/...), which is resolved via the existing, entirely unchanged
+            _on_item_interaction_detected (its own resolution logic never rolled anything, so
+            it needs no dice_penalty awareness at all -- it's simply called once per item-kind
+            clause here instead of being the sole top-level handler for a whole input).
+        @param data The turn_detected payload from NLPCore ({clauses: [{kind: "item", intent,
+            item_name} | {kind: "action", skill, score, target?}, ...], input}). Item-kind
+            clauses resolve immediately, in clause order, via _on_item_interaction_detected
+            (narrating right away); action-kind clauses accumulate into one batch, resolved
+            and narrated together exactly the way a lone action always has. Each action
+            entry's "skill" is usually a plain skill name, but may also be a named technique/
+            spell the player owns (ex: "cleave") -- resolve_named_ability/select_ability_skill
+            are what convert that into the skill it's actually rolled with, while keeping the
+            named ability itself to use directly for damage further down. Each action entry's
+            own "target", if present, is NLPCore's best-guess entity name match for that one
+            clause (see map_to_target) -- honored as an item-test target (see
+            _resolve_item_test_target) if it names a reachable, testable item; otherwise as a
+            combat redirect if it names a live, hostile, in-scene entity; otherwise the
+            persisted self.current_target is left alone.
         """
-        actions = data.get("actions")
-        if not actions:
+        clauses = data.get("clauses")
+        if not clauses:
             return
         input_text = data.get("input")
-        # Every action attempted this turn beyond the first costs every one of them -1D (see
-        # this method's own "Multiple actions" note) -- 0 for the ordinary single-action turn,
-        # unchanged from every existing call site's behavior before this mechanic existed.
-        dice_penalty = max(0, len(actions) - 1)
+        # Every clause this turn -- item interaction or skill/ability action alike -- shares
+        # the same cumulative -1D economy (see this method's own "Multiple actions" note). 0
+        # for a single clause, unchanged from every existing call site's behavior before this
+        # mechanic existed.
+        dice_penalty = max(0, len(clauses) - 1)
 
         player_actions = []
-        # Whether any sub-action this turn actually went through target-based resolution, as
-        # opposed to every one of them being an item test (which never engages self.current_
-        # target at all, and must never trigger a round just because that persistent, cross-
-        # turn field happens to already be hostile from some earlier turn -- ex: identifying a
-        # potion while a dead-but-still-nominally-current wolf sits in self.current_target).
+        # Whether any action-kind clause this turn actually went through target-based
+        # resolution, as opposed to every one of them being an item test (which never engages
+        # self.current_target at all, and must never trigger a round just because that
+        # persistent, cross-turn field happens to already be hostile from some earlier turn --
+        # ex: identifying a potion while a dead-but-still-nominally-current wolf sits in
+        # self.current_target). Item-*interaction* clauses (resolved separately, below) never
+        # set this either -- they never touch self.current_target at all.
         engaged_combat_target = False
-        for entry in actions:
+        for entry in clauses:
+            if entry.get("kind") == "item":
+                # Resolved via the exact same, unchanged item-interaction pipeline a bare
+                # item_interaction_detected event already uses -- narrates immediately, in
+                # clause order, rather than joining player_actions below, which only ever
+                # covers the skill/ability portion of the turn.
+                self._on_item_interaction_detected({
+                    "intent": entry.get("intent"), "item_name": entry.get("item_name"), "input": input_text,
+                })
+                continue
+
             skill_name = entry.get("skill")
             if not skill_name:
                 continue
@@ -218,10 +244,10 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             "present_entities": list(self.scenario_entities),
         }
 
-        # Checked once, after every one of the player's own actions this turn has already
-        # resolved (and any explicit per-action target redirect has already happened) -- not
-        # per action, which is what actually keeps a multi-action turn to exactly one round
-        # (see this method's own "Multiple actions" note).
+        # Checked once, after every one of the player's own skill/ability actions this turn
+        # has already resolved (and any explicit per-action target redirect has already
+        # happened) -- not per action, which is what actually keeps a multi-action turn to
+        # exactly one round (see this method's own "Multiple actions" note).
         if (
             engaged_combat_target
             and self.current_target is not None
@@ -283,7 +309,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         @param input_text The player's raw input, attached to the result for narration.
         @param dice_penalty Forwarded to _resolve_item_test -- an item test still rolls dice
             (see resolve_action's own docstring), so it shares this turn's multi-action
-            penalty exactly like an opposed roll does (see _on_action_detected's own
+            penalty exactly like an opposed roll does (see _on_turn_detected's own
             "Multiple actions" note).
         @return A publish-ready action_resolved result dict, or None if explicit_target isn't
             a reachable, testable item.
@@ -358,7 +384,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         @param named_ability The resolved ability entity (technique/spell), or None.
         @param target_name self.current_target, or None.
         @param dice_penalty Forwarded to resolve_action/resolve_opposed_action for the
-            player's own roll only -- see _on_action_detected's own "Multiple actions" note.
+            player's own roll only -- see _on_turn_detected's own "Multiple actions" note.
             0 for an ordinary single action, unchanged from this method's behavior before that
             mechanic existed.
         @return (result, ability, via_test) -- ability is the attack ability resolved for the
@@ -677,7 +703,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         @brief Event handler for a free-text dialogue match (see NLPCore.DIALOGUE_KEYWORDS/
             _detect_dialogue_intent): the player directly addressing someone, as opposed to a
             skill-based social check (persuade/intimidate/deceive, still resolved the ordinary
-            dice way through _on_action_detected) or any of the item/scene intents
+            dice way through _on_turn_detected) or any of the item/scene intents
             _on_item_interaction_detected covers. Bypasses the skill/dice system entirely, the
             same as every intent above -- there's nothing to roll for simply talking. Thin by
             design (see this class's own docstring): the actual addressee resolution and
@@ -732,13 +758,13 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
     def _resolve_item_test(self, item_name, skill_name, dice_penalty=0):
         """!
         @brief Resolves a flat [entity.test] check against a reachable item (see
-            _resolve_item_test_target) -- the item-level counterpart to _on_action_detected's
+            _resolve_item_test_target) -- the item-level counterpart to _on_turn_detected's
             own scene-target test branch, kept as a separate path since an item is never a
             combat target (no round, no defender_details, no damage).
         @param item_name The item entity's name (already confirmed reachable/testable by
             _resolve_item_test_target).
         @param skill_name The skill the player is attempting to use.
-        @param dice_penalty Forwarded to resolve_action -- see _on_action_detected's own
+        @param dice_penalty Forwarded to resolve_action -- see _on_turn_detected's own
             "Multiple actions" note.
         @return A resolve_action-shaped result dict, plus "revealed" (the item's own "tags"
                 list) if the check passed and its outcome had a truthy "reveal" key.
@@ -797,7 +823,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             non-combat interaction resolution, where that's always correct since a chest/NPC
             is never "defeated". Used both to set the initial current_target (via
             load_scenario()) and to advance it once the previous target dies (see
-            _on_action_detected's end-of-round check).
+            _on_turn_detected's end-of-round check).
         @return The chosen entity name, or None if nothing in the scenario is alive.
         """
         for instance_name in self.scenario_entities:
