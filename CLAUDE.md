@@ -43,15 +43,18 @@ when and how it's actually constructed.
   (attitudes, character description), `DM_Movement.py` (bands, range, plus the room-transition/
   formation item-interaction intents), `DM_Persistence.py` (save/load), `DM_CharacterCreation.py`
   (baking a finished character-creation result onto the player entity — see "Character
-  creation" below), and `DM_Dialogue.py` (resolving who's being directly addressed in
-  free-form conversation — see "Dialogue" below). Python's MRO flattens every mixin method onto
-  one `DMCore` instance, so `dm_core.<method>(...)` call sites don't care which file defines
-  a given method.
+  creation" below), `DM_Dialogue.py` (resolving who's being directly addressed in
+  free-form conversation — see "Dialogue" below), and `DM_Help.py` (the reserved "ADaM"
+  out-of-character help persona — see "ADaM (out-of-character help)" below). Python's MRO
+  flattens every mixin method onto one `DMCore` instance, so `dm_core.<method>(...)` call sites
+  don't care which file defines a given method.
 - **`NLP_Core.py`** — `sentence-transformers` (`all-MiniLM-L6-v2`) embeds each skill's
   name/description/keywords as separate phrases, then cosine-matches player input against all
   of them. Also matches free text against item names/directions/save-load prefixes for
-  non-skill intents (see "Items and movement as intents" below) and against `DIALOGUE_KEYWORDS`
-  for free-form conversational address (see "Dialogue" below). Splits the input into one or
+  non-skill intents (see "Items and movement as intents" below), against `DIALOGUE_KEYWORDS`
+  for free-form conversational address (see "Dialogue" below), and against the reserved
+  `ADAM_NAME_PATTERN` for the out-of-character help persona (see "ADaM (out-of-character help)"
+  below). Splits the input into one or
   more clauses (`_split_action_clauses`) and classifies each independently as an item
   interaction or a skill/ability action — merged into one `turn_detected {clauses: [{kind:
   "item", intent, item_name} | {kind: "action", skill, score, target?}, ...], input}` event,
@@ -60,7 +63,7 @@ when and how it's actually constructed.
   clauses fit in); if no clause resolves to anything at all, publishes `action_not_understood`
   instead.
 - **`LLM_Core.py`** — posts to LM Studio's OpenAI-compatible `/v1/chat/completions` on a
-  background thread, with a rolling 100-message context window. Subscribes to seven narration
+  background thread, with a rolling 100-message context window. Subscribes to eight narration
   triggers (see "Narration" below).
 - **`GUI_Core.py`** — Tkinter window: history pane + tabbed Party/Notes/Map/Debug panels, plus
   three dropdown menus on the window's menu bar: Character (Create... only), File (Save.../
@@ -803,6 +806,54 @@ everyone in the room, including the omniscient narrator and any other NPC presen
 witnessed, which is what lets a second NPC in the same room later recall what was just said to
 the first one.
 
+## ADaM (out-of-character help)
+
+`"ADaM"` (Artificial Dungeon and Master) is a fourth diceless channel — a reserved,
+always-available, explicitly out-of-character persona the player can address for guidance
+(their own skills/abilities, a re-description of the current scene, available exits, and
+general command/verb guidance), never an in-fiction one. Unlike Dialogue, there's no addressee
+to resolve (ADaM isn't a scene entity) and no way for it to be denied — it always resolves.
+It's also unconditionally free: unlike an item interaction, it never joins the shared
+multi-action turn economy at all (see "Multiple actions"), the same "communication is free"
+treatment movement/speech already get, just doubly so since it isn't even in-fiction speech.
+
+`NLP_Core.py`'s `ADAM_NAME_PATTERN` (`\badam\b`, case-insensitive) is checked as its own
+whole-input, pre-clause-split reserved word — right after save/load detection, ahead of both
+inter-room direction detection and the item-interaction pass — so `"talk to ADaM"`/`"ask ADaM
+about my skills"` reach the help channel rather than being swallowed by `DIALOGUE_KEYWORDS` or
+an item verb first (Dialogue's own target resolution searches `scenario_entities`, where
+"adam" is never found, so without this priority it would silently fall back to whatever the
+default scene target happens to be). This reserves the literal name "adam" the same way
+`DM_Rules.py`'s `PLAYER_PLACEHOLDER` reserves "player" — a known, accepted tradeoff (no future
+entity in any setting can be named Adam without colliding). Publishes `help_detected {input}`.
+
+`DM_Help.py`'s `HelpMixin._on_help_detected` gathers a fresh snapshot of live state every time
+it fires (no memory of past ADaM exchanges — see below) and publishes `help_resolved`: the
+player's own `[entity.skills]` formatted `"name: XD+Y"`, their `abilities` resolved via
+`resolve_ability` (`DM_Combat.py`, the same lookup any ability use already goes through) to a
+name/description, `equipped`/`inventory`, the current scene's `_current_scene_name`/
+`_current_scene_description` (`DM_Rules.py`), `present` via the same
+`_describe_scenario_characters()` roster the player is normally told, and `exits` — `[]` for a
+flat scenario, else the current room's own `[[room.exit]]` entries with each `destination` key
+resolved to that room's own friendly `name`. No `_publish_party_status()` call, same reasoning
+Dialogue already documents (nothing here ever mutates HP/equipment/inventory/conditions).
+
+**Deliberately excluded from `context_window`.** Every other narration trigger
+(`_queue_narration`/`_queue_dialogue`) appends both the prompt and the reply to `LLMCore`'s
+shared rolling window, which every future GM narration call replays in full (`_build_system_
+message` has no presence filtering at all — only Dialogue's own `_filter_present_history`
+does). ADaM's own `generate_adam_response`/`_build_adam_system_message`/`_queue_adam_response`
+(`LLM_Core.py`) instead send a standalone `[system, user]` request straight to `_fetch_and_
+publish(..., store_in_context=False)` — a new param that skips the usual `context_window.
+append(...)` on the reply — and never append the prompt either. Two reasons, not one: (1) tone
+— a meta/OOC exchange left in the shared window risks the GM later parroting mechanical facts
+in-fiction, since nothing filters it back out for the omniscient narrator the way presence-
+tagging does for a specific NPC; (2) budget — ADaM can be invoked repeatedly with dense
+payloads (full skill lists, exits, etc.) that would otherwise crowd the finite 100-message
+window, diluting real narrative history fast. The cost is that ADaM has no memory of its own
+past replies — each invocation is a fresh, independent request built from whatever `DM_Help.py`
+gathers off live state at that moment, not a continuation of an earlier ADaM conversation.
+
 ## Narration
 
 `LLMCore` subscribes to narration-relevant events, sharing outcome-text building
@@ -818,6 +869,9 @@ the first one.
   `_queue_dialogue` (see "Dialogue" above); a denied one falls back to an ordinary
   `_queue_narration` explanation, same shape as any other denied item interaction.
 - `game_load_failed` → `generate_load_failed_response`.
+- `help_resolved` → `generate_adam_response` — the reserved "ADaM" out-of-character help
+  persona (see "ADaM (out-of-character help)" above); routes through `_queue_adam_response`,
+  the one trigger here that never touches `context_window` at all.
 
 The scenario/room setting and character roster are re-injected into the system message on
 every request, so narration stays grounded even after the intro scrolls out of the rolling

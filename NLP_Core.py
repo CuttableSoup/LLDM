@@ -99,6 +99,19 @@ DIALOGUE_KEYWORDS = (
     "talk to ", "speak to ", "speak with ", "ask ", "tell ", "say to ", "greet ", "chat with ",
 )
 
+# Reserved persona name for the out-of-character help/guidance channel (see DM_Help.py) -- a
+# fixed, always-available meta-command in the same spirit as save/load, not an in-fiction
+# dialogue target: no scene entity is ever named "adam", so DialogueMixin's own "search
+# scenario_entities for a named entity" resolution would never find it and would silently fall
+# back to whatever the default scene target happens to be. Checked as its own whole-input,
+# pre-clause-split reserved word instead, ahead of both item-interaction detection and
+# DIALOGUE_KEYWORDS, so "talk to ADaM"/"ask ADaM about my skills" reach the help channel rather
+# than being swallowed as ordinary dialogue. \b-anchored, case-insensitive, so "Adam"/"ADAM"
+# all match but "adamant" doesn't. Known, accepted tradeoff: reserves the literal name "adam"
+# the same way DM_Rules.py's PLAYER_PLACEHOLDER reserves "player" -- no future entity in any
+# setting can be named Adam without colliding with this.
+ADAM_NAME_PATTERN = re.compile(r"\badam\b", re.IGNORECASE)
+
 DIRECTION_PHRASES = {
     "forward": (
         "next room", "proceed deeper", "continue deeper", "go deeper", "through the door",
@@ -202,9 +215,12 @@ class NLPCore:
             something up, and swinging a sword all cost the same shared per-turn action
             economy in West End Games D6; only movement and speech are actually free).
 
-            Two whole-input checks still run *ahead* of clause splitting, exactly as before
-            this merge: save/load (a meta-command, never split at all) and inter-room movement
-            (_detect_direction -- a different axis from advance/retreat below, see
+            Three whole-input checks still run *ahead* of clause splitting, exactly as before
+            this merge (save/load and direction) plus one new one (ADaM): save/load (a
+            meta-command, never split at all), ADaM (also a meta-command -- see
+            ADAM_NAME_PATTERN's own module note -- checked right after save/load so it beats
+            both item-interaction detection and DIALOGUE_KEYWORDS to the punch), and inter-room
+            movement (_detect_direction -- a different axis from advance/retreat below, see
             DIRECTION_PHRASES' own module note). Dialogue detection also still runs against
             the *whole* input, not per clause (left that way deliberately for now -- full
             multi-intent-type composition involving dialogue is still out of scope), but only
@@ -219,6 +235,10 @@ class NLPCore:
         save_load_intent, slot_name = self._detect_save_load_intent(processed)
         if save_load_intent:
             self.event_bus.publish(f"{save_load_intent}_requested", {"slot": slot_name})
+            return
+
+        if self._detect_help_intent(processed):
+            self.event_bus.publish("help_detected", {"input": processed})
             return
 
         direction = self._detect_direction(processed)
@@ -367,6 +387,17 @@ class NLPCore:
         @return True if processed_text contains any DIALOGUE_KEYWORDS phrase, else False.
         """
         return any(keyword in processed_text for keyword in DIALOGUE_KEYWORDS)
+
+    def _detect_help_intent(self, processed_text):
+        """!
+        @brief Checks processed input for the reserved "adam" persona name -- see
+            ADAM_NAME_PATTERN's own module note for why this is checked ahead of everything
+            else (including dialogue and item-interaction detection) rather than folded into
+            either.
+        @param processed_text The cleaned and processed player input.
+        @return True if processed_text contains the whole word "adam" (any case), else False.
+        """
+        return bool(ADAM_NAME_PATTERN.search(processed_text))
 
     def _detect_direction(self, processed_text):
         """!

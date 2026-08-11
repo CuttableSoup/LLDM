@@ -348,6 +348,32 @@ class TestNlpConfidenceThreshold(unittest.TestCase):
         self.assertEqual(len(turn_events), 1)
         self.assertEqual(turn_events[0]["clauses"], [{"kind": "item", "intent": "give", "item_name": "longsword"}])
 
+    def test_detect_help_intent_matches_whole_word_adam_only(self):
+        self.assertTrue(self.nlp_core._detect_help_intent("adam, what are my skills?"))
+        self.assertTrue(self.nlp_core._detect_help_intent("ADaM help me"))
+        # \b-anchored -- "adam" appearing inside another word must never match.
+        self.assertFalse(self.nlp_core._detect_help_intent("this sword is adamantine"))
+        self.assertFalse(self.nlp_core._detect_help_intent("attack the wolf"))
+
+    def test_adam_wins_over_both_item_verb_and_dialogue_in_the_same_input(self):
+        # Checked ahead of both the item-interaction pass and DIALOGUE_KEYWORDS -- naming
+        # "adam" anywhere in the input always reaches the help channel, never ordinary
+        # dialogue (whose own target resolution would never find "adam" among
+        # scenario_entities and would silently fall back to the default scene target instead).
+        help_events = []
+        dialogue_events = []
+        turn_events = []
+        self.event_bus.subscribe("help_detected", help_events.append)
+        self.event_bus.subscribe("dialogue_detected", dialogue_events.append)
+        self.event_bus.subscribe("turn_detected", turn_events.append)
+
+        self.event_bus.publish("user_input_submitted", "talk to ADaM and give the longsword to thane")
+
+        self.assertEqual(len(help_events), 1)
+        self.assertEqual(dialogue_events, [])
+        self.assertEqual(turn_events, [])
+        self.assertIn("adam", help_events[0]["input"])
+
     def test_detect_save_load_intent_parses_slot_names(self):
         self.assertEqual(self.nlp_core._detect_save_load_intent("save as arena run 1"), ("save", "arena run 1"))
         self.assertEqual(
@@ -2016,6 +2042,65 @@ class TestFreeformDialogue(DMTestCase):
         self.assertEqual(set(result["present_entities"]), set(self.dm_core.scenario_entities))
 
 
+class TestHelpChannel(DMTestCase):
+    """!
+    @brief DM_Help.py's HelpMixin -- the reserved "ADaM" out-of-character help channel. Unlike
+        TestFreeformDialogue above, there's no "not found"/"denied" case to cover -- ADaM isn't
+        a scene entity, so _on_help_detected always resolves.
+    """
+    scenario_name = "arena"
+
+    def setUp(self):
+        super().setUp()
+        self.help_events = self._capture("help_resolved")
+
+    def _ask(self, input_text="adam, help me"):
+        self.dm_core._on_help_detected({"input": input_text})
+        return self.help_events[-1]
+
+    def test_reports_the_players_own_skills_and_gear(self):
+        result = self._ask()
+
+        self.assertIn("longsword", result["equipped"].values())
+        self.assertIn("health potion", result["inventory"])
+        self.assertTrue(any(entry.startswith("blades:") for entry in result["skills"]))
+        self.assertTrue(any(entry.startswith("fireball") for entry in result["abilities"]))
+
+    def test_reports_the_current_scene_and_present_entities(self):
+        result = self._ask()
+
+        self.assertTrue(result["scene_name"])
+        self.assertTrue(result["scene_description"])
+        self.assertEqual(result["present"], self.dm_core._describe_scenario_characters())
+
+    def test_no_exits_in_a_flat_single_room_scenario(self):
+        result = self._ask()
+        self.assertEqual(result["exits"], [])
+
+    def test_input_and_presence_snapshot_are_carried_through(self):
+        result = self._ask("adam, what can i do")
+        self.assertEqual(result["input"], "adam, what can i do")
+        self.assertEqual(set(result["present_entities"]), set(self.dm_core.scenario_entities))
+
+
+class TestHelpChannelExits(DMTestCase):
+    """!
+    @brief Multi-room-dungeon side of HelpMixin -- exits are only meaningful when self.rooms
+        is populated (see _describe_available_exits), so this is exercised separately against
+        "crypt" rather than folded into TestHelpChannel's own flat-scenario fixture.
+    """
+    scenario_name = "crypt"
+
+    def test_lists_the_current_rooms_own_exits_with_friendly_destination_names(self):
+        self.help_events = self._capture("help_resolved")
+        self.dm_core._on_help_detected({"input": "adam, where can i go"})
+
+        result = self.help_events[-1]
+        # "entrance" (the starting room) has exactly one exit, "forward" to "hall_of_webs" --
+        # whose own room name ("The Hall of Webs") should be reported, not the raw room key.
+        self.assertEqual(result["exits"], [{"direction": "forward", "destination_name": "The Hall of Webs"}])
+
+
 class TestAttitudePhrases(DMTestCase):
     def _tier_name(self, value):
         tier = self.dm_core.get_attitude_tier(value)
@@ -2462,6 +2547,76 @@ class TestLlmDebugEvent(LLMTestCase):
         self.assertIn("[system]", debug_events[0]["query"])
         self.assertIn("The wolf attacks.", debug_events[0]["query"])
         self.assertEqual(debug_events[0]["response"], "The wolf snarls.")
+
+
+class TestAdamNarration(LLMTestCase):
+    """!
+    @brief LLMCore's own side of DM_Help.py's channel: generate_adam_response/
+        _build_adam_system_message/_queue_adam_response. The load-bearing property under test
+        is the isolation guarantee -- unlike every other narration trigger, an ADaM exchange
+        must never touch context_window at all (see LLM_Core.py's own module notes for why).
+    """
+
+    def _help_payload(self, **overrides):
+        payload = {
+            "input": "what are my skills",
+            "present_entities": ["gladstone"],
+            "skills": ["blades: 5D+0", "finesse: 3D+0"],
+            "abilities": ["fireball: A ball of fire."],
+            "equipped": {"rhand": "longsword"},
+            "inventory": ["longsword", "health potion"],
+            "scene_name": "The Arena",
+            "scene_description": "A large arena.",
+            "present": ["gladstone - A man"],
+            "exits": [{"direction": "forward", "destination_name": "The Hall of Webs"}],
+        }
+        payload.update(overrides)
+        return payload
+
+    def test_publishing_help_resolved_never_touches_context_window(self):
+        # No thread/network mocking needed -- _queue_adam_response never appends to
+        # context_window at all, synchronously, before the background thread even starts (the
+        # same style TestFreeformDialogueNarration already uses to assert dialogue's own
+        # pre-fetch context_window append, just proving the opposite here).
+        self.assertEqual(self.llm_core.context_window, [])
+
+        self.event_bus.publish("help_resolved", self._help_payload())
+
+        self.assertEqual(self.llm_core.context_window, [])
+
+    def test_system_message_includes_general_guidance_and_the_live_payload(self):
+        message = self.llm_core._build_adam_system_message(self._help_payload(), rag_query=None)
+
+        self.assertIn("ADaM", message)
+        self.assertIn("out-of-character", message)
+        # General command guidance -- the actual onboarding gap this persona closes.
+        self.assertIn("equip/wear", message)
+        self.assertIn("save/load", message)
+        # The live, dynamic payload.
+        self.assertIn("blades: 5D+0", message)
+        self.assertIn("fireball: A ball of fire.", message)
+        self.assertIn("longsword", message)
+        self.assertIn("The Arena", message)
+        self.assertIn("The Hall of Webs", message)
+
+    def test_fetch_still_publishes_llm_response_ready_without_storing_in_context(self):
+        # The real fetch path (threading.Thread + urllib.request.urlopen mocked, same style as
+        # TestLlmDebugEvent) confirms _fetch_and_publish's new store_in_context=False actually
+        # skips the append on the success path too, not just before the thread starts.
+        response_events = []
+        self.event_bus.subscribe("llm_response_ready", response_events.append)
+        fake_response = MagicMock()
+        fake_response.read.return_value = json.dumps(
+            {"choices": [{"message": {"content": "You know blades and finesse."}}]}
+        ).encode("utf-8")
+
+        with patch("threading.Thread") as mock_thread, \
+             patch("urllib.request.urlopen", return_value=fake_response):
+            self.event_bus.publish("help_resolved", self._help_payload())
+            mock_thread.call_args.kwargs["target"]()
+
+        self.assertEqual(response_events, ["You know blades and finesse."])
+        self.assertEqual(self.llm_core.context_window, [])
 
 
 class FakeRagIndex:

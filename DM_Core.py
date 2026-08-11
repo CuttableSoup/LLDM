@@ -4,6 +4,7 @@ import re
 from DM_CharacterCreation import CharacterCreationMixin
 from DM_Combat import CombatMixin
 from DM_Dialogue import DialogueMixin
+from DM_Help import HelpMixin
 from DM_Inventory import InventoryMixin
 from DM_Movement import MovementMixin
 from DM_NpcGeneration import NpcGenerationMixin
@@ -12,7 +13,7 @@ from DM_Rules import RulesMixin, scenario_file_path
 from DM_Social import SocialMixin
 from DM_Status import StatusMixin
 
-class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixin, RulesMixin, PersistenceMixin, CharacterCreationMixin, NpcGenerationMixin, DialogueMixin):
+class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixin, RulesMixin, PersistenceMixin, CharacterCreationMixin, NpcGenerationMixin, DialogueMixin, HelpMixin):
     """!
     @brief Main class handling the core mechanics of the RPG system. The implementation is
         composed from domain mixins in sibling files -- DM_Rules.py (rules/scenario
@@ -25,16 +26,18 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         (baking a finished character-creation result -- race + point-buy skill allocation,
         see Character_Creation.py's own module docstring -- onto the player entity),
         DM_NpcGeneration.py (turning a generate=true template into a real stat block at
-        instancing time, see NPC_Generation.py's own module docstring), and DM_Dialogue.py
-        (resolving who's being directly addressed in free-form conversation) -- so that
-        every dm_core.<method>(...) call site throughout the codebase and test_all.py keeps
-        working unchanged regardless of which file actually defines a given method (Python's
-        MRO flattens every mixin method onto this one class). DM_Core.py itself is reduced
-        to __init__ (boot wiring) plus the three real event handlers, _on_turn_detected,
-        _on_item_interaction_detected, and _on_dialogue_detected, and their direct helpers --
-        the pieces that orchestrate calls across every mixin and don't belong to any single
-        domain. _on_turn_detected also calls _on_item_interaction_detected directly, once per
-        item-kind clause in a mixed turn -- see its own "Multiple actions" docstring.
+        instancing time, see NPC_Generation.py's own module docstring), DM_Dialogue.py
+        (resolving who's being directly addressed in free-form conversation), and DM_Help.py
+        (the reserved "ADaM" out-of-character help channel -- see its own module docstring)
+        -- so that every dm_core.<method>(...) call site throughout the codebase and
+        test_all.py keeps working unchanged regardless of which file actually defines a given
+        method (Python's MRO flattens every mixin method onto this one class). DM_Core.py
+        itself is reduced to __init__ (boot wiring) plus the three real event handlers,
+        _on_turn_detected, _on_item_interaction_detected, and _on_dialogue_detected, and their
+        direct helpers -- the pieces that orchestrate calls across every mixin and don't
+        belong to any single domain. _on_turn_detected also calls _on_item_interaction_detected
+        directly, once per item-kind clause in a mixed turn -- see its own "Multiple actions"
+        docstring.
     """
 
     def __init__(self, event_bus, scenario_name="arena", character=None, setting="Fantasy"):
@@ -129,6 +132,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         self.event_bus.subscribe("turn_detected", self._on_turn_detected)
         self.event_bus.subscribe("item_interaction_detected", self._on_item_interaction_detected)
         self.event_bus.subscribe("dialogue_detected", self._on_dialogue_detected)
+        self.event_bus.subscribe("help_detected", self._on_help_detected)
         self.event_bus.subscribe("save_requested", self._on_save_requested)
         self.event_bus.subscribe("load_requested", self._on_load_requested)
 

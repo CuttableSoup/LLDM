@@ -37,6 +37,7 @@ class LLMCore:
         self.event_bus.subscribe("action_not_understood", self.generate_clarification_response)
         self.event_bus.subscribe("item_interaction_resolved", self.generate_item_interaction_response)
         self.event_bus.subscribe("dialogue_resolved", self.generate_npc_dialogue)
+        self.event_bus.subscribe("help_resolved", self.generate_adam_response)
         self.event_bus.subscribe("save_requested", self._on_save_requested)
         self.event_bus.subscribe("load_requested", self._on_load_requested)
         self.event_bus.subscribe("game_load_failed", self.generate_load_failed_response)
@@ -594,19 +595,24 @@ class LLMCore:
         """
         return [entry for entry in self.context_window if entity_name in (entry.get("present") or ())]
 
-    def _fetch_and_publish(self, messages, present_entities):
+    def _fetch_and_publish(self, messages, present_entities, store_in_context=True):
         """!
-        @brief The network call + response handling shared by _queue_narration and
-            _queue_dialogue's own background fetch threads -- everything downstream of "here
-            are the messages to send" is identical either way: POST to LM Studio, append the
-            reply to the shared context_window (tagged with present_entities, same as the
-            prompt that prompted it, so it becomes part of what everyone present has now
-            witnessed), and publish llm_response_ready/llm_debug_updated. Must never raise --
-            runs on a background thread with nothing to catch an exception it doesn't handle
-            itself (see this file's own module note on LLM_Client.py's different contract).
+        @brief The network call + response handling shared by _queue_narration/_queue_dialogue/
+            _queue_adam_response's own background fetch threads -- everything downstream of
+            "here are the messages to send" is identical either way: POST to LM Studio,
+            optionally append the reply to the shared context_window (tagged with
+            present_entities, same as the prompt that prompted it, so it becomes part of what
+            everyone present has now witnessed), and publish llm_response_ready/
+            llm_debug_updated. Must never raise -- runs on a background thread with nothing to
+            catch an exception it doesn't handle itself (see this file's own module note on
+            LLM_Client.py's different contract).
         @param messages The complete [{"role", "content"}, ...] list to send, system message
             included.
         @param present_entities The presence tag to attach to the appended assistant turn.
+        @param store_in_context Whether to append the reply to context_window at all -- True
+            for every ordinary narration/dialogue trigger, False for _queue_adam_response,
+            whose exchanges are deliberately excluded from the shared window entirely (see
+            _queue_adam_response's own docstring for why).
         """
         data = {"messages": messages, "temperature": 0.7, "max_tokens": 4096}
         # Exactly what's about to go over the wire, formatted for a human -- see
@@ -622,7 +628,8 @@ class LLMCore:
             response = urllib.request.urlopen(req)
             result = json.loads(response.read().decode('utf-8'))
             llm_text = result['choices'][0]['message']['content']
-            self.context_window.append({"role": "assistant", "content": llm_text, "present": present_entities})
+            if store_in_context:
+                self.context_window.append({"role": "assistant", "content": llm_text, "present": present_entities})
             self.event_bus.publish("llm_response_ready", llm_text)
             self.event_bus.publish("llm_debug_updated", {"query": query_text, "response": llm_text})
         except Exception as e:
@@ -732,6 +739,105 @@ class LLMCore:
             history = self._filter_present_history(target)
             messages = [{"role": "system", "content": system_message}] + self._api_messages(history)
             self._fetch_and_publish(messages, present_entities)
+
+        threading.Thread(target=fetch_from_llm, daemon=True).start()
+
+    def generate_adam_response(self, data):
+        """!
+        @brief Narrates a reply from ADaM, the reserved out-of-character help persona (see
+            DM_Help.py's own module docstring for what triggers this and what data it
+            gathers) -- always resolves (there's no "not found" case; ADaM isn't a scene
+            entity that can be absent) and always speaks directly to the player as an
+            explicit meta/OOC assistant, never in-fiction.
+        @param data The "help_resolved" payload (DM_Help.py's HelpMixin._on_help_detected).
+        """
+        self.event_bus.publish("log_info", "Generating ADaM response.")
+        prompt = f"The player asks ADaM: \"{data.get('input', '')}\""
+        self._queue_adam_response(prompt, data, rag_query=data.get("input"))
+
+    def _build_adam_system_message(self, help_data, rag_query):
+        """!
+        @brief The ADaM counterpart to _build_dialogue_system_message -- speaks as ADaM, an
+            explicitly out-of-character assistant, not the omniscient in-fiction Game Master
+            (_build_system_message) or an in-world character (_build_dialogue_system_message).
+            Grounded in a static paragraph of general command/verb guidance (the actual
+            onboarding gap this persona exists to close) plus help_data's own live snapshot of
+            the player's mechanical state and the current scene (DM_Help.py).
+        @param help_data The "help_resolved" payload.
+        @param rag_query What to retrieve sourcebook lore against (see perform_rag).
+        @return The complete system message string for this one request.
+        """
+        system_message = (
+            "You are ADaM (Artificial Dungeon and Master), an out-of-character assistant "
+            "speaking directly to the player as yourself -- never narrating in-fiction events, "
+            "never speaking as the Game Master or any character in the scene. Answer the "
+            "player's question plainly and concisely, using only the facts given below; never "
+            "invent skills, items, exits, or people that aren't listed.\n\n"
+            "The game understands free text mapped onto these kinds of actions: skill/ability "
+            "actions (ex: \"attack the wolf\", \"cast fireball\"); item actions (examine, "
+            "equip/wear, unequip/take off, drop, take, give, trade, open, close, use/drink); "
+            "movement (advance/retreat within a scene, or a direction to leave a room through "
+            "an exit); talking directly to someone present (\"talk to X\", \"ask X about "
+            "...\"); directing the party (\"stay behind me\"/\"walk beside me\"); and "
+            "save/load (\"save as <name>\", \"load <name>\")."
+        )
+
+        if help_data.get("skills"):
+            system_message += "\n\nThe player's own skills: " + "; ".join(help_data["skills"])
+        if help_data.get("abilities"):
+            system_message += "\nThe player's own abilities: " + "; ".join(help_data["abilities"])
+        if help_data.get("equipped"):
+            equipped = ", ".join(f"{slot}: {item}" for slot, item in help_data["equipped"].items())
+            system_message += f"\nCurrently equipped: {equipped}"
+        if help_data.get("inventory"):
+            system_message += "\nInventory: " + ", ".join(help_data["inventory"])
+        if help_data.get("scene_name") or help_data.get("scene_description"):
+            system_message += (
+                f"\n\nCurrent scene: \"{help_data.get('scene_name', '')}\" - "
+                f"{help_data.get('scene_description', '')}"
+            )
+        if help_data.get("present"):
+            system_message += "\nPresent here: " + " | ".join(help_data["present"])
+        if help_data.get("exits"):
+            exits = ", ".join(
+                f"{exit_info.get('direction')} (to {exit_info.get('destination_name')})"
+                for exit_info in help_data["exits"]
+            )
+            system_message += f"\nExits from here: {exits}"
+
+        rag_context = self.perform_rag(rag_query)
+        if rag_context:
+            system_message += (
+                "\nReference lore from the campaign sourcebook, relevant to this moment "
+                f"(use only what applies; don't contradict it):\n{rag_context}"
+            )
+        return system_message
+
+    def _queue_adam_response(self, prompt, help_data, rag_query=None):
+        """!
+        @brief The ADaM counterpart to _queue_narration/_queue_dialogue -- same background-
+            fetch machinery, but deliberately does *not* touch context_window at all, unlike
+            every other narration trigger (which all append both the prompt and the reply to
+            the shared rolling window). Two reasons: (1) tone -- context_window is replayed in
+            full by every future _build_system_message-based GM narration call (no presence
+            filtering there, only dialogue's own _filter_present_history does that), so a
+            meta/OOC exchange left in it risks the GM later parroting mechanical facts
+            in-fiction; (2) budget -- ADaM can be invoked repeatedly with dense payloads (full
+            skill lists, exits, etc.), and left in the shared 100-message window that would
+            crowd out real narrative history fast. Each invocation is therefore a standalone,
+            stateless request: help_data is gathered fresh from live game state every time
+            (DM_Help.py), not remembered from a prior ADaM exchange.
+        @param prompt The user-role prompt: the player's own words, addressed to ADaM.
+        @param help_data The "help_resolved" payload, threaded through to
+            _build_adam_system_message.
+        @param rag_query What to retrieve sourcebook lore against -- the player's own raw
+            input, same convention every other narration trigger follows.
+        """
+        system_message = self._build_adam_system_message(help_data, rag_query if rag_query else prompt)
+        messages = [{"role": "system", "content": system_message}, {"role": "user", "content": prompt}]
+
+        def fetch_from_llm():
+            self._fetch_and_publish(messages, present_entities=None, store_in_context=False)
 
         threading.Thread(target=fetch_from_llm, daemon=True).start()
 
