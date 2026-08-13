@@ -382,16 +382,22 @@ class LLMCore:
                 f"Narrate this in 1-2 sentences as the Game Master."
             )
         elif intent == "use":
-            # "healed"/"remaining_hp"/"charges_left"/"replaced_with" are
+            # "healed"/"poisoned"/"remaining_hp"/"charges_left"/"replaced_with" are
             # DMCore._resolve_use_intent's own real roll/consumption results, never invented --
             # same "feed the LLM the real mechanical outcome" rule every other roll-bearing
-            # narration already follows. "healed" is 0 for an item with no healing effect
-            # wired yet (ex: a future wand) -- worded to not claim an effect that didn't happen.
+            # narration already follows. "healed"/"poisoned" are each 0 when the item carries no
+            # such effect -- worded to not claim an effect that didn't happen. An ad hoc-
+            # conjured consumable (DM_Improvisation.py) can carry either, so this is also where
+            # a "helpful-looking" improvised potion turning out to be poison actually reads as
+            # a real twist to the player, not a silent stat change.
             healed = data.get("healed", 0)
-            effect_text = (
-                f", restoring {healed} HP (now at {data.get('remaining_hp', 0)} HP)" if healed
-                else ""
-            )
+            poisoned = data.get("poisoned", 0)
+            if healed:
+                effect_text = f", restoring {healed} HP (now at {data.get('remaining_hp', 0)} HP)"
+            elif poisoned:
+                effect_text = f", dealing {poisoned} poison damage (now at {data.get('remaining_hp', 0)} HP)"
+            else:
+                effect_text = ""
             charges_left = data.get("charges_left", 0)
             if charges_left > 0:
                 aftermath = f" It has {charges_left} charge(s) left."
@@ -762,7 +768,11 @@ class LLMCore:
             (_build_system_message) or an in-world character (_build_dialogue_system_message).
             Grounded in a static paragraph of general command/verb guidance (the actual
             onboarding gap this persona exists to close) plus help_data's own live snapshot of
-            the player's mechanical state and the current scene (DM_Help.py).
+            the player's mechanical state and the current scene (DM_Help.py). Also mentions
+            help_data's own "removed" outcome, if present (DM_Improvisation.py's
+            _attempt_entity_removal, via DM_Help.py's own "removal_candidate" handling) -- the
+            one case this payload describes something ADaM itself just *did*, not just facts to
+            report.
         @param help_data The "help_resolved" payload.
         @param rag_query What to retrieve sourcebook lore against (see perform_rag).
         @return The complete system message string for this one request.
@@ -804,6 +814,12 @@ class LLMCore:
                 for exit_info in help_data["exits"]
             )
             system_message += f"\nExits from here: {exits}"
+        removed = help_data.get("removed")
+        if removed and removed.get("removed"):
+            system_message += (
+                f"\n\nYou just removed \"{removed.get('name')}\" from the scene entirely "
+                f"(reason: {removed.get('reason', 'as requested')}) -- mention this happened."
+            )
 
         rag_context = self.perform_rag(rag_query)
         if rag_context:

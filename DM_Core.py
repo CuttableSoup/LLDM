@@ -5,6 +5,7 @@ from DM_CharacterCreation import CharacterCreationMixin
 from DM_Combat import CombatMixin
 from DM_Dialogue import DialogueMixin
 from DM_Help import HelpMixin
+from DM_Improvisation import ImprovisationMixin
 from DM_Inventory import InventoryMixin
 from DM_Movement import MovementMixin
 from DM_NpcGeneration import NpcGenerationMixin
@@ -13,7 +14,7 @@ from DM_Rules import RulesMixin, scenario_file_path
 from DM_Social import SocialMixin
 from DM_Status import StatusMixin
 
-class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixin, RulesMixin, PersistenceMixin, CharacterCreationMixin, NpcGenerationMixin, DialogueMixin, HelpMixin):
+class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixin, RulesMixin, PersistenceMixin, CharacterCreationMixin, NpcGenerationMixin, DialogueMixin, HelpMixin, ImprovisationMixin):
     """!
     @brief Main class handling the core mechanics of the RPG system. The implementation is
         composed from domain mixins in sibling files -- DM_Rules.py (rules/scenario
@@ -27,9 +28,11 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         see Character_Creation.py's own module docstring -- onto the player entity),
         DM_NpcGeneration.py (turning a generate=true template into a real stat block at
         instancing time, see NPC_Generation.py's own module docstring), DM_Dialogue.py
-        (resolving who's being directly addressed in free-form conversation), and DM_Help.py
-        (the reserved "ADaM" out-of-character help channel -- see its own module docstring)
-        -- so that every dm_core.<method>(...) call site throughout the codebase and
+        (resolving who's being directly addressed in free-form conversation), DM_Help.py
+        (the reserved "ADaM" out-of-character help channel -- see its own module docstring),
+        and DM_Improvisation.py (ad hoc entity creation/removal via LLM function calling, see
+        its own module docstring and AdHoc_Generation.py) -- so that every
+        dm_core.<method>(...) call site throughout the codebase and
         test_all.py keeps working unchanged regardless of which file actually defines a given
         method (Python's MRO flattens every mixin method onto this one class). DM_Core.py
         itself is reduced to __init__ (boot wiring) plus the three real event handlers,
@@ -86,6 +89,12 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         self.rooms = {}
         self.current_room_key = None
         self.visited_rooms = {}
+        # Instance names forcibly removed from the scene via ImprovisationMixin's
+        # remove_entity_from_scene (DM_Improvisation.py) -- consulted by DM_Rules.py's
+        # _instance_entities so a removed hand-authored entity never respawns on a later room
+        # revisit or a reload. Must be set before load_scenario()/load_scenario_definition()
+        # below, both of which call _instance_entities.
+        self.removed_entities = set()
         self.rules = {}
         self.round_number = 0
         # The player's persisted combat target -- distinct from _get_target_name()'s "first
@@ -133,6 +142,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         self.event_bus.subscribe("item_interaction_detected", self._on_item_interaction_detected)
         self.event_bus.subscribe("dialogue_detected", self._on_dialogue_detected)
         self.event_bus.subscribe("help_detected", self._on_help_detected)
+        self.event_bus.subscribe("improvisation_requested", self._on_improvisation_requested)
         self.event_bus.subscribe("save_requested", self._on_save_requested)
         self.event_bus.subscribe("load_requested", self._on_load_requested)
 

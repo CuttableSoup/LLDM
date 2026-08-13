@@ -42,3 +42,54 @@ appraise = { dice = 2, pips = 0 }
 observation = { dice = 3, pips = 0 }
 streetwise = { dice = 2, pips = 1 }
 brawling = { dice = 1, pips = 0 }
+
+[[entity]]
+name = "shopkeeper"
+supertype = "creature"
+subtype = "humanoid"
+description = "A cheerful, round-faced merchant standing behind a cluttered counter of general goods."
+
+max_hp = 16
+
+currency = 60
+max_bulk = 5
+weight = 150
+
+languages = [ "common" ]
+memories = [ "Took over the shop from their father", "Knows every regular customer by name" ]
+quotes = [ "Welcome, welcome! Take a look around.", "If I don't have it in stock, I can probably find some." ]
+
+# Must stay above every [entity.xxx] sub-table below, or TOML would fold it into whichever one
+# came last instead of the top-level [[entity]] table (same gotcha characters.toml's own
+# gladstone comment already documents). Only one real, pre-authored good on hand -- deliberately
+# sparse. The point of this scenario is that "most general goods" (rope, a lantern, a waterskin,
+# ...) work through DM_Improvisation.py's ad hoc creation fallback (see CLAUDE.md's "Ad hoc
+# entity creation and removal") rather than needing every plausible item hand-authored here first.
+inventory = [ "dagger" ]
+
+[entity.attitudes]
+default = [ 40, 20, 10, 0, 0, 0 ]
+# disposition   Hostile <-> Friendly
+# trust         Suspicious <-> Trusting
+# confidence    Fearful <-> Confident
+# respect       Disdainful <-> Admiring
+# obligation    Unfettered <-> Indebted
+# intimacy      Disgusted <-> Enamored
+
+[entity.qualities]
+body = "round"
+eye = "hazel"
+gender = "female"
+hair = "brown"
+height = "average"
+skin = "tan"
+size = "medium"
+race = "human"
+age = 44
+
+[entity.conditions]
+
+[entity.skills]
+charisma = { dice = 3, pips = 0 }
+appraise = { dice = 4, pips = 0 }
+persuasion = { dice = 2, pips = 0 }

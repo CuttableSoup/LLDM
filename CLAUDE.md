@@ -44,8 +44,10 @@ when and how it's actually constructed.
   formation item-interaction intents), `DM_Persistence.py` (save/load), `DM_CharacterCreation.py`
   (baking a finished character-creation result onto the player entity — see "Character
   creation" below), `DM_Dialogue.py` (resolving who's being directly addressed in
-  free-form conversation — see "Dialogue" below), and `DM_Help.py` (the reserved "ADaM"
-  out-of-character help persona — see "ADaM (out-of-character help)" below). Python's MRO
+  free-form conversation — see "Dialogue" below), `DM_Help.py` (the reserved "ADaM"
+  out-of-character help persona — see "ADaM (out-of-character help)" below), and
+  `DM_Improvisation.py` (ad hoc entity creation/removal via LLM function calling — see "Ad hoc
+  entity creation and removal" below). Python's MRO
   flattens every mixin method onto one `DMCore` instance, so `dm_core.<method>(...)` call sites
   don't care which file defines a given method.
 - **`NLP_Core.py`** — `sentence-transformers` (`all-MiniLM-L6-v2`) embeds each skill's
@@ -54,7 +56,14 @@ when and how it's actually constructed.
   non-skill intents (see "Items and movement as intents" below), against `DIALOGUE_KEYWORDS`
   for free-form conversational address (see "Dialogue" below), and against the reserved
   `ADAM_NAME_PATTERN` for the out-of-character help persona (see "ADaM (out-of-character help)"
-  below). Splits the input into one or
+  below) — also gated by `REMOVAL_KEYWORDS`, a cheap local pre-check for whether an
+  ADaM-addressed message is worth a synchronous ad hoc-removal LLM call (see "Ad hoc entity
+  creation and removal" below). An item-verb clause whose own item name doesn't match anything
+  is tracked and, if the whole turn would otherwise resolve to nothing at all, published as
+  `improvisation_requested` instead of `action_not_understood` — the ad hoc entity creation
+  fallback (same section). Also incrementally re-registers a newly-created/reload-restored ad
+  hoc entity's own name/description into its item-matching embeddings on `item_catalog_updated`,
+  the one event here that isn't itself input-driven. Splits the input into one or
   more clauses (`_split_action_clauses`) and classifies each independently as an item
   interaction or a skill/ability action — merged into one `turn_detected {clauses: [{kind:
   "item", intent, item_name} | {kind: "action", skill, score, target?}, ...], input}` event,
@@ -723,11 +732,16 @@ the same shared per-turn clause list a skill/ability action does.
 - `_resolve_open_close_intent` is gated to `subtype == "container"`; toggles `"closed"`,
   independent of `"locked"` — a picked lock still needs its own `"open"`. A successful open
   attaches `contents`: one flavor-description string per item inside.
-- `_resolve_use_intent` activates/consumes an item, gated on a truthy `usable` field. The
-  only effect implemented is healing (`healing = {dice, pips}`, rolled through
-  `apply_healing`); using an item also applies a permanent `"identified"` condition.
-  Consumption is charge-based (`_consume_charge`): no `charges` field means single-use; at
-  zero charges the item is replaced by `replace_with` or simply removed.
+- `_resolve_use_intent` activates/consumes an item, gated on a truthy `usable` field. Two
+  effects are implemented: healing (`healing = {dice, pips}`, rolled through `apply_healing`)
+  and poison (`poison = {dice, pips}`, rolled through the ordinary `calculate_damage`/
+  `apply_damage` path instead, `damage_tags = ["poison"]`, self-inflicted — attacker and
+  defender are both the player, so a poison-resistant/immune character correctly reduces or
+  negates it exactly like a real attack, and `evaluate_statuses`' own wound-tier conditions
+  still apply). An item can carry either, both, or neither; using an item also applies a
+  permanent `"identified"` condition regardless. Consumption is charge-based
+  (`_consume_charge`): no `charges` field means single-use; at zero charges the item is
+  replaced by `replace_with` or simply removed.
 - `_resolve_room_transition_intent` handles `"move"` (see "Scenarios and rooms").
 
 Publishes `item_interaction_resolved` either way, with enough detail (`found`,
@@ -835,8 +849,10 @@ name/description, `equipped`/`inventory`, the current scene's `_current_scene_na
 `_current_scene_description` (`DM_Rules.py`), `present` via the same
 `_describe_scenario_characters()` roster the player is normally told, and `exits` — `[]` for a
 flat scenario, else the current room's own `[[room.exit]]` entries with each `destination` key
-resolved to that room's own friendly `name`. No `_publish_party_status()` call, same reasoning
-Dialogue already documents (nothing here ever mutates HP/equipment/inventory/conditions).
+resolved to that room's own friendly `name`. No `_publish_party_status()` call for the ordinary
+informational path, same reasoning Dialogue already documents (nothing here mutates HP/
+equipment/inventory/conditions) — except when a removal actually went through (see "Ad hoc
+entity creation and removal" below), the one case that breaks this invariant on purpose.
 
 **Deliberately excluded from `context_window`.** Every other narration trigger
 (`_queue_narration`/`_queue_dialogue`) appends both the prompt and the reply to `LLMCore`'s
@@ -853,6 +869,129 @@ payloads (full skill lists, exits, etc.) that would otherwise crowd the finite 1
 window, diluting real narrative history fast. The cost is that ADaM has no memory of its own
 past replies — each invocation is a fresh, independent request built from whatever `DM_Help.py`
 gathers off live state at that moment, not a continuation of an earlier ADaM conversation.
+
+## Ad hoc entity creation and removal
+
+ADaM's second capability: acting as a real DM by improvising the world itself, not just
+explaining it. `AdHoc_Generation.py` is the pure, DMCore-independent LLM-calling half (same
+"pure, entity-shape-agnostic" precedent `NPC_Generation.py`/`Challenge_Rating.py` set) —
+`generate_ad_hoc_item`/`decide_entity_removal`, each an OpenAI-style tool call (`LLM_Client.py`,
+synchronous, raises on failure) offering the model a primary function plus a shared `decline`
+escape hatch, `tool_choice="auto"`. Unlike NPC generation (which always needs *some* result and
+falls back to a random offline pick), both here default to declining on any failure — never
+fabricating an item or a removal when the LLM is unreachable — on a tighter 8s timeout than NPC
+generation's 20s default, since this can fire far more often mid-session than NPC generation's
+handful-of-times-per-scene-load pattern. `DM_Improvisation.py`'s `ImprovisationMixin` is the
+DMCore-touching glue (the same split `DM_NpcGeneration.py` is to `NPC_Generation.py`).
+
+**Two different triggers, two different risk profiles — not one symmetric mechanic.**
+Creation is an automatic fallback during ordinary play: no need to address ADaM by name at all.
+Removal can target *any* entity, hand-authored included, so it's deliberately gated behind
+explicitly addressing ADaM — see the previous section's own `removal_candidate` handling.
+
+**Creation.** `NLP_Core.py`'s `_on_user_input` tracks any clause where `_detect_item_intent`
+matched a verb in `IMPROVISABLE_INTENTS` (`examine`/`take`/`give`/`equip`/`unequip`/`use`/
+`drop`/`trade`) but whose own `map_to_item` found nothing. `trade` is included deliberately —
+see its own paragraph below for why it needs a third placement path, not the two every other
+intent uses. If the *whole turn* still resolves to nothing at all (no `turn_clauses`, no exempt
+clause) once pass 2 also comes up empty, the first such candidate is published as
+`improvisation_requested {intent, phrase, input}` **instead of** `action_not_understood` — the
+one and only integration point; a clause that fails alongside another clause that *did* resolve
+still silently drops today, unchanged, the same as before this feature existed.
+
+`ImprovisationMixin._on_improvisation_requested` calls `generate_ad_hoc_item` (enum-constrained
+`subtype` — `weapon`/`armor`/`potion`/`tool`/`trinket`/`misc`, deliberately no
+`container`/`trap`, which need `[entity.test]`/locked-condition data this schema can't author;
+enum-constrained `equip_slot`, built from `get_equip_slots(player_name)`, and `damage_tag`,
+built from tags already in real use across `Rules/Fantasy/*.toml` — the same enum-over-free-text
+reliability win `NPC_Generation.py`'s own tool schema already banks on for small local models).
+On decline/failure: publishes `action_not_understood`, exactly the outcome that would have
+happened without this feature. On success: tags the new entity `ad_hoc = True` (drives its own
+save/load treatment — see below), stores it into `self.entities`, and publishes
+`item_catalog_updated` (see NLPCore's own handling, below) before resolving.
+
+An item can also opt into `"use"` (`usable = true`, plus `healing`/`poison` `{dice, pips}`
+skill stats — see "Items and movement as intents"'s own `_resolve_use_intent` note) via the same
+tool call's `is_healing`/`is_poisonous` flags. The tool schema's own description explicitly
+tells the model not to default every improvised consumable to safe/beneficial — for balance, a
+plausible fraction should come back poisonous instead, so freely asking to drink/use an
+ad hoc-conjured item is never a guaranteed free heal.
+
+*Three placement paths, not a style choice.* The model's own `location` choice (`"ground"` or
+`"inventory"`) is real narrative judgment (a stone lying around vs. a match already in a
+pocket), but which one actually *works* mechanically depends on the triggering intent, not just
+the location: `DM_Core.py`'s `_on_item_interaction_detected` dispatcher only ever checks
+`_current_ground_items()` for `"examine"`/`"take"`; `give`/`equip`/`unequip`/`use`/`drop` always
+resolve against the *player's own* inventory regardless of source/destination direction; `trade`
+alone resolves against the *current scene target's* own inventory as its source (buying
+something means the seller has to have it). So `PLAYER_CENTRIC_INTENTS` (`give`/`equip`/
+`unequip`/`use`/`drop`) always land directly in the player's inventory and re-dispatch through
+the ordinary, otherwise-unchanged `_on_item_interaction_detected` — a ground placement here just
+collapses "you spot it and immediately act on it" into one beat rather than a separate explicit
+`take` first. `GROUND_AWARE_INTENTS` (`examine`/`take`) honor the model's own placement:
+`"ground"` appends to `_current_ground_items()` and re-dispatches normally (already correct, via
+the existing ground-check branch); `"inventory"` instead publishes a bespoke `item_interaction_
+resolved {found: True, ...}` directly, plus a manual `_publish_party_status()` call — re-
+dispatching would incorrectly check the scene's own default *target's* inventory instead of the
+player's own (there's no existing dispatcher path for "examine/take something already in your
+own inventory with no target involved" at all). `TARGET_CENTRIC_INTENTS` (`trade` alone) ignores
+the model's own `location` field entirely (there's no "on the ground" or "in the player's
+pocket" for something a shopkeeper is about to sell) and instead stocks the new entity directly
+into `self._get_target_name()`'s own inventory before re-dispatching — this is what lets a
+general store's shopkeeper sell "most general goods" without every possible good having to be
+pre-authored on their own `[entity.inventory]` list (see `Rules/Fantasy/scenarios/shop.toml`);
+the entity's own `value` field (set by the model) is what the ordinary `trade` dispatch charges
+as a price. Short-circuits to a decline *before* ever asking the LLM if there's no current scene
+target at all — there's no one to buy from, the same "nothing here could plausibly be removed"
+short-circuit `decide_entity_removal` already applies on the removal side.
+
+**Removal.** `NLP_Core.py`'s `REMOVAL_KEYWORDS` (`"remove"`, `"get rid of"`, `"destroy"`, ...)
+is a cheap local pre-check, attached to `help_detected`'s own payload as `"removal_candidate"`
+only when `ADAM_NAME_PATTERN` already matched — avoids paying for a synchronous removal-decision
+LLM call on every ordinary "ADaM, what are my skills" question; the LLM's own `tool_choice=
+"auto"`/`decline` is still the real arbiter of whether anything actually gets removed.
+`DM_Help.py`'s `_on_help_detected` calls `ImprovisationMixin._attempt_entity_removal` *first*
+when flagged — builds the real, current universe of removable names (every entity in
+`scenario_entities`, every ground item, every known instance's own inventory/equipped item,
+`player_name` always excluded — belt-and-suspenders on top of `remove_entity_from_scene`'s own
+runtime guard) as an enum constraint for `decide_entity_removal`, so the model can't even
+attempt to name something that doesn't exist. A real removal is folded into `help_resolved` as
+`"removed"` (LLMCore's `_build_adam_system_message` mentions it happened) and triggers
+`_publish_party_status()` — the one exception to "ADaM never mutates state."
+
+`remove_entity_from_scene(name)` strips `name` from `scenario_entities`/`persistent_entities`/
+every `visited_rooms` list/every ground list/every known instance's own inventory/equipped
+values (via `_all_known_instance_names()`, the same "universe of instances with mutable state"
+`DM_Persistence.py` already computes), then records it in `self.removed_entities` so a
+scenario/room's own static `entities` list can never respawn it (see `DM_Rules.py`'s
+`_instance_entities`, the one check point that consults this set). Deliberately does **not**
+`del self.entities[name]` — leaves it orphaned/unreferenced, mirroring the existing precedent
+that a fully-consumed item (`_consume_charge`, charges hit 0, no `replace_with`) already just
+stops being referenced anywhere rather than being deleted outright; this is also what makes an
+orphaned ad hoc entity self-clean out of future saves for free (collection is by *reachability*,
+not a scan of `self.entities` — see persistence below). Hard guard: refuses if `name ==
+player_name` — a technical necessity (the engine assumes `self.entities[player_name]` exists
+everywhere), not a game-design restriction. Accepted consequence: removing a container also
+orphans (and so stops persisting) anything still listed in its own `inventory` — intended, since
+removal can target any entity including containers, not a bug.
+
+**Persistence.** An ad hoc entity has no static TOML template to re-derive anything from on
+reload (unlike a generated NPC, which still has a real `entity_template`), so
+`DM_Persistence.py`'s `_collect_ad_hoc_entities` saves every *reachable* one's complete dict
+(not a diff) under `"ad_hoc_entities"`; `load_game` restores each with a full dict replacement
+right alongside the existing `"ground"` restoration, then publishes `item_catalog_updated` once,
+as a batch. `"removed_entities"` round-trips too — restored *before*
+`load_scenario_definition`/`load_scenario` run (both call `_instance_entities`), the one
+ordering requirement that keeps a removed entity from respawning on the very reload that's
+supposed to remember it's gone.
+
+**NLPCore catch-up.** `item_embeddings`/`item_indices` are otherwise only ever built once, from
+`"rules_loaded"` — an ad hoc entity created (or restored) after that would be permanently
+unreachable to `map_to_item` (a later "drop the stone" would miss and either wrongly re-trigger
+creation or dead-end) without `item_catalog_updated`: `NLP_Core.py`'s own
+`_on_item_catalog_updated` encodes each `{name, description}` pair the same two-phrase-per-item
+shape `_on_rules_loaded` already builds, and appends onto the existing tensor/index list
+(`torch.cat`) rather than rebuilding the whole catalog from scratch.
 
 ## Narration
 

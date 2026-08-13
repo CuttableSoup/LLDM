@@ -273,13 +273,19 @@ class InventoryMixin(DMCoreProtocol):
             a future wand (subtype "wand", not "potion") opts in the same way, just by
             carrying `usable = true` plus whatever effect fields it defines.
 
-            The only effect actually implemented yet is healing, read from the item's own
-            "healing" {dice, pips} skill stat if present (ex: health potion) and rolled
-            through apply_healing (DM_Status.py) -- the healing counterpart to
-            calculate_damage's own roll_dice usage. An item with no "healing" stat still
-            "uses" successfully (consumes a charge, may still identify/replace itself below),
-            it just has no numeric effect yet -- there's nothing else to trigger until a
-            second effect type is actually built.
+            Two effects are implemented: healing, read from the item's own "healing" {dice,
+            pips} skill stat if present (ex: health potion) and rolled through apply_healing
+            (DM_Status.py); and poison, read from a "poison" {dice, pips} skill stat the same
+            way but rolled through the ordinary calculate_damage/apply_damage path instead
+            (DM_Combat.py), tagged damage_tags = ["poison"] -- self-inflicted (attacker and
+            defender are both the player), so a poison-resistant or poison-immune character
+            correctly reduces or negates it exactly like a real attack would, and
+            evaluate_statuses' own wound-tier conditions still apply. An item can carry either,
+            both, or neither -- one with neither still "uses" successfully (consumes a charge,
+            may still identify/replace itself below), it just has no numeric effect. Poison
+            exists specifically so an ad hoc-conjured consumable (DM_Improvisation.py,
+            AdHoc_Generation.py) isn't guaranteed free healing -- the LLM can mark one harmful
+            instead, for balance.
 
             Using it also identifies it, whether or not it already was -- you now know
             exactly what it does, from experience, which is a strictly stronger kind of
@@ -314,6 +320,19 @@ class InventoryMixin(DMCoreProtocol):
             healed = self.roll_dice(healing.get("dice", 0), healing.get("pips", 0))
             remaining_hp = self.apply_healing(self.player_name, healed)
 
+        poison = item.get("skills", {}).get("poison")
+        poisoned = 0
+        if poison:
+            damage_result = self.calculate_damage(
+                self.player_name, self.player_name,
+                {
+                    "damage_value": {"dice": poison.get("dice", 0), "pips": poison.get("pips", 0), "bonus": 0},
+                    "damage_tags": ["poison"],
+                },
+            )
+            poisoned = damage_result["net_damage"]
+            remaining_hp = damage_result["remaining_hp"]
+
         self.apply_condition(item_name, "identified", duration="permanent", dismiss="")
 
         charges_left = self._consume_charge(item_name)
@@ -331,7 +350,7 @@ class InventoryMixin(DMCoreProtocol):
                     )
 
         resolved(
-            True, healed=healed, remaining_hp=remaining_hp,
+            True, healed=healed, poisoned=poisoned, remaining_hp=remaining_hp,
             charges_left=max(charges_left, 0), replaced_with=replaced_with,
         )
 

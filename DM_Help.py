@@ -21,6 +21,16 @@ class HelpMixin(DMCoreProtocol):
         LLM_Core.py) is what actually turns this payload into a reply -- see its own module
         notes for why that reply is deliberately excluded from context_window entirely,
         instead of merely presence-untagged the way dialogue/narration entries are.
+
+        No longer strictly side-effect-free: when NLP_Core.py's own REMOVAL_KEYWORDS gate
+        flagged the input as a plausible removal request, _on_help_detected also attempts one
+        (see _on_help_detected's own docstring) via ImprovisationMixin.
+        _attempt_entity_removal (DM_Improvisation.py) *before* gathering the informational
+        payload below -- the one exception to "never mutates state" above, since a real removal
+        can change HP/equipment/inventory/scenario_entities. Deliberately still gated behind
+        explicitly addressing ADaM by name, never an automatic fallback the way ad hoc item
+        *creation* is -- see DM_Improvisation.py's own module docstring for why creation and
+        removal have such different risk profiles and triggers.
     """
 
     def _describe_player_skills(self):
@@ -82,11 +92,21 @@ class HelpMixin(DMCoreProtocol):
         """!
         @brief Event handler for "help_detected" (NLPCore's own ADAM_NAME_PATTERN match) --
             gathers a fresh snapshot of the player's own mechanical state and the current
-            scene and publishes it as "help_resolved" for LLMCore to narrate as ADaM. Never
-            rolls dice, never mutates state (no _publish_party_status() call, the same
-            reasoning DialogueMixin already documents for why dialogue never calls it either).
-        @param data The "help_detected" payload ({"input": processed_text}).
+            scene and publishes it as "help_resolved" for LLMCore to narrate as ADaM. Rolls no
+            dice; mutates state only in the one case NLP_Core.py's own REMOVAL_KEYWORDS gate
+            flagged as a plausible removal request (see this class's own module docstring) --
+            _attempt_entity_removal (DM_Improvisation.py) runs first and its outcome is folded
+            into the payload as "removed", so ADaM's own narration can mention what happened.
+            _publish_party_status() is only called when a removal actually went through (a
+            removal can change HP/equipment/inventory/scenario_entities, so the GUI's Party tab
+            needs to redraw); the ordinary informational path still never calls it, the same
+            reasoning DialogueMixin already documents for why dialogue never does either.
+        @param data The "help_detected" payload ({"input": processed_text, "removal_candidate": bool}).
         """
+        removal_outcome = None
+        if data.get("removal_candidate"):
+            removal_outcome = self._attempt_entity_removal(data.get("input", ""))
+
         player = self.entities.get(self.player_name, {})
         self.event_bus.publish("help_resolved", {
             "input": data.get("input", ""),
@@ -99,4 +119,7 @@ class HelpMixin(DMCoreProtocol):
             "scene_description": self._current_scene_description(),
             "present": self._describe_scenario_characters(),
             "exits": self._describe_available_exits(),
+            "removed": removal_outcome,
         })
+        if removal_outcome and removal_outcome.get("removed"):
+            self._publish_party_status()

@@ -6,6 +6,7 @@
 import re
 
 import numpy as np
+import torch
 from sentence_transformers import SentenceTransformer, util
 
 # Substring checks against processed input to decide item-interaction intent, before any skill
@@ -112,6 +113,17 @@ DIALOGUE_KEYWORDS = (
 # setting can be named Adam without colliding with this.
 ADAM_NAME_PATTERN = re.compile(r"\badam\b", re.IGNORECASE)
 
+# A cheap, local pre-check on top of ADAM_NAME_PATTERN -- attached to help_detected's own
+# payload as "removal_candidate" so DM_Help.py only pays for a synchronous ad hoc-removal LLM
+# call (AdHoc_Generation.py's decide_entity_removal) on a message that actually smells like a
+# removal request, not on every ordinary "ADaM, what are my skills" question. Purely a gate on
+# whether to *ask* the LLM at all -- the LLM's own tool_choice="auto"/"decline" is still the
+# real arbiter of whether anything actually gets removed.
+REMOVAL_KEYWORDS = (
+    "remove", "get rid of", "destroy", "delete", "banish", "dismiss", "make it disappear",
+    "make them disappear",
+)
+
 DIRECTION_PHRASES = {
     "forward": (
         "next room", "proceed deeper", "continue deeper", "go deeper", "through the door",
@@ -148,6 +160,17 @@ ACTION_CLAUSE_PATTERN = re.compile(r"--|[,;:?]|\band\b|\bthen\b")
 # DM_Core.py) despite needing no item lookup, the same way "give"/"take"/etc. do.
 EXEMPT_ITEM_INTENTS = frozenset({"advance", "retreat", "formation_behind", "formation_abreast"})
 NO_ITEM_LOOKUP_INTENTS = frozenset({"open", "close"})
+
+# The item-interaction verbs eligible for DM_Improvisation.py's ad hoc creation fallback (see
+# _on_user_input's own "improvisation_requested" note) -- includes "trade" (ex: "buy a rope"
+# from a shopkeeper who never had one on their own hand-authored inventory list -- a general
+# store shouldn't need every possible good pre-authored to sell it): DM_Improvisation.py stocks
+# the created item directly into the current scene target's own inventory for this one intent,
+# rather than the ground/player inventory every other intent here uses. Mirrors
+# DM_Improvisation.py's own PLAYER_CENTRIC_INTENTS | GROUND_AWARE_INTENTS | TARGET_CENTRIC_
+# INTENTS union exactly -- kept as a separate constant (rather than importing one from the
+# other) since this module must stay independent of DMCore/game state.
+IMPROVISABLE_INTENTS = frozenset({"examine", "take", "give", "equip", "unequip", "use", "drop", "trade"})
 
 # map_to_item checks these before any embedding match -- currency is a plain integer field
 # (entity["currency"]), not an object-supertype entity with a name/description to embed.
@@ -202,6 +225,9 @@ class NLPCore:
         self.event_bus.subscribe("rules_loaded", self._on_rules_loaded)
         # Subscribe to user input
         self.event_bus.subscribe("user_input_submitted", self._on_user_input)
+        # DM_Improvisation.py publishes this whenever an ad hoc entity is created or restored
+        # from a save -- see _on_item_catalog_updated's own docstring.
+        self.event_bus.subscribe("item_catalog_updated", self._on_item_catalog_updated)
         
         self.event_bus.publish("log_info", "NLPCore initialized with SentenceTransformer.")
 
@@ -228,6 +254,12 @@ class NLPCore:
             intent -- preserving the exact priority order the old single-clause code already
             gave item intents over dialogue (so a genuine item verb naming an entity, ex:
             "give the sword to Anne", is never swallowed as dialogue).
+
+            If the whole turn would otherwise resolve to nothing at all (no turn_clauses, no
+            exempt clause), but at least one clause was a recognized item verb naming something
+            map_to_item couldn't match, "improvisation_requested" is published instead of
+            "action_not_understood" -- DM_Improvisation.py's own last-resort ad hoc entity
+            creation fallback (see IMPROVISABLE_INTENTS' own module note).
         @param player_input The raw string from "user_input_submitted".
         """
         processed = self.process_input(player_input)
@@ -238,7 +270,10 @@ class NLPCore:
             return
 
         if self._detect_help_intent(processed):
-            self.event_bus.publish("help_detected", {"input": processed})
+            self.event_bus.publish("help_detected", {
+                "input": processed,
+                "removal_candidate": self._detect_removal_intent(processed),
+            })
             return
 
         direction = self._detect_direction(processed)
@@ -266,6 +301,12 @@ class NLPCore:
         turn_clauses = []
         remaining_clauses = []
         found_exempt = False
+        # Recognized item verbs (see IMPROVISABLE_INTENTS) whose own map_to_item call found
+        # nothing -- tracked separately from remaining_clauses so, if the whole turn otherwise
+        # resolves to nothing at all, DM_Improvisation.py gets a last-resort shot at conjuring
+        # a plausible object instead of this input simply dead-ending (see this method's own
+        # "improvisation_requested" note, below).
+        unmatched_item_verbs = []
         for clause in self._split_action_clauses(processed):
             clause_intent = self._detect_item_intent(clause)
             if clause_intent in EXEMPT_ITEM_INTENTS:
@@ -285,7 +326,9 @@ class NLPCore:
                 # A recognized "examine"/"take"/"give"/"trade" verb but no matching item name --
                 # fall through to skill matching below rather than silently dropping it (ex:
                 # could still be a legitimate skill phrase that happens to contain one of
-                # these words).
+                # these words), but remember it in case skill matching also comes up empty.
+                if clause_intent in IMPROVISABLE_INTENTS:
+                    unmatched_item_verbs.append({"intent": clause_intent, "phrase": clause})
             remaining_clauses.append(clause)
 
         # Dialogue is checked once, on the whole input, only once pass 1 found nothing at all
@@ -322,6 +365,20 @@ class NLPCore:
             # the whole downstream pipeline (DMCore, LLMCore) is built around one consistent
             # shape rather than special-casing N=1 or a single clause kind.
             self.event_bus.publish("turn_detected", {"clauses": turn_clauses, "input": processed})
+        elif not found_exempt and unmatched_item_verbs:
+            # The whole turn would otherwise resolve to nothing at all, but at least one clause
+            # was a recognized item verb naming something that just doesn't exist yet -- last
+            # resort before giving up: DM_Improvisation.py's own generate_ad_hoc_item gets a
+            # chance to decide whether that's plausible to conjure into the scene (ex: "pick up
+            # a stone"). Only the first candidate is used -- extending this into a genuinely
+            # multi-clause improvisation attempt is out of scope for now (a second, understood
+            # clause in the same input still silently drops any of its own unmatched item verbs,
+            # unchanged from today's behavior, since turn_clauses would be non-empty and this
+            # branch wouldn't even run).
+            candidate = unmatched_item_verbs[0]
+            self.event_bus.publish("improvisation_requested", {
+                "intent": candidate["intent"], "phrase": candidate["phrase"], "input": processed,
+            })
         elif not found_exempt:
             # Below confidence_threshold on every remaining clause, and pass 1 found nothing
             # either: publish this instead of staying silent, so the player gets some response
@@ -398,6 +455,17 @@ class NLPCore:
         @return True if processed_text contains the whole word "adam" (any case), else False.
         """
         return bool(ADAM_NAME_PATTERN.search(processed_text))
+
+    def _detect_removal_intent(self, processed_text):
+        """!
+        @brief Checks an ADaM-addressed message for REMOVAL_KEYWORDS -- see that constant's
+            own module note for why this is a cheap local gate, not the actual decision (the
+            LLM's own decide_entity_removal, AdHoc_Generation.py, is the real arbiter).
+        @param processed_text The cleaned and processed player input (already known to have
+            matched ADAM_NAME_PATTERN).
+        @return True if processed_text contains any REMOVAL_KEYWORDS phrase, else False.
+        """
+        return any(keyword in processed_text for keyword in REMOVAL_KEYWORDS)
 
     def _detect_direction(self, processed_text):
         """!
@@ -561,6 +629,49 @@ class NLPCore:
             self.target_indices = []
 
         self.event_bus.publish("log_info", f"NLPCore: {len(target_phrases)} target phrases encoded for {len(set(target_indices))} targetable entities.")
+
+    def _on_item_catalog_updated(self, data):
+        """!
+        @brief Incrementally registers newly-created (or reload-restored) ad hoc entities into
+            item_embeddings/item_indices, the same two-phrase-per-item ([name], [description])
+            shape _on_rules_loaded already builds for the whole static catalog. Without this, an
+            ad hoc entity (DM_Improvisation.py, AdHoc_Generation.py) would only ever be
+            reachable on the one turn it's created (dispatched directly by name) -- any later
+            reference (ex: "drop the stone") would miss map_to_item again, since NLPCore's own
+            embeddings are otherwise only ever (re)built once, from "rules_loaded" (a reload
+            doesn't republish that event -- DM_Persistence.py's load_game publishes this
+            instead, once, as a batch, after restoring every saved ad hoc entity).
+        @param data The "item_catalog_updated" payload ({"entities": [{"name",
+            "description"}, ...]}).
+        """
+        entries = data.get("entities", [])
+        if not entries:
+            return
+
+        new_phrases = []
+        new_indices = []
+        for entry in entries:
+            name = entry.get("name")
+            if not name:
+                continue
+            new_phrases.append(name)
+            new_indices.append(name)
+            description = entry.get("description", "")
+            if description:
+                new_phrases.append(description)
+                new_indices.append(name)
+
+        if not new_phrases:
+            return
+
+        new_embeddings = self.model.encode(new_phrases, convert_to_tensor=True)
+        if self.item_embeddings is None:
+            self.item_embeddings = new_embeddings
+        else:
+            self.item_embeddings = torch.cat([self.item_embeddings, new_embeddings], dim=0)
+        self.item_indices.extend(new_indices)
+
+        self.event_bus.publish("log_info", f"NLPCore: {len(new_phrases)} item phrases registered for {len(entries)} ad hoc item(s).")
 
     def process_input(self, player_input):
         """!

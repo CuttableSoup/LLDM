@@ -1,0 +1,9 @@
+[scenario]
+name = "The General Store"
+description = "A cramped, well-stocked general store. Shelves line every wall, crowded with sacks, coils, jars, and tools whose exact purpose isn't always obvious at a glance."
+bands = 2
+enclosed = true
+entities = [
+    { name = "player", band = 1 },
+    { name = "shopkeeper", band = 1 }
+]

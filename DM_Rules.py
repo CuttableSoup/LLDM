@@ -305,7 +305,10 @@ class RulesMixin(DMCoreProtocol):
             re-instancing during a save-game load, where whatever a fresh generation call
             would produce is about to be overwritten by the saved values anyway (see
             DM_Persistence.py's load_game).
-        @return The list of instance names created, in entity_entries order.
+        @return The list of instance names created, in entity_entries order -- excluding any
+                entry whose resolved instance_name is in self.removed_entities (see
+                DM_Improvisation.py's remove_entity_from_scene), which is skipped entirely
+                rather than being re-instanced.
         """
         party_pool = party_pool if party_pool is not None else []
         instance_names = []
@@ -333,6 +336,16 @@ class RulesMixin(DMCoreProtocol):
             occurrence_counts[template_name] = occurrence_counts.get(template_name, 0) + 1
             occurrence = occurrence_counts[template_name]
             instance_name = template_name if occurrence == 1 else f"{template_name}_{occurrence}"
+
+            # Forcibly removed via ImprovisationMixin.remove_entity_from_scene
+            # (DM_Improvisation.py) at some point this playthrough -- never respawn it just
+            # because a scenario/room's own static "entities" list still names it, whether
+            # this is a fresh room visit or a save reload. occurrence_counts above is still
+            # incremented first, so a later same-named entry in this same list keeps
+            # disambiguating correctly regardless.
+            if instance_name in self.removed_entities:
+                self.event_bus.publish("log_info", f"Skipping removed entity: {instance_name}")
+                continue
 
             instance = copy.deepcopy(template)
             instance["entity_id"] = instance_name

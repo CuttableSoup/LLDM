@@ -55,6 +55,35 @@ class PersistenceMixin(DMCoreProtocol):
                     seen.append(name)
         return seen
 
+    def _collect_ad_hoc_entities(self):
+        """!
+        @brief Every ad hoc entity (DM_Improvisation.py -- entity["ad_hoc"] = True) currently
+            *reachable* -- present in some ground list, or in some known instance's own
+            inventory/equipped mapping -- for save_game to persist in full (there's no static
+            TOML template to re-derive an ad hoc entity's fields from on reload, unlike every
+            other instance's own diff-based state). Reachability, not a scan of self.entities,
+            is deliberate: remove_entity_from_scene never deletes an entity outright, just
+            unreferences it everywhere, so an orphaned ad hoc entity naturally stops being
+            collected here too -- no separate cleanup needed for it to fall out of future saves.
+        @return {name: full_entity_dict, ...} for every reachable ad hoc entity.
+        """
+        names = set()
+        if self.rooms:
+            for room in self.rooms.values():
+                names.update(room.get("ground", []))
+        else:
+            names.update(self.scenario.get("ground", []))
+        for instance_name in self._all_known_instance_names():
+            entity = self.entities.get(instance_name, {})
+            names.update(entity.get("inventory", []))
+            names.update(entity.get("equipped", {}).values())
+
+        return {
+            name: dict(self.entities[name])
+            for name in names
+            if self.entities.get(name, {}).get("ad_hoc")
+        }
+
     def save_game(self, slot_name):
         """!
         @brief Writes this core's mechanical state to Saves/<slot_name>/dm_state.json -- a
@@ -92,6 +121,14 @@ class PersistenceMixin(DMCoreProtocol):
             than the one actually saved. Abilities/equipment aren't generated at all (still
             decided by whoever authors the entity_template, same as any hand-authored entity
             -- see CLAUDE.md's "NPC generation"), so there's nothing dynamic to save there.
+
+            Also saves "ad_hoc_entities" (see _collect_ad_hoc_entities) -- every reachable
+            ad hoc entity's own *complete* dict, not a diff, since (unlike a generated NPC,
+            which still has a real entity_template to fall back on) an ad hoc entity has no
+            static template at all to re-derive anything from on reload. And "removed_entities"
+            -- every name ever forcibly removed via ImprovisationMixin.remove_entity_from_scene
+            (DM_Improvisation.py), so a reload doesn't let a scenario/room's own static
+            "entities" list respawn something the player (or ADaM, on their behalf) removed.
         @param slot_name The save slot's name (used as a directory name under Saves/).
         """
         slot_dir = self._save_slot_dir(slot_name)
@@ -137,6 +174,8 @@ class PersistenceMixin(DMCoreProtocol):
             "visited_rooms": self.visited_rooms,
             "ground": ground_state,
             "instances": {name: _instance_state(name) for name in instance_names},
+            "ad_hoc_entities": self._collect_ad_hoc_entities(),
+            "removed_entities": list(self.removed_entities),
         }
         with open(os.path.join(slot_dir, "dm_state.json"), "w") as f:
             json.dump(data, f, indent=2)
@@ -163,6 +202,22 @@ class PersistenceMixin(DMCoreProtocol):
             resurrecting a room reference) or self.scenario["ground"] for a single-room
             scenario, mirroring exactly where save_game read it from and
             _current_ground_items (DM_Inventory.py) itself looks for it during play.
+
+            "removed_entities" is restored *before* load_scenario_definition/load_scenario run
+            (see below), since DM_Rules.py's _instance_entities consults self.removed_entities
+            while re-instancing -- restoring it any later would let a removed hand-authored
+            entity respawn on this very reload. Every _instance_entities call this method makes
+            (the starting room via load_scenario(), the visited-rooms loop, and enter_room for
+            a saved non-starting room) happens after this restore, so one restore point is
+            sufficient -- enter_room in particular never calls _instance_entities itself for an
+            already-visited room (see _populate_room's own "restore from cache" branch).
+
+            "ad_hoc_entities" is restored right alongside "ground" (right after
+            load_scenario()) -- a full dict replacement per entity (there's no template to
+            overlay onto), then "item_catalog_updated" is published once, as a batch, so
+            NLPCore's own item_embeddings/item_indices catch up (a reload never republishes
+            "rules_loaded", so nothing else would ever re-register them -- see NLP_Core.py's
+            own _on_item_catalog_updated).
 
             The load_rules call is not optional: self.entities holds both static templates
             and live instances under the same keys (a single-occurrence instance like
@@ -208,9 +263,23 @@ class PersistenceMixin(DMCoreProtocol):
         self.round_number = data.get("round_number", 0)
         self.scenario_key = data.get("scenario_key", self.scenario_key)
         self.setting = data.get("setting", self.setting)
+        # Must precede load_scenario_definition/load_scenario -- see this method's own
+        # docstring for why _instance_entities needs this available before it ever runs.
+        self.removed_entities = set(data.get("removed_entities", []))
         self.load_rules(os.path.join("Rules", self.setting))
         self.load_scenario_definition(self.scenario_key)
         self.load_scenario(skip_llm_generation=True)
+
+        saved_ad_hoc_entities = data.get("ad_hoc_entities")
+        if saved_ad_hoc_entities:
+            for name, entity_dict in saved_ad_hoc_entities.items():
+                self.entities[name] = entity_dict
+            self.event_bus.publish("item_catalog_updated", {
+                "entities": [
+                    {"name": name, "description": entity_dict.get("description", "")}
+                    for name, entity_dict in saved_ad_hoc_entities.items()
+                ],
+            })
 
         saved_ground = data.get("ground")
         if saved_ground:

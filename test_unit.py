@@ -19,6 +19,7 @@ from Character_Creation import (
     race_baseline_skills,
     validate_allocation,
 )
+from AdHoc_Generation import decide_entity_removal, generate_ad_hoc_item
 from Character_Creation_GUI import CharacterCreationDialog
 from Challenge_Rating import calculate_challenge_rating, calculate_party_challenge_rating, skill_rating
 from DM_Core import DMCore
@@ -373,6 +374,70 @@ class TestNlpConfidenceThreshold(unittest.TestCase):
         self.assertEqual(dialogue_events, [])
         self.assertEqual(turn_events, [])
         self.assertIn("adam", help_events[0]["input"])
+
+    def test_unmatched_item_verb_triggers_improvisation_instead_of_action_not_understood(self):
+        # DMCore's own real (unmocked) _on_improvisation_requested handler is also subscribed
+        # on this class's shared cls.dm_core -- AdHoc_Generation._real_call_chat_completion is
+        # patched to fail instantly rather than let it attempt a real, slow network call to a
+        # local LM Studio that isn't running in this offline suite (its own failure path
+        # publishes "action_not_understood" right back, which is fine -- this test only cares
+        # that NLPCore published "improvisation_requested" in the first place).
+        improvisation_events = []
+        self.event_bus.subscribe("improvisation_requested", improvisation_events.append)
+
+        with patch("AdHoc_Generation._real_call_chat_completion", side_effect=ConnectionError("no LM Studio")):
+            self.event_bus.publish("user_input_submitted", "take the strange glowing talisman")
+
+        self.assertEqual(len(improvisation_events), 1)
+        self.assertEqual(improvisation_events[0]["intent"], "take")
+
+    def test_matched_clause_elsewhere_in_input_still_wins_over_improvisation(self):
+        # A compound input where one clause resolves normally still takes the ordinary path --
+        # extending ad hoc creation into multi-clause turns is deliberately out of scope (see
+        # CLAUDE.md's "Ad hoc entity creation and removal"). No network patching needed here --
+        # turn_clauses ends up non-empty, so the improvisation branch never runs at all.
+        improvisation_events = []
+        turn_events = []
+        self.event_bus.subscribe("improvisation_requested", improvisation_events.append)
+        self.event_bus.subscribe("turn_detected", turn_events.append)
+
+        self.event_bus.publish("user_input_submitted", "take the strange glowing talisman and attack the wolf")
+
+        self.assertEqual(improvisation_events, [])
+        self.assertEqual(len(turn_events), 1)
+
+    def test_removal_candidate_flag_only_set_when_removal_keywords_present(self):
+        help_events = []
+        self.event_bus.subscribe("help_detected", help_events.append)
+
+        self.event_bus.publish("user_input_submitted", "adam, get rid of that torch")
+        self.assertTrue(help_events[-1]["removal_candidate"])
+
+        self.event_bus.publish("user_input_submitted", "adam, what are my skills")
+        self.assertFalse(help_events[-1]["removal_candidate"])
+
+    def test_item_catalog_updated_registers_a_new_item_matchable_afterward(self):
+        # cls.nlp_core is shared across this whole class (setUpClass, not setUp) -- restore
+        # its embeddings/indices afterward so registering a new item here can't leak into any
+        # other test's own map_to_item/improvisation-fallback behavior.
+        original_embeddings = self.nlp_core.item_embeddings
+        original_indices = list(self.nlp_core.item_indices)
+        try:
+            item_name, _score = self.nlp_core.map_to_item("a glowing rubber chicken talisman")
+            self.assertIsNone(item_name)
+
+            self.event_bus.publish("item_catalog_updated", {
+                "entities": [{
+                    "name": "rubber chicken talisman",
+                    "description": "A glowing rubber chicken talisman.",
+                }],
+            })
+
+            item_name, _score = self.nlp_core.map_to_item("a glowing rubber chicken talisman")
+            self.assertEqual(item_name, "rubber chicken talisman")
+        finally:
+            self.nlp_core.item_embeddings = original_embeddings
+            self.nlp_core.item_indices = original_indices
 
     def test_detect_save_load_intent_parses_slot_names(self):
         self.assertEqual(self.nlp_core._detect_save_load_intent("save as arena run 1"), ("save", "arena run 1"))
@@ -1290,6 +1355,428 @@ class TestNpcGeneration(unittest.TestCase):
         self.assertTrue(result["skills"])
 
 
+class TestAdHocGeneration(unittest.TestCase):
+    """!
+    @brief AdHoc_Generation.py's pure LLM-calling logic -- no DMCore, no live LLM (see
+        TestImprovisation for the DMCore-side glue that actually mutates game state).
+        generate_ad_hoc_item/decide_entity_removal's own call_chat_completion
+        dependency-injection seam is exercised directly here, the same style
+        TestNpcGeneration uses for generate_npc_stats.
+    """
+
+    def test_create_item_returns_a_full_entity_dict(self):
+        def fake_call(api_url, messages, tools=None, tool_choice=None, timeout=None):
+            return {"choices": [{"message": {"tool_calls": [{"function": {
+                "name": "create_item",
+                "arguments": json.dumps({
+                    "name": "stone", "description": "A smooth grey stone.",
+                    "subtype": "misc", "location": "ground", "value": 0,
+                }),
+            }}]}}]}
+
+        result = generate_ad_hoc_item("a stone", "take", "A dusty antechamber.", call_chat_completion=fake_call)
+
+        self.assertTrue(result["created"])
+        self.assertEqual(result["location"], "ground")
+        entity = result["entity"]
+        self.assertEqual(entity["name"], "stone")
+        self.assertEqual(entity["supertype"], "object")
+        self.assertTrue(entity["ad_hoc"])
+        self.assertNotIn("damage_value", entity)
+        self.assertNotIn("armor_value", entity)
+
+    def test_weapon_flags_attach_damage_value(self):
+        def fake_call(api_url, messages, tools=None, tool_choice=None, timeout=None):
+            return {"choices": [{"message": {"tool_calls": [{"function": {
+                "name": "create_item",
+                "arguments": json.dumps({
+                    "name": "rusty knife", "description": "A pitted old knife.",
+                    "subtype": "weapon", "location": "ground", "is_weapon": True,
+                    "damage_dice": 1, "damage_pips": 0, "damage_tag": "slashing",
+                }),
+            }}]}}]}
+
+        result = generate_ad_hoc_item("a rusty knife", "take", "A rubbish heap.", call_chat_completion=fake_call)
+
+        entity = result["entity"]
+        self.assertEqual(entity["damage_value"], {"dice": 1, "pips": 0, "bonus": 0})
+        self.assertEqual(entity["damage_tags"], ["slashing"])
+
+    def test_equip_slot_only_kept_when_actually_valid(self):
+        def fake_call(api_url, messages, tools=None, tool_choice=None, timeout=None):
+            return {"choices": [{"message": {"tool_calls": [{"function": {
+                "name": "create_item",
+                "arguments": json.dumps({
+                    "name": "iron ring", "description": "A plain band.",
+                    "subtype": "trinket", "location": "ground", "equip_slot": "ring",
+                }),
+            }}]}}]}
+
+        valid = generate_ad_hoc_item(
+            "a ring", "take", "A dungeon.", valid_equip_slots=["ring", "neck"], call_chat_completion=fake_call,
+        )
+        self.assertEqual(valid["entity"]["equip_slot"], "ring")
+
+        invalid = generate_ad_hoc_item(
+            "a ring", "take", "A dungeon.", valid_equip_slots=["rhand"], call_chat_completion=fake_call,
+        )
+        self.assertNotIn("equip_slot", invalid["entity"])
+
+    def test_usable_healing_item_carries_healing_skill_stat(self):
+        def fake_call(api_url, messages, tools=None, tool_choice=None, timeout=None):
+            return {"choices": [{"message": {"tool_calls": [{"function": {
+                "name": "create_item",
+                "arguments": json.dumps({
+                    "name": "murky tonic", "description": "A cloudy, herbal-smelling tonic.",
+                    "subtype": "potion", "location": "ground",
+                    "usable": True, "is_healing": True, "healing_dice": 2, "healing_pips": 1,
+                }),
+            }}]}}]}
+
+        result = generate_ad_hoc_item("a tonic", "use", "A dungeon.", call_chat_completion=fake_call)
+
+        entity = result["entity"]
+        self.assertTrue(entity["usable"])
+        self.assertEqual(entity["skills"]["healing"], {"dice": 2, "pips": 1})
+        self.assertNotIn("poison", entity["skills"])
+
+    def test_usable_poisonous_item_carries_poison_skill_stat_instead(self):
+        # For balance -- not every improvised consumable is a free heal.
+        def fake_call(api_url, messages, tools=None, tool_choice=None, timeout=None):
+            return {"choices": [{"message": {"tool_calls": [{"function": {
+                "name": "create_item",
+                "arguments": json.dumps({
+                    "name": "unlabeled vial", "description": "A vial of something acrid.",
+                    "subtype": "potion", "location": "ground",
+                    "usable": True, "is_poisonous": True, "poison_dice": 1, "poison_pips": 2,
+                }),
+            }}]}}]}
+
+        result = generate_ad_hoc_item("a strange vial", "use", "A dungeon.", call_chat_completion=fake_call)
+
+        entity = result["entity"]
+        self.assertTrue(entity["usable"])
+        self.assertEqual(entity["skills"]["poison"], {"dice": 1, "pips": 2})
+        self.assertNotIn("healing", entity["skills"])
+
+    def test_non_usable_item_carries_no_usable_flag_or_skills(self):
+        def fake_call(api_url, messages, tools=None, tool_choice=None, timeout=None):
+            return {"choices": [{"message": {"tool_calls": [{"function": {
+                "name": "create_item",
+                "arguments": json.dumps({
+                    "name": "stone", "description": "A smooth grey stone.",
+                    "subtype": "misc", "location": "ground",
+                }),
+            }}]}}]}
+
+        result = generate_ad_hoc_item("a stone", "take", "A dungeon.", call_chat_completion=fake_call)
+
+        self.assertNotIn("usable", result["entity"])
+        self.assertNotIn("skills", result["entity"])
+
+    def test_decline_reports_not_created(self):
+        def fake_call(api_url, messages, tools=None, tool_choice=None, timeout=None):
+            return {"choices": [{"message": {"tool_calls": [{"function": {
+                "name": "decline", "arguments": json.dumps({"reason": "not plausible here"}),
+            }}]}}]}
+
+        result = generate_ad_hoc_item("the moon", "take", "A dungeon.", call_chat_completion=fake_call)
+        self.assertFalse(result["created"])
+
+    def test_generate_ad_hoc_item_never_fabricates_when_call_chat_completion_raises(self):
+        def failing_call(*args, **kwargs):
+            raise ConnectionError("no LM Studio")
+
+        result = generate_ad_hoc_item("a stone", "take", "A dungeon.", call_chat_completion=failing_call)
+        self.assertFalse(result["created"])
+        self.assertEqual(result["reason"], "unavailable")
+
+    def test_decide_entity_removal_picks_a_real_name(self):
+        def fake_call(api_url, messages, tools=None, tool_choice=None, timeout=None):
+            return {"choices": [{"message": {"tool_calls": [{"function": {
+                "name": "remove_entity",
+                "arguments": json.dumps({"name": "torch", "reason": "player asked"}),
+            }}]}}]}
+
+        result = decide_entity_removal(
+            "get rid of that torch", "A dim hallway.", ["torch", "wolf"], call_chat_completion=fake_call,
+        )
+        self.assertTrue(result["removed"])
+        self.assertEqual(result["name"], "torch")
+
+    def test_decide_entity_removal_rejects_a_name_outside_removable_entities(self):
+        # The enum constraint itself should already prevent this in practice; this covers the
+        # runtime double-check in case a model ever echoes back something off-list anyway.
+        def fake_call(api_url, messages, tools=None, tool_choice=None, timeout=None):
+            return {"choices": [{"message": {"tool_calls": [{"function": {
+                "name": "remove_entity",
+                "arguments": json.dumps({"name": "not_a_real_name", "reason": "why not"}),
+            }}]}}]}
+
+        result = decide_entity_removal(
+            "remove it", "A dim hallway.", ["torch"], call_chat_completion=fake_call,
+        )
+        self.assertFalse(result["removed"])
+
+    def test_decide_entity_removal_short_circuits_on_no_removable_entities(self):
+        def exploding_call(*args, **kwargs):
+            raise AssertionError("should never be called with nothing removable")
+
+        result = decide_entity_removal("remove something", "desc", [], call_chat_completion=exploding_call)
+        self.assertFalse(result["removed"])
+
+    def test_decide_entity_removal_never_fabricates_when_call_chat_completion_raises(self):
+        def failing_call(*args, **kwargs):
+            raise TimeoutError("slow")
+
+        result = decide_entity_removal("remove the torch", "desc", ["torch"], call_chat_completion=failing_call)
+        self.assertFalse(result["removed"])
+
+
+class TestImprovisation(DMTestCase):
+    """!
+    @brief DM_Improvisation.py's ImprovisationMixin -- the DMCore-side glue for ad hoc entity
+        creation/removal. AdHoc_Generation.py's own call_chat_completion is never exercised
+        here (see TestAdHocGeneration) -- generate_ad_hoc_item/decide_entity_removal are
+        patched directly so these tests cover only the glue's own state mutation/dispatch.
+        scenario "arena" (DMTestCase's own default) declares "wolf" twice (disambiguating to
+        "wolf"/"wolf_2") plus "thane" alongside the player, gladstone.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.item_events = self._capture("item_interaction_resolved")
+        self.not_understood_events = self._capture("action_not_understood")
+        self.catalog_events = self._capture("item_catalog_updated")
+
+    def _fake_creation(self, entity_overrides=None, location="ground", created=True, reason=None):
+        if not created:
+            return {"created": False, "reason": reason or "declined"}
+        entity = {
+            "name": "stone", "supertype": "object", "subtype": "misc",
+            "description": "A smooth grey stone.", "value": 0, "ad_hoc": True,
+        }
+        if entity_overrides:
+            entity.update(entity_overrides)
+        return {"created": True, "entity": entity, "location": location}
+
+    def test_ground_placement_take_ends_up_in_inventory_off_the_ground(self):
+        with patch("DM_Improvisation.generate_ad_hoc_item", return_value=self._fake_creation(location="ground")):
+            self.dm_core._on_improvisation_requested({
+                "intent": "take", "phrase": "a stone", "input": "pick up a stone",
+            })
+
+        self.assertIn("stone", self.dm_core.entities["gladstone"]["inventory"])
+        self.assertNotIn("stone", self.dm_core._current_ground_items())
+        self.assertEqual(self.catalog_events, [
+            {"entities": [{"name": "stone", "description": "A smooth grey stone."}]},
+        ])
+
+    def test_ground_placement_examine_describes_without_taking(self):
+        with patch("DM_Improvisation.generate_ad_hoc_item", return_value=self._fake_creation(location="ground")):
+            self.dm_core._on_improvisation_requested({
+                "intent": "examine", "phrase": "a stone", "input": "examine the stone",
+            })
+
+        result = self.item_events[-1]
+        self.assertTrue(result["found"])
+        self.assertIn("stone", self.dm_core._current_ground_items())
+        self.assertNotIn("stone", self.dm_core.entities["gladstone"]["inventory"])
+
+    def test_player_centric_intent_lands_in_inventory_regardless_of_ground_location(self):
+        # "equip" is player-centric -- the item goes straight into inventory and re-dispatches,
+        # even though the fake LLM response chose "ground" (see DM_Improvisation.py's own
+        # module docstring for why these two intent categories can't share one code path).
+        entity = self._fake_creation(entity_overrides={"name": "iron ring", "equip_slot": "ring"}, location="ground")
+        with patch("DM_Improvisation.generate_ad_hoc_item", return_value=entity):
+            self.dm_core._on_improvisation_requested({
+                "intent": "equip", "phrase": "a ring", "input": "equip the ring",
+            })
+
+        self.assertIn("iron ring", self.dm_core.entities["gladstone"]["inventory"])
+        self.assertEqual(self.dm_core.entities["gladstone"]["equipped"].get("ring"), "iron ring")
+        self.assertNotIn("iron ring", self.dm_core._current_ground_items())
+
+    def test_a_conjured_poisonous_consumable_actually_poisons_on_use(self):
+        # End-to-end: creation -> "use" is player-centric so it lands straight in inventory and
+        # re-dispatches -> DM_Inventory.py's _resolve_use_intent rolls the poison damage for real.
+        entity = self._fake_creation(entity_overrides={
+            "name": "unlabeled vial", "subtype": "potion", "usable": True,
+            "skills": {"poison": {"dice": 2, "pips": 0}},
+        })
+        self.dm_core.roll_dice = lambda dice, pips: 7
+        starting_hp = self.dm_core.get_current_hp("gladstone")
+
+        with patch("DM_Improvisation.generate_ad_hoc_item", return_value=entity):
+            self.dm_core._on_improvisation_requested({
+                "intent": "use", "phrase": "the strange vial", "input": "drink the strange vial",
+            })
+
+        result = self.item_events[-1]
+        self.assertTrue(result["found"])
+        self.assertEqual(result["poisoned"], 7)
+        self.assertEqual(self.dm_core.get_current_hp("gladstone"), starting_hp - 7)
+
+    def test_inventory_placement_examine_publishes_a_bespoke_response(self):
+        with patch("DM_Improvisation.generate_ad_hoc_item", return_value=self._fake_creation(location="inventory")):
+            self.dm_core._on_improvisation_requested({
+                "intent": "examine", "phrase": "my pockets", "input": "check my pockets",
+            })
+
+        result = self.item_events[-1]
+        self.assertTrue(result["found"])
+        self.assertEqual(result["item_name"], "stone")
+        self.assertIn("stone", self.dm_core.entities["gladstone"]["inventory"])
+
+    def test_decline_falls_back_to_action_not_understood(self):
+        with patch("DM_Improvisation.generate_ad_hoc_item", return_value=self._fake_creation(created=False)):
+            self.dm_core._on_improvisation_requested({
+                "intent": "take", "phrase": "the moon", "input": "take the moon",
+            })
+
+        self.assertEqual(len(self.not_understood_events), 1)
+        self.assertEqual(self.item_events, [])
+
+    def test_remove_entity_from_scene_strips_presence_and_prevents_respawn(self):
+        self.assertIn("wolf", self.dm_core.scenario_entities)
+
+        outcome = self.dm_core.remove_entity_from_scene("wolf")
+
+        self.assertTrue(outcome["removed"])
+        self.assertNotIn("wolf", self.dm_core.scenario_entities)
+        self.assertIn("wolf", self.dm_core.removed_entities)
+
+        # Simulates a revisit/reload re-instancing the scenario's own static entities list --
+        # "wolf" must not respawn just because arena.toml still declares it (unlike "wolf_2",
+        # a separate instance never removed, which should still be there).
+        self.dm_core.load_scenario()
+        self.assertNotIn("wolf", self.dm_core.scenario_entities)
+        self.assertIn("wolf_2", self.dm_core.scenario_entities)
+
+    def test_remove_entity_from_scene_refuses_to_remove_the_player(self):
+        outcome = self.dm_core.remove_entity_from_scene(self.dm_core.player_name)
+
+        self.assertFalse(outcome["removed"])
+        self.assertIn("gladstone", self.dm_core.scenario_entities)
+        self.assertNotIn("gladstone", self.dm_core.removed_entities)
+
+    def test_attempt_entity_removal_excludes_the_player_from_the_candidate_set(self):
+        captured = {}
+
+        def fake_decide(phrase, scene_description, removable_entities, **kwargs):
+            captured["removable_entities"] = removable_entities
+            return {"removed": False}
+
+        with patch("DM_Improvisation.decide_entity_removal", side_effect=fake_decide):
+            self.dm_core._attempt_entity_removal("get rid of the wolf")
+
+        self.assertIn("wolf", captured["removable_entities"])
+        self.assertNotIn("gladstone", captured["removable_entities"])
+
+    def test_attempt_entity_removal_end_to_end_via_help_channel(self):
+        help_events = self._capture("help_resolved")
+
+        def fake_decide(phrase, scene_description, removable_entities, **kwargs):
+            return {"removed": True, "name": "wolf", "reason": "player asked"}
+
+        with patch("DM_Improvisation.decide_entity_removal", side_effect=fake_decide):
+            self.dm_core._on_help_detected({"input": "adam, get rid of the wolf", "removal_candidate": True})
+
+        self.assertNotIn("wolf", self.dm_core.scenario_entities)
+        self.assertEqual(help_events[-1]["removed"], {"removed": True, "name": "wolf", "reason": "player asked"})
+
+
+class TestShopScenario(DMTestCase):
+    """!
+    @brief End-to-end proof (mocked LLM, no live LM Studio needed) that Rules/Fantasy/
+        scenarios/shop.toml's "shopkeeper" can sell "most general goods... despite not being
+        defined entities" (the scenario this file exists to exercise) -- TARGET_CENTRIC_INTENTS'
+        own "trade" handling in DM_Improvisation.py. "dagger" is the shopkeeper's one real,
+        hand-authored good (npcs.toml), kept deliberately sparse so this test can show both the
+        ordinary trade path and the ad hoc one working side by side.
+    """
+    scenario_name = "shop"
+
+    def setUp(self):
+        super().setUp()
+        self.item_events = self._capture("item_interaction_resolved")
+
+    def test_buying_a_real_pre_authored_good_still_works_normally(self):
+        self.dm_core._on_item_interaction_detected({
+            "intent": "trade", "item_name": "dagger", "input": "buy the dagger",
+        })
+        result = self.item_events[-1]
+        self.assertTrue(result["found"])
+        self.assertEqual(result["price"], 8)
+        self.assertIn("dagger", self.dm_core.entities["gladstone"]["inventory"])
+
+    def test_buying_an_undefined_general_good_conjures_it_into_the_shopkeepers_stock(self):
+        fake_result = {
+            "created": True,
+            "location": "ground",  # deliberately ignored for "trade" -- see DM_Improvisation.py
+            "entity": {
+                "name": "coil of rope", "supertype": "object", "subtype": "tool",
+                "description": "A sturdy coil of hempen rope, fifty feet long.",
+                "value": 5, "ad_hoc": True,
+            },
+        }
+        with patch("DM_Improvisation.generate_ad_hoc_item", return_value=fake_result):
+            self.dm_core._on_improvisation_requested({
+                "intent": "trade", "phrase": "a coil of rope", "input": "buy some rope",
+            })
+
+        result = self.item_events[-1]
+        self.assertTrue(result["found"])
+        self.assertEqual(result["price"], 5)
+        self.assertIn("coil of rope", self.dm_core.entities["gladstone"]["inventory"])
+        self.assertNotIn("coil of rope", self.dm_core.entities["shopkeeper"]["inventory"])
+        self.assertNotIn("coil of rope", self.dm_core._current_ground_items())
+
+    def test_buying_an_undefined_good_while_too_poor_still_gates_on_price(self):
+        self.dm_core.entities["gladstone"]["currency"] = 0
+        fake_result = {
+            "created": True, "location": "ground",
+            "entity": {
+                "name": "lantern", "supertype": "object", "subtype": "tool",
+                "description": "A dented tin lantern.", "value": 12, "ad_hoc": True,
+            },
+        }
+        with patch("DM_Improvisation.generate_ad_hoc_item", return_value=fake_result):
+            self.dm_core._on_improvisation_requested({
+                "intent": "trade", "phrase": "a lantern", "input": "buy a lantern",
+            })
+
+        result = self.item_events[-1]
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "cant_afford")
+        # Still conjured into the shopkeeper's own stock even though the purchase itself was
+        # denied -- a later "buy the lantern" (once the player can afford it) should find it
+        # waiting rather than needing to be improvised a second time.
+        self.assertIn("lantern", self.dm_core.entities["shopkeeper"]["inventory"])
+
+    def test_nothing_to_buy_when_no_target_is_present(self):
+        self.dm_core.scenario_entities = ["gladstone"]  # shopkeeper stepped out
+        not_understood = self._capture("action_not_understood")
+
+        with patch("DM_Improvisation.generate_ad_hoc_item") as mock_generate:
+            self.dm_core._on_improvisation_requested({
+                "intent": "trade", "phrase": "a lantern", "input": "buy a lantern",
+            })
+
+        mock_generate.assert_not_called()  # short-circuits before ever asking the LLM
+        self.assertEqual(len(not_understood), 1)
+
+    def test_implausible_purchase_declines(self):
+        not_understood = self._capture("action_not_understood")
+        with patch("DM_Improvisation.generate_ad_hoc_item", return_value={"created": False, "reason": "declined"}):
+            self.dm_core._on_improvisation_requested({
+                "intent": "trade", "phrase": "the moon", "input": "buy the moon",
+            })
+
+        self.assertEqual(len(not_understood), 1)
+        self.assertEqual(self.item_events, [])
+
+
 class TestNpcGenerationDMCoreIntegration(DMTestCase):
     """!
     @brief _instance_entities' entity_template branch (DM_Rules.py/DM_NpcGeneration.py)
@@ -1865,6 +2352,44 @@ class TestUseItem(DMTestCase):
         )
         self.assertIn("glass vial", self.dm_core.entities["gladstone"]["inventory"])
 
+    def test_using_a_poisonous_item_deals_real_damage(self):
+        # Same {dice, pips} skill-stat shape as "healing", just routed through calculate_damage/
+        # apply_damage instead of apply_healing -- see DM_Improvisation.py's own module notes on
+        # why an ad hoc-conjured consumable can be marked poisonous instead of a free heal.
+        self.dm_core.entities["nasty brew"] = {
+            "name": "nasty brew", "supertype": "object", "subtype": "potion",
+            "description": "A vial of something that smells wrong.", "usable": True,
+            "skills": {"poison": {"dice": 2, "pips": 0}},
+        }
+        self.dm_core.entities["gladstone"]["inventory"].append("nasty brew")
+        starting_hp = self.dm_core.get_current_hp("gladstone")
+
+        result = self._use(item_name="nasty brew", roll_result=7)
+
+        self.assertTrue(result["found"])
+        self.assertEqual(result["healed"], 0)
+        self.assertEqual(result["poisoned"], 7)
+        self.assertEqual(self.dm_core.get_current_hp("gladstone"), starting_hp - 7)
+        self.assertEqual(result["remaining_hp"], starting_hp - 7)
+        self.assertNotIn("nasty brew", self.dm_core.entities["gladstone"]["inventory"])
+
+    def test_poison_immunity_negates_the_damage_entirely(self):
+        # calculate_damage's own immunity_tags check applies here exactly like a real attack --
+        # a poison-conjured item isn't a special case that bypasses it.
+        self.dm_core.entities["gladstone"]["immunity_tags"] = ["poison"]
+        self.dm_core.entities["toxic vial"] = {
+            "name": "toxic vial", "supertype": "object", "subtype": "potion",
+            "description": "A small vial of venom.", "usable": True,
+            "skills": {"poison": {"dice": 3, "pips": 0}},
+        }
+        self.dm_core.entities["gladstone"]["inventory"].append("toxic vial")
+        starting_hp = self.dm_core.get_current_hp("gladstone")
+
+        result = self._use(item_name="toxic vial", roll_result=10)
+
+        self.assertEqual(result["poisoned"], 0)
+        self.assertEqual(self.dm_core.get_current_hp("gladstone"), starting_hp)
+
 
 class TestEquipUnequipDrop(DMTestCase):
     def setUp(self):
@@ -2264,6 +2789,41 @@ class TestSaveLoad(DMTestCase):
 
         self.assertEqual(fresh_dm._current_ground_items(), ["health potion"])
         self.assertEqual(fresh_dm.entities["gladstone"]["inventory"].count("health potion"), 2)
+
+
+    def test_ad_hoc_entity_round_trips_through_save_load(self):
+        # An ad hoc entity (DM_Improvisation.py) has no static TOML template to re-derive
+        # anything from on reload -- unlike every other saved instance, its *complete* dict has
+        # to be saved and restored, not just a diff.
+        slot = self._track("test_ad_hoc_round_trip")
+        entity = {
+            "name": "stone", "supertype": "object", "subtype": "misc",
+            "description": "A smooth grey stone.", "value": 0, "ad_hoc": True,
+        }
+        self.dm_core.entities["stone"] = entity
+        self.dm_core._current_ground_items().append("stone")
+        self.dm_core.save_game(slot)
+
+        fresh_dm = DMCore(EventBus(), scenario_name="arena")
+        self.assertNotIn("stone", fresh_dm.entities)
+        fresh_dm.load_game(slot)
+
+        self.assertEqual(fresh_dm.entities["stone"], entity)
+        self.assertIn("stone", fresh_dm._current_ground_items())
+
+    def test_removed_entity_does_not_respawn_after_save_load(self):
+        slot = self._track("test_removed_entity_round_trip")
+        self.dm_core.remove_entity_from_scene("wolf")
+        self.assertNotIn("wolf", self.dm_core.scenario_entities)
+        self.dm_core.save_game(slot)
+
+        fresh_dm = DMCore(EventBus(), scenario_name="arena")  # boots with "wolf" freshly instanced
+        self.assertIn("wolf", fresh_dm.scenario_entities)
+        fresh_dm.load_game(slot)
+
+        self.assertNotIn("wolf", fresh_dm.scenario_entities)
+        self.assertIn("wolf", fresh_dm.removed_entities)
+        self.assertIn("wolf_2", fresh_dm.scenario_entities)
 
 
 class TestMultiRoomDungeon(DMTestCase):
