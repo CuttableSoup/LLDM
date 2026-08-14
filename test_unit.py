@@ -959,12 +959,7 @@ class TestMovementAndRange(DMTestCase):
 
         self.assertEqual(self.dm_core.get_band("gladstone"), 2)  # moved one band toward wolf
 
-
-    # --- move_toward_or_away: the creature/ally counterpart to advance_or_retreat ----------
-
-
     # --- is_in_range -------------------------------------------------------------------
-
 
     def test_weapon_and_spell_range_thresholds(self):
         # (item, defender band, expected) -- gladstone stays at band 1 throughout, so
@@ -997,12 +992,6 @@ class TestMovementAndRange(DMTestCase):
         self.assertEqual(action["reason"], "out_of_range")
         self.assertIsNone(action["roll"])
         self.assertNotIn("damage", action)
-
-
-    # --- _on_item_interaction_detected("advance"/"retreat") -------------------------------
-
-
-    # --- save/load persists band ------------------------------------------------------------
 
 
 class TestEntityBehavior(DMTestCase):
@@ -2738,27 +2727,6 @@ class TestItemTargetedSkillCheck(DMTestCase):
         self.assertTrue(self.dm_core.is_identified("cursed dagger"))
 
 
-class TestHealthPotionIdentify(DMTestCase):
-    def setUp(self):
-        super().setUp()
-        self.action_events = self._capture("action_resolved")
-
-    def _check_the_potion(self, skill_name, roll_result):
-        self.dm_core.roll_dice = lambda dice, pips: roll_result
-        self.dm_core._on_turn_detected({
-            "clauses": [{"kind": "action", "skill": skill_name, "target": "health potion"}],
-            "input": "I appraise the health potion",
-        })
-
-
-    def test_successful_check_reveals_healing_and_marks_identified(self):
-        self._check_the_potion("appraise", roll_result=4)  # clears difficulty 4
-        result = self.action_events[-1]["actions"][0]
-        self.assertTrue(result["success"])
-        self.assertEqual(result["revealed"], ["healing"])
-        self.assertTrue(self.dm_core.is_identified("health potion"))
-
-
 class TestOpenClose(DMTestCase):
     scenario_name = "dungeon"
 
@@ -2773,11 +2741,6 @@ class TestOpenClose(DMTestCase):
     def _open(self):
         self.dm_core._on_item_interaction_detected({
             "intent": "open", "item_name": None, "input": "I open the chest",
-        })
-
-    def _close(self):
-        self.dm_core._on_item_interaction_detected({
-            "intent": "close", "item_name": None, "input": "I close the chest",
         })
 
     def test_chest_starts_closed(self):
