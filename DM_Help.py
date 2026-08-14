@@ -22,15 +22,18 @@ class HelpMixin(DMCoreProtocol):
         notes for why that reply is deliberately excluded from context_window entirely,
         instead of merely presence-untagged the way dialogue/narration entries are.
 
-        No longer strictly side-effect-free: when NLP_Core.py's own REMOVAL_KEYWORDS gate
-        flagged the input as a plausible removal request, _on_help_detected also attempts one
-        (see _on_help_detected's own docstring) via ImprovisationMixin.
-        _attempt_entity_removal (DM_Improvisation.py) *before* gathering the informational
-        payload below -- the one exception to "never mutates state" above, since a real removal
-        can change HP/equipment/inventory/scenario_entities. Deliberately still gated behind
-        explicitly addressing ADaM by name, never an automatic fallback the way ad hoc item
-        *creation* is -- see DM_Improvisation.py's own module docstring for why creation and
-        removal have such different risk profiles and triggers.
+        No longer strictly side-effect-free: when NLP_Core.py's own REMOVAL_KEYWORDS/
+        CREATURE_KEYWORDS/EDIT_KEYWORDS gates flagged the input as a plausible removal/creature-
+        conjuring/edit request, _on_help_detected also attempts the matching one (see
+        _on_help_detected's own docstring) via ImprovisationMixin's own
+        _attempt_entity_removal/_attempt_creature_conjuring/_attempt_entity_edit
+        (DM_Improvisation.py) *before* gathering the informational payload below -- the one
+        exception to "never mutates state" above, since any of the three can change HP/
+        equipment/inventory/scenario_entities/an entity's own description or conditions.
+        Deliberately still gated behind explicitly addressing ADaM by name, never an automatic
+        fallback the way ad hoc item *creation* is -- see DM_Improvisation.py's own module
+        docstring for why these have such different risk profiles/triggers than plain item
+        creation.
     """
 
     def _describe_player_skills(self):
@@ -93,19 +96,33 @@ class HelpMixin(DMCoreProtocol):
         @brief Event handler for "help_detected" (NLPCore's own ADAM_NAME_PATTERN match) --
             gathers a fresh snapshot of the player's own mechanical state and the current
             scene and publishes it as "help_resolved" for LLMCore to narrate as ADaM. Rolls no
-            dice; mutates state only in the one case NLP_Core.py's own REMOVAL_KEYWORDS gate
-            flagged as a plausible removal request (see this class's own module docstring) --
-            _attempt_entity_removal (DM_Improvisation.py) runs first and its outcome is folded
-            into the payload as "removed", so ADaM's own narration can mention what happened.
-            _publish_party_status() is only called when a removal actually went through (a
-            removal can change HP/equipment/inventory/scenario_entities, so the GUI's Party tab
-            needs to redraw); the ordinary informational path still never calls it, the same
-            reasoning DialogueMixin already documents for why dialogue never does either.
-        @param data The "help_detected" payload ({"input": processed_text, "removal_candidate": bool}).
+            dice; mutates state only in the cases NLP_Core.py's own REMOVAL_KEYWORDS/
+            CREATURE_KEYWORDS/EDIT_KEYWORDS gates flagged as a plausible request (see this
+            class's own module docstring) -- each of ImprovisationMixin's own
+            _attempt_entity_removal/_attempt_creature_conjuring/_attempt_entity_edit
+            (DM_Improvisation.py) runs independently (a single ADaM message could plausibly
+            trigger more than one, though in practice it's almost always at most one) and its
+            outcome is folded into the payload as "removed"/"created_creature"/"edited", so
+            ADaM's own narration can mention what happened. _publish_party_status() is only
+            called when at least one of the three actually went through (any of them can change
+            HP/equipment/inventory/scenario_entities/an entity's own description or conditions,
+            so the GUI's Party tab needs to redraw); the ordinary informational path still never
+            calls it, the same reasoning DialogueMixin already documents for why dialogue never
+            does either.
+        @param data The "help_detected" payload ({"input": processed_text, "removal_candidate",
+            "creature_candidate", "edit_candidate": bool}).
         """
         removal_outcome = None
         if data.get("removal_candidate"):
             removal_outcome = self._attempt_entity_removal(data.get("input", ""))
+
+        creature_outcome = None
+        if data.get("creature_candidate"):
+            creature_outcome = self._attempt_creature_conjuring(data.get("input", ""))
+
+        edit_outcome = None
+        if data.get("edit_candidate"):
+            edit_outcome = self._attempt_entity_edit(data.get("input", ""))
 
         player = self.entities.get(self.player_name, {})
         self.event_bus.publish("help_resolved", {
@@ -120,6 +137,12 @@ class HelpMixin(DMCoreProtocol):
             "present": self._describe_scenario_characters(),
             "exits": self._describe_available_exits(),
             "removed": removal_outcome,
+            "created_creature": creature_outcome,
+            "edited": edit_outcome,
         })
-        if removal_outcome and removal_outcome.get("removed"):
+        if (
+            (removal_outcome and removal_outcome.get("removed"))
+            or (creature_outcome and creature_outcome.get("created_creature"))
+            or (edit_outcome and edit_outcome.get("edited"))
+        ):
             self._publish_party_status()

@@ -153,6 +153,15 @@ class PersistenceMixin(DMCoreProtocol):
                 state["description"] = entity.get("description", "")
                 state["qualities"] = entity.get("qualities", {})
                 state["attitudes"] = entity.get("attitudes", {})
+            elif entity.get("edited"):
+                # A hand-authored entity edited via ADaM (DM_Improvisation.py's
+                # _attempt_entity_edit) -- "description" doesn't otherwise round-trip for a
+                # non-ad_hoc/non-generated instance (it just re-derives from the static
+                # template on reload), so it has to be saved explicitly here or the edit would
+                # silently revert on the next load. "elif", not "if" -- a generated entity's
+                # own description already saves above; the two flags never need to stack.
+                state["edited"] = True
+                state["description"] = entity.get("description", "")
             return state
 
         if self.rooms:
@@ -325,6 +334,9 @@ class PersistenceMixin(DMCoreProtocol):
                 entity["description"] = state.get("description", entity.get("description", ""))
                 entity["qualities"] = state.get("qualities", entity.get("qualities", {}))
                 entity["attitudes"] = state.get("attitudes", entity.get("attitudes", {}))
+            elif state.get("edited"):
+                entity["edited"] = True
+                entity["description"] = state.get("description", entity.get("description", ""))
 
         # load_scenario()/enter_room (above) already reset current_target to a freshly-
         # computed default -- overlay the saved value on top, same pattern as player_name, so

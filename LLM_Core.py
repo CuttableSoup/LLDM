@@ -769,10 +769,11 @@ class LLMCore:
             Grounded in a static paragraph of general command/verb guidance (the actual
             onboarding gap this persona exists to close) plus help_data's own live snapshot of
             the player's mechanical state and the current scene (DM_Help.py). Also mentions
-            help_data's own "removed" outcome, if present (DM_Improvisation.py's
-            _attempt_entity_removal, via DM_Help.py's own "removal_candidate" handling) -- the
-            one case this payload describes something ADaM itself just *did*, not just facts to
-            report.
+            help_data's own "removed"/"created_creature"/"edited" outcomes, if present
+            (DM_Improvisation.py's _attempt_entity_removal/_attempt_creature_conjuring/
+            _attempt_entity_edit, via DM_Help.py's own "removal_candidate"/"creature_candidate"/
+            "edit_candidate" handling) -- the one case(s) this payload describes something ADaM
+            itself just *did*, not just facts to report.
         @param help_data The "help_resolved" payload.
         @param rag_query What to retrieve sourcebook lore against (see perform_rag).
         @return The complete system message string for this one request.
@@ -819,6 +820,18 @@ class LLMCore:
             system_message += (
                 f"\n\nYou just removed \"{removed.get('name')}\" from the scene entirely "
                 f"(reason: {removed.get('reason', 'as requested')}) -- mention this happened."
+            )
+        created_creature = help_data.get("created_creature")
+        if created_creature and created_creature.get("created_creature"):
+            system_message += (
+                f"\n\nYou just conjured \"{created_creature.get('name')}\" into the scene -- "
+                "mention this happened, describing what appeared."
+            )
+        edited = help_data.get("edited")
+        if edited and edited.get("edited"):
+            system_message += (
+                f"\n\nYou just edited \"{edited.get('name')}\" "
+                f"(reason: {edited.get('reason', 'as requested')}) -- mention what changed."
             )
 
         rag_context = self.perform_rag(rag_query)

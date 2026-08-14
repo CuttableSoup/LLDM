@@ -124,6 +124,20 @@ REMOVAL_KEYWORDS = (
     "make them disappear",
 )
 
+# Mirrors REMOVAL_KEYWORDS exactly, for "creature_candidate" -- gates whether DM_Help.py bothers
+# calling AdHoc_Generation.py's generate_ad_hoc_creature (a synchronous LLM call) at all, not
+# the real arbiter of whether anything actually gets conjured (that's still the LLM's own
+# tool_choice="auto"/"decline").
+CREATURE_KEYWORDS = (
+    "summon", "conjure", "spawn", "bring in", "there's a", "there is a", "add a", "appears",
+)
+
+# Mirrors REMOVAL_KEYWORDS/CREATURE_KEYWORDS exactly, for "edit_candidate" -- gates whether
+# DM_Help.py bothers calling AdHoc_Generation.py's decide_entity_edit.
+EDIT_KEYWORDS = (
+    "change", "edit", "make the", "make it", "is now", "describe it as", "describe the",
+)
+
 DIRECTION_PHRASES = {
     "forward": (
         "next room", "proceed deeper", "continue deeper", "go deeper", "through the door",
@@ -273,6 +287,8 @@ class NLPCore:
             self.event_bus.publish("help_detected", {
                 "input": processed,
                 "removal_candidate": self._detect_removal_intent(processed),
+                "creature_candidate": self._detect_creature_intent(processed),
+                "edit_candidate": self._detect_edit_intent(processed),
             })
             return
 
@@ -466,6 +482,28 @@ class NLPCore:
         @return True if processed_text contains any REMOVAL_KEYWORDS phrase, else False.
         """
         return any(keyword in processed_text for keyword in REMOVAL_KEYWORDS)
+
+    def _detect_creature_intent(self, processed_text):
+        """!
+        @brief Checks an ADaM-addressed message for CREATURE_KEYWORDS -- see that constant's
+            own module note for why this is a cheap local gate, not the actual decision (the
+            LLM's own generate_ad_hoc_creature, AdHoc_Generation.py, is the real arbiter).
+        @param processed_text The cleaned and processed player input (already known to have
+            matched ADAM_NAME_PATTERN).
+        @return True if processed_text contains any CREATURE_KEYWORDS phrase, else False.
+        """
+        return any(keyword in processed_text for keyword in CREATURE_KEYWORDS)
+
+    def _detect_edit_intent(self, processed_text):
+        """!
+        @brief Checks an ADaM-addressed message for EDIT_KEYWORDS -- see that constant's own
+            module note for why this is a cheap local gate, not the actual decision (the LLM's
+            own decide_entity_edit, AdHoc_Generation.py, is the real arbiter).
+        @param processed_text The cleaned and processed player input (already known to have
+            matched ADAM_NAME_PATTERN).
+        @return True if processed_text contains any EDIT_KEYWORDS phrase, else False.
+        """
+        return any(keyword in processed_text for keyword in EDIT_KEYWORDS)
 
     def _detect_direction(self, processed_text):
         """!

@@ -875,19 +875,30 @@ gathers off live state at that moment, not a continuation of an earlier ADaM con
 ADaM's second capability: acting as a real DM by improvising the world itself, not just
 explaining it. `AdHoc_Generation.py` is the pure, DMCore-independent LLM-calling half (same
 "pure, entity-shape-agnostic" precedent `NPC_Generation.py`/`Challenge_Rating.py` set) —
-`generate_ad_hoc_item`/`decide_entity_removal`, each an OpenAI-style tool call (`LLM_Client.py`,
-synchronous, raises on failure) offering the model a primary function plus a shared `decline`
-escape hatch, `tool_choice="auto"`. Unlike NPC generation (which always needs *some* result and
-falls back to a random offline pick), both here default to declining on any failure — never
-fabricating an item or a removal when the LLM is unreachable — on a tighter 8s timeout than NPC
-generation's 20s default, since this can fire far more often mid-session than NPC generation's
+`generate_ad_hoc_item`/`generate_ad_hoc_creature`/`decide_entity_removal`/`decide_entity_edit`,
+each an OpenAI-style tool call (`LLM_Client.py`, synchronous, raises on failure) offering the
+model a primary function plus a shared `decline` escape hatch, `tool_choice="auto"`. Unlike NPC
+generation (which always needs *some* result and falls back to a random offline pick), every
+function here defaults to declining on any failure — never fabricating an item, creature,
+removal, or edit when the LLM is unreachable — on a tighter 8s timeout than NPC generation's 20s
+default, since this can fire far more often mid-session than NPC generation's
 handful-of-times-per-scene-load pattern. `DM_Improvisation.py`'s `ImprovisationMixin` is the
 DMCore-touching glue (the same split `DM_NpcGeneration.py` is to `NPC_Generation.py`).
 
-**Two different triggers, two different risk profiles — not one symmetric mechanic.**
-Creation is an automatic fallback during ordinary play: no need to address ADaM by name at all.
-Removal can target *any* entity, hand-authored included, so it's deliberately gated behind
-explicitly addressing ADaM — see the previous section's own `removal_candidate` handling.
+**Two different triggers, two different risk profiles — not one symmetric mechanic.** Every
+capability here slots into one of two buckets, not a single symmetric mechanic:
+- **Automatic fallback**, no need to address ADaM by name at all (low risk — an improvised prop
+  or flavor line can't hurt anything): plain item creation, extended to a container/trap
+  (still `generate_ad_hoc_item`, just a subtype carrying its own minimal `[entity.test]`) and to
+  ambient scenery detail (a third `describe_scenery` outcome with no entity created at all).
+- **ADaM-gated**, behind explicitly addressing ADaM by name (higher risk — can affect combat
+  balance or mutate any existing entity, hand-authored included): entity removal (`removal_
+  candidate`), creature/NPC conjuring (`creature_candidate` — a hostile one can fight, changing
+  the scene's balance), and entity editing (`edit_candidate` — can rewrite any existing entity's
+  own description or apply/dismiss a condition on it). See the previous section's own
+  `removal_candidate` handling for the shape all three local keyword pre-checks share
+  (`NLP_Core.py`'s `REMOVAL_KEYWORDS`/`CREATURE_KEYWORDS`/`EDIT_KEYWORDS`, each attached to
+  `help_detected`'s own payload only once `ADAM_NAME_PATTERN` already matched).
 
 **Creation.** `NLP_Core.py`'s `_on_user_input` tracks any clause where `_detect_item_intent`
 matched a verb in `IMPROVISABLE_INTENTS` (`examine`/`take`/`give`/`equip`/`unequip`/`use`/
@@ -900,15 +911,53 @@ one and only integration point; a clause that fails alongside another clause tha
 still silently drops today, unchanged, the same as before this feature existed.
 
 `ImprovisationMixin._on_improvisation_requested` calls `generate_ad_hoc_item` (enum-constrained
-`subtype` — `weapon`/`armor`/`potion`/`tool`/`trinket`/`misc`, deliberately no
-`container`/`trap`, which need `[entity.test]`/locked-condition data this schema can't author;
-enum-constrained `equip_slot`, built from `get_equip_slots(player_name)`, and `damage_tag`,
-built from tags already in real use across `Rules/Fantasy/*.toml` — the same enum-over-free-text
-reliability win `NPC_Generation.py`'s own tool schema already banks on for small local models).
-On decline/failure: publishes `action_not_understood`, exactly the outcome that would have
-happened without this feature. On success: tags the new entity `ad_hoc = True` (drives its own
-save/load treatment — see below), stores it into `self.entities`, and publishes
-`item_catalog_updated` (see NLPCore's own handling, below) before resolving.
+`subtype` — `weapon`/`armor`/`potion`/`tool`/`trinket`/`misc`/`container`/`trap`;
+enum-constrained `equip_slot`, built from `get_equip_slots(player_name)`, `lock_skill`/
+`disarm_skill`, built from `self.skills.keys()`, and `damage_tag`, built from tags already in
+real use across `Rules/Fantasy/*.toml` — the same enum-over-free-text reliability win
+`NPC_Generation.py`'s own tool schema already banks on for small local models). On decline/
+failure: publishes `action_not_understood`, exactly the outcome that would have happened without
+this feature. On success: tags the new entity `ad_hoc = True` (drives its own save/load
+treatment — see below), stores it into `self.entities`, and publishes `item_catalog_updated`
+(see NLPCore's own handling, below) before resolving.
+
+**Scenery.** The same tool call also offers `describe_scenery(description)`, the model's own
+escape hatch for a phrase that names ambient detail (writing on a wall, an odor, the room's
+layout) rather than a discrete, self-contained object — `generate_ad_hoc_item` returns
+`{"created": False, "scenery": True, "description"}` on this branch, distinct from a plain
+decline. `_on_improvisation_requested` publishes a bespoke `item_interaction_resolved
+{found: True, description}` directly, with no entity created at all — a pure flavor beat, same
+treatment an ordinary `"examine"` description already gets, nothing to persist.
+
+**Containers and traps.** `subtype = "container"`/`"trap"` carry a minimal, LLM-authorable
+subset of the same shape `items.toml`'s hand-authored `chest`/`dart trap` already use (see
+"Entity tests" above) — built entirely inside `generate_ad_hoc_item` itself (a container gets
+`active_conditions = {"closed": ..., "locked": ...}` if the model marked it `locked`, plus a
+`[entity.test]` gating on `requires_condition = "locked"` whose `pass` dismisses it and whose
+`fail` applies `"jammed"`, mirroring the chest exactly; a trap gets `active_conditions =
+{"armed": ...}` plus a `[entity.test]` gating on `"armed"` whose `fail` also deals real damage
+via the same `damage`/`damage_tags` shape `apply_test_outcome` already reads — but skips
+`[entity.notice]`/`"hidden"` entirely, since a trap only gets conjured *because* the player
+already described finding it, so there's nothing left to auto-roll a notice check against).
+`_resolve_test_skill` picks the model's own `lock_skill`/`disarm_skill` if it's real, else falls
+back to `"finesse"`, else drops the `[entity.test]` block (and, for a container, the `"locked"`
+condition) entirely — a conjured container/trap must never land permanently unopenable/
+undisarmable just because the model picked (or omitted) an invalid skill.
+
+Placement is a fourth path, not a style choice: unlike a plain item, a container/trap becomes a
+live, targetable scene participant (`SCENE_PLACED_SUBTYPES`, `DM_Improvisation.py`) — inserted
+at the *front* of `self.scenario_entities` so `_get_target_name()` (what a bare
+`"examine <the target itself>"`/`"open"`/`"close"` all resolve against) picks it immediately,
+even with some other non-party entity (ex: a creature already mid-fight) also present. It also
+claims `self.current_target` via the shared `_claim_current_target_if_free` helper (see
+"Creature/NPC conjuring" below for its own use of the same helper) — necessary because
+`self.current_target`, not `_get_target_name()`, is what a scene-level `[entity.test]` check
+(picking a lock, disarming a trap) actually resolves against (`_resolve_roll`, `DM_Core.py`), so
+without this the new entity could be examined/opened but never actually tested. Never steals the
+target from a fight already engaged (a live, hostile-toward-the-player entity) — re-dispatches
+through the ordinary, unchanged item-interaction pipeline either way, which is what makes the
+very `"examine"`/`"take"` that triggered creation resolve exactly like it would against a
+hand-authored container/trap (ex: a locked one denies `"examine"` too, same as `chest`).
 
 An item can also opt into `"use"` (`usable = true`, plus `healing`/`poison` `{dice, pips}`
 skill stats — see "Items and movement as intents"'s own `_resolve_use_intent` note) via the same
@@ -975,15 +1024,73 @@ everywhere), not a game-design restriction. Accepted consequence: removing a con
 orphans (and so stops persisting) anything still listed in its own `inventory` — intended, since
 removal can target any entity including containers, not a bug.
 
-**Persistence.** An ad hoc entity has no static TOML template to re-derive anything from on
-reload (unlike a generated NPC, which still has a real `entity_template`), so
+**Creature/NPC conjuring.** `_attempt_creature_conjuring` (`DM_Improvisation.py`) resolves
+`target_cr = self.get_challenge_rating(self.player_name)` — a single-target encounter framing,
+not real NPC generation's own party-pool resolution (`DM_NpcGeneration.py`'s
+`_resolve_npc_target_cr`), since there's no `entity_template` field to resolve against here —
+and calls `generate_ad_hoc_creature` (`AdHoc_Generation.py`): one tool call, `create_creature`,
+constrained to 1-2 real `npc_keywords.toml` archetype keywords (same reliability-over-free-text
+win `NPC_Generation.py`'s own schema banks on), a `disposition` enum (`hostile`/`wary`/
+`neutral`/`friendly`, mapped to a fixed attitude-default value — `hostile` is exactly `-100`,
+the precise threshold `is_hostile` requires for real combat), and a `power` enum
+(`weak`/`moderate`/`strong`, a flat multiplier on `target_cr`, the same role `cr_multiplier`
+plays in real NPC generation). Unlike real NPC generation, there's no second LLM round trip for
+stats — the keyword choice from this one call is reused directly with `NPC_Generation.py`'s own
+deterministic `fit_skills_to_cr` (`rolled_cr = target_cr * power_multiplier *
+random.uniform(0.85, 1.15)`, the same variance-then-deterministic-fit split real generation
+uses). **Only a `"hostile"` disposition** gets an inline innate attack ability plus a
+flee-under-0.4-hp_per_remain-then-attack `[[entity.behavior]]` pair attached, mirroring
+`creatures.toml`'s own wolf/bandit shape exactly (real NPC generation never touches
+abilities/behavior at all, since a hand-authored `entity_template` already supplies them where
+wanted — an ad hoc creature has no such template, so this is the one capability here that
+*does* author minimal combat data, deliberately scoped to the single case that actually needs
+it to be fightable). A wary/neutral/friendly conjured NPC is dialogue-only, same as a template
+author would choose for a peaceful NPC.
+
+Since `_instance_entities` (`DM_Rules.py`) only ever runs at scenario/room load time, placement
+mutates `self.entities`/`self.scenario_entities` directly instead — assigning `entity_id`/
+`band` (the player's own current band, so it's always in melee range) the way `_instance_entities`
+would for a fresh instance, tagging `ad_hoc = True` (so it saves/restores in full — see
+"Persistence" below, unchanged from a plain ad hoc item), and appending to
+`self.scenario_entities` so it's a live, targetable participant. A hostile creature also claims
+`self.current_target` via `_claim_current_target_if_free` (shared with container/trap
+placement, above) — so the very next player action can fight it without first having to
+explicitly retarget, unless a fight is already engaged, in which case the claim is skipped
+entirely (conjuring a curiosity mid-combat must never silently retarget the player away from
+what they're actually fighting, and — for a non-hostile creature especially — would also wrongly
+flip `_on_turn_detected`'s own round-vs-action narration choice, which reads
+`self.current_target`'s own hostility).
+
+**Entity editing.** `_attempt_entity_edit` (`DM_Improvisation.py`) builds the same editable-name
+universe `_attempt_entity_removal` already builds (every present scene entity, every ground
+item, every known instance's own inventory/equipped item, `player_name` always excluded — an
+unrestricted edit target is exactly as risky as an unrestricted removal target) and asks
+`decide_entity_edit` to pick one and how to change it, or decline. Scope is deliberately narrow:
+a full `new_description` rewrite, plus `apply_condition`/`dismiss_condition` (reusing the
+already-safe, already-reversible `apply_condition`/`dismiss_condition` primitives, `DM_Status.py`
+— the same "use a condition for something that can plausibly change mid-scene" guidance this
+file's own "Tags vs. conditions" section already gives) — never raw mechanical fields like
+`skills`/`damage_value`, which would need far more validation to not silently break combat math.
+A description change tags the entity `entity["edited"] = True` (see "Persistence" below) and
+republishes `item_catalog_updated` so a later item-name match reflects the new text. Folded into
+`help_resolved` as `"edited"` (`LLMCore`'s `_build_adam_system_message` mentions it happened) and
+triggers `_publish_party_status()`, same as a real removal.
+
+**Persistence.** An ad hoc entity (item or creature) has no static TOML template to re-derive
+anything from on reload (unlike a generated NPC, which still has a real `entity_template`), so
 `DM_Persistence.py`'s `_collect_ad_hoc_entities` saves every *reachable* one's complete dict
 (not a diff) under `"ad_hoc_entities"`; `load_game` restores each with a full dict replacement
 right alongside the existing `"ground"` restoration, then publishes `item_catalog_updated` once,
 as a batch. `"removed_entities"` round-trips too — restored *before*
 `load_scenario_definition`/`load_scenario` run (both call `_instance_entities`), the one
 ordering requirement that keeps a removed entity from respawning on the very reload that's
-supposed to remember it's gone.
+supposed to remember it's gone. An *edited* hand-authored entity is different again — it still
+has a real static template, so only the one field editing can actually touch (`"description"`)
+needs its own save: `entity["edited"] = True` makes `save_game`'s own per-instance diff include
+`"description"` explicitly (mirroring the `"generated"`-flag branch's own extra saved fields, an
+`elif` alongside it since the two never need to stack), and `load_game`'s overlay loop restores
+it the same way — without this, an edited description would silently revert to the static
+template's own text on the very next reload.
 
 **NLPCore catch-up.** `item_embeddings`/`item_indices` are otherwise only ever built once, from
 `"rules_loaded"` — an ad hoc entity created (or restored) after that would be permanently
@@ -991,7 +1098,10 @@ unreachable to `map_to_item` (a later "drop the stone" would miss and either wro
 creation or dead-end) without `item_catalog_updated`: `NLP_Core.py`'s own
 `_on_item_catalog_updated` encodes each `{name, description}` pair the same two-phrase-per-item
 shape `_on_rules_loaded` already builds, and appends onto the existing tensor/index list
-(`torch.cat`) rather than rebuilding the whole catalog from scratch.
+(`torch.cat`) rather than rebuilding the whole catalog from scratch. Every capability above that
+introduces a new name or changes a description republishes this event — a conjured creature
+(so it can later be named directly), and an edited description (so a later match reflects the
+new text) — not just plain item creation.
 
 ## Narration
 

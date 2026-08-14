@@ -19,7 +19,12 @@ from Character_Creation import (
     race_baseline_skills,
     validate_allocation,
 )
-from AdHoc_Generation import decide_entity_removal, generate_ad_hoc_item
+from AdHoc_Generation import (
+    decide_entity_edit,
+    decide_entity_removal,
+    generate_ad_hoc_creature,
+    generate_ad_hoc_item,
+)
 from Character_Creation_GUI import CharacterCreationDialog
 from Challenge_Rating import calculate_challenge_rating, calculate_party_challenge_rating, skill_rating
 from DM_Core import DMCore
@@ -415,6 +420,23 @@ class TestNlpConfidenceThreshold(unittest.TestCase):
 
         self.event_bus.publish("user_input_submitted", "adam, what are my skills")
         self.assertFalse(help_events[-1]["removal_candidate"])
+
+    def test_creature_and_edit_candidate_flags_only_set_when_their_own_keywords_present(self):
+        help_events = []
+        self.event_bus.subscribe("help_detected", help_events.append)
+
+        self.event_bus.publish("user_input_submitted", "adam, summon a wolf")
+        self.assertTrue(help_events[-1]["creature_candidate"])
+        self.assertFalse(help_events[-1]["edit_candidate"])
+        self.assertFalse(help_events[-1]["removal_candidate"])
+
+        self.event_bus.publish("user_input_submitted", "adam, change the torch's description")
+        self.assertTrue(help_events[-1]["edit_candidate"])
+        self.assertFalse(help_events[-1]["creature_candidate"])
+
+        self.event_bus.publish("user_input_submitted", "adam, what are my skills")
+        self.assertFalse(help_events[-1]["creature_candidate"])
+        self.assertFalse(help_events[-1]["edit_candidate"])
 
     def test_item_catalog_updated_registers_a_new_item_matchable_afterward(self):
         # cls.nlp_core is shared across this whole class (setUpClass, not setUp) -- restore
@@ -1532,6 +1554,196 @@ class TestAdHocGeneration(unittest.TestCase):
         result = decide_entity_removal("remove the torch", "desc", ["torch"], call_chat_completion=failing_call)
         self.assertFalse(result["removed"])
 
+    def test_describe_scenery_reports_no_entity_created(self):
+        def fake_call(api_url, messages, tools=None, tool_choice=None, timeout=None):
+            return {"choices": [{"message": {"tool_calls": [{"function": {
+                "name": "describe_scenery",
+                "arguments": json.dumps({"description": "Faint claw marks score the stone wall."}),
+            }}]}}]}
+
+        result = generate_ad_hoc_item("the wall", "examine", "A dungeon.", call_chat_completion=fake_call)
+
+        self.assertFalse(result["created"])
+        self.assertTrue(result["scenery"])
+        self.assertEqual(result["description"], "Faint claw marks score the stone wall.")
+
+    def test_locked_container_carries_active_conditions_and_test(self):
+        def fake_call(api_url, messages, tools=None, tool_choice=None, timeout=None):
+            return {"choices": [{"message": {"tool_calls": [{"function": {
+                "name": "create_item",
+                "arguments": json.dumps({
+                    "name": "old crate", "description": "A battered wooden crate.",
+                    "subtype": "container", "location": "ground",
+                    "locked": True, "lock_skill": "finesse", "lock_difficulty": 11,
+                    "contains_currency": 15,
+                }),
+            }}]}}]}
+
+        result = generate_ad_hoc_item(
+            "a crate", "examine", "A storeroom.", valid_skill_names=["finesse", "blades"],
+            call_chat_completion=fake_call,
+        )
+
+        entity = result["entity"]
+        self.assertEqual(entity["subtype"], "container")
+        self.assertEqual(entity["currency"], 15)
+        self.assertIn("locked", entity["active_conditions"])
+        self.assertIn("closed", entity["active_conditions"])
+        self.assertEqual(entity["test"]["skill"], ["finesse"])
+        self.assertEqual(entity["test"]["difficulty"], 11)
+        self.assertEqual(entity["test"]["requires_condition"], "locked")
+        self.assertEqual(entity["test"]["pass"], {"dismiss_condition": "locked"})
+
+    def test_locked_container_falls_back_to_finesse_when_model_omits_a_valid_lock_skill(self):
+        # Never a permanently unopenable object -- see AdHoc_Generation._resolve_test_skill.
+        def fake_call(api_url, messages, tools=None, tool_choice=None, timeout=None):
+            return {"choices": [{"message": {"tool_calls": [{"function": {
+                "name": "create_item",
+                "arguments": json.dumps({
+                    "name": "old crate", "description": "A battered wooden crate.",
+                    "subtype": "container", "location": "ground", "locked": True,
+                }),
+            }}]}}]}
+
+        result = generate_ad_hoc_item(
+            "a crate", "examine", "A storeroom.", valid_skill_names=["finesse", "blades"],
+            call_chat_completion=fake_call,
+        )
+
+        entity = result["entity"]
+        self.assertIn("locked", entity["active_conditions"])
+        self.assertEqual(entity["test"]["skill"], ["finesse"])
+
+    def test_unlocked_container_has_no_test_but_still_has_currency_and_closed_condition(self):
+        def fake_call(api_url, messages, tools=None, tool_choice=None, timeout=None):
+            return {"choices": [{"message": {"tool_calls": [{"function": {
+                "name": "create_item",
+                "arguments": json.dumps({
+                    "name": "old crate", "description": "A battered wooden crate.",
+                    "subtype": "container", "location": "ground", "contains_currency": 3,
+                }),
+            }}]}}]}
+
+        result = generate_ad_hoc_item("a crate", "examine", "A storeroom.", call_chat_completion=fake_call)
+
+        entity = result["entity"]
+        self.assertEqual(entity["currency"], 3)
+        self.assertNotIn("locked", entity["active_conditions"])
+        self.assertIn("closed", entity["active_conditions"])
+        self.assertNotIn("test", entity)
+
+    def test_trap_carries_armed_condition_and_fail_damage(self):
+        def fake_call(api_url, messages, tools=None, tool_choice=None, timeout=None):
+            return {"choices": [{"message": {"tool_calls": [{"function": {
+                "name": "create_item",
+                "arguments": json.dumps({
+                    "name": "spike trap", "description": "A row of sharpened spikes.",
+                    "subtype": "trap", "location": "ground",
+                    "disarm_skill": "finesse", "disarm_difficulty": 9,
+                    "damage_dice": 3, "damage_pips": 0, "damage_tag": "piercing",
+                }),
+            }}]}}]}
+
+        result = generate_ad_hoc_item(
+            "a trap", "examine", "A corridor.", valid_skill_names=["finesse"], call_chat_completion=fake_call,
+        )
+
+        entity = result["entity"]
+        self.assertEqual(entity["subtype"], "trap")
+        self.assertIn("armed", entity["active_conditions"])
+        self.assertEqual(entity["test"]["requires_condition"], "armed")
+        self.assertEqual(entity["test"]["fail"]["damage"], {"dice": 3, "pips": 0, "bonus": 0})
+        self.assertEqual(entity["test"]["fail"]["damage_tags"], ["piercing"])
+
+    def test_generate_ad_hoc_creature_fits_skills_and_attaches_attack_when_hostile(self):
+        def fake_call(api_url, messages, tools=None, tool_choice=None, timeout=None):
+            return {"choices": [{"message": {"tool_calls": [{"function": {
+                "name": "create_creature",
+                "arguments": json.dumps({
+                    "name": "cave rat", "description": "A mangy, oversized rat.",
+                    "keywords": ["brute"], "disposition": "hostile", "power": "moderate",
+                }),
+            }}]}}]}
+        npc_keywords = {"brute": ["strength", "brawling", "fortitude"]}
+
+        result = generate_ad_hoc_creature(
+            "a rat", "A dank cellar.", target_cr=20, npc_keywords=npc_keywords, call_chat_completion=fake_call,
+        )
+
+        self.assertTrue(result["created"])
+        entity = result["entity"]
+        self.assertEqual(entity["supertype"], "creature")
+        self.assertTrue(entity["ad_hoc"])
+        self.assertEqual(entity["attitudes"]["default"][0], -100)
+        self.assertGreater(entity["max_hp"], 0)
+        self.assertEqual(set(entity["skills"]), {"strength", "brawling", "fortitude"})
+        self.assertEqual(len(entity["abilities"]), 1)
+        self.assertIn(entity["abilities"][0]["skill"], entity["skills"])
+        self.assertEqual(len(entity["behavior"]), 2)
+        self.assertEqual(entity["behavior"][1]["action"], entity["abilities"][0]["name"])
+
+    def test_generate_ad_hoc_creature_non_hostile_has_no_abilities_or_behavior(self):
+        def fake_call(api_url, messages, tools=None, tool_choice=None, timeout=None):
+            return {"choices": [{"message": {"tool_calls": [{"function": {
+                "name": "create_creature",
+                "arguments": json.dumps({
+                    "name": "lost pilgrim", "description": "A weary traveler.",
+                    "keywords": ["scholar"], "disposition": "friendly", "power": "weak",
+                }),
+            }}]}}]}
+        npc_keywords = {"scholar": ["knowledge", "willpower"]}
+
+        result = generate_ad_hoc_creature(
+            "a pilgrim", "A dusty road.", target_cr=20, npc_keywords=npc_keywords, call_chat_completion=fake_call,
+        )
+
+        entity = result["entity"]
+        self.assertEqual(entity["attitudes"]["default"][0], 60)
+        self.assertNotIn("abilities", entity)
+        self.assertNotIn("behavior", entity)
+
+    def test_generate_ad_hoc_creature_short_circuits_on_empty_keyword_catalog(self):
+        def exploding_call(*args, **kwargs):
+            raise AssertionError("should never be called with no npc_keywords catalog")
+
+        result = generate_ad_hoc_creature("a rat", "desc", target_cr=20, npc_keywords={}, call_chat_completion=exploding_call)
+        self.assertFalse(result["created"])
+        self.assertEqual(result["reason"], "no_keywords")
+
+    def test_decide_entity_edit_returns_new_description(self):
+        def fake_call(api_url, messages, tools=None, tool_choice=None, timeout=None):
+            return {"choices": [{"message": {"tool_calls": [{"function": {
+                "name": "edit_entity",
+                "arguments": json.dumps({
+                    "name": "torch", "new_description": "A torch, now guttering and nearly spent.",
+                    "reason": "player asked",
+                }),
+            }}]}}]}
+
+        result = decide_entity_edit("the torch is almost burned out", "desc", ["torch"], call_chat_completion=fake_call)
+
+        self.assertTrue(result["edited"])
+        self.assertEqual(result["name"], "torch")
+        self.assertEqual(result["new_description"], "A torch, now guttering and nearly spent.")
+        self.assertIsNone(result["apply_condition"])
+
+    def test_decide_entity_edit_rejects_a_name_outside_editable_entities(self):
+        def fake_call(api_url, messages, tools=None, tool_choice=None, timeout=None):
+            return {"choices": [{"message": {"tool_calls": [{"function": {
+                "name": "edit_entity",
+                "arguments": json.dumps({"name": "not_a_real_name", "new_description": "x", "reason": "why not"}),
+            }}]}}]}
+
+        result = decide_entity_edit("change it", "desc", ["torch"], call_chat_completion=fake_call)
+        self.assertFalse(result["edited"])
+
+    def test_decide_entity_edit_short_circuits_on_no_editable_entities(self):
+        def exploding_call(*args, **kwargs):
+            raise AssertionError("should never be called with nothing editable")
+
+        result = decide_entity_edit("change something", "desc", [], call_chat_completion=exploding_call)
+        self.assertFalse(result["edited"])
+
 
 class TestImprovisation(DMTestCase):
     """!
@@ -1684,6 +1896,206 @@ class TestImprovisation(DMTestCase):
 
         self.assertNotIn("wolf", self.dm_core.scenario_entities)
         self.assertEqual(help_events[-1]["removed"], {"removed": True, "name": "wolf", "reason": "player asked"})
+
+    def test_scenery_result_publishes_flavor_with_no_entity_created(self):
+        entities_before = set(self.dm_core.entities)
+        fake_result = {"created": False, "scenery": True, "description": "Claw marks score the stone."}
+
+        with patch("DM_Improvisation.generate_ad_hoc_item", return_value=fake_result):
+            self.dm_core._on_improvisation_requested({
+                "intent": "examine", "phrase": "the wall", "input": "examine the wall",
+            })
+
+        result = self.item_events[-1]
+        self.assertTrue(result["found"])
+        self.assertEqual(result["description"], "Claw marks score the stone.")
+        self.assertEqual(set(self.dm_core.entities), entities_before)  # nothing created
+        self.assertEqual(self.not_understood_events, [])
+
+    def _fake_container_creation(self, locked=True):
+        entity = {
+            "name": "old crate", "supertype": "object", "subtype": "container",
+            "description": "A battered wooden crate.", "value": 0, "currency": 15,
+            "active_conditions": {"closed": {"duration": "permanent", "dismiss": None}},
+            "ad_hoc": True,
+        }
+        if locked:
+            entity["active_conditions"]["locked"] = {"duration": "permanent", "dismiss": None}
+            entity["test"] = {
+                "difficulty": 8, "skill": ["finesse"], "requires_condition": "locked",
+                "blocks_if_condition": "jammed",
+                "pass": {"dismiss_condition": "locked"},
+                "fail": {"condition": "jammed", "duration": "permanent", "dismiss": ""},
+            }
+        return {"created": True, "entity": entity, "location": "ground"}
+
+    def test_conjured_container_becomes_the_addressable_scene_target(self):
+        with patch("DM_Improvisation.generate_ad_hoc_item", return_value=self._fake_container_creation(locked=False)):
+            self.dm_core._on_improvisation_requested({
+                "intent": "examine", "phrase": "a crate", "input": "examine the old crate",
+            })
+
+        self.assertEqual(self.dm_core.scenario_entities[0], "old crate")
+        self.assertNotIn("old crate", self.dm_core._current_ground_items())
+        result = self.item_events[-1]
+        self.assertTrue(result["found"])
+
+        # Now openable/lootable exactly like a hand-authored container -- current_target isn't
+        # touched by container placement (only "open"/"close"/self-examine need
+        # _get_target_name(), not self.current_target), so this exercises the ordinary,
+        # unchanged _resolve_open_close_intent path end to end.
+        self.dm_core._on_item_interaction_detected({"intent": "open", "item_name": None, "input": "open the crate"})
+        opened = self.item_events[-1]
+        self.assertTrue(opened["found"])
+        self.assertEqual(opened["container"], "old crate")
+
+    def test_conjured_locked_container_can_be_picked_then_opened(self):
+        # No fight currently engaged -- the realistic case for discovering a container while
+        # exploring -- so _claim_current_target_if_free actually claims it (see
+        # test_attempt_creature_conjuring_does_not_steal_target_from_an_engaged_fight for the
+        # opposite case).
+        self.dm_core.current_target = None
+        with patch("DM_Improvisation.generate_ad_hoc_item", return_value=self._fake_container_creation(locked=True)):
+            self.dm_core._on_improvisation_requested({
+                "intent": "examine", "phrase": "a crate", "input": "examine the old crate",
+            })
+
+        self.assertTrue(self.dm_core.is_locked("old crate"))
+        self.assertEqual(self.dm_core.current_target, "old crate")
+
+        self.dm_core.roll_dice = lambda dice, pips: 20  # guarantee the lock pick succeeds
+        self.dm_core._on_turn_detected({
+            "clauses": [{"kind": "action", "skill": "finesse", "score": 1.0}],
+            "input": "pick the lock",
+        })
+
+        self.assertFalse(self.dm_core.is_locked("old crate"))
+
+    def test_conjured_trap_deals_damage_on_a_failed_disarm(self):
+        entity = {
+            "name": "spike trap", "supertype": "object", "subtype": "trap",
+            "description": "A row of sharpened spikes.", "value": 0,
+            "active_conditions": {"armed": {"duration": "permanent", "dismiss": None}},
+            "test": {
+                "difficulty": 20, "skill": ["finesse"], "requires_condition": "armed",
+                "blocks_if_condition": "triggered",
+                "pass": {"dismiss_condition": "armed"},
+                "fail": {
+                    "condition": "triggered", "duration": "permanent", "dismiss": "",
+                    "damage": {"dice": 3, "pips": 0, "bonus": 0}, "damage_tags": ["piercing"],
+                },
+            },
+            "ad_hoc": True,
+        }
+        fake_result = {"created": True, "entity": entity, "location": "ground"}
+        starting_hp = self.dm_core.get_current_hp("gladstone")
+        self.dm_core.current_target = None  # no fight engaged -- see the container test's own note
+
+        with patch("DM_Improvisation.generate_ad_hoc_item", return_value=fake_result):
+            self.dm_core._on_improvisation_requested({
+                "intent": "examine", "phrase": "a trap", "input": "examine the spike trap",
+            })
+
+        self.assertEqual(self.dm_core.scenario_entities[0], "spike trap")
+        self.assertEqual(self.dm_core.current_target, "spike trap")
+
+        # random.randint (not roll_dice) mocked -- same style TestLockedChest already uses --
+        # so the trap's own damage roll (3 dice) still nets more than gladstone's chain mail
+        # armor reduction (2 dice) rather than the two coincidentally cancelling out.
+        with patch("random.randint", return_value=1):  # 3 dice @ 1 = 3, well under test difficulty 20
+            self.dm_core._on_turn_detected({
+                "clauses": [{"kind": "action", "skill": "finesse", "score": 1.0}],
+                "input": "try to disarm it",
+            })
+
+        self.assertTrue(self.dm_core.entities["spike trap"]["active_conditions"].get("triggered"))
+        self.assertLess(self.dm_core.get_current_hp("gladstone"), starting_hp)
+
+    def _fake_hostile_creature(self, name="cave rat"):
+        entity = {
+            "name": name, "description": "A mangy, oversized rat.",
+            "supertype": "creature", "subtype": "npc", "max_hp": 9,
+            "skills": {"brawling": {"dice": 2, "pips": 0}},
+            "attitudes": {"default": [-100, 0, 0, 0, 0, 0]},
+            "abilities": [{
+                "name": f"{name} attack", "supertype": "innate", "subtype": "weapon",
+                "skill": "brawling", "damage_value": {"dice": 1, "pips": 0, "bonus": 0},
+                "damage_tags": ["physical"],
+            }],
+            "behavior": [{"requirements": [{"field": "hp_per_remain", "operator": ">=", "value": 0.01}], "action": f"{name} attack"}],
+            "ad_hoc": True,
+        }
+        return {"created": True, "entity": entity}
+
+    def test_attempt_creature_conjuring_hostile_joins_scene_and_becomes_current_target(self):
+        self.dm_core.current_target = None  # no fight already engaged (arena's own wolves aside)
+        with patch("DM_Improvisation.generate_ad_hoc_creature", return_value=self._fake_hostile_creature()):
+            outcome = self.dm_core._attempt_creature_conjuring("summon a rat")
+
+        self.assertTrue(outcome["created_creature"])
+        self.assertIn("cave rat", self.dm_core.scenario_entities)
+        self.assertTrue(self.dm_core.is_hostile("cave rat", self.dm_core.player_name))
+        self.assertEqual(self.dm_core.current_target, "cave rat")
+        self.assertEqual(self.dm_core.get_band("cave rat"), self.dm_core.get_band("gladstone"))
+
+    def test_attempt_creature_conjuring_does_not_steal_target_from_an_engaged_fight(self):
+        self.dm_core.current_target = "wolf"  # already engaged with a live hostile
+
+        with patch("DM_Improvisation.generate_ad_hoc_creature", return_value=self._fake_hostile_creature()):
+            self.dm_core._attempt_creature_conjuring("summon a rat")
+
+        self.assertEqual(self.dm_core.current_target, "wolf")
+        self.assertIn("cave rat", self.dm_core.scenario_entities)
+
+    def test_attempt_creature_conjuring_declines_reports_false(self):
+        with patch("DM_Improvisation.generate_ad_hoc_creature", return_value={"created": False, "reason": "declined"}):
+            outcome = self.dm_core._attempt_creature_conjuring("summon a dragon")
+
+        self.assertFalse(outcome["created_creature"])
+
+    def test_attempt_entity_edit_changes_description_and_tags_edited(self):
+        def fake_decide(phrase, scene_description, editable_entities, **kwargs):
+            return {
+                "edited": True, "name": "wolf", "reason": "player asked",
+                "new_description": "A scarred, one-eyed wolf.",
+                "apply_condition": None, "dismiss_condition": None,
+            }
+
+        with patch("DM_Improvisation.decide_entity_edit", side_effect=fake_decide):
+            outcome = self.dm_core._attempt_entity_edit("the wolf has a scar over one eye")
+
+        self.assertTrue(outcome["edited"])
+        self.assertEqual(self.dm_core.entities["wolf"]["description"], "A scarred, one-eyed wolf.")
+        self.assertTrue(self.dm_core.entities["wolf"]["edited"])
+
+    def test_attempt_entity_edit_excludes_the_player_from_the_candidate_set(self):
+        captured = {}
+
+        def fake_decide(phrase, scene_description, editable_entities, **kwargs):
+            captured["editable_entities"] = editable_entities
+            return {"edited": False}
+
+        with patch("DM_Improvisation.decide_entity_edit", side_effect=fake_decide):
+            self.dm_core._attempt_entity_edit("change the wolf")
+
+        self.assertIn("wolf", captured["editable_entities"])
+        self.assertNotIn("gladstone", captured["editable_entities"])
+
+    def test_attempt_entity_edit_end_to_end_via_help_channel(self):
+        help_events = self._capture("help_resolved")
+
+        def fake_decide(phrase, scene_description, editable_entities, **kwargs):
+            return {
+                "edited": True, "name": "wolf", "reason": "player asked",
+                "new_description": "A scarred, one-eyed wolf.", "apply_condition": None,
+                "dismiss_condition": None,
+            }
+
+        with patch("DM_Improvisation.decide_entity_edit", side_effect=fake_decide):
+            self.dm_core._on_help_detected({"input": "adam, the wolf has a scar", "edit_candidate": True})
+
+        self.assertEqual(self.dm_core.entities["wolf"]["description"], "A scarred, one-eyed wolf.")
+        self.assertEqual(help_events[-1]["edited"]["name"], "wolf")
 
 
 class TestShopScenario(DMTestCase):
@@ -2791,6 +3203,23 @@ class TestSaveLoad(DMTestCase):
         self.assertEqual(fresh_dm.entities["gladstone"]["inventory"].count("health potion"), 2)
 
 
+    def test_ad_hoc_edited_description_round_trips_through_save_load(self):
+        # "description" doesn't otherwise round-trip for a hand-authored, non-ad_hoc/
+        # non-generated entity (it just re-derives from the static template on reload) --
+        # DM_Improvisation.py's _attempt_entity_edit tags entity["edited"] = True specifically
+        # so save_game knows to persist it explicitly instead of silently reverting.
+        slot = self._track("test_edited_round_trip")
+        self.dm_core.entities["wolf"]["description"] = "A scarred, one-eyed wolf."
+        self.dm_core.entities["wolf"]["edited"] = True
+        self.dm_core.save_game(slot)
+
+        fresh_dm = DMCore(EventBus(), scenario_name="arena")  # boots with the template's own description
+        fresh_dm.load_game(slot)
+
+        self.assertEqual(fresh_dm.entities["wolf"]["description"], "A scarred, one-eyed wolf.")
+        self.assertTrue(fresh_dm.entities["wolf"]["edited"])
+
+
     def test_ad_hoc_entity_round_trips_through_save_load(self):
         # An ad hoc entity (DM_Improvisation.py) has no static TOML template to re-derive
         # anything from on reload -- unlike every other saved instance, its *complete* dict has
@@ -3158,6 +3587,18 @@ class TestAdamNarration(LLMTestCase):
         self.assertIn("longsword", message)
         self.assertIn("The Arena", message)
         self.assertIn("The Hall of Webs", message)
+
+    def test_system_message_mentions_a_creature_conjured_this_turn(self):
+        payload = self._help_payload(created_creature={"created_creature": True, "name": "cave rat"})
+        message = self.llm_core._build_adam_system_message(payload, rag_query=None)
+        self.assertIn("cave rat", message)
+        self.assertIn("conjured", message)
+
+    def test_system_message_mentions_an_edit_made_this_turn(self):
+        payload = self._help_payload(edited={"edited": True, "name": "wolf", "reason": "player asked"})
+        message = self.llm_core._build_adam_system_message(payload, rag_query=None)
+        self.assertIn("wolf", message)
+        self.assertIn("edited", message)
 
     def test_fetch_still_publishes_llm_response_ready_without_storing_in_context(self):
         # The real fetch path (threading.Thread + urllib.request.urlopen mocked, same style as
