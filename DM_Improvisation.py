@@ -37,7 +37,8 @@ class ImprovisationMixin(DMCoreProtocol):
         set up by DMCore.__init__, plus RulesMixin's _current_scene_description/
         _all_known_instance_names (PersistenceMixin), InventoryMixin's _current_ground_items,
         CombatMixin's get_equip_slots/get_challenge_rating, SocialMixin's is_hostile,
-        MovementMixin's get_band, StatusMixin's apply_condition/dismiss_condition, and DMCore's
+        MovementMixin's get_band, StatusMixin's apply_condition/dismiss_condition/get_current_hp,
+        and DMCore's
         own _on_item_interaction_detected/_publish_party_status. Inherits DMCoreProtocol purely
         so type checkers can resolve these shared attributes/cross-mixin methods -- see
         DM_Types.py. AdHoc_Generation.py is the pure, DMCore-independent LLM-calling half this
@@ -60,6 +61,31 @@ class ImprovisationMixin(DMCoreProtocol):
           "removal_candidate"/"creature_candidate"/"edit_candidate" handling for how NLP_Core.py
           gates each of these behind a cheap local keyword pre-check.
     """
+
+    def _unique_entity_key(self, base_name):
+        """!
+        @brief Picks a self.entities key guaranteed not to collide with anything currently live
+            (or the player) for an ad hoc item/creature whose own name comes straight from the
+            LLM and is never enum-constrained, unlike decide_entity_removal/decide_entity_edit's
+            own name field. Mirrors the disambiguation _instance_entities already gives
+            hand-authored duplicates (ex: "wolf"/"wolf_2") -- just keyed against the live
+            self.entities universe instead of one call's own entity_entries list, since there's
+            no batch to disambiguate within here; without this, self.entities[name] = entity
+            would silently clobber whatever already held that key, up to and including the
+            player entity itself if the LLM happened to invent a matching name. entity["name"]
+            (the display text narration reads) is left untouched by the caller -- DM_Social.py's
+            describe_character already falls back to entity.get("name", entity_name) for exactly
+            this dict-key-vs-display-name split, the same split a generated NPC's own
+            occurrence-suffixed instance name already relies on.
+        @param base_name The LLM-invented name to disambiguate.
+        @return base_name unchanged if free, else base_name with a "_2", "_3", ... suffix.
+        """
+        if base_name != self.player_name and base_name not in self.entities:
+            return base_name
+        suffix = 2
+        while f"{base_name}_{suffix}" in self.entities or f"{base_name}_{suffix}" == self.player_name:
+            suffix += 1
+        return f"{base_name}_{suffix}"
 
     def _on_improvisation_requested(self, data):
         """!
@@ -113,7 +139,8 @@ class ImprovisationMixin(DMCoreProtocol):
             return
 
         entity = result["entity"]
-        name = entity["name"]
+        name = self._unique_entity_key(entity["name"])
+        entity["entity_id"] = name
         self.entities[name] = entity
         # Registers the new name/description into NLPCore's own item_embeddings/item_indices
         # (see NLP_Core.py's _on_item_catalog_updated) -- without this, a *later* reference to
@@ -138,7 +165,12 @@ class ImprovisationMixin(DMCoreProtocol):
             # unlike _get_target_name(), a skill check against the new entity's own
             # [entity.test] (ex: picking its lock) resolves against self.current_target, not
             # _get_target_name(), so without this a freshly-conjured container/trap could be
-            # examined/opened but never actually tested.
+            # examined/opened but never actually tested. band is set explicitly here (unlike a
+            # plain ground/inventory item, which has no band of its own at all) since this one
+            # becomes a real scenario_entities participant -- get_band/get_distance_between
+            # would otherwise silently default a bandless entity to 1 regardless of where the
+            # player actually is, same as _attempt_creature_conjuring already sets below.
+            entity["band"] = self.get_band(self.player_name)
             self.scenario_entities.insert(0, name)
             self._claim_current_target_if_free(name)
             self._on_item_interaction_detected({"intent": intent, "item_name": name, "input": input_text})
@@ -253,8 +285,13 @@ class ImprovisationMixin(DMCoreProtocol):
             never automatic (see this class's own module docstring for why). Builds the real,
             current universe of removable names (every present scene entity, every ground item,
             every known instance's own inventory/equipped item -- the player's own name always
-            excluded, on top of the runtime guard remove_entity_from_scene itself also enforces)
-            and asks decide_entity_removal to pick one, or decline.
+            excluded, on top of the runtime guard remove_entity_from_scene itself also enforces),
+            plus the live-hostile subset of it (is_hostile + a live-HP check), and asks
+            decide_entity_removal to pick one, or decline -- see that function's own
+            hostile_entities param for why this subset is computed and passed at all: without
+            it, a real model complies with "get rid of that wolf, this fight is too hard"
+            unconditionally, turning a free out-of-character request into a dice-free win
+            against anything currently trying to kill the player.
         @param input_text The player's own raw message to ADaM.
         @return {"removed": False} on decline/nothing removable/failure. On success, the same
                 {"removed": True, "name", "reason"} shape remove_entity_from_scene returns, with
@@ -275,7 +312,13 @@ class ImprovisationMixin(DMCoreProtocol):
         if not removable:
             return {"removed": False}
 
-        decision = decide_entity_removal(input_text, self._current_scene_description(), sorted(removable))
+        hostile = [
+            candidate for candidate in removable
+            if self.is_hostile(candidate, self.player_name) and self.get_current_hp(candidate) > 0
+        ]
+        decision = decide_entity_removal(
+            input_text, self._current_scene_description(), sorted(removable), hostile_entities=hostile,
+        )
         if not decision.get("removed"):
             return {"removed": False}
 
@@ -340,7 +383,7 @@ class ImprovisationMixin(DMCoreProtocol):
             return {"created_creature": False}
 
         entity = result["entity"]
-        name = entity["name"]
+        name = self._unique_entity_key(entity["name"])
         entity["entity_id"] = name
         entity["band"] = self.get_band(self.player_name)
         entity["active_conditions"] = {}

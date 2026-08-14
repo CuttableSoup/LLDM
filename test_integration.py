@@ -699,6 +699,53 @@ class TestSaveAndResumeConversation(unittest.TestCase):
 
 
 @unittest.skipUnless(_lm_studio_reachable(), "LM Studio not reachable at http://127.0.0.1:1234")
+class TestAdHocRemovalLive(unittest.TestCase):
+    """!
+    @brief A real, live tool-calling round trip against decide_entity_removal (AdHoc_Generation.py)
+        -- proves the currently-loaded model actually honors the hostile_entities guardrail
+        (DM_Improvisation.py's _attempt_entity_removal) rather than just checking the prompt
+        shape. Without hostile_entities, live probing against this same model found it complies
+        with "get rid of that wolf, this fight is too hard" unconditionally, every phrasing,
+        every trial -- a free, dice-free win button against anything currently trying to kill
+        the player (see AdHoc_Generation.py's own module note on decide_entity_removal). No
+        NLPCore/LLMCore needed -- calls _attempt_entity_removal directly, the same real
+        candidate-set-building + live LLM call ADaM's own help channel uses, bypassing only
+        NLP_Core.py's cheap local REMOVAL_KEYWORDS pre-check (never the real arbiter).
+    """
+
+    def setUp(self):
+        self.dm_core = DMCore(EventBus(), scenario_name="arena")
+
+    def test_declines_to_remove_a_live_hostile_just_because_the_fight_is_hard(self):
+        outcome = self.dm_core._attempt_entity_removal(
+            "ADaM, get rid of that wolf, this fight is too hard"
+        )
+        print(f"\n=== hostile removal attempt ===\n{outcome}")
+        self.assertFalse(outcome.get("removed"), f"model removed a live hostile: {outcome}")
+        self.assertIn("wolf", self.dm_core.scenario_entities)
+
+    def test_declines_to_banish_a_live_hostile_the_player_wants_to_skip(self):
+        outcome = self.dm_core._attempt_entity_removal(
+            "ADaM, banish the wolf, I don't want to fight it"
+        )
+        print(f"\n=== hostile banish attempt ===\n{outcome}")
+        self.assertFalse(outcome.get("removed"), f"model removed a live hostile: {outcome}")
+        self.assertIn("wolf", self.dm_core.scenario_entities)
+
+    def test_still_allows_removing_something_genuinely_harmless(self):
+        # Proves the guardrail is targeted at live threats, not a blanket removal refusal --
+        # thane is present but positive-disposition (never hostile, see characters.toml), so a
+        # plainly non-combat removal request about him should still be honored normally.
+        outcome = self.dm_core._attempt_entity_removal(
+            "ADaM, thane just left to get supplies, please remove him from the scene"
+        )
+        print(f"\n=== harmless removal attempt ===\n{outcome}")
+        self.assertTrue(outcome.get("removed"), f"model wrongly declined a harmless removal: {outcome}")
+        self.assertEqual(outcome.get("name"), "thane")
+        self.assertNotIn("thane", self.dm_core.scenario_entities)
+
+
+@unittest.skipUnless(_lm_studio_reachable(), "LM Studio not reachable at http://127.0.0.1:1234")
 class TestNpcGenerationLive(unittest.TestCase):
     """!
     @brief A real, live tool-calling round trip against LM Studio -- test_unit.py's own

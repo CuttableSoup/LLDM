@@ -1885,6 +1885,40 @@ class TestImprovisation(DMTestCase):
         self.assertIn("wolf", captured["removable_entities"])
         self.assertNotIn("gladstone", captured["removable_entities"])
 
+    def test_attempt_entity_removal_flags_live_hostiles_for_the_prompt(self):
+        # arena's own wolf/wolf_2 are hostile by default (no [entity.attitudes] at all -- see
+        # CLAUDE.md's "Combat"); thane is a positive-disposition ally, never hostile. This is
+        # what decide_entity_removal's own hostile_entities param leans on to refuse "get rid
+        # of the wolf, this fight is too hard" -- see AdHoc_Generation.py's own module note.
+        captured = {}
+
+        def fake_decide(phrase, scene_description, removable_entities, hostile_entities=None, **kwargs):
+            captured["hostile_entities"] = hostile_entities
+            return {"removed": False}
+
+        with patch("DM_Improvisation.decide_entity_removal", side_effect=fake_decide):
+            self.dm_core._attempt_entity_removal("get rid of the wolf, this fight is too hard")
+
+        self.assertIn("wolf", captured["hostile_entities"])
+        self.assertIn("wolf_2", captured["hostile_entities"])
+        self.assertNotIn("thane", captured["hostile_entities"])
+
+    def test_attempt_entity_removal_does_not_flag_a_dead_hostile_as_live(self):
+        # A defeated creature is fair game for an ordinary removal request (ex: "get rid of the
+        # wolf's carcass") -- only a *live* threat needs the hostile-entities guardrail.
+        self.dm_core.entities["wolf"]["hp"] = 0
+        captured = {}
+
+        def fake_decide(phrase, scene_description, removable_entities, hostile_entities=None, **kwargs):
+            captured["hostile_entities"] = hostile_entities
+            return {"removed": False}
+
+        with patch("DM_Improvisation.decide_entity_removal", side_effect=fake_decide):
+            self.dm_core._attempt_entity_removal("get rid of the dead wolf")
+
+        self.assertNotIn("wolf", captured["hostile_entities"])
+        self.assertIn("wolf_2", captured["hostile_entities"])
+
     def test_attempt_entity_removal_end_to_end_via_help_channel(self):
         help_events = self._capture("help_resolved")
 
@@ -2096,6 +2130,43 @@ class TestImprovisation(DMTestCase):
 
         self.assertEqual(self.dm_core.entities["wolf"]["description"], "A scarred, one-eyed wolf.")
         self.assertEqual(help_events[-1]["edited"]["name"], "wolf")
+
+    def test_ad_hoc_item_name_colliding_with_a_live_entity_gets_disambiguated(self):
+        # arena's own "wolf"/"wolf_2" are already live (see this class's own docstring) -- an
+        # ad hoc item whose LLM-invented name collides with one must not silently overwrite it
+        # (self.entities[name] = entity used to do exactly that before _unique_entity_key).
+        entity = self._fake_creation(entity_overrides={"name": "wolf"}, location="ground")
+        with patch("DM_Improvisation.generate_ad_hoc_item", return_value=entity):
+            self.dm_core._on_improvisation_requested({
+                "intent": "take", "phrase": "a wolf figurine", "input": "take the wolf figurine",
+            })
+
+        self.assertEqual(self.dm_core.entities["wolf"]["supertype"], "creature")  # untouched
+        self.assertIn("wolf_3", self.dm_core.entities)  # wolf/wolf_2 already taken
+        self.assertEqual(self.dm_core.entities["wolf_3"]["supertype"], "object")
+        self.assertEqual(self.dm_core.entities["wolf_3"]["name"], "wolf")  # display text unchanged
+        self.assertEqual(self.dm_core.entities["wolf_3"]["entity_id"], "wolf_3")
+        self.assertIn("wolf_3", self.dm_core.entities["gladstone"]["inventory"])
+
+    def test_ad_hoc_creature_name_colliding_with_the_player_does_not_clobber_them(self):
+        with patch("DM_Improvisation.generate_ad_hoc_creature", return_value=self._fake_hostile_creature(name="gladstone")):
+            outcome = self.dm_core._attempt_creature_conjuring("summon my evil twin")
+
+        self.assertTrue(outcome["created_creature"])
+        self.assertEqual(outcome["name"], "gladstone_2")
+        self.assertTrue(self.dm_core.entities["gladstone"]["is_player"])  # real player untouched
+        self.assertIn("gladstone_2", self.dm_core.scenario_entities)
+        self.assertEqual(self.dm_core.entities["gladstone_2"]["supertype"], "creature")
+
+    def test_conjured_container_is_placed_at_the_players_current_band_not_band_1(self):
+        self.dm_core.entities["gladstone"]["band"] = 3
+        self.dm_core.current_target = None
+        with patch("DM_Improvisation.generate_ad_hoc_item", return_value=self._fake_container_creation(locked=False)):
+            self.dm_core._on_improvisation_requested({
+                "intent": "examine", "phrase": "a crate", "input": "examine the old crate",
+            })
+
+        self.assertEqual(self.dm_core.get_band("old crate"), 3)
 
 
 class TestShopScenario(DMTestCase):

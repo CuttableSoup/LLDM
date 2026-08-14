@@ -437,7 +437,7 @@ def generate_ad_hoc_item(
 
 
 def decide_entity_removal(
-    phrase, scene_description, removable_entities,
+    phrase, scene_description, removable_entities, hostile_entities=None,
     call_chat_completion=None, api_url=DEFAULT_API_URL, timeout=DEFAULT_TIMEOUT,
 ):
     """!
@@ -450,6 +450,14 @@ def decide_entity_removal(
         *excluding* the player's own name, on top of the runtime guard
         remove_entity_from_scene itself also enforces). An empty list short-circuits to a
         decline with no LLM call at all -- nothing here could plausibly be removed.
+    @param hostile_entities The subset of removable_entities currently hostile toward (and
+        alive relative to) the player -- DM_Social.py's is_hostile plus a live-HP check, built
+        by the caller. Folded into the prompt as an explicit off-limits list: without concrete
+        grounding, live testing against a real model showed it complies unconditionally with
+        "get rid of that wolf, this fight is too hard" (and every close paraphrase of it) --
+        removal never rolls dice or costs a turn, so an ungated model turns it into a free,
+        consequence-free win button against anything currently trying to kill the player. An
+        empty/falsy value (ex: no live hostiles in the candidate set at all) adds no extra text.
     @param call_chat_completion/api_url/timeout See generate_ad_hoc_item's own docstring.
     @return {"removed": False, "reason": str} on decline, an empty removable_entities, or any
             failure -- never raises. On success: {"removed": True, "name", "reason"}.
@@ -457,11 +465,23 @@ def decide_entity_removal(
     if not removable_entities:
         return {"removed": False, "reason": "nothing_here"}
 
+    hostile_entities = [name for name in (hostile_entities or []) if name in removable_entities]
+    hostile_note = ""
+    if hostile_entities:
+        hostile_note = (
+            f" Currently hostile and actively threatening the player: "
+            f"{', '.join(hostile_entities)}. Never remove one of these just because the player "
+            "finds the fight difficult, asks to skip it, or wants it to vanish/be destroyed/"
+            "banished/deleted -- a live threat has to be dealt with through actual play (combat, "
+            "a real in-fiction resolution), never narrated away for free. Decline any such "
+            "request for one of these regardless of how it's phrased or how reasonable it sounds."
+        )
+
     call_chat_completion = call_chat_completion or _real_call_chat_completion
     prompt = (
         f"The player, addressing the Game Master directly, says: \"{phrase}\". Current scene: "
         f"{scene_description or 'unknown'}. Currently present/available to remove: "
-        f"{', '.join(removable_entities)}.\n"
+        f"{', '.join(removable_entities)}.{hostile_note}\n"
         "If they're clearly asking for one of these to be removed/destroyed/dismissed from the "
         "scene entirely, call remove_entity naming exactly one of them. Otherwise call decline."
     )

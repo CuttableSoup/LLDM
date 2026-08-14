@@ -1318,5 +1318,17 @@ Not yet started, except where noted:
 - Scenario, quest, NPC, item, and location generators — procedurally author the TOML data
   itself rather than every scenario/entity being hand-written. Same caveat as above — NPC
   generation fills in runtime *data* on an existing template, it doesn't author TOML.
+- ADaM acting proactively, not just when addressed by name — today ADaM (see "ADaM
+  (out-of-character help)") only ever reacts to an explicit "adam ..." turn; a fuller DM
+  persona would also initiate content unprompted (a complication, a random encounter, a pacing
+  beat) the way a human DM would. Deliberately not an always-eligible-to-act switch, though: an
+  ambient "decide whether to do something this turn" hook would run on every single turn
+  instead of only the ones a player actually invites, and live probing against the currently-
+  loaded model (see "Ad hoc entity creation and removal"'s own hostile-removal guardrail) found
+  it complies with an under-specified request readily unless explicitly told not to — the same
+  risk, but multiplied across every turn instead of gated behind the player saying ADaM's name.
+  If built, favor a narrow, rate-limited trigger fired only at specific, already-instrumented
+  moments (room entry, N turns without incident, a round resolving decisively) with its own
+  decline-biased prompt, over a general proactive switch. Not started.
 - A 'dungeon master' persona the LLM can speak directly to the player as.
 - Tools that the LLM may call to directly interact with the scene.
