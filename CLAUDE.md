@@ -96,10 +96,13 @@ when and how it's actually constructed.
   Skills/Abilities/Inventory/Conditions — Equipment lists every valid slot for the member's own
   supertype/subtype, filled or `(empty)`, via `get_equip_slots`'s same override precedence as
   `get_attitude`, see "Data/TOML conventions"). Membership is filtered through the payload's
-  own `"scenario_entities"` list, not `is_player`/`is_party` alone — `self.entities` also still
-  holds every *uninstanced* template from every loaded TOML file (ex: `characters.toml`'s
-  `anne`, `is_party = true`, but not part of `arena.toml`'s own entities list), which must not
-  show up on the Party tab just for existing on disk; `DM_Combat.py`'s
+  own `"scenario_entities"` list, not `is_player`/`is_party` alone — `self.entities` can still
+  hold an *uninstanced* `is_party` template that isn't part of the live `scenario_entities`
+  list, which must not show up on the Party tab just for existing there (`GUI_Core.py`'s own
+  `test_display_party_status_renders_...` exercises this directly with synthetic data; no
+  real, currently-shipped scenario happens to trigger it today, since every `is_party` entity
+  is scenario-local now — see "Scenarios and rooms" — so the filter is defensive, not dead
+  code). `DM_Combat.py`'s
   `get_party_challenge_rating` filters the same way (see "Challenge rating"). Notes is a
   free-typed scratchpad with its own save/load slice. Map is a free-form drawing canvas the
   engine never reads. Debug overwrites (not appends) the most recent LLM request/response on
@@ -151,8 +154,8 @@ for the whole batch, not once per entry (see "Multiple actions").
 
 Combat is a target being present *and* `is_hostile(target_name, player_name)`, which has two
 distinct defaults, deliberately not collapsed into one: an entity with **no**
-`[entity.attitudes]` table at all (ex: `creatures.toml`'s wolf/bandit, which declare no
-attitude data whatsoever) is hostile unconditionally — a monster that never bothered to
+`[entity.attitudes]` table at all (ex: `arena.toml`'s wolf/`field.toml`'s bandit, which declare
+no attitude data whatsoever) is hostile unconditionally — a monster that never bothered to
 author a disposition is still a monster. An entity that **does** declare attitude data
 instead has to reach true hostility, `disposition <= -100`, to actually fight — a merely
 wary/negative-but-not-murderous disposition (ex: -40) is dialogue, not combat ("you can
@@ -183,9 +186,10 @@ once, at the end of the round, if it died.
 A behavior entry's `action` is either an ability name or one of two reserved movement words,
 `"advance"`/`"retreat"` (`MOVEMENT_ACTIONS`, `DM_Combat.py`), routed to `move_toward_or_away`
 instead of an ability lookup. An explicit `"retreat"` entry is how a creature values its own
-life — checked ahead of its attack entry, ex: `creatures.toml`'s wolf/giant spider/bandit flee
-once `hp_per_remain` drops under 0.40 (the same cutoff `rules.toml`'s `"wounded"` tier bottoms
-out at); an undead/construct entity has no such entry and fights on regardless. Separately,
+life — checked ahead of its attack entry, ex: `arena.toml`'s wolf/`crypt.toml`'s giant spider/
+`field.toml`'s bandit flee once `hp_per_remain` drops under 0.40 (the same cutoff `rules.toml`'s
+`"wounded"` tier bottoms out at); an undead/construct entity has no such entry and fights on
+regardless. Separately,
 `resolve_behavior_action` falls back to `"advance"` on its own whenever its chosen action
 can't currently reach its target (`is_in_range`) — closing distance instead of standing idle.
 
@@ -307,15 +311,23 @@ from, just not filtered to one particular skill — nothing here is about to be 
 there's no skill to disambiguate by), resolving `"user.weapon.<field>"` indirection
 (`resolve_weapon_reference`) the same way a real attack would. `get_party_challenge_rating`
 filters through `self.scenario_entities`, not a blind `is_player`/`is_party` scan of
-`self.entities` — `self.entities` also still holds every *uninstanced* template from every
-loaded TOML file (ex: `characters.toml`'s `anne`, `is_party = true`, but not part of
-`arena.toml`'s own entities list), and those must not count just for existing on disk.
+`self.entities` — `self.entities` can still hold an *uninstanced* `is_party` template that
+isn't part of the live scenario (see the same note on `GUI_Core.py`'s own Party-tab filtering,
+above), and that must not count just for existing there.
 
 ## NPC generation
 
-`Rules/Fantasy/templates.toml` holds `[[entity_template]]` tables — a genuinely different
-top-level key from `[[entity]]`, loaded by `load_rules` (`DM_Rules.py`) into their own
-`self.entity_templates` dict, never `self.entities`. This is deliberate: keeping generation
+`[[entity_template]]` is a genuinely different top-level key from `[[entity]]`, loaded into its
+own `self.entity_templates` dict, never `self.entities` — by `load_rules` (`DM_Rules.py`) for a
+flat `Rules/<setting>/*.toml` file, or by `load_scenario_definition` for one declared inside a
+scenario file itself (see "Scenarios and rooms"). Every entity_template in `Rules/Fantasy/`
+today is scenario-local (`tavern_random.toml`'s own `generated_innkeeper`/`generated_stranger`/
+`generated_regular`, `npc_generation_test.toml`'s own `generated_stranger`,
+`scenario_entity_test.toml`'s own `vault_specter_stub`) — there's no shared
+`Rules/Fantasy/templates.toml` anymore, since every one of these started as test/placeholder
+content rather than a finished, reusable template; `load_rules`' own handling of a flat file's
+`[[entity_template]]` tables is still live code, just currently unexercised by any Fantasy data
+(a future setting, or a genuinely shared template, could still use it). This is deliberate: keeping generation
 stubs in a separate namespace is what makes one impossible to reference by accident — a
 scenario/room entry names a real entity via `{ name = "wolf", band = 1 }` (looked up in
 `self.entities`, unchanged) but an entity_template via `{ template = "generated_stranger", band =
@@ -472,8 +484,9 @@ exceeded, nothing can reach the fleeing entity.
 
 **Party formation.** Every `is_party` entity carries its own `follow_offset` (int, default 0),
 read by `_apply_party_formation` to snap that entity's band to `player_band + follow_offset`.
-`characters.toml`'s `thane` (`follow_offset = 0`) walks abreast; `anne` (`-1`) trails one band
-behind to favor her ranged spellwork. This is a flat teleport, not a speed-limited move, and
+`arena.toml`/`crypt.toml`'s own `thane` (`follow_offset = 0`) walks abreast; `crypt.toml`'s own
+`anne` (`-1`) trails one band behind to favor her ranged spellwork. This is a flat teleport, not
+a speed-limited move, and
 only ever fires where the *player's* band changes (`advance_or_retreat`, `enter_room`) — never
 from a creature/ally's own combat-turn movement, which stays free to drift out of formation
 until the player's next move snaps it back. The player can override `follow_offset` in play:
@@ -518,7 +531,11 @@ re-inserted under the new key, and `self.player_name` repoints at it — so
 `_instance_entities`' `"player"` placeholder (see "Scenarios and rooms") resolves to the new
 name from the first scene onward. A name colliding with any other already-loaded entity is
 rejected outright (`log_error`, not raised — the skill/race override still applies even when
-the rename is rejected). Renaming doesn't touch any *other* entity's own
+the rename is rejected) — "already-loaded" specifically means whatever `load_rules` populated
+`self.entities` with, since this runs *before* `load_scenario_definition`; a scenario file's
+own local `[[entity]]` tables (see "Scenarios and rooms") don't exist yet at this point and so
+can't collide here, a known, accepted gap (a chosen name colliding with, ex: `arena.toml`'s own
+`wolf` goes uncaught). Renaming doesn't touch any *other* entity's own
 `[[entity.attitudes.name]]` override keyed to the old literal name — a renamed character just
 falls back to that entity's `default` disposition, same as any name the override doesn't list.
 `character=None` (every caller that omits it) is a complete no-op — `characters.toml`'s
@@ -573,9 +590,9 @@ first is handled solely by `DMCore`'s own `_on_load_requested`, subscribed durin
 ## Scenarios and rooms
 
 `Rules/Fantasy/scenarios/*.toml` (`arena`, `tavern`, `field`, `dungeon`, `crypt`, plus
-`character_test` — see "Testing") each hold one `[scenario]` table, kept in their own
-subdirectory so multiple scenarios can coexist without the flat `load_rules` scan (which only
-keeps the last `[scenario]` table it reads) overwriting one with another.
+`character_test`/`scenario_entity_test` — see "Testing") each hold one `[scenario]` table, kept
+in their own subdirectory so multiple scenarios can coexist without the flat `load_rules` scan
+(which only keeps the last `[scenario]` table it reads) overwriting one with another.
 
 A scenario is either a **plain single room** (entities listed directly under `[scenario]`) or
 a **multi-room dungeon** (`crypt`): one or more `[[room]]` tables, each with its own
@@ -592,6 +609,57 @@ scenario/room's `entities` list names the player with the reserved sentinel `"pl
 `_instance_entities` resolves it to `self.player_name` before the template lookup, so a
 scenario keeps working regardless of which template is `is_player = true` or what a
 freshly-created character was renamed to.
+
+**A scenario file can define its own `[[entity]]` tables**, sibling to `[scenario]`/`[[room]]`
+— the same top-level key `load_rules` reads from every flat `Rules/<setting>/*.toml` file, just
+scoped to this one scenario instead of a shared file like `creatures.toml`/`items.toml`. This
+is what lets a scenario-specific entity (a boss, a one-off prop) live in the same file as the
+scenario that references it, without having to be authored somewhere shared just to be
+nameable. `load_scenario_definition` reads these into `self.entities` right after opening the
+scenario file — after `load_rules` has already run (see `DMCore.__init__`/`DM_Persistence.py`'s
+`load_game`, both of which call `load_rules` immediately before it), so a scenario-local entity
+can reuse a shared name on purpose to override it for this one scenario, and is re-populated
+fresh on every load exactly like everything `load_rules` itself loads. `[scenario].entities`
+and every `[[room]].entities` list resolve a `"name"` against `self.entities` the same way
+regardless of which file actually defined it — no special-casing needed downstream.
+`scenario_entity_test.toml` (excluded from `list_available_scenarios`, same as
+`character_test.toml`) exists solely to exercise this.
+
+**Every real gameplay scenario owns its own local copy of every npc/creature entity (and
+entity_template) it references, and none of them are also defined in a shared file** —
+`arena.toml`/`field.toml`'s own `wolf`, `arena.toml`/`crypt.toml`'s own `thane`, `crypt.toml`'s
+own `anne`/`giant spider`/`skeleton warrior`/`the bone warden`, `field.toml`'s own `bandit`,
+`shop.toml`'s own `shopkeeper`, `tavern.toml`'s own `innkeeper`, `tavern_random.toml`'s own
+`generated_innkeeper`/`generated_stranger`/`generated_regular` — so each scenario file is
+playable standalone, without `creatures.toml`/`characters.toml`. There used to be a shared
+`Rules/Fantasy/npcs.toml` (`innkeeper`/`shopkeeper`) and a shared `templates.toml` (the three
+`generated_*` entity_templates above) too; both are deleted now that nothing references them
+outside a scenario file — every one of these was test/placeholder content from the start, not
+a finished creation meant to be shared, so keeping a now-redundant "master copy" around served
+no purpose. `characters.toml` keeps only `gladstone` (`_resolve_player_name` scans
+`self.entities` right after `load_rules`, before any scenario loads — a scenario file's own
+entities don't exist yet at that point, so the one entity template every boot needs resolvable
+via `is_player = true` can never be scenario-local); `creatures.toml` keeps only `fire
+elemental` (referenced directly by `test_unit.py`'s own damage-reduction tests, not owned by
+any scenario, so there's no scenario file for it to move into). `character_test.toml` and `npc_generation_test.toml` each carry their *own* separate local
+copy of `wolf`/`generated_stranger` respectively (distinct from `arena.toml`/`field.toml`'s own
+`wolf`, and from `tavern_random.toml`'s own `generated_stranger`) for the same reason: their
+own purpose (exercising the "player" placeholder/rename path, and NPC generation) never
+depended on reusing shared data in the first place — that was just an implementation
+convenience while the shared files still existed.
+Kept in sync by hand across files that share an entity (`wolf` between `arena.toml`/
+`field.toml`/`character_test.toml`, `thane` between `arena.toml`/`crypt.toml`) since there's no
+single source of truth left to derive from — the tradeoff self-containment makes on purpose.
+Items (`items.toml`) are deliberately out of scope for this — a scenario's creatures/NPCs can
+still reference a shared item by name (ex: `field.toml`'s own `bandit` still names
+`items.toml`'s `short bow`). `dungeon.toml` has no npc/creature entities at all (only
+`items.toml`'s `chest`), so it needed no changes. One consequence worth knowing: the rename
+collision check in `apply_character_creation` (see "Character creation") runs *before*
+`load_scenario_definition`, so it can only see entities already loaded via `load_rules` —
+a chosen character name colliding with a scenario-local entity (ex: naming yourself "wolf" while
+about to play `arena`) is **not** caught the way colliding with `gladstone`/`fire elemental`
+still is; `TestCharacterCreationRename`'s own collision test picks `fire elemental` for exactly
+this reason.
 
 `DMCore.__init__(event_bus, scenario_name="arena")` picks which file loads via
 `load_scenario_definition`, which raises `FileNotFoundError` for an unknown name (fatal on
@@ -625,7 +693,7 @@ before re-instancing for this reason (see "Saving and loading").
 `[[status]]`'s own requirements and `[[entity.behavior]]`'s; an optional `opponent_name` param
 resolves the one opponent-relative derived field, `"distance_to_target"` (the band gap to
 `opponent_name`) — used by a creature choosing *between* attack options by range, ex:
-`creatures.toml`'s `bandit` favors its `short bow` while `distance_to_target > 0`, falling to
+`field.toml`'s `bandit` favors its `short bow` while `distance_to_target > 0`, falling to
 its `rusty shortsword` once that gap closes to 0.
 
 `evaluate_statuses` finds every status matching a trigger whose requirements the entity
@@ -1040,7 +1108,7 @@ deterministic `fit_skills_to_cr` (`rolled_cr = target_cr * power_multiplier *
 random.uniform(0.85, 1.15)`, the same variance-then-deterministic-fit split real generation
 uses). **Only a `"hostile"` disposition** gets an inline innate attack ability plus a
 flee-under-0.4-hp_per_remain-then-attack `[[entity.behavior]]` pair attached, mirroring
-`creatures.toml`'s own wolf/bandit shape exactly (real NPC generation never touches
+`arena.toml`'s own wolf/`field.toml`'s own bandit shape exactly (real NPC generation never touches
 abilities/behavior at all, since a hand-authored `entity_template` already supplies them where
 wanted — an ad hoc creature has no such template, so this is the one capability here that
 *does* author minimal combat data, deliberately scoped to the single case that actually needs
@@ -1259,7 +1327,10 @@ Practical constraints when touching this file:
   plus `_capture`/`_capture_any` helpers) and `LLMTestCase`. `TestCharacterCreationRename`
   covers the "player" placeholder and the rename path against
   `Rules/Fantasy/scenarios/character_test.toml` — a minimal scenario built solely for this,
-  kept separate from the real gameplay scenarios. `TestFreeformDialogue` covers
+  kept separate from the real gameplay scenarios. `TestScenarioLocalEntities` covers a scenario
+  file's own `[[entity]]`/`[[entity_template]]` tables against `scenario_entity_test.toml`,
+  whose entity and template exist nowhere else — proving `load_scenario_definition` itself
+  loads them, not just that a hand-authored one resolves. `TestFreeformDialogue` covers
   `DialogueMixin`'s own addressee resolution/gating (named vs. default target, hostile-allowed,
   not-present/object denials); `TestRoomLevelPresenceScoping` wires a real `DMCore` and
   `LLMCore` together over one event bus (no `NLPCore`) against `crypt.toml`'s room graph to

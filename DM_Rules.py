@@ -34,8 +34,9 @@ def list_available_scenarios(setting="Fantasy"):
         a choice before any DMCore exists -- same "pure, DMCore-independent, re-scan the TOML
         directly" precedent Character_Creation.py's load_character_creation_data sets, since
         GUICore needs this list before it can know whether a DMCore will ever exist.
-        character_test.toml is deliberately excluded -- it's a minimal scenario built solely
-        for TestCharacterCreationRename, not a real one to offer a player.
+        character_test.toml/scenario_entity_test.toml are deliberately excluded -- minimal
+        scenarios built solely for TestCharacterCreationRename/TestScenarioLocalEntities, not
+        real ones to offer a player.
     @param setting Which Rules/ subdirectory to scan -- see scenario_file_path.
     @return A list of (scenario_key, display_name, description) tuples, sorted by key. A
         scenario file that's missing or fails to parse is silently skipped, the same
@@ -51,7 +52,7 @@ def list_available_scenarios(setting="Fantasy"):
         if not filename.endswith(".toml"):
             continue
         key = filename[: -len(".toml")]
-        if key == "character_test":
+        if key in ("character_test", "scenario_entity_test"):
             continue
         try:
             with open(os.path.join(scenarios_dir, filename), "rb") as f:
@@ -244,6 +245,21 @@ class RulesMixin(DMCoreProtocol):
             load_scenario/enter_room both branch on "is self.rooms populated" rather than a
             separate flag, so a plain scenario file never has to declare anything extra just
             to opt out of the room-graph machinery.
+
+            A scenario file may also declare its own [[entity]]/[[entity_template]] tables,
+            sibling to [scenario]/[[room]] -- the same two top-level keys load_rules reads from
+            every flat Rules/<setting>/*.toml file, just scoped to this one scenario instead.
+            This is what lets a scenario-specific entity (a boss, a one-off prop) or a
+            scenario-specific NPC-generation stub (see "NPC generation") live in the same file
+            as the scenario that references it, rather than having to be authored into a shared
+            file like creatures.toml/items.toml just to be nameable at all --
+            [scenario].entities and every [[room]].entities list resolve a "name"/"template"
+            against self.entities/self.entity_templates exactly the same way regardless of
+            which file actually defined it. Loaded after load_rules (see DMCore.__init__/
+            DM_Persistence.py's load_game, both of which call load_rules immediately before
+            this), so a scenario-local entity/template can reuse a shared name on purpose to
+            override it for this one scenario, and so both are re-populated fresh on every
+            load, same as everything load_rules itself loads.
         @param scenario_name The scenario's filename without extension (ex: "arena", "tavern").
         @raises FileNotFoundError if no matching scenario file exists. Unlike load_rules'
                 blanket per-file try/except, a missing/malformed scenario is fatal on purpose:
@@ -260,6 +276,10 @@ class RulesMixin(DMCoreProtocol):
             data = tomllib.load(f)
         self.scenario = data.get("scenario", {})
         self.rooms = {room.get("key"): room for room in data.get("room", [])}
+        for entity in data.get("entity", []):
+            self.entities[entity.get("name")] = entity
+        for entity_template in data.get("entity_template", []):
+            self.entity_templates[entity_template.get("name")] = entity_template
         self.current_room_key = self.scenario.get("start_room")
         # room_key -> the list of instance names created for it the first time it was
         # entered (see enter_room) -- what makes a revisited room stay exactly as the player
@@ -285,8 +305,9 @@ class RulesMixin(DMCoreProtocol):
               character's own template name (ex: "gladstone"), so a scenario keeps working
               unchanged regardless of which template is_player=true or whatever a freshly
               created character was renamed to (see DM_CharacterCreation.py).
-            - "template" -- looked up in self.entity_templates instead (see
-              Rules/Fantasy/templates.toml), a stub with no hand-authored [entity.skills]/
+            - "template" -- looked up in self.entity_templates instead (see, ex:
+              Rules/Fantasy/scenarios/tavern_random.toml's own [[entity_template]] tables), a
+              stub with no hand-authored [entity.skills]/
               max_hp/name of its own. NpcGenerationMixin._apply_npc_generation fills those in
               immediately after the instance is stored, mutating it in place (it has to
               already be in self.entities by then, since the CR-fitting math calls back into

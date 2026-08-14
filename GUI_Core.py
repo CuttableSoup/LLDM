@@ -426,10 +426,12 @@ class GUICore:
             "scenario_entities": ...}, plus "skills" for "rules_loaded" specifically -- the
             skill catalog, unused here since each member's own skills live on the entity
             itself). "scenario_entities" is what keeps an is_party template not actually part
-            of the current scenario (ex: characters.toml's "anne" while playing "arena",
-            which never lists her) off the Party tab -- self.entities alone can't tell an
-            instanced party member apart from an uninstanced template sitting in the same
-            dict (see DM_Combat.py's get_party_challenge_rating, which filters the same way).
+            of the current scenario off the Party tab just for sitting in self.entities --
+            self.entities alone can't tell an instanced party member apart from an uninstanced
+            template in the same dict (see DM_Combat.py's get_party_challenge_rating, which
+            filters the same way; CLAUDE.md's "Architecture" has a worked example, though every
+            is_party entity in Rules/Fantasy/ is scenario-local today, so no real content
+            currently exercises this beyond a synthetic test).
         """
         self.event_bus.publish("log_info", "Displaying party status.")
         self.party_tree.delete(*self.party_tree.get_children())

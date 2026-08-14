@@ -1,9 +1,10 @@
 # A minimal scenario dedicated to exercising NPC generation (DM_NpcGeneration.py/
 # NPC_Generation.py) -- deliberately not one of the "real" scenarios (arena/tavern/field/
 # dungeon/crypt), so a future rebalance of those can't accidentally change what this is
-# testing, the same reasoning character_test.toml already follows. Reuses templates.toml's
-# own "generated_stranger" (an entity_template) rather than inventing a dedicated test-only
-# one -- the same "reuse real data" approach character_test.toml takes with "wolf".
+# testing, the same reasoning character_test.toml already follows. "generated_stranger" is its
+# own local [[entity_template]] copy below (the same shape tavern_random.toml's own copy uses),
+# not templates.toml (which no longer exists -- every entity_template that used to live there
+# is now scenario-local, see CLAUDE.md's "NPC generation").
 [scenario]
 name = "The Generation Grounds"
 description = "A bare, featureless room built only to exercise NPC generation."
@@ -13,3 +14,44 @@ entities = [
     { name = "player", band = 1 },
     { template = "generated_stranger", band = 2 },
 ]
+
+[[entity_template]]
+name = "generated_stranger"
+supertype = "creature"
+subtype = "humanoid"
+hint = [
+    {"a stranger passing through, keeping mostly to themselves" = 30},
+    {"a wandering merchant looking to trade" = 30},
+    {"an adventerer looking for a party to tackle a nearby dungeon" = 40},
+]
+target_cr = "player"
+cr_multiplier = {min = 0.8, max = 1.2} # can vary from weaker to stronger
+
+currency = {min = 10, max = 50}
+max_bulk = 5
+
+[entity_template.attitudes]
+default = [
+    {min = -40, max = 40}, # disposition varies from wary to warm
+    0, # trust remain zero
+    0, # confidence remain zero
+    10, # respect remain zero
+    -20, # obligation remains low for a stranger
+    {min = -40, max = 40} # intimacy varies from wary to warm
+]
+[[entity_template.attitudes.name]]
+player = [ 40, 0, 0, 0, 0, 0 ] # trusts the player for some reaseon
+
+[entity_template.qualities]
+race = [
+    {"halfling" = 20},
+    {"dwarf" = 20},
+    {"elf" = 20},
+    {"human" = 60},
+    {"half-orc" = 20}
+]
+gender = [
+    {"male" = 50},
+    {"female" = 50}
+]
+age = { min = 18, max = 50 }

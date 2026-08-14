@@ -69,11 +69,12 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         self.entities = {}
         # Stub templates for NPC generation (see NPC_Generation.py/DM_NpcGeneration.py,
         # CLAUDE.md's "NPC generation") -- kept in their own namespace, loaded from
-        # [[entity_template]] tables (Rules/Fantasy/templates.toml), not [[entity]] ones, so
-        # they can never collide with (or be mistakenly referenced as) a real, directly
-        # usable entity/creature template in self.entities. A scenario/room entry opts into
-        # one via its own "template" field, never "name" -- see DM_Rules.py's
-        # _instance_entities.
+        # [[entity_template]] tables (declared inline in a scenario file, ex:
+        # Rules/Fantasy/scenarios/tavern_random.toml -- or any flat Rules/<setting>/*.toml
+        # file via load_rules, for a genuinely shared one), not [[entity]] ones, so they can
+        # never collide with (or be mistakenly referenced as) a real, directly usable
+        # entity/creature template in self.entities. A scenario/room entry opts into one via
+        # its own "template" field, never "name" -- see DM_Rules.py's _instance_entities.
         self.entity_templates = {}
         self.scenario = {}
         self.scenario_entities = []

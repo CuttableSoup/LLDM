@@ -1011,7 +1011,7 @@ class TestEntityBehavior(DMTestCase):
         self.resolved = self._capture("round_resolved")
 
     def test_choose_behavior_matches_while_the_entity_is_alive(self):
-        # creatures.toml's wolf: a single behavior, "always bite while hp_per_remain >= 0.01".
+        # arena.toml's wolf: a single behavior, "always bite while hp_per_remain >= 0.01".
         behavior = self.dm_core.choose_behavior("wolf")
         assert behavior is not None
         self.assertEqual(behavior["action"], "bite")
@@ -1080,6 +1080,12 @@ class TestEntityBehavior(DMTestCase):
 
 
 class TestBandit(DMTestCase):
+    # "bandit" is field.toml's own local entity now (creatures.toml no longer carries one --
+    # see its own comment) -- booting "field" first is what makes it resolvable at all, before
+    # setUp below overrides self.dm_core.scenario/re-runs load_scenario() with a custom band
+    # layout.
+    scenario_name = "field"
+
     def setUp(self):
         super().setUp()
         self.dm_core.scenario = {
@@ -2175,8 +2181,9 @@ class TestShopScenario(DMTestCase):
         scenarios/shop.toml's "shopkeeper" can sell "most general goods... despite not being
         defined entities" (the scenario this file exists to exercise) -- TARGET_CENTRIC_INTENTS'
         own "trade" handling in DM_Improvisation.py. "dagger" is the shopkeeper's one real,
-        hand-authored good (npcs.toml), kept deliberately sparse so this test can show both the
-        ordinary trade path and the ad hoc one working side by side.
+        hand-authored good (shop.toml's own local shopkeeper entity), kept deliberately sparse
+        so this test can show both the ordinary trade path and the ad hoc one working side by
+        side.
     """
     scenario_name = "shop"
 
@@ -2263,9 +2270,9 @@ class TestShopScenario(DMTestCase):
 class TestNpcGenerationDMCoreIntegration(DMTestCase):
     """!
     @brief _instance_entities' entity_template branch (DM_Rules.py/DM_NpcGeneration.py)
-        against npc_generation_test.toml's own "generated_stranger" (templates.toml) -- no live
-        LLM, NPC_Generation._real_call_chat_completion is patched with a deterministic fake
-        so this stays part of the fast offline suite (see test_integration.py for a real
+        against npc_generation_test.toml's own local "generated_stranger" entity_template --
+        no live LLM, NPC_Generation._real_call_chat_completion is patched with a deterministic
+        fake so this stays part of the fast offline suite (see test_integration.py for a real
         end-to-end LM Studio round trip).
     """
     scenario_name = "npc_generation_test"
@@ -2317,9 +2324,9 @@ class TestNpcGenerationDMCoreIntegration(DMTestCase):
         self.assertIn(str(qualities["age"]), prompt)
 
     def test_varied_currency_qualities_and_attitudes_all_resolve_to_concrete_values(self):
-        # generated_stranger's own currency/qualities/attitudes mix fixed and varied fields
-        # (templates.toml) -- every one of them should come out a plain scalar, never a
-        # leftover {"min", "max"} dict or a weighted-choice list.
+        # generated_stranger's own currency/qualities/attitudes mix fixed and varied fields --
+        # every one of them should come out a plain scalar, never a leftover {"min", "max"}
+        # dict or a weighted-choice list.
         entity = self.dm_core.entities["generated_stranger"]
 
         self.assertIsInstance(entity["currency"], int)
@@ -2342,9 +2349,9 @@ class TestNpcGenerationDMCoreIntegration(DMTestCase):
         self.assertTrue(-40 <= intimacy <= 40)
 
     def test_player_attitude_token_is_substituted_with_the_live_player_name(self):
-        # templates.toml authors this override toward the literal token "player" -- it must
-        # resolve to whichever entity is actually is_player = true (gladstone), not stay
-        # keyed to a string no live entity is ever named.
+        # npc_generation_test.toml's own generated_stranger authors this override toward the
+        # literal token "player" -- it must resolve to whichever entity is actually
+        # is_player = true (gladstone), not stay keyed to a string no live entity is ever named.
         name_overrides = self.dm_core.entities["generated_stranger"]["attitudes"]["name"]
         self.assertEqual(len(name_overrides), 1)
         override = name_overrides[0]
@@ -2365,7 +2372,7 @@ class TestNpcGenerationDMCoreIntegration(DMTestCase):
 
     def test_target_cr_player_resolves_against_the_live_player(self):
         # generated_stranger's own target_cr = "player" -- generated with variance=0.15 (the
-        # module default, since npcs.toml's own template doesn't override it), so it should
+        # module default, since its own template doesn't override it), so it should
         # land in a generous but bounded band around gladstone's own real CR, not some
         # unrelated fixed number.
         npc_cr = self.dm_core.get_challenge_rating("generated_stranger")
@@ -2415,31 +2422,32 @@ class TestNpcGenerationDMCoreIntegration(DMTestCase):
         self.assertEqual(len(self.fake_call_log), 1)  # only the original setUp() generation
 
     def test_entity_templates_are_never_accidentally_referenced(self):
-        # A fresh "arena" boot -- never references "generated_stranger" itself, so unlike
-        # self.dm_core (this class's own npc_generation_test fixture, which already has a
-        # *live*, generated "generated_stranger" instance sitting in self.entities under that
-        # same key -- self.entities holds templates and live instances under the same keys,
-        # see CLAUDE.md's "Scenarios and rooms"), self.entities here has no "generated_stranger"
-        # at all -- only self.entity_templates does, proving the lookup itself is what's
-        # isolated, not just that this particular scenario never happens to collide.
-        with patch("NPC_Generation._real_call_chat_completion", new=self._fake_call):
-            dm = DMCore(EventBus(), scenario_name="arena")
-        self.assertIn("generated_stranger", dm.entity_templates)
-        self.assertNotIn("generated_stranger", dm.entities)
+        # scenario_entity_test.toml's own "vault_specter_stub" is a real entity_template that
+        # its own [scenario].entities deliberately never references (see
+        # TestScenarioLocalEntities) -- unlike self.dm_core (this class's own
+        # npc_generation_test fixture, which already has a *live*, generated
+        # "generated_stranger" instance sitting in self.entities under that same key --
+        # self.entities holds templates and live instances under the same keys, see CLAUDE.md's
+        # "Scenarios and rooms"), self.entities here has no "vault_specter_stub" at all -- only
+        # self.entity_templates does, proving the lookup itself is what's isolated, not just
+        # that this particular scenario never happens to collide.
+        dm = DMCore(EventBus(), scenario_name="scenario_entity_test")
+        self.assertIn("vault_specter_stub", dm.entity_templates)
+        self.assertNotIn("vault_specter_stub", dm.entities)
 
         errors = []
         dm.event_bus.subscribe("log_error", errors.append)
 
         # A scenario entry naming an entity_template via "name" (the field real entities use)
         # must fail the same "unknown entity" way a real typo would, not silently resolve it.
-        result = dm._instance_entities([{"name": "generated_stranger", "band": 1}])
+        result = dm._instance_entities([{"name": "vault_specter_stub", "band": 1}])
         self.assertEqual(result, [])
         self.assertTrue(any("unknown entity" in e for e in errors))
 
         # Conversely, a real entity/creature template can't be pulled through "template"
-        # either -- self.entity_templates has no "wolf" entry to find.
+        # either -- self.entity_templates has no "vault sentinel" entry to find.
         errors.clear()
-        result = dm._instance_entities([{"template": "wolf", "band": 1}])
+        result = dm._instance_entities([{"template": "vault sentinel", "band": 1}])
         self.assertEqual(result, [])
         self.assertTrue(any("unknown entity template" in e for e in errors))
 
@@ -2497,14 +2505,20 @@ class TestCharacterCreationRename(unittest.TestCase):
         character = {
             "race": "elf",
             "allocation": {"arcane": 5, "stealth": 5, "observation": 5},
-            "name": "wolf",  # collides with creatures.toml's own "wolf" template
+            # Collides with creatures.toml's own "fire elemental" -- has to be an entity
+            # loaded via load_rules, not character_test.toml's own local "wolf": the rename
+            # collision check (apply_character_creation) runs before load_scenario_definition,
+            # so a scenario-local entity isn't visible to it yet (see CLAUDE.md's "Character
+            # creation").
+            "name": "fire elemental",
         }
 
         dm = DMCore(bus, scenario_name="character_test", character=character)
 
         self.assertEqual(dm.player_name, "gladstone")  # rename rejected
         self.assertEqual(dm.entities["gladstone"]["skills"]["arcane"], {"dice": 8, "pips": 0})
-        self.assertEqual(dm.entities["wolf"]["supertype"], "creature")  # untouched, not clobbered
+        # untouched, not clobbered
+        self.assertEqual(dm.entities["fire elemental"]["supertype"], "creature")
         self.assertTrue(any("rename rejected" in message for message in errors))
 
     def test_name_only_character_renames_without_touching_skills(self):
@@ -2517,6 +2531,35 @@ class TestCharacterCreationRename(unittest.TestCase):
         self.assertNotIn("gladstone", dm.entities)
         # Untouched -- characters.toml's own hand-authored value, not race_baseline_skills'.
         self.assertEqual(dm.entities["Aria"]["skills"]["blades"], {"dice": 5, "pips": 0})
+
+
+class TestScenarioLocalEntities(unittest.TestCase):
+    """!
+    @brief A scenario file's own [[entity]]/[[entity_template]] tables (DM_Rules.py's
+        load_scenario_definition) -- lets a scenario-specific entity/NPC-generation stub live
+        in the same file as the scenario that references it, instead of needing to be authored
+        into a shared file like creatures.toml. Uses
+        Rules/Fantasy/scenarios/scenario_entity_test.toml, whose "vault sentinel" entity and
+        "vault_specter_stub" template exist nowhere else -- if load_scenario_definition didn't
+        load them, [scenario].entities' reference to the former would fail with "unknown
+        entity" and never make it into scenario_entities at all, and the latter would be
+        entirely absent from self.entity_templates.
+    """
+
+    def test_scenario_local_entity_is_loaded_and_instanced(self):
+        dm = DMCore(EventBus(), scenario_name="scenario_entity_test")
+
+        self.assertEqual(dm.entities["vault sentinel"]["max_hp"], 10)
+        self.assertEqual(dm.entities["vault sentinel"]["supertype"], "creature")
+        self.assertIn("vault sentinel", dm.scenario_entities)
+
+    def test_scenario_local_entity_template_is_loaded(self):
+        dm = DMCore(EventBus(), scenario_name="scenario_entity_test")
+
+        self.assertEqual(dm.entity_templates["vault_specter_stub"]["subtype"], "undead")
+        # A stub template -- never instanced (not referenced by [scenario]/[[room]] entities),
+        # so it must never show up in self.entities alongside real, directly usable entities.
+        self.assertNotIn("vault_specter_stub", dm.entities)
 
 
 class TestPeekSavedScenarioKey(unittest.TestCase):
@@ -2939,8 +2982,8 @@ class TestInventoryTransfer(DMTestCase):
 
 
 class TestNpcDialogue(DMTestCase):
-    # Rules/Fantasy/scenarios/tavern.toml puts the player with a friendly NPC
-    # (npcs.toml's innkeeper) instead of the default "arena" combat scenario.
+    # Rules/Fantasy/scenarios/tavern.toml puts the player with a friendly NPC (its own local
+    # innkeeper) instead of the default "arena" combat scenario.
     scenario_name = "tavern"
 
     def setUp(self):
@@ -2965,15 +3008,18 @@ class TestNpcDialogue(DMTestCase):
 
     def test_fighting_a_hostile_target_still_batches_into_round_resolved(self):
         # Sanity check the branch didn't regress combat routing for an actually hostile target.
+        # "fire elemental" (creatures.toml) rather than "wolf" -- it's the one creature still
+        # loaded via load_rules regardless of scenario, so it's resolvable here even though
+        # this fixture boots "tavern" (which never references it).
         self.dm_core.scenario = {
             "entities": [
                 { "name": "gladstone", "band": 1 },
-                { "name": "wolf", "band": 1 },
+                { "name": "fire elemental", "band": 1 },
             ],
         }
         self.dm_core.load_scenario()
 
-        self.dm_core._on_turn_detected({"clauses": [{"kind": "action", "skill": "blades"}], "input": "I attack the wolf"})
+        self.dm_core._on_turn_detected({"clauses": [{"kind": "action", "skill": "blades"}], "input": "I attack the fire elemental"})
 
         self.assertEqual(len(self.round_events), 1)
         self.assertEqual(self.action_events, [])
@@ -2985,7 +3031,7 @@ class TestFreeformDialogue(DMTestCase):
     @brief DM_Dialogue.py's DialogueMixin -- the new diceless "directly address someone"
         channel, distinct from TestNpcDialogue above (which is the pre-existing, still-valid
         charisma skill check path). scenario "tavern" puts the player with a friendly NPC
-        (npcs.toml's innkeeper), same fixture TestNpcDialogue itself uses.
+        (its own local innkeeper), same fixture TestNpcDialogue itself uses.
     """
     scenario_name = "tavern"
 
@@ -3006,16 +3052,17 @@ class TestFreeformDialogue(DMTestCase):
 
     def test_hostile_target_is_still_addressable(self):
         # Unlike combat targeting, dialogue never gates on hostility -- addressing something
-        # hostile (ex: shouting at a wolf mid-fight) is allowed. "wolf" is already loaded as a
-        # template (creatures.toml, via load_rules) even though tavern.toml never instances
-        # it -- just needs to be added to the live scene for this one check.
-        self.dm_core.scenario_entities.append("wolf")
-        self.assertTrue(self.dm_core.is_hostile("wolf", self.dm_core.player_name))
+        # hostile (ex: shouting at a wolf mid-fight) is allowed. "fire elemental" is already
+        # loaded as a template (creatures.toml, via load_rules, regardless of scenario) even
+        # though tavern.toml never instances it -- just needs to be added to the live scene
+        # for this one check.
+        self.dm_core.scenario_entities.append("fire elemental")
+        self.assertTrue(self.dm_core.is_hostile("fire elemental", self.dm_core.player_name))
 
-        result = self._talk("i talk to the wolf")
+        result = self._talk("i talk to the fire elemental")
 
         self.assertTrue(result["found"])
-        self.assertEqual(result["target"], "wolf")
+        self.assertEqual(result["target"], "fire elemental")
 
     def test_absent_or_dead_target_is_denied(self):
         dead_result = self._talk("i talk to the innkeeper")
@@ -3142,7 +3189,7 @@ class TestAttitudePhrases(DMTestCase):
 class TestIsHostileThreshold(DMTestCase):
     """!
     @brief is_hostile's two distinct defaults (DM_Social.py): an entity with no
-        [entity.attitudes] table at all (ex: creatures.toml's wolf/bandit) is hostile
+        [entity.attitudes] table at all (ex: arena.toml's wolf/field.toml's bandit) is hostile
         unconditionally, regardless of the -100 threshold below -- otherwise every existing
         hostile creature with no authored attitude data would stop fighting the moment the
         threshold tightened from "<= 0" to "<= -100".

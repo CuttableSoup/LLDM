@@ -7,3 +7,51 @@ entities = [
     { name = "player", band = 1 },
     { name = "innkeeper", band = 1 }
 ]
+
+# Local copy of every npc/creature entity this scenario references (see DM_Rules.py's
+# load_scenario_definition/"Scenarios and rooms" in CLAUDE.md), so this file is self-contained
+# and doesn't need npcs.toml to actually be playable.
+[[entity]]
+name = "innkeeper"
+supertype = "creature"
+subtype = "humanoid"
+description = "A stout woman with flour-dusted sleeves, wiping down the bar."
+
+max_hp = 20
+
+currency = 40
+max_bulk = 5
+weight = 160
+
+languages = [ "common" ]
+memories = [ "Lost her husband to a bandit raid on the north road", "Waters down the ale for rowdy patrons" ]
+quotes = [ "Welcome to the Rusty Tankard, what'll it be?", "Careful with that road at night, bandits about." ]
+
+[entity.attitudes]
+default = [ 30, 0, 10, 0, 0, 0 ]
+# disposition   Hostile <-> Friendly
+# trust         Suspicious <-> Trusting
+# confidence    Fearful <-> Confident
+# respect       Disdainful <-> Admiring
+# obligation    Unfettered <-> Indebted
+# intimacy      Disgusted <-> Enamored
+
+[entity.qualities]
+body = "stout"
+eye = "green"
+gender = "female"
+hair = "grey"
+height = "short"
+skin = "ruddy"
+size = "medium"
+race = "human"
+age = 52
+
+[entity.conditions]
+
+[entity.skills]
+charisma = { dice = 3, pips = 0 }
+appraise = { dice = 2, pips = 0 }
+observation = { dice = 3, pips = 0 }
+streetwise = { dice = 2, pips = 1 }
+brawling = { dice = 1, pips = 0 }

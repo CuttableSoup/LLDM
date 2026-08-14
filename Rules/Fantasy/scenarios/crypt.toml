@@ -18,6 +18,268 @@ entities = [
     { name = "anne", band = 1 }
 ]
 
+# Local copies of every npc/creature entity this whole dungeon references (see DM_Rules.py's
+# load_scenario_definition/"Scenarios and rooms" in CLAUDE.md), so this one file is
+# self-contained and doesn't need creatures.toml/characters.toml to actually be playable.
+# "thane" is also duplicated into arena.toml, which references it too; kept in sync by hand
+# since duplication (not a shared file) is the whole point here.
+[[entity]]
+name = "thane"
+supertype = "creature"
+subtype = "humanoid"
+description = "A grizzled mercenary who fights at gladstone's side."
+is_party = true
+follow_offset = 0
+
+max_hp = 24
+
+[entity.attitudes]
+default = [ 40, 40, 40, 40, 40, 40 ]
+
+[entity.qualities]
+race = "human"
+
+[entity.skills]
+acrobatics = { dice = 2, pips = 0 }
+appraise = { dice = 2, pips = 0 }
+arcane = { dice = 2, pips = 0 }
+artistry = { dice = 2, pips = 0 }
+athletics = { dice = 4, pips = 0 }
+axes = { dice = 2, pips = 0 }
+blades = { dice = 4, pips = 0 }
+brawling = { dice = 4, pips = 0 }
+charisma = { dice = 2, pips = 0 }
+deception = { dice = 2, pips = 0 }
+disguise = { dice = 2, pips = 0 }
+dodge = { dice = 3, pips = 0 }
+escape = { dice = 2, pips = 0 }
+finesse = { dice = 2, pips = 0 }
+fly = { dice = 2, pips = 0 }
+forgery = { dice = 2, pips = 0 }
+fortitude = { dice = 3, pips = 0 }
+gambling = { dice = 2, pips = 0 }
+husbandry = { dice = 2, pips = 0 }
+intimidation = { dice = 4, pips = 0 }
+linguistics = { dice = 2, pips = 0 }
+medicine = { dice = 2, pips = 0 }
+miracles = { dice = 2, pips = 0 }
+missiles = { dice = 2, pips = 0 }
+navigation = { dice = 2, pips = 0 }
+observation = { dice = 2, pips = 0 }
+polearms = { dice = 2, pips = 0 }
+psionics = { dice = 2, pips = 0 }
+reflexes = { dice = 2, pips = 0 }
+stealth = { dice = 2, pips = 0 }
+streetwise = { dice = 3, pips = 0 }
+strength = { dice = 4, pips = 0 }
+survival = { dice = 4, pips = 0 }
+throwing = { dice = 2, pips = 0 }
+trickery = { dice = 2, pips = 0 }
+willpower = { dice = 2, pips = 0 }
+
+[[entity.abilities]]
+name = "shortsword strike"
+supertype = "innate"
+subtype = "weapon"
+skill = "blades"
+damage_tags = [ "slashing" ]
+damage_value = { dice = 2, pips = 0, bonus = "user.strength_damage" }
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "shortsword strike"
+
+[[entity]]
+name = "anne"
+supertype = "creature"
+subtype = "humanoid"
+description = "A sharp-eyed battle mage, quick with a ward and quicker with a curse."
+is_party = true
+follow_offset = -1
+
+max_hp = 18
+
+abilities = [ "splash flow" ]
+
+[entity.attitudes]
+default = [ 30, 30, 30, 30, 30, 30 ]
+
+[[entity.attitudes.name]]
+gladstone = [ 100, 100, 100, 100, 100, 100 ]
+
+[entity.qualities]
+race = "elf"
+
+[entity.skills]
+acrobatics = { dice = 5, pips = 0 }
+appraise = { dice = 2, pips = 0 }
+arcane = { dice = 4, pips = 0 }
+artistry = { dice = 2, pips = 0 }
+athletics = { dice = 2, pips = 0 }
+axes = { dice = 2, pips = 0 }
+blades = { dice = 2, pips = 0 }
+brawling = { dice = 1, pips = 0 }
+charisma = { dice = 4, pips = 0 }
+deception = { dice = 2, pips = 0 }
+disguise = { dice = 2, pips = 0 }
+dodge = { dice = 2, pips = 1 }
+escape = { dice = 2, pips = 0 }
+finesse = { dice = 2, pips = 0 }
+fly = { dice = 2, pips = 0 }
+forgery = { dice = 2, pips = 0 }
+fortitude = { dice = 2, pips = 0 }
+gambling = { dice = 2, pips = 0 }
+husbandry = { dice = 2, pips = 0 }
+intimidation = { dice = 1, pips = 0 }
+linguistics = { dice = 4, pips = 0 }
+medicine = { dice = 4, pips = 0 }
+miracles = { dice = 2, pips = 0 }
+missiles = { dice = 2, pips = 0 }
+navigation = { dice = 2, pips = 0 }
+observation = { dice = 5, pips = 0 }
+polearms = { dice = 2, pips = 0 }
+psionics = { dice = 2, pips = 0 }
+reflexes = { dice = 2, pips = 0 }
+stealth = { dice = 5, pips = 0 }
+streetwise = { dice = 2, pips = 0 }
+strength = { dice = 1, pips = 0 }
+survival = { dice = 2, pips = 0 }
+throwing = { dice = 2, pips = 0 }
+trickery = { dice = 2, pips = 0 }
+willpower = { dice = 3, pips = 0 }
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "splash flow"
+
+[[entity]]
+name = "giant spider"
+supertype = "creature"
+subtype = "animal"
+description = "An abdomen swollen to the size of a barrel, bristling with coarse hair, skitters along webbing strung wall to wall."
+
+max_hp = 14
+
+vulnerability_value = { dice = 2, pips = 0 }
+vulnerability_tags = [ "fire" ]
+
+[[entity.abilities]]
+name = "venomous bite"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "piercing", "poison" ]
+damage_value = { dice = 2, pips = 0, bonus = "user.strength_damage" }
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+    { field = "hp_per_remain", operator = "<", value = 0.40 },
+]
+action = "retreat"
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "venomous bite"
+
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+willpower = { dice = 1, pips = 0 }
+reflexes = { dice = 3, pips = 0 }
+dodge = { dice = 4, pips = 0 }
+strength = { dice = 1, pips = 0 }
+brawling = { dice = 4, pips = 0 }
+
+[[entity]]
+name = "skeleton warrior"
+supertype = "creature"
+subtype = "undead"
+description = "A yellowed skeleton in tattered mail, empty sockets fixed forward, a notched blade held in a bony grip."
+
+max_hp = 20
+
+immunity_tags = [ "poison" ]
+vulnerability_value = { dice = 2, pips = 0 }
+vulnerability_tags = [ "bludgeoning" ]
+
+[[entity.abilities]]
+name = "notched blade"
+supertype = "innate"
+subtype = "weapon"
+skill = "blades"
+damage_tags = [ "slashing" ]
+damage_value = { dice = 2, pips = 1, bonus = "user.strength_damage" }
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "notched blade"
+
+[entity.skills]
+fortitude = { dice = 3, pips = 0 }
+willpower = { dice = 3, pips = 0 }
+reflexes = { dice = 2, pips = 0 }
+dodge = { dice = 2, pips = 0 }
+strength = { dice = 3, pips = 0 }
+blades = { dice = 4, pips = 0 }
+
+[[entity]]
+name = "the bone warden"
+supertype = "creature"
+subtype = "undead"
+description = "A towering, armor-fused skeleton bound in chains of dark iron, its ribcage packed with cold blue witchfire that never quite goes out."
+
+max_hp = 50
+
+immunity_tags = [ "poison" ]
+resistance_value = { dice = 1, pips = 0 }
+resistance_tags = [ "physical", "piercing", "slashing" ]
+vulnerability_value = { dice = 2, pips = 0 }
+vulnerability_tags = [ "fire" ]
+
+[[entity.abilities]]
+name = "bone claw"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "slashing" ]
+damage_value = { dice = 3, pips = 0, bonus = "user.strength_damage" }
+
+[[entity.abilities]]
+name = "grave chill"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "cold" ]
+damage_value = { dice = 4, pips = 1, bonus = 0 }
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.4 },
+]
+action = "bone claw"
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "grave chill"
+
+[entity.skills]
+fortitude = { dice = 6, pips = 0 }
+willpower = { dice = 3, pips = 0 }
+reflexes = { dice = 2, pips = 0 }
+dodge = { dice = 2, pips = 0 }
+strength = { dice = 5, pips = 0 }
+brawling = { dice = 5, pips = 0 }
+
 [[room]]
 key = "entrance"
 name = "Entrance Hall"

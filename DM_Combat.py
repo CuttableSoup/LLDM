@@ -425,7 +425,7 @@ class CombatMixin(DMCoreProtocol):
             requirements are currently met, in declaration order -- the same
             {field, operator, value} requirement engine [[status]] already uses
             (entity_matches_requirements), just read from "behavior" instead of
-            "status". Ex: creatures.toml's wolf checks a low-hp "retreat" entry first,
+            "status". Ex: arena.toml's wolf checks a low-hp "retreat" entry first,
             then falls back to "always attack while hp_per_remain >= 0.01", so it
             keeps attacking (or fleeing) until it's effectively dead and then simply
             stops matching any behavior at all.
@@ -449,7 +449,7 @@ class CombatMixin(DMCoreProtocol):
         """!
         @brief Resolves an entity's currently-chosen behavior against a target -- either a
             deliberate move (see below) or an opposed attack. A behavior names a specific
-            *action* (ex: creatures.toml's wolf names "bite", one of its own abilities)
+            *action* (ex: arena.toml's wolf names "bite", one of its own abilities)
             rather than a bare skill -- reusing resolve_named_ability + select_ability_skill,
             the exact same lookup the player's own named-technique path (ex: "cleave")
             already uses, rather than going through find_attack_ability's
@@ -461,8 +461,9 @@ class CombatMixin(DMCoreProtocol):
             -- MOVEMENT_ACTIONS routes straight to move_toward_or_away (DM_Movement.py), the
             explicit way a behavior entry opts into self-preservation (ex: fleeing once
             hp_per_remain drops low, checked ahead of an attack entry in the same
-            declaration-order list choose_behavior already walks -- see creatures.toml's
-            wolf/giant spider for the shipped example) or into deliberately closing distance
+            declaration-order list choose_behavior already walks -- see arena.toml's
+            wolf/crypt.toml's giant spider for the shipped example) or into deliberately
+            closing distance
             regardless of what's in range.
 
             Otherwise, range-checked exactly like the player's own attacks (see is_in_range
@@ -573,10 +574,10 @@ class CombatMixin(DMCoreProtocol):
         @brief The whole party's challenge rating -- every is_player/is_party entity actually
             in play right now, its own get_challenge_rating summed (Challenge_Rating.py's
             calculate_party_challenge_rating). Filtered through self.scenario_entities, not a
-            blind is_player/is_party scan of self.entities -- self.entities also still holds
-            every *uninstanced* template from every loaded TOML file (ex: characters.toml's
-            "anne", is_party=true, but not part of arena.toml's own entities list), and those
-            must not count just for existing on disk.
+            blind is_player/is_party scan of self.entities -- self.entities can still hold an
+            *uninstanced* is_party template that isn't part of the live scenario (see the same
+            note on GUI_Core.py's own Party-tab filtering, CLAUDE.md's "Architecture"), and
+            that must not count just for existing there.
         @return The party's combined challenge rating (an int).
         """
         return calculate_party_challenge_rating(

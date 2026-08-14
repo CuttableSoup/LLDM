@@ -112,9 +112,10 @@ class MovementMixin(DMCoreProtocol):
     def _apply_party_formation(self):
         """!
         @brief Snaps every currently-scened party member's own band to a fixed offset from
-            the player's own band -- ex: characters.toml's thane (follow_offset = 0) walks
-            abreast, anne (follow_offset = -1) trails one band behind, favoring her own
-            ranged spellwork over standing in melee. Called anywhere the *player's* own band
+            the player's own band -- ex: arena.toml/crypt.toml's own thane (follow_offset = 0)
+            walks abreast, crypt.toml's own anne (follow_offset = -1) trails one band behind,
+            favoring her own ranged spellwork over standing in melee. Called anywhere the
+            *player's* own band
             changes (advance_or_retreat, enter_room's own arrival) -- never from a creature/
             ally's own combat-turn movement (move_toward_or_away), which stays purely
             tactical (chasing/fleeing its own opponent) and is deliberately left free to drift

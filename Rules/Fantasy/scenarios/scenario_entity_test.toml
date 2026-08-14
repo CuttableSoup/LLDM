@@ -1,0 +1,43 @@
+# A minimal scenario dedicated to exercising a scenario file's own [[entity]]/[[entity_template]]
+# tables (see DM_Rules.py's load_scenario_definition) -- "vault sentinel" and "vault_specter_stub"
+# are defined right here, not in any shared Rules/Fantasy/*.toml file (creatures.toml/items.toml/
+# templates.toml/...), so they can only be found at all if load_scenario_definition itself loads
+# a scenario file's own [[entity]]/[[entity_template]] tables into self.entities/
+# self.entity_templates. vault_specter_stub is deliberately left unreferenced by [scenario]/
+# [[room]] entities -- this file only proves the template loads, not the (already well-covered,
+# see TestNpcGenerationDMCoreIntegration) instancing/generation path, which would otherwise need
+# a live or patched LLM call to exercise. Deliberately not one of the "real" scenarios (arena/
+# tavern/field/dungeon/crypt), same reasoning character_test.toml gives for its own existence --
+# excluded from list_available_scenarios for the same reason.
+[scenario]
+name = "The Sealed Vault"
+description = "A bare stone vault built only to exercise scenario-local entity definitions."
+bands = 2
+enclosed = true
+entities = [
+    { name = "player", band = 1 },
+    { name = "vault sentinel", band = 1 },
+]
+
+[[entity]]
+name = "vault sentinel"
+supertype = "creature"
+subtype = "construct"
+description = "A construct that exists only inside this scenario file."
+max_hp = 10
+
+[entity.skills]
+brawling = { dice = 2, pips = 0 }
+
+[[entity_template]]
+name = "vault_specter_stub"
+supertype = "creature"
+subtype = "undead"
+hint = "a restless guardian bound to this vault"
+target_cr = "player"
+
+[entity_template.qualities]
+race = "human"
+
+[entity_template.attitudes]
+default = [ -60, 0, 0, 0, 0, 0 ]

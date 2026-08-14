@@ -734,8 +734,9 @@ class TestAdHocRemovalLive(unittest.TestCase):
 
     def test_still_allows_removing_something_genuinely_harmless(self):
         # Proves the guardrail is targeted at live threats, not a blanket removal refusal --
-        # thane is present but positive-disposition (never hostile, see characters.toml), so a
-        # plainly non-combat removal request about him should still be honored normally.
+        # thane is present but positive-disposition (never hostile, see arena.toml's own
+        # thane), so a plainly non-combat removal request about him should still be honored
+        # normally.
         outcome = self.dm_core._attempt_entity_removal(
             "ADaM, thane just left to get supplies, please remove him from the scene"
         )

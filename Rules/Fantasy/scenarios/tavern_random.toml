@@ -9,3 +9,86 @@ entities = [
     { template = "generated_stranger", band = 2 },
     { template = "generated_regular", band = 3 }
 ]
+
+# Local copies of every NPC-generation stub (entity_template) this scenario references (see
+# DM_Rules.py's load_scenario_definition/"Scenarios and rooms" in CLAUDE.md), so this file is
+# self-contained and doesn't need templates.toml to actually be playable. "generated_stranger"
+# also still lives in templates.toml, kept there on purpose for npc_generation_test.toml's own
+# deliberate shared-data reuse (see its own docstring) -- this copy simply wins for this
+# scenario, loaded after load_rules.
+[[entity_template]]
+name = "generated_innkeeper"
+supertype = "creature"
+subtype = "humanoid"
+hint = "the innkeeper running the bar tonight"
+target_cr = "player"
+
+currency = 40
+max_bulk = 5
+
+[entity_template.attitudes]
+# Just a flat default -- warm toward everyone alike, no special-cased exceptions.
+default = [ 30, 0, 10, 0, 0, 0 ]
+
+[entity_template.qualities]
+race = "dwarf"
+
+[[entity_template]]
+name = "generated_stranger"
+supertype = "creature"
+subtype = "humanoid"
+hint = [
+    {"a stranger passing through, keeping mostly to themselves" = 30},
+    {"a wandering merchant looking to trade" = 30},
+    {"an adventerer looking for a party to tackle a nearby dungeon" = 40},
+]
+target_cr = "player"
+cr_multiplier = {min = 0.8, max = 1.2} # can vary from weaker to stronger
+
+currency = {min = 10, max = 50}
+max_bulk = 5
+
+[entity_template.attitudes]
+default = [
+    {min = -40, max = 40}, # disposition varies from wary to warm
+    0, # trust remain zero
+    0, # confidence remain zero
+    10, # respect remain zero
+    -20, # obligation remains low for a stranger
+    {min = -40, max = 40} # intimacy varies from wary to warm
+]
+[[entity_template.attitudes.name]]
+player = [ 40, 0, 0, 0, 0, 0 ] # trusts the player for some reaseon
+
+[entity_template.qualities]
+race = [
+    {"halfling" = 20},
+    {"dwarf" = 20},
+    {"elf" = 20},
+    {"human" = 60},
+    {"half-orc" = 20}
+]
+gender = [
+    {"male" = 50},
+    {"female" = 50}
+]
+age = { min = 18, max = 50 }
+
+[[entity_template]]
+name = "generated_regular"
+supertype = "creature"
+subtype = "humanoid"
+hint = "a regular who's had one too many and is in a talkative mood"
+target_cr = "player"
+cr_multiplier = 0.6                         # a background patron, not meant to rival the player
+
+currency = 5
+max_bulk = 5
+
+[entity_template.attitudes]
+default = [ 15, -5, 0, 0, 0, 0 ]
+[[entity_template.attitudes.supertype]]
+undead = [ -60, -60, 40, -60, -60, -60 ]
+
+[entity_template.qualities]
+race = "halfling"

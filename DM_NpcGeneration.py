@@ -1,6 +1,6 @@
 """!
 @file DM_NpcGeneration.py
-@brief DMCore mixin turning an entity_template (see Rules/Fantasy/templates.toml,
+@brief DMCore mixin turning an entity_template (see Rules/Fantasy/scenarios/tavern_random.toml,
     DM_Rules.py's _instance_entities) into a real stat block at the moment it's instanced.
     Pure math/LLM-calling logic lives in NPC_Generation.py -- this mixin is the "glue" that
     resolves a template's own target_cr against live DMCore state and bakes the result onto
@@ -132,9 +132,10 @@ class NpcGenerationMixin(DMCoreProtocol):
     def _resolve_generated_qualities(self, entity):
         """!
         @brief Resolves every [entity_template.qualities] field that may be varied (ex:
-            templates.toml's own weighted "race"/"gender", ranged "age") down to one concrete
-            value each -- in place, so a fixed field (ex: generated_innkeeper's plain
-            race = "dwarf") passes through resolve_varied_value unchanged.
+            tavern_random.toml's own generated_stranger, its weighted "race"/"gender", ranged
+            "age") down to one concrete value each -- in place, so a fixed field (ex: the same
+            file's generated_innkeeper's plain race = "dwarf") passes through
+            resolve_varied_value unchanged.
         @param entity The live instance dict (already carrying whatever [entity.qualities]
             the entity_template declared, via _instance_entities' own deepcopy).
         """
@@ -149,7 +150,7 @@ class NpcGenerationMixin(DMCoreProtocol):
         @brief Resolves [entity.attitudes] down to concrete numbers, element by element (not
             the six-axis array as a single varied field -- resolve_varied_value is applied to
             each axis individually, so a template can mix fixed and varied axes freely, ex:
-            templates.toml's generated_stranger keeping trust/confidence at a flat 0 while
+            tavern_random.toml's generated_stranger keeping trust/confidence at a flat 0 while
             disposition/intimacy vary). Covers "default" plus every "name"/"supertype"
             override entry the same way. Also substitutes the reserved PLAYER_ATTITUDE_TOKEN
             key in any "name" override for self.player_name -- an entity_template can't know

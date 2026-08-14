@@ -29,11 +29,12 @@ def resolve_varied_value(value):
     """!
     @brief Resolves one entity_template field that may be authored as a plain value, a
         {min, max} range, or a weighted-choice list -- the shared "how varied is this field"
-        vocabulary templates.toml uses across hint/cr_multiplier/currency/qualities/
-        attitudes, so DM_NpcGeneration.py doesn't need separate resolution logic per field.
+        vocabulary an entity_template (ex: Rules/Fantasy/scenarios/tavern_random.toml's own
+        generated_stranger) uses across hint/cr_multiplier/currency/qualities/attitudes, so
+        DM_NpcGeneration.py doesn't need separate resolution logic per field.
         Applying this to every leaf individually (not the whole [entity_template.attitudes]
         default array at once, for instance) is what lets a template mix fixed and varied
-        entries freely (ex: templates.toml's generated_stranger: trust/confidence stay a
+        entries freely (ex: generated_stranger's own trust/confidence stay a
         flat 0 while disposition/intimacy vary) -- see _resolve_attitudes in
         DM_NpcGeneration.py for how the six-axis array itself is walked.
     @param value One of:
@@ -41,7 +42,7 @@ def resolve_varied_value(value):
         - {"min": low, "max": high} -- a uniform random pick in that range. Both ints picks
           an int (random.randint, inclusive); either being a float picks a float
           (random.uniform).
-        - A list of single-key {"choice": weight} tables (ex: templates.toml's own
+        - A list of single-key {"choice": weight} tables (ex: generated_stranger's own
           `race = [{"human"=60}, {"elf"=20}, ...]`) -- a weighted random pick of the *key*
           (not the weight), via random.choices. Weights are relative, not required to sum to
           100 or 1 -- random.choices normalizes them internally.
@@ -183,8 +184,8 @@ def _describe_qualities(qualities):
         so the invented name/backstory actually matches -- ex: a resolved gender = "male"
         shouldn't come back paired with a name the model would only ever pick for a woman.
         Deliberately scoped to just these three keys (not every arbitrary
-        [entity_template.qualities] leaf a template might declare) -- they're the ones
-        templates.toml's own varied fields actually vary today; a template's other
+        [entity_template.qualities] leaf a template might declare) -- they're the ones any
+        shipped entity_template's own varied fields actually vary today; a template's other
         descriptive qualities (body/eye/hair/...) stay flavor the LLM never needs for naming.
     @param qualities The entity's own already-resolved "qualities" dict, or None/{}.
     @return A sentence fragment (ex: "They are a male halfling, about 37 years old."), or ""
