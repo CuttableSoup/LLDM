@@ -2164,6 +2164,62 @@ class TestImprovisation(DMTestCase):
         self.assertEqual(self.dm_core.get_band("old crate"), 3)
 
 
+class TestPlaceNewEntity(DMTestCase):
+    """!
+    @brief RulesMixin._place_new_entity (DM_Rules.py) -- the shared primitive
+        _instance_entities and every band-bearing DM_Improvisation.py placement path (a
+        conjured container/trap, a conjured creature) go through, instead of each hand-writing
+        entity_id/band/active_conditions. Exercised directly here, with no scenario load or
+        NLP pipeline involved.
+    """
+
+    def test_copies_active_conditions_from_a_templates_own_conditions_field(self):
+        entity = {"name": "chest", "conditions": {"locked": {"duration": "permanent", "dismiss": None}}}
+        result = self.dm_core._place_new_entity("chest", entity, band=2)
+
+        self.assertIs(result, entity)
+        self.assertEqual(entity["entity_id"], "chest")
+        self.assertEqual(entity["band"], 2)
+        self.assertEqual(entity["active_conditions"], {"locked": {"duration": "permanent", "dismiss": None}})
+        self.assertIsNot(entity["active_conditions"], entity["conditions"])
+        self.assertIs(self.dm_core.entities["chest"], entity)
+
+    def test_preserves_active_conditions_already_authored_on_the_entity(self):
+        entity = {"name": "trap", "active_conditions": {"armed": {"duration": "permanent", "dismiss": None}}}
+        self.dm_core._place_new_entity("trap", entity, band=1)
+
+        self.assertEqual(entity["active_conditions"], {"armed": {"duration": "permanent", "dismiss": None}})
+
+    def test_defaults_active_conditions_to_empty_when_neither_field_is_present(self):
+        entity = {"name": "goblin"}
+        self.dm_core._place_new_entity("goblin", entity, band=1)
+
+        self.assertEqual(entity["active_conditions"], {})
+
+
+class TestReachableEntityNames(DMTestCase):
+    """!
+    @brief ImprovisationMixin._reachable_entity_names (DM_Improvisation.py) -- the shared
+        "everything present/ground/inventory/equipped, minus the player" universe both
+        _attempt_entity_removal and _attempt_entity_edit build off of. Exercised directly here,
+        with no ADaM/NLP pipeline involved. scenario "arena" (DMTestCase's own default)
+        declares "wolf" alongside the player, gladstone.
+    """
+
+    def test_includes_scene_ground_and_inventory_equipped_items_but_excludes_the_player(self):
+        self.dm_core.scenario.setdefault("ground", []).append("a stone")
+        self.dm_core.entities["gladstone"]["inventory"] = ["a rope"]
+        self.dm_core.entities["gladstone"]["equipped"] = {"main_hand": "a dagger"}
+
+        reachable = self.dm_core._reachable_entity_names()
+
+        self.assertIn("wolf", reachable)
+        self.assertIn("a stone", reachable)
+        self.assertIn("a rope", reachable)
+        self.assertIn("a dagger", reachable)
+        self.assertNotIn("gladstone", reachable)
+
+
 class TestShopScenario(DMTestCase):
     """!
     @brief End-to-end proof (mocked LLM, no live LM Studio needed) that Rules/Fantasy/

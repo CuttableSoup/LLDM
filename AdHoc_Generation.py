@@ -35,6 +35,22 @@ from NPC_Generation import fit_skills_to_cr
 DEFAULT_API_URL = "http://127.0.0.1:1234/v1/chat/completions"
 DEFAULT_TIMEOUT = 8
 
+# The item-interaction verbs eligible for the ad hoc creation fallback, partitioned by which
+# entity's own inventory a created item actually needs to land in for DM_Core.py's ordinary,
+# unchanged item-interaction dispatcher to resolve the *original* triggering intent correctly
+# (see DM_Improvisation.py's own _on_improvisation_requested -- "give"/"equip"/"unequip"/"use"/
+# "drop" always check the player's own inventory regardless of direction; "trade" is the one
+# intent that checks the *current target's* inventory as its source, since buying something
+# means the seller has to have it, not the buyer). Live here -- not in DM_Improvisation.py,
+# which actually branches on each set, and not in NLP_Core.py, which only ever needs their
+# union -- because this is the one module both already treat as pure/DMCore-independent, so
+# both can import the same three sets without NLP_Core.py picking up any DMCore/game-state
+# coupling. NLP_Core.py computes its own IMPROVISABLE_INTENTS as the union of these three at
+# import time, rather than hand-copying a fourth constant, so the two can't drift apart.
+PLAYER_CENTRIC_INTENTS = frozenset({"give", "equip", "unequip", "use", "drop"})
+GROUND_AWARE_INTENTS = frozenset({"examine", "take"})
+TARGET_CENTRIC_INTENTS = frozenset({"trade"})
+
 # Tags already in real use across Rules/Fantasy/*.toml (creatures.toml/items.toml's own
 # damage_tags/resistance_tags/vulnerability_tags) -- enum-constraining the LLM's own tool
 # arguments to this fixed, real set is far more reliable with a small local model than free

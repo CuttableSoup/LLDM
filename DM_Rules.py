@@ -369,22 +369,47 @@ class RulesMixin(DMCoreProtocol):
                 continue
 
             instance = copy.deepcopy(template)
-            instance["entity_id"] = instance_name
-            # Objective, 1-indexed band position (see DM_Movement.py) -- every entity gets
-            # one, the player included, so gaps are computed the same way for everyone.
             # Defaults to band 1 for any entry that doesn't specify one.
-            instance["band"] = entry.get("band", 1)
-            # "conditions" is the template's starting state (ex: a chest's [entity.conditions.locked]);
-            # "active_conditions" is the per-instance runtime dict apply_condition/dismiss_condition
-            # mutate, so it must start as its own copy rather than sharing the template's dict.
-            instance["active_conditions"] = dict(instance.get("conditions", {}))
-            self.entities[instance_name] = instance
+            self._place_new_entity(instance_name, instance, entry.get("band", 1))
             if is_generated_template:
                 self._apply_npc_generation(instance_name, party_pool, instance_names, skip_llm_generation)
             self._auto_roll_notice(instance_name)
             instance_names.append(instance_name)
 
         return instance_names
+
+    def _place_new_entity(self, name, entity, band):
+        """!
+        @brief The shared primitive behind every path that turns a raw entity dict into a live
+            self.entities participant -- scenario/room loading (_instance_entities, above) and
+            every ad hoc placement in DM_Improvisation.py (plain item, container/trap, conjured
+            creature) all go through this rather than each hand-writing the same three fields.
+            Deliberately thin: scenario_entities insertion, current_target claiming, and
+            item_catalog_updated publishing differ per caller (front-insert vs end-append vs
+            never; claimed vs not; published vs not) and stay the caller's own job.
+        @param name The entity's own self.entities key (already disambiguated by the caller --
+            _instance_entities' own occurrence_counts for a load batch,
+            ImprovisationMixin._unique_entity_key for a single ad hoc placement -- two genuinely
+            different scopes this primitive doesn't need to know about).
+        @param entity The raw entity dict (a deep-copied template, or one an LLM just invented).
+            Mutated in place and also returned for convenience.
+        @param band Objective, 1-indexed band position (see DM_Movement.py) -- every entity
+            gets one, the player included, so gaps are computed the same way for everyone.
+        @return entity, mutated in place and now stored at self.entities[name].
+        """
+        entity["entity_id"] = name
+        entity["band"] = band
+        # "conditions" is a template's own starting state (ex: a chest's
+        # [entity.conditions.locked]); "active_conditions" is the per-instance runtime dict
+        # apply_condition/dismiss_condition mutate. setdefault -- not an unconditional overwrite
+        # -- is what lets one rule serve every caller: a real template's "conditions" gets
+        # copied in (instance never has "active_conditions" of its own yet); an ad hoc
+        # container/trap's own already-authored active_conditions (locked/closed, armed -- see
+        # AdHoc_Generation.py) is left untouched rather than wiped; an ad hoc creature with
+        # neither key falls back to {}.
+        entity.setdefault("active_conditions", dict(entity.get("conditions", {})))
+        self.entities[name] = entity
+        return entity
 
     def _auto_roll_notice(self, instance_name):
         """!

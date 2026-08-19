@@ -9,6 +9,12 @@ import numpy as np
 import torch
 from sentence_transformers import SentenceTransformer, util
 
+# AdHoc_Generation.py is the one project-internal import this module makes -- it's pure/
+# DMCore-independent (no DMCore/game-state coupling of its own), so importing its shared
+# intent-vocabulary constants doesn't compromise this module's own independence from DMCore.
+# See IMPROVISABLE_INTENTS, below, for what these three are actually used for here.
+from AdHoc_Generation import GROUND_AWARE_INTENTS, PLAYER_CENTRIC_INTENTS, TARGET_CENTRIC_INTENTS
+
 # Substring checks against processed input to decide item-interaction intent, before any skill
 # matching runs. Phrases (not bare words) where a bare word would collide with an existing
 # skill phrasing already in use -- ex: "pick" alone would misfire on "I pick the lock"
@@ -180,11 +186,12 @@ NO_ITEM_LOOKUP_INTENTS = frozenset({"open", "close"})
 # from a shopkeeper who never had one on their own hand-authored inventory list -- a general
 # store shouldn't need every possible good pre-authored to sell it): DM_Improvisation.py stocks
 # the created item directly into the current scene target's own inventory for this one intent,
-# rather than the ground/player inventory every other intent here uses. Mirrors
-# DM_Improvisation.py's own PLAYER_CENTRIC_INTENTS | GROUND_AWARE_INTENTS | TARGET_CENTRIC_
-# INTENTS union exactly -- kept as a separate constant (rather than importing one from the
-# other) since this module must stay independent of DMCore/game state.
-IMPROVISABLE_INTENTS = frozenset({"examine", "take", "give", "equip", "unequip", "use", "drop", "trade"})
+# rather than the ground/player inventory every other intent here uses. Computed as the union
+# of AdHoc_Generation.py's own PLAYER_CENTRIC_INTENTS/GROUND_AWARE_INTENTS/TARGET_CENTRIC_
+# INTENTS -- imported from there, not DM_Improvisation.py, since AdHoc_Generation.py is the one
+# module both this file and DM_Improvisation.py already treat as pure/DMCore-independent, so
+# this module's own independence from DMCore/game state stays intact.
+IMPROVISABLE_INTENTS = PLAYER_CENTRIC_INTENTS | GROUND_AWARE_INTENTS | TARGET_CENTRIC_INTENTS
 
 # map_to_item checks these before any embedding match -- currency is a plain integer field
 # (entity["currency"]), not an object-supertype entity with a name/description to embed.
@@ -446,6 +453,20 @@ class NLPCore:
             return "retreat"
         return None
 
+    def _keyword_gate(self, processed_text, keywords):
+        """!
+        @brief Shared shape behind every plain "does this phrase contain any of these keyword
+            substrings" check in this file (_detect_dialogue_intent/_detect_removal_intent/
+            _detect_creature_intent/_detect_edit_intent, below) -- each of those keeps its own
+            named method rather than calling this directly, since the name itself (ex:
+            "removal_candidate") is what makes _on_user_input's own payload-building code
+            self-documenting without a comment; only the one-line body was ever duplicated.
+        @param processed_text The cleaned and processed player input.
+        @param keywords The keyword tuple to check against (ex: REMOVAL_KEYWORDS).
+        @return True if processed_text contains any keywords phrase, else False.
+        """
+        return any(keyword in processed_text for keyword in keywords)
+
     def _detect_dialogue_intent(self, processed_text):
         """!
         @brief Checks processed input for conversational-address phrasing, checked last among
@@ -459,7 +480,7 @@ class NLPCore:
         @param processed_text The cleaned and processed player input.
         @return True if processed_text contains any DIALOGUE_KEYWORDS phrase, else False.
         """
-        return any(keyword in processed_text for keyword in DIALOGUE_KEYWORDS)
+        return self._keyword_gate(processed_text, DIALOGUE_KEYWORDS)
 
     def _detect_help_intent(self, processed_text):
         """!
@@ -481,7 +502,7 @@ class NLPCore:
             matched ADAM_NAME_PATTERN).
         @return True if processed_text contains any REMOVAL_KEYWORDS phrase, else False.
         """
-        return any(keyword in processed_text for keyword in REMOVAL_KEYWORDS)
+        return self._keyword_gate(processed_text, REMOVAL_KEYWORDS)
 
     def _detect_creature_intent(self, processed_text):
         """!
@@ -492,7 +513,7 @@ class NLPCore:
             matched ADAM_NAME_PATTERN).
         @return True if processed_text contains any CREATURE_KEYWORDS phrase, else False.
         """
-        return any(keyword in processed_text for keyword in CREATURE_KEYWORDS)
+        return self._keyword_gate(processed_text, CREATURE_KEYWORDS)
 
     def _detect_edit_intent(self, processed_text):
         """!
@@ -503,7 +524,7 @@ class NLPCore:
             matched ADAM_NAME_PATTERN).
         @return True if processed_text contains any EDIT_KEYWORDS phrase, else False.
         """
-        return any(keyword in processed_text for keyword in EDIT_KEYWORDS)
+        return self._keyword_gate(processed_text, EDIT_KEYWORDS)
 
     def _detect_direction(self, processed_text):
         """!

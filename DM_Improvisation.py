@@ -1,7 +1,8 @@
 import os
 
 from AdHoc_Generation import (
-    decide_entity_edit, decide_entity_removal, generate_ad_hoc_creature, generate_ad_hoc_item,
+    GROUND_AWARE_INTENTS, PLAYER_CENTRIC_INTENTS, TARGET_CENTRIC_INTENTS, decide_entity_edit,
+    decide_entity_removal, generate_ad_hoc_creature, generate_ad_hoc_item,
 )
 from DM_Types import DMCoreProtocol
 from NPC_Generation import load_npc_keywords
@@ -11,21 +12,9 @@ from NPC_Generation import load_npc_keywords
 # container/trap is opened/examined-as-itself the same way a hand-authored one is (see
 # DM_Core.py's own _on_item_interaction_detected, which resolves "open"/"close" and a bare
 # "examine <the target itself>" against self._get_target_name(), not a ground/inventory lookup).
+# Unrelated to PLAYER_CENTRIC_INTENTS/GROUND_AWARE_INTENTS/TARGET_CENTRIC_INTENTS (imported
+# from AdHoc_Generation.py, below) -- NLP_Core.py has no mirror of this one, so it stays local.
 SCENE_PLACED_SUBTYPES = frozenset({"container", "trap"})
-
-# The item-interaction verbs eligible for the ad hoc creation fallback (see
-# _on_improvisation_requested), partitioned by which entity's own inventory the created item
-# actually needs to land in for the ordinary, unchanged dispatcher to resolve the *original*
-# triggering intent correctly (see DM_Core.py's _on_item_interaction_detected -- "give"/
-# "equip"/"unequip"/"use"/"drop" always check the player's own inventory regardless of
-# direction; "trade" is the one intent that checks the *current target's* inventory as its
-# source, since buying something means the seller has to have it, not the buyer). NLP_Core.py's
-# own IMPROVISABLE_INTENTS mirrors the union of all three sets exactly -- kept as separate
-# constants (rather than importing one from the other) since NLP_Core.py must stay independent
-# of DMCore/game state.
-PLAYER_CENTRIC_INTENTS = frozenset({"give", "equip", "unequip", "use", "drop"})
-GROUND_AWARE_INTENTS = frozenset({"examine", "take"})
-TARGET_CENTRIC_INTENTS = frozenset({"trade"})
 
 
 class ImprovisationMixin(DMCoreProtocol):
@@ -35,7 +24,8 @@ class ImprovisationMixin(DMCoreProtocol):
         self.scenario_entities/self.persistent_entities/self.visited_rooms/self.rooms/
         self.scenario/self.removed_entities/self.current_target/self.setting/self.event_bus,
         set up by DMCore.__init__, plus RulesMixin's _current_scene_description/
-        _all_known_instance_names (PersistenceMixin), InventoryMixin's _current_ground_items,
+        _place_new_entity/_all_known_instance_names (PersistenceMixin), InventoryMixin's
+        _current_ground_items,
         CombatMixin's get_equip_slots/get_challenge_rating, SocialMixin's is_hostile,
         MovementMixin's get_band, StatusMixin's apply_condition/dismiss_condition/get_current_hp,
         and DMCore's
@@ -151,32 +141,37 @@ class ImprovisationMixin(DMCoreProtocol):
             "entities": [{"name": name, "description": entity.get("description", "")}],
         })
 
+        # Decides where the newly-created entity physically lands; the actual narration/
+        # mutation for the *original* triggering intent (equip/give/trade/take/...) is left to
+        # the ordinary, unchanged item-interaction pipeline (DM_Core.py's own
+        # _on_item_interaction_detected -- 180 lines of real currency/pricing/container-gating/
+        # transfer logic this deliberately reuses rather than re-implementing narration from a
+        # bespoke placement result) via one dispatch call below, shared by every branch but one.
         if entity.get("subtype") in SCENE_PLACED_SUBTYPES:
             # A container/trap becomes a live, targetable scene participant, not a ground/
             # inventory item -- inserted at the front of scenario_entities so
             # self._get_target_name() ("the first non-party entity in scenario_entities order",
             # what "examine <the target itself>"/"open"/"close" all resolve against) picks it
             # immediately, even if some other non-party entity (ex: a hostile creature already
-            # mid-fight) is also present. Re-dispatching through the ordinary, unchanged
-            # item-interaction pipeline is what makes the very "examine"/"take" that triggered
-            # this resolve exactly like it would against a hand-authored container/trap (ex: a
-            # locked one denies "examine" too -- see CLAUDE.md's "Items and movement as
-            # intents"). Also claims self.current_target (see _claim_current_target_if_free) --
-            # unlike _get_target_name(), a skill check against the new entity's own
-            # [entity.test] (ex: picking its lock) resolves against self.current_target, not
-            # _get_target_name(), so without this a freshly-conjured container/trap could be
-            # examined/opened but never actually tested. band is set explicitly here (unlike a
-            # plain ground/inventory item, which has no band of its own at all) since this one
-            # becomes a real scenario_entities participant -- get_band/get_distance_between
-            # would otherwise silently default a bandless entity to 1 regardless of where the
-            # player actually is, same as _attempt_creature_conjuring already sets below.
-            entity["band"] = self.get_band(self.player_name)
+            # mid-fight) is also present. Also claims self.current_target (see
+            # _claim_current_target_if_free) -- unlike _get_target_name(), a skill check against
+            # the new entity's own [entity.test] (ex: picking its lock) resolves against
+            # self.current_target, not _get_target_name(), so without this a freshly-conjured
+            # container/trap could be examined/opened but never actually tested. band is set
+            # explicitly here (unlike a plain ground/inventory item, which has no band of its
+            # own at all) since this one becomes a real scenario_entities participant --
+            # get_band/get_distance_between would otherwise silently default a bandless entity
+            # to 1 regardless of where the player actually is, same as _attempt_creature_conjuring
+            # already sets. _place_new_entity (DM_Rules.py) re-running entity_id/
+            # self.entities[name] here is harmless -- both already hold these values from just
+            # above -- but its setdefault on active_conditions is what preserves this entity's
+            # own already-authored locked/closed or armed state (AdHoc_Generation.py) rather than
+            # the unconditional overwrite _instance_entities uses for a fresh hand-authored
+            # template.
+            self._place_new_entity(name, entity, self.get_band(self.player_name))
             self.scenario_entities.insert(0, name)
             self._claim_current_target_if_free(name)
-            self._on_item_interaction_detected({"intent": intent, "item_name": name, "input": input_text})
-            return
-
-        if intent in TARGET_CENTRIC_INTENTS:
+        elif intent in TARGET_CENTRIC_INTENTS:
             # "trade" checks the *current target's* own inventory as its source (buying means
             # the seller has to have it) -- the LLM's own "location" choice is meaningless here
             # (there's no "on the ground" or "in the player's pocket" for something a shopkeeper
@@ -184,12 +179,7 @@ class ImprovisationMixin(DMCoreProtocol):
             # own inventory instead, then the ordinary "trade" dispatch (DM_Core.py) charges the
             # entity's own "value" as a price and transfers it exactly like a real one.
             self.entities.setdefault(target_name, {}).setdefault("inventory", []).append(name)
-            self._on_item_interaction_detected({"intent": intent, "item_name": name, "input": input_text})
-            return
-
-        player_inventory = self.entities.setdefault(self.player_name, {}).setdefault("inventory", [])
-
-        if intent in PLAYER_CENTRIC_INTENTS:
+        elif intent in PLAYER_CENTRIC_INTENTS:
             # "give"/"equip"/"unequip"/"use"/"drop" all resolve against the *player's own*
             # inventory regardless of source/destination direction (DM_Inventory.py/DM_Core.py's
             # own _on_item_interaction_detected dispatcher never checks _current_ground_items()
@@ -197,29 +187,29 @@ class ImprovisationMixin(DMCoreProtocol):
             # the LLM's own "location" said "ground" or "inventory". A ground placement here
             # just means "you spot it and immediately act on it" collapses into one beat rather
             # than a separate explicit "take" first.
-            player_inventory.append(name)
-            self._on_item_interaction_detected({"intent": intent, "item_name": name, "input": input_text})
-            return
-
-        # intent in GROUND_AWARE_INTENTS ("examine"/"take") -- the only two intents the
-        # ordinary dispatcher actually checks _current_ground_items() for.
-        if result["location"] == "ground":
+            self.entities.setdefault(self.player_name, {}).setdefault("inventory", []).append(name)
+        elif result["location"] == "ground":
+            # intent in GROUND_AWARE_INTENTS ("examine"/"take") -- the only two intents the
+            # ordinary dispatcher actually checks _current_ground_items() for.
             self._current_ground_items().append(name)
-            self._on_item_interaction_detected({"intent": intent, "item_name": name, "input": input_text})
+        else:
+            # location == "inventory", intent in GROUND_AWARE_INTENTS: conjured directly onto
+            # the player (ex: "check my pockets for a match"). Re-dispatching "examine"/"take"
+            # here would incorrectly check the scene's own default target's inventory instead of
+            # the player's (DM_Core.py's _on_item_interaction_detected routes
+            # source_name = target_name for both), so this publishes a bespoke success response
+            # directly instead of going through the dispatcher -- the one placement outcome that
+            # doesn't share the trailing dispatch call below.
+            self.entities.setdefault(self.player_name, {}).setdefault("inventory", []).append(name)
+            self.event_bus.publish("item_interaction_resolved", {
+                "intent": intent, "item_name": name, "input": input_text, "found": True,
+                "description": entity.get("description", ""),
+                "present_entities": list(self.scenario_entities),
+            })
+            self._publish_party_status()
             return
 
-        # location == "inventory": conjured directly onto the player (ex: "check my pockets for
-        # a match"). Re-dispatching "examine"/"take" here would incorrectly check the scene's
-        # own default target's inventory instead of the player's (DM_Core.py's
-        # _on_item_interaction_detected routes source_name = target_name for both), so this
-        # publishes a bespoke success response directly instead of going through the dispatcher.
-        player_inventory.append(name)
-        self.event_bus.publish("item_interaction_resolved", {
-            "intent": intent, "item_name": name, "input": input_text, "found": True,
-            "description": entity.get("description", ""),
-            "present_entities": list(self.scenario_entities),
-        })
-        self._publish_party_status()
+        self._on_item_interaction_detected({"intent": intent, "item_name": name, "input": input_text})
 
     def remove_entity_from_scene(self, name):
         """!
@@ -278,15 +268,38 @@ class ImprovisationMixin(DMCoreProtocol):
         self.event_bus.publish("log_info", f"Removed '{name}' from the scene.")
         return {"removed": True, "name": name}
 
+    def _reachable_entity_names(self):
+        """!
+        @brief Every entity name the player could plausibly mean by pointing at "something
+            here" -- every present scene entity, every ground item, every known instance's own
+            inventory/equipped item -- the player's own name always excluded. Shared by both
+            _attempt_entity_removal and _attempt_entity_edit, which otherwise ask the same "what
+            exists to act on right now" question with different verbs (remove vs. edit); each
+            still layers its own further narrowing on top (removal's own live-hostile subset,
+            below, has no equivalent on the edit side).
+        @return A fresh set (safe for the caller to mutate/narrow further).
+        """
+        reachable = set(self.scenario_entities)
+        if self.rooms:
+            for room in self.rooms.values():
+                reachable.update(room.get("ground", []))
+        else:
+            reachable.update(self.scenario.get("ground", []))
+        for instance_name in self._all_known_instance_names():
+            entity = self.entities.get(instance_name, {})
+            reachable.update(entity.get("inventory", []))
+            reachable.update(entity.get("equipped", {}).values())
+        reachable.discard(self.player_name)
+        return reachable
+
     def _attempt_entity_removal(self, input_text):
         """!
         @brief Called from DM_Help.py's _on_help_detected when NLP_Core.py's own removal
             keyword gate flagged the player's message to ADaM as a plausible removal request --
             never automatic (see this class's own module docstring for why). Builds the real,
-            current universe of removable names (every present scene entity, every ground item,
-            every known instance's own inventory/equipped item -- the player's own name always
-            excluded, on top of the runtime guard remove_entity_from_scene itself also enforces),
-            plus the live-hostile subset of it (is_hostile + a live-HP check), and asks
+            current universe of removable names (_reachable_entity_names -- on top of the
+            runtime guard remove_entity_from_scene itself also enforces), plus the live-hostile
+            subset of it (is_hostile + a live-HP check), and asks
             decide_entity_removal to pick one, or decline -- see that function's own
             hostile_entities param for why this subset is computed and passed at all: without
             it, a real model complies with "get rid of that wolf, this fight is too hard"
@@ -297,17 +310,7 @@ class ImprovisationMixin(DMCoreProtocol):
                 {"removed": True, "name", "reason"} shape remove_entity_from_scene returns, with
                 the LLM's own stated "reason" folded in.
         """
-        removable = set(self.scenario_entities)
-        if self.rooms:
-            for room in self.rooms.values():
-                removable.update(room.get("ground", []))
-        else:
-            removable.update(self.scenario.get("ground", []))
-        for instance_name in self._all_known_instance_names():
-            entity = self.entities.get(instance_name, {})
-            removable.update(entity.get("inventory", []))
-            removable.update(entity.get("equipped", {}).values())
-        removable.discard(self.player_name)
+        removable = self._reachable_entity_names()
 
         if not removable:
             return {"removed": False}
@@ -362,12 +365,13 @@ class ImprovisationMixin(DMCoreProtocol):
             mid-scene spawn, unlike real NPC generation's own party-pool resolution (see
             DM_NpcGeneration.py's _resolve_npc_target_cr), which isn't needed here since there's
             no entity_template's own target_cr field to resolve against. On success, places the
-            new entity the way _instance_entities (DM_Rules.py) would for a fresh instance
-            (entity_id/band/active_conditions), but mutates self.entities/self.scenario_entities
-            directly rather than calling _instance_entities itself, since that's only ever
-            called at scenario/room load time (see CLAUDE.md's "Ad hoc entity creation and
-            removal" -- the same reasoning generate_ad_hoc_item's own item placement already
-            follows). A hostile creature also claims self.current_target (see
+            new entity via RulesMixin's own _place_new_entity (DM_Rules.py) -- the same
+            entity_id/band/active_conditions primitive _instance_entities itself is built on --
+            then appends directly to self.scenario_entities, since _instance_entities' own
+            occurrence-disambiguation/removed_entities-skip/NPC-generation/notice-roll wrapping
+            around that primitive is only relevant at scenario/room load time (see CLAUDE.md's
+            "Ad hoc entity creation and removal" -- the same reasoning generate_ad_hoc_item's own
+            item placement already follows). A hostile creature also claims self.current_target (see
             _claim_current_target_if_free) -- so the very next player action can fight it
             without first having to explicitly retarget.
         @param input_text The player's own raw message to ADaM.
@@ -384,10 +388,7 @@ class ImprovisationMixin(DMCoreProtocol):
 
         entity = result["entity"]
         name = self._unique_entity_key(entity["name"])
-        entity["entity_id"] = name
-        entity["band"] = self.get_band(self.player_name)
-        entity["active_conditions"] = {}
-        self.entities[name] = entity
+        self._place_new_entity(name, entity, self.get_band(self.player_name))
         self.scenario_entities.append(name)
         self.event_bus.publish("item_catalog_updated", {
             "entities": [{"name": name, "description": entity.get("description", "")}],
@@ -404,25 +405,13 @@ class ImprovisationMixin(DMCoreProtocol):
             gate flagged the player's message to ADaM as a plausible edit request -- never
             automatic (see this class's own module docstring for why: an unrestricted edit
             target is just as risky as an unrestricted removal target). Builds the same
-            editable-name universe _attempt_entity_removal already builds (every present scene
-            entity, every ground item, every known instance's own inventory/equipped item -- the
-            player's own name always excluded) and asks decide_entity_edit to pick one and how
-            to change it, or decline.
+            editable-name universe _attempt_entity_removal builds (_reachable_entity_names) and
+            asks decide_entity_edit to pick one and how to change it, or decline.
         @param input_text The player's own raw message to ADaM.
         @return {"edited": False} on decline/nothing editable/failure/no actual change. On
                 success, {"edited": True, "name", "reason"}.
         """
-        editable = set(self.scenario_entities)
-        if self.rooms:
-            for room in self.rooms.values():
-                editable.update(room.get("ground", []))
-        else:
-            editable.update(self.scenario.get("ground", []))
-        for instance_name in self._all_known_instance_names():
-            entity = self.entities.get(instance_name, {})
-            editable.update(entity.get("inventory", []))
-            editable.update(entity.get("equipped", {}).values())
-        editable.discard(self.player_name)
+        editable = self._reachable_entity_names()
 
         if not editable:
             return {"edited": False}
