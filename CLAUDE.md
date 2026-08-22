@@ -73,7 +73,7 @@ the game" for when and how it's actually constructed.
   re-registers a newly-created/reload-restored ad hoc entity's name/description on
   `item_catalog_updated`, the one event here that isn't input-driven.
 - **`LLM_Core.py`** — posts to Ollama's OpenAI-compatible `/v1/chat/completions` on a
-  background thread, with a rolling 100-message context window. Subscribes to eight narration
+  background thread, with a rolling 100-message context window. Subscribes to nine narration
   triggers (see "Narration").
 - **`GUI_Core.py`** — Tkinter window: history pane + tabbed Party/Notes/Map/Debug panels, plus
   three menus: Character (Create... only), File (Save.../Load...), Scenario (Load... only).
@@ -800,8 +800,9 @@ skills/abilities/equipped/inventory, the current scene's name/description, the p
 roster, and `exits` (the current room's own exits, if a room is active, followed by the current
 location's own `[[location.exit]]` list, resolved to friendly destination names — `[]` if
 neither exists, ex: a location with no rooms and no declared exits of its own). No
-`_publish_party_status()` for the ordinary informational path — except when a removal actually
-went through (see "Ad hoc entity creation and removal"), the one exception on purpose.
+`_publish_party_status()` for the ordinary informational path — except when a removal, creature
+conjuring, or edit actually goes through (see "Ad hoc entity creation and removal"), the three
+exceptions on purpose.
 
 **Deliberately excluded from `context_window`.** Every other narration trigger appends both
 prompt and reply to `LLMCore`'s shared rolling window. ADaM's own `generate_adam_response`/
@@ -889,9 +890,14 @@ placements redispatch through the same unchanged pipeline with no bespoke narrat
 
 **Removal.** `DM_Help.py`'s `_on_help_detected` calls `_attempt_entity_removal` first when
 flagged — builds the real universe of removable names (every scene/ground/inventory entity,
-`player_name` excluded) as an enum constraint for `decide_entity_removal`. A real removal is
-folded into `help_resolved` as `"removed"` and triggers `_publish_party_status()` — the one
-exception to "ADaM never mutates state." `remove_entity_from_scene(name)` strips `name` from
+`player_name` excluded) as an enum constraint for `decide_entity_removal`, plus a narrower
+`hostile_entities` subset (`is_hostile` + a live-HP check) passed alongside it — without this,
+a real model complies with "get rid of that wolf, this fight is too hard" unconditionally,
+turning a free out-of-character request into a dice-free win; `decide_entity_removal`'s own
+prompt is what actually leans on this subset to decline. A real removal is
+folded into `help_resolved` as `"removed"` and triggers `_publish_party_status()` — one of the
+three exceptions to "ADaM never mutates state" (creature conjuring and editing, below, are the
+other two). `remove_entity_from_scene(name)` strips `name` from
 every entity/ground/room list and records it in `self.removed_entities` so it can never respawn
 (`DM_Rules.py`'s `_instance_entities` checks this set). Deliberately does **not**
 `del self.entities[name]` — left orphaned/unreferenced, same precedent as a fully-consumed item,
@@ -912,7 +918,9 @@ wary/neutral/friendly conjured NPC is dialogue-only. Placement mutates
 `self.entities`/`self.scenario_entities` directly (since `_instance_entities` only runs at load
 time) — `entity_id`/`band` (player's current band), `ad_hoc = True`. A hostile creature also
 claims `self.current_target` unless a fight is already engaged, so conjuring mid-combat never
-silently retargets the player or flips the round-vs-action narration choice.
+silently retargets the player or flips the round-vs-action narration choice. Folded into
+`help_resolved` as `"created_creature"` and triggers `_publish_party_status()`, same as removal
+and editing.
 
 **Entity editing.** `_attempt_entity_edit` builds the same editable-name universe as removal and
 asks `decide_entity_edit` to pick one and change it, or decline. Scope is narrow: a full
@@ -1223,5 +1231,14 @@ Not yet started, except where noted:
   unless explicitly told not to. If built, favor a narrow, rate-limited trigger fired only at
   specific, already-instrumented moments (room entry, N turns without incident) with its own
   decline-biased prompt. Not started.
-- A 'dungeon master' persona the LLM can speak directly to the player as.
-- Tools that the LLM may call to directly interact with the scene.
+- A 'dungeon master' persona the LLM can speak directly to the player as — distinct from both
+  the omniscient third-person narrator voice and ADaM's own explicitly out-of-character one.
+- Tools that the LLM may call to directly interact with the scene. **Partially started**: ADaM's
+  own ad hoc generation (see "Ad hoc entity creation and removal") already gives the LLM real
+  `tool_choice="auto"` function-calling access to create items/creatures and remove/edit
+  entities — but only via `LLM_Client.py`'s narrow, single-purpose, DMCore-triggered calls
+  (`generate_ad_hoc_item`/`generate_ad_hoc_creature`/`decide_entity_removal`/
+  `decide_entity_edit`). `LLM_Core.py`'s own narrating GM voice — the one actually speaking to
+  the player on every ordinary turn — never sends a `tools` payload at all and has no scene-
+  mutation ability of its own; this goal is really about giving *that* voice general tool access,
+  not another bespoke gated call.
