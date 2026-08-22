@@ -15,6 +15,25 @@ from DM_Rules import RulesMixin, scenario_file_path
 from DM_Social import SocialMixin
 from DM_Status import StatusMixin
 
+# Multi-instance combat targeting (see DMCore._resolve_named_instance_ambiguity): NLPCore's own
+# map_to_target (NLP_Core.py) picks one specific live instance name by raw text similarity to
+# that instance's own registered name/description phrases -- given two identically-templated
+# creatures ("wolf"/"wolf_2"), it has no way to prefer one over the other just because the
+# player said "the second wolf"/"the other wolf"/"the wounded wolf", since none of those
+# qualifier words are part of any registered phrase. These are deliberately small, literal
+# keyword sets (matching this codebase's own TRAVEL_KEYWORDS/DIALOGUE_KEYWORDS convention in
+# Intent_Classification.py) rather than a general sentiment/adjective system.
+TARGET_ORDINAL_KEYWORDS = {"first": 1, "second": 2, "third": 3, "fourth": 4}
+TARGET_OTHER_KEYWORDS = ("other", "another")
+TARGET_WOUNDED_KEYWORDS = ("wounded", "hurt", "injured")
+TARGET_HEALTHY_KEYWORDS = ("healthy", "unhurt", "uninjured", "unharmed")
+# The same 0.40 hp_per_remain cutoff rules.toml's own "wounded" status tier -- and arena.toml's
+# wolf retreat behavior -- already use elsewhere in this codebase (see CLAUDE.md's "Combat"),
+# reused here rather than inventing a second threshold. A candidate has to actually cross this
+# line before "wounded"/"healthy" is honored -- calling a room full of undamaged creatures
+# "wounded" shouldn't silently redirect to whichever one merely has the least HP among equals.
+TARGET_WOUNDED_HP_CUTOFF = 0.40
+
 class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixin, RulesMixin, PersistenceMixin, CharacterCreationMixin, NpcGenerationMixin, DialogueMixin, HelpMixin, ImprovisationMixin, EncounterMixin):
     """!
     @brief Main class handling the core mechanics of the RPG system. The implementation is
@@ -245,7 +264,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
                 player_actions.append(item_result)
                 continue
 
-            self._apply_target_redirect(explicit_target)
+            self._apply_target_redirect(explicit_target, input_text)
             target_name = self.current_target
             engaged_combat_target = True
 
@@ -379,14 +398,20 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
                 return candidate_skill
         return None
 
-    def _apply_target_redirect(self, explicit_target):
+    def _apply_target_redirect(self, explicit_target, input_text=""):
         """!
         @brief Honors an explicit, NLP-matched target as a combat redirect -- only if it
             names a live, hostile, in-scene entity. Naming a confidently-matched but
             non-hostile entity (ex: an ally) is silently ignored rather than making it the
             target; leaves self.current_target untouched if explicit_target doesn't qualify.
+            Resolves multi-instance ambiguity (see _resolve_named_instance_ambiguity) first,
+            so a disambiguating word in input_text can redirect explicit_target to a same-
+            family sibling instance before the hostile/alive checks below ever run.
         @param explicit_target NLPCore's best-guess target name (map_to_target), or None.
+        @param input_text The player's raw turn input, forwarded to
+            _resolve_named_instance_ambiguity.
         """
+        explicit_target = self._resolve_named_instance_ambiguity(explicit_target, input_text)
         if (
             explicit_target
             and explicit_target in self.scenario_entities
@@ -394,6 +419,93 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             and self.get_current_hp(explicit_target) > 0
         ):
             self.current_target = explicit_target
+
+    def _instance_family(self, entity_name):
+        """!
+        @brief Strips DM_Rules.py's own _unique_entity_key "_<N>" disambiguating suffix, if
+            present, to recover the shared base name multiple live instances of the same
+            template were instanced under (ex: "wolf_2" -> "wolf"). A name with no numeric
+            suffix -- including one that was never actually duplicated -- returns unchanged.
+        @param entity_name An entity's own self.entities key.
+        @return The base name this instance's family is keyed by.
+        """
+        match = re.match(r"^(.*)_(\d+)$", entity_name)
+        return match.group(1) if match else entity_name
+
+    def _live_instances_sharing_family(self, entity_name):
+        """!
+        @brief Every living, in-scene entity sharing entity_name's own instance family (see
+            _instance_family), in stable creation order -- the bare base name first (if
+            still alive), then "_2", "_3", ... by DM_Rules.py's own _unique_entity_key
+            numbering. A name with no live duplicates returns a single-element list.
+        @param entity_name Any live entity name -- the base name or a "_N" instance alike.
+        @return The ordered list of same-family living entity names.
+        """
+        family = self._instance_family(entity_name)
+
+        def _suffix(name):
+            match = re.match(r"^.*_(\d+)$", name)
+            return int(match.group(1)) if match else 1
+
+        candidates = [
+            name for name in self.scenario_entities
+            if self._instance_family(name) == family and self.get_current_hp(name) > 0
+        ]
+        candidates.sort(key=_suffix)
+        return candidates
+
+    def _resolve_named_instance_ambiguity(self, explicit_target, input_text):
+        """!
+        @brief Re-checks input_text for a disambiguating word whenever explicit_target has
+            one or more living same-family siblings still in the scene (ex: a second
+            "wolf") -- map_to_target's own embedding match has no way to prefer a sibling
+            just because the player said "the second wolf"/"the other wolf"/"the wounded
+            wolf" instead of the plain species name, since none of those qualifier words
+            are part of any registered target phrase (see NLP_Core.py's own on_rules_loaded).
+            A single live instance (the overwhelmingly common case) short-circuits
+            immediately with no further work. Checked in order -- ordinal, then other/
+            another, then wounded, then healthy -- and falls back to explicit_target
+            unchanged if input_text carries none of them, or if a wounded/healthy claim
+            doesn't actually match any candidate's real HP (see TARGET_WOUNDED_HP_CUTOFF).
+        @param explicit_target NLPCore's best-guess target name, or None.
+        @param input_text The player's raw turn input.
+        @return explicit_target, or a same-family sibling instance name input_text actually
+            pointed at.
+        """
+        if not explicit_target:
+            return explicit_target
+        candidates = self._live_instances_sharing_family(explicit_target)
+        if len(candidates) <= 1:
+            return explicit_target
+
+        text = input_text.lower()
+
+        for word, position in TARGET_ORDINAL_KEYWORDS.items():
+            if position <= len(candidates) and re.search(rf"\b{word}\b", text):
+                return candidates[position - 1]
+
+        if any(re.search(rf"\b{word}\b", text) for word in TARGET_OTHER_KEYWORDS):
+            others = [name for name in candidates if name != self.current_target]
+            if others:
+                return others[0]
+
+        if any(re.search(rf"\b{word}\b", text) for word in TARGET_WOUNDED_KEYWORDS):
+            wounded = [
+                name for name in candidates
+                if (self.get_comparable_value(name, "hp_per_remain") or 1.0) < TARGET_WOUNDED_HP_CUTOFF
+            ]
+            if wounded:
+                return min(wounded, key=lambda name: self.get_comparable_value(name, "hp_per_remain"))
+
+        if any(re.search(rf"\b{word}\b", text) for word in TARGET_HEALTHY_KEYWORDS):
+            healthy = [
+                name for name in candidates
+                if (self.get_comparable_value(name, "hp_per_remain") or 0.0) >= TARGET_WOUNDED_HP_CUTOFF
+            ]
+            if healthy:
+                return max(healthy, key=lambda name: self.get_comparable_value(name, "hp_per_remain"))
+
+        return explicit_target
 
     def _resolve_roll(self, skill_name, named_ability, target_name, dice_penalty=0):
         """!

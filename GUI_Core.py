@@ -198,13 +198,12 @@ class GUICore:
             way display_game_saved/display_game_loaded/display_game_load_failed already are --
             for out-of-band status that isn't narration but the player still needs to see (ex:
             Ollama_Launcher.py's own download-progress/startup messages, relayed by LLDM.py's
-            main() before mainloop() is running yet -- see append_to_history's own root.update()
-            call below, which is what makes that visible without a running event loop, the same
-            manual-pump pattern get_user_input already uses).
+            main() from a background thread while mainloop() is already running -- the running
+            mainloop pumps this on its own, so no manual root.update() is needed here, unlike
+            when this call used to happen before mainloop() had even started.
         @param message Plain text, no trailing newline needed.
         """
         self.append_to_history(f"[System] {message}\n")
-        self.root.update()
 
     def display_llm_debug(self, data):
         """!

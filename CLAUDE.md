@@ -169,6 +169,17 @@ round, not sequentially. `current_target` only advances (to the next living host
 the first living non-player entity if none is hostile) once, at the end of the round, if it
 died.
 
+**Naming one of several identically-named live instances.** `map_to_target` (`NLP_Core.py`)
+matches by raw text similarity, so it always prefers the unsuffixed instance (`"wolf"` over
+`"wolf_2"`, `DM_Rules.py`'s own `_unique_entity_key` suffixing) regardless of which one the
+player meant — same-template instances share an identical description, and a player never
+literally types the suffixed key. `_apply_target_redirect`'s own
+`_resolve_named_instance_ambiguity` (`DM_Core.py`) corrects for this when the matched name has
+living same-family siblings in the scene: it re-checks the turn's raw input for an ordinal
+(`"the second wolf"`), `"other"`/`"another"`, or a wounded/healthy word (via `hp_per_remain`,
+gated at the same `0.40` cutoff `rules.toml`'s `"wounded"` tier uses), falling back to the naive
+match otherwise. A name with no live duplicates short-circuits immediately.
+
 A behavior entry's `action` is either an ability name or one of two reserved movement words,
 `"advance"`/`"retreat"` (`MOVEMENT_ACTIONS`, `DM_Combat.py`), routed to `move_toward_or_away`
 instead of an ability lookup. An explicit `"retreat"` entry is how a creature values its own
@@ -680,9 +691,8 @@ resolves — joins the same shared per-turn clause list a skill/ability action d
   - `_resolve_unequip_intent` only clears the slot mapping — denied `"not_equipped"` if it isn't
     equipped at all.
   - `_resolve_drop_intent` unequips if needed, then moves the item onto the current room/scene's
-    own ground (`_current_ground_items`). **Known gap:** unlike `scenario_entities`, nothing in
-    `"ground"` is saved/restored yet, so a drop since the last save doesn't survive a save/load
-    round trip.
+    own ground (`_current_ground_items`) — this round-trips through save/load like everything
+    else (see "Saving and loading").
   - A later `"examine"`/`"take"` aimed at a ground item is resolved by `_resolve_ground_intent`
     before falling through to the ordinary target-based path below.
 - `"examine"`/`"take"` against an item already sitting in the player's own inventory (ex: an ad
@@ -1042,10 +1052,11 @@ shaped); a chat completion against a model name that hasn't been pulled 404s rat
 falling back to whatever's loaded.
 
 `Ollama_Launcher.py`'s `ensure_ollama_running` is a best-effort local server bootstrap, called
-once from `LLDM.py`'s own `main()` right after `GUICore` is constructed (before `NLPCore`/
-`LLMCore`/`DMCore`) — specifically so its window already exists to report progress into (see
-"Booting the game"): a fast no-op if something's already listening at `127.0.0.1:11434`.
-Otherwise it resolves an `ollama.exe` to run —
+once from `LLDM.py`'s own `main()` on a background daemon thread, started right after `GUICore`
+is constructed (before `NLPCore`/`LLMCore`/`DMCore`) — specifically so its window already exists
+for the thread's own log callback to report progress into (see "Booting the game"): a fast no-op
+if something's already listening at `127.0.0.1:11434`. Otherwise it resolves an `ollama.exe` to
+run —
 preferring a real system install (`shutil.which("ollama")`) over a vendored one, so installing
 Ollama for real later transparently takes over from a downloaded copy — and if neither exists
 at all, downloads Ollama's own official portable Windows build straight from its GitHub
@@ -1061,14 +1072,21 @@ Once an executable is resolved, `ensure_ollama_running` spawns `ollama serve` an
 immediately — deliberately not blocking on the new *process* actually becoming ready, since
 `NLPCore`'s own `sentence-transformers` model load (the very next boot step, ~15-20s) already
 gives a freshly-spawned Ollama plenty of time to come up in the background. The one-time
-*install* step, by contrast, does block main() — there's no "just try again later" fallback for
-a binary that doesn't exist on disk yet, and this only ever runs once per machine (every later
-launch finds the already-extracted executable first). Every failure mode (no network, a failed
-checksum, an unwritable `vendor/`, the process failing to launch) just logs and lets the app
-continue exactly as it already would with no Ollama available at all — the same best-effort
-posture every other LLM integration point in this codebase already follows. `main()` registers
-an `atexit` cleanup that terminates the spawned process, but only the one this call itself
-started — a pre-existing Ollama instance (started by hand, or by another app) is never touched.
+*install* step, by contrast, blocks whatever called `ensure_ollama_running` — there's no "just
+try again later" fallback for a binary that doesn't exist on disk yet, and this only ever runs
+once per machine (every later launch finds the already-extracted executable first). Because a
+fresh machine has to download the ~1.5GB Ollama binary plus, by default, a ~9.6GB model pull
+(`gemma4`'s own `:latest`/E4B tag) before this call would otherwise return, `main()` runs the
+entire `ensure_ollama_running` call on a background daemon thread rather than blocking its own
+startup on it — see "Booting the game" for why nothing in the app actually needs it to have
+finished before a game can start. Every failure mode (no network, a failed checksum, an
+unwritable `vendor/`, the process failing to launch) just logs and lets the app continue exactly
+as it already would with no Ollama available at all — the same best-effort posture every other
+LLM integration point in this codebase already follows. `main()` registers an `atexit` cleanup
+that terminates the spawned process, but only the one this call itself started (checked via a
+`nonlocal` variable the background thread assigns once `ensure_ollama_running` returns — `None`
+until then, so a shutdown racing the bootstrap simply has nothing yet to clean up) — a
+pre-existing Ollama instance (started by hand, or by another app) is never touched.
 
 A running server alone doesn't mean narration will work — a chat completion against a model
 name that hasn't been pulled 404s (see this section's own opening paragraph), so
@@ -1093,14 +1111,22 @@ two ways: `event_bus.publish("log_info", ...)` (`Logger.py`'s ordinary console m
 `GUICore.display_system_status` (a `"[System] ..."` line in the History pane, the same prefix
 convention `display_game_saved`/`display_game_loaded`/`display_game_load_failed` already use).
 The latter is why `GUICore` is constructed first among the three event-subscribing cores in
-`main()` (ahead of `NLPCore`/`LLMCore`) rather than last — its window has to already exist for
-the (possibly multi-minute, first-run-only) download to have somewhere to report into.
-`display_system_status` calls `self.root.update()` after every line so progress is actually
-visible before `gui_core.start()`'s own `mainloop()` ever runs — the same manual event-loop-pump
-pattern `get_user_input` already uses elsewhere in this file. This construction reorder is safe
-only because none of `GUICore`'s own subscriptions (`llm_response_ready`, `rules_loaded`, ...)
-can fire this early regardless of order — nothing publishes them until `DMCore` exists, and
-`DMCore` isn't constructed until well after this point (see "Booting the game").
+`main()` (ahead of `NLPCore`/`LLMCore`) rather than last — the background bootstrap thread's own
+closure over `gui_core` needs it to already exist the moment the thread starts, and starting the
+thread this early is what lets the window reach `mainloop()` (see `gui_core.start()`) without
+waiting on `NLPCore`'s own ~15-20s model load either. `display_system_status` no longer needs to
+manually pump the Tk event loop the way it used to when this call was still made synchronously
+before `mainloop()` ever ran — the bootstrap thread now reports progress *while* `mainloop()` is
+already running, so the running loop picks up each history-pane update on its own, exactly the
+same way `LLM_Core.py`'s own background narration fetches already touch `GUICore` from a foreign
+thread. This is safe for the same reason it always was: none of `GUICore`'s own subscriptions
+(`llm_response_ready`, `rules_loaded`, ...) can fire this early regardless of thread timing —
+nothing publishes them until `DMCore` exists, and `DMCore` isn't constructed until well after
+this point (see "Booting the game"). One consequence worth naming: the player can now open
+Character → Create... and start a scenario while the Ollama bootstrap is still mid-download —
+narration during that window degrades to "Could not connect to the local LLM"
+(`LLM_Core.py`'s own existing best-effort path) until the bootstrap catches up, rather than the
+window being unusable until it finishes.
 
 ## RAG / sourcebook grounding
 
@@ -1173,12 +1199,11 @@ subset only.
 ## Known gaps
 
 - `Intent_Classification.py` — a keyword-driven skill match can still dominate an unrelated
-  whole-sentence embedding match (ex: "identify the dagger" resolves to the wrong skill); no
-  multi-instance disambiguation (ex: "the wounded wolf" vs. "the other wolf"). One instance
-  confirmed live by `test_unit.py`'s own keyword-collision invariant test: `DIALOGUE_KEYWORDS`'
-  `"ask "` is a substring of a real skill's own `"mask"` keyword, so a sentence using "mask" as
-  a whole word could still misfire as dialogue detection — not fixed, since changing keyword-
-  matching behavior was out of scope for the refactor that found it.
+  whole-sentence embedding match (ex: "identify the dagger" resolves to the wrong skill). One
+  instance confirmed live by `test_unit.py`'s own keyword-collision invariant test:
+  `DIALOGUE_KEYWORDS`' `"ask "` is a substring of a real skill's own `"mask"` keyword, so a
+  sentence using "mask" as a whole word could still misfire as dialogue detection — not fixed,
+  since changing keyword-matching behavior was out of scope for the refactor that found it.
 - `DM_Rules.py`'s `_instance_entities` disambiguates duplicate names (`"wolf"`/`"wolf_2"`) via a
   counter scoped to one call's own `entity_entries` list, not against the live `self.entities`
   universe — deliberately, since it has to stay idempotent across repeated `load_scenario()`/

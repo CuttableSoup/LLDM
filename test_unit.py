@@ -1254,6 +1254,49 @@ class TestScenarioLoading(DMTestCase):
         self.assertEqual(self.dm_core.current_target, "wolf")
 
 
+class TestMultiInstanceTargeting(DMTestCase):
+    """!
+    @brief DMCore._resolve_named_instance_ambiguity, exercised through _apply_target_redirect
+        -- arena's own "wolf"/"wolf_2" (both live, both max_hp 16) are the fixture. Every
+        clause here passes "wolf" as NLPCore's own naive target guess (map_to_target always
+        prefers the plain species name over a literal "wolf_2" string -- see DM_Core.py's own
+        module note) alongside varied input phrasing, the same shape map_to_target's real
+        output would take.
+    """
+
+    def test_no_qualifier_leaves_the_naive_guess_unchanged(self):
+        self.dm_core._apply_target_redirect("wolf", "I attack the wolf")
+        self.assertEqual(self.dm_core.current_target, "wolf")
+
+    def test_ordinal_second_redirects_to_the_second_instance(self):
+        self.dm_core._apply_target_redirect("wolf", "I attack the second wolf")
+        self.assertEqual(self.dm_core.current_target, "wolf_2")
+
+    def test_other_redirects_away_from_the_already_current_instance(self):
+        self.assertEqual(self.dm_core.current_target, "wolf")  # the default, before redirect
+        self.dm_core._apply_target_redirect("wolf", "I attack the other wolf")
+        self.assertEqual(self.dm_core.current_target, "wolf_2")
+
+    def test_wounded_redirects_to_the_instance_actually_below_the_cutoff(self):
+        # wolf max_hp 16; 11 damage -> 5/16 = 0.3125, under the 0.40 "wounded" cutoff. wolf_2
+        # stays undamaged, so only wolf itself qualifies as "the wounded wolf" here.
+        self.dm_core.apply_damage("wolf", 11)
+        self.dm_core._apply_target_redirect("wolf", "I attack the wounded wolf")
+        self.assertEqual(self.dm_core.current_target, "wolf")
+
+    def test_healthy_redirects_away_from_the_wounded_instance(self):
+        self.dm_core.apply_damage("wolf", 11)  # wolf: 5/16, under the cutoff; wolf_2: full
+        self.dm_core._apply_target_redirect("wolf", "I attack the healthy wolf")
+        self.assertEqual(self.dm_core.current_target, "wolf_2")
+
+    def test_single_instance_short_circuits_with_no_redirect(self):
+        # thane has no same-family sibling at all -- the qualifier word is simply irrelevant.
+        self.assertEqual(
+            self.dm_core._resolve_named_instance_ambiguity("thane", "talk to the other thane"),
+            "thane",
+        )
+
+
 class TestCharacterCreation(unittest.TestCase):
     """!
     @brief Character_Creation.py's pure race/point-buy logic -- no DMCore, no GUI, just the
