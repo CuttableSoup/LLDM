@@ -412,3 +412,114 @@ class InventoryMixin(DMCoreProtocol):
             return
         self.apply_condition(target_name, "closed", duration="permanent", dismiss="")
         resolved(True, container=target_name)
+
+    def _resolve_transfer_intent(self, intent, item_name, target_name, resolved):
+        """!
+        @brief Handles "give"/"trade"/"examine"/"take" against a named item -- "take"/"trade"
+            move an item from the target to the player, "give" moves one from the player to the
+            target (same transfer_item/transfer_currency primitives, just with source/
+            destination swapped), "examine" never moves anything. Called only once the locked
+            gate, the ground-item short-circuit, and open/close have already had their shot (see
+            DMCore._on_item_interaction_detected) -- item_name here always names something
+            reachable only via a target (already in inventory, or inside/behind target_name).
+
+            "examine"/"take" against an item already sitting in the player's own inventory (ex:
+            DM_Improvisation.py placing an ad hoc item straight into inventory) resolve directly
+            against the player -- recomputed here as already_owned, the same check the dispatcher
+            makes for its own locked-gate purposes, so this resolver stays callable on its own
+            with nothing but item_name/target_name and live entity state. "trade" additionally
+            charges the item's TOML `value` as a price (denied outright if the player can't
+            afford it, rather than a partial payment); trading for currency itself, or aiming
+            "take"/"give"/"trade" at the target's own name rather than something inside it, is
+            always "not_takeable" regardless of amount.
+        @param intent "give", "trade", "examine", or "take".
+        @param item_name NLPCore's best-guess item match (map_to_item), or the literal sentinel
+            "currency".
+        @param target_name The current scene target's name, or None if there isn't one.
+        @param resolved The item_interaction_resolved publisher closure from
+            DMCore._on_item_interaction_detected.
+        """
+        already_owned = intent in ("examine", "take") and item_name in self.entities.get(self.player_name, {}).get("inventory", [])
+
+        if not already_owned and item_name == target_name:
+            # Interacting with the container/creature itself, not something inside it -- there's
+            # nothing to "take"/"give"/"trade" about the target as a whole.
+            if intent == "examine":
+                description = self.describe_character(target_name, toward_name=self.player_name) or ""
+                resolved(True, description=description)
+            else:
+                resolved(False, reason="not_takeable")
+            return
+
+        if not already_owned and target_name and self.is_closed(target_name):
+            # A closed (but unlocked) container can still be examined/opened from the outside
+            # (handled by _resolve_open_close_intent) -- only reaching its *contents* is gated
+            # here.
+            resolved(False, reason="closed", container=target_name)
+            return
+
+        if intent == "give":
+            if not target_name:
+                resolved(False, reason="no_recipient")
+                return
+            source_name, destination_name = self.player_name, target_name
+        elif already_owned:
+            # Already in the player's own inventory (ex: an ad hoc item conjured straight into
+            # inventory, DM_Improvisation.py) -- nothing to actually transfer, so source and
+            # destination are the same rather than falling back to whatever the scene target
+            # happens to be. Deliberately excludes "trade": buying an already-owned item is
+            # nonsensical, and trade's own price-payment logic pays target_name directly,
+            # independent of source_name/destination_name -- including it here would silently
+            # charge the player currency against an unrelated scene target.
+            source_name = destination_name = self.player_name
+        else:
+            source_name, destination_name = target_name, self.player_name
+
+        if item_name == "currency":
+            if intent == "trade":
+                # Trading for currency itself is meaningless -- nothing to buy or sell here.
+                # Checked before availability, since this is wrong regardless of the amount.
+                resolved(False, reason="not_takeable")
+                return
+            # Currency is a plain "currency" integer field, not an inventory item -- handled
+            # separately from transfer_item/source_inventory below.
+            available = self.entities.get(source_name, {}).get("currency", 0) if source_name else 0
+            if available <= 0:
+                resolved(False, reason="not_present")
+                return
+            if intent == "examine":
+                resolved(True, description=f"{available} currency", container=target_name)
+            else:
+                moved = self.transfer_currency(source_name, destination_name)
+                resolved(True, container=target_name, amount=moved)
+            return
+
+        source_inventory = self.entities.get(source_name, {}).get("inventory", []) if source_name else []
+        if item_name not in source_inventory:
+            resolved(False, reason="not_present")
+            return
+
+        if intent == "examine":
+            description = self.entities.get(item_name, {}).get("description", "")
+            # A plain look never surfaces a hidden property (ex: the cursed dagger's curse) --
+            # only once is_identified is true (a passed [entity.test], ex: an arcane check)
+            # does examining it start including what that check actually revealed.
+            revealed = list(self.entities.get(item_name, {}).get("tags", [])) if self.is_identified(item_name) else []
+            # No real container involved when source_name/destination_name are both the player
+            # (the "already in your own inventory" branch above) -- narration shouldn't claim
+            # the item came from target_name when nothing was actually taken from it.
+            container = target_name if source_name != destination_name else None
+            resolved(True, description=description, container=container, revealed=revealed)
+        elif intent == "trade":
+            price = self.entities.get(item_name, {}).get("value", 0)
+            buyer_currency = self.entities.get(self.player_name, {}).get("currency", 0)
+            if buyer_currency < price:
+                resolved(False, reason="cant_afford", price=price)
+                return
+            self.transfer_currency(self.player_name, target_name, price)
+            self.transfer_item(source_name, destination_name, item_name)
+            resolved(True, container=target_name, price=price)
+        else:
+            self.transfer_item(source_name, destination_name, item_name)
+            container = target_name if source_name != destination_name else None
+            resolved(True, container=container)

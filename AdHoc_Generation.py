@@ -267,6 +267,45 @@ def _extract_tool_call(response):
     return tool_call["function"]["name"], arguments
 
 
+def _call_tool_or_decline(messages, tools, accepted_function_names, call_chat_completion, api_url, timeout):
+    """!
+    @brief Shared LLM-calling boilerplate for every function below -- calls
+        call_chat_completion, extracts the tool call, and resolves whether the model picked one
+        of accepted_function_names or effectively declined. Collapses the one block that used to
+        be byte-for-byte duplicated four times (generate_ad_hoc_item, decide_entity_removal,
+        generate_ad_hoc_creature, decide_entity_edit): each caller below keeps only its own
+        message-building and success-side result-shaping. tool_choice is always "auto" -- every
+        call site already used this same fixed value, so it's baked in here rather than threaded
+        through as a parameter with only one real value in use anywhere.
+    @param messages The full [system, user] messages list -- caller-built, since content differs
+        per function.
+    @param tools The "tools" schema list (always ends with a shared _decline_tool_schema entry).
+    @param accepted_function_names The set of function names this caller treats as success (ex:
+        {"create_item", "describe_scenery"} for generate_ad_hoc_item's own two-outcome case,
+        {"remove_entity"} for decide_entity_removal's single-outcome case).
+    @param call_chat_completion The already-resolved callable -- the caller resolves
+        call_chat_completion or _real_call_chat_completion itself, at call time, before reaching
+        here, preserving the existing patch("AdHoc_Generation._real_call_chat_completion", ...)
+        seam.
+    @param api_url/timeout Forwarded to call_chat_completion.
+    @return (function_name, arguments) when function_name is in accepted_function_names.
+            (None, reason) otherwise -- reason is "unavailable" if call_chat_completion or
+            _extract_tool_call raised, else arguments.get("reason", "declined") (guarded for a
+            non-dict arguments) for an explicit decline or any unrecognized function name.
+    """
+    try:
+        response = call_chat_completion(api_url, messages, tools=tools, tool_choice="auto", timeout=timeout)
+        function_name, arguments = _extract_tool_call(response)
+    except Exception:
+        return None, "unavailable"
+
+    if function_name not in accepted_function_names:
+        reason = arguments.get("reason", "declined") if isinstance(arguments, dict) else "declined"
+        return None, reason
+
+    return function_name, arguments
+
+
 def _resolve_test_skill(requested_skill, valid_skill_names, fallback="finesse"):
     """!
     @brief Picks the skill a conjured container/trap's own [entity.test] should gate on --
@@ -339,24 +378,19 @@ def generate_ad_hoc_item(
         {"role": "user", "content": prompt},
     ]
 
-    try:
-        response = call_chat_completion(
-            api_url, messages, tools=_build_item_tool_schema(valid_equip_slots, valid_skill_names),
-            tool_choice="auto", timeout=timeout,
-        )
-        function_name, arguments = _extract_tool_call(response)
-    except Exception:
-        return {"created": False, "reason": "unavailable"}
+    function_name, payload = _call_tool_or_decline(
+        messages, _build_item_tool_schema(valid_equip_slots, valid_skill_names),
+        {"create_item", "describe_scenery"}, call_chat_completion, api_url, timeout,
+    )
+    if function_name is None:
+        return {"created": False, "reason": payload}
+    arguments = payload
 
     if function_name == "describe_scenery":
         description = arguments.get("description") if isinstance(arguments, dict) else None
         if not description:
             return {"created": False, "reason": "incomplete"}
         return {"created": False, "scenery": True, "description": description}
-
-    if function_name != "create_item":
-        reason = arguments.get("reason", "declined") if isinstance(arguments, dict) else "declined"
-        return {"created": False, "reason": reason}
 
     name = arguments.get("name")
     description = arguments.get("description")
@@ -509,18 +543,13 @@ def decide_entity_removal(
         {"role": "user", "content": prompt},
     ]
 
-    try:
-        response = call_chat_completion(
-            api_url, messages, tools=_build_removal_tool_schema(removable_entities),
-            tool_choice="auto", timeout=timeout,
-        )
-        function_name, arguments = _extract_tool_call(response)
-    except Exception:
-        return {"removed": False, "reason": "unavailable"}
-
-    if function_name != "remove_entity":
-        reason = arguments.get("reason", "declined") if isinstance(arguments, dict) else "declined"
-        return {"removed": False, "reason": reason}
+    function_name, payload = _call_tool_or_decline(
+        messages, _build_removal_tool_schema(removable_entities), {"remove_entity"},
+        call_chat_completion, api_url, timeout,
+    )
+    if function_name is None:
+        return {"removed": False, "reason": payload}
+    arguments = payload
 
     name = arguments.get("name")
     if name not in removable_entities:
@@ -622,18 +651,13 @@ def generate_ad_hoc_creature(
         {"role": "user", "content": prompt},
     ]
 
-    try:
-        response = call_chat_completion(
-            api_url, messages, tools=_build_creature_tool_schema(npc_keywords),
-            tool_choice="auto", timeout=timeout,
-        )
-        function_name, arguments = _extract_tool_call(response)
-    except Exception:
-        return {"created": False, "reason": "unavailable"}
-
-    if function_name != "create_creature":
-        reason = arguments.get("reason", "declined") if isinstance(arguments, dict) else "declined"
-        return {"created": False, "reason": reason}
+    function_name, payload = _call_tool_or_decline(
+        messages, _build_creature_tool_schema(npc_keywords), {"create_creature"},
+        call_chat_completion, api_url, timeout,
+    )
+    if function_name is None:
+        return {"created": False, "reason": payload}
+    arguments = payload
 
     name = arguments.get("name")
     description = arguments.get("description")
@@ -781,18 +805,13 @@ def decide_entity_edit(
         {"role": "user", "content": prompt},
     ]
 
-    try:
-        response = call_chat_completion(
-            api_url, messages, tools=_build_edit_tool_schema(editable_entities),
-            tool_choice="auto", timeout=timeout,
-        )
-        function_name, arguments = _extract_tool_call(response)
-    except Exception:
-        return {"edited": False, "reason": "unavailable"}
-
-    if function_name != "edit_entity":
-        reason = arguments.get("reason", "declined") if isinstance(arguments, dict) else "declined"
-        return {"edited": False, "reason": reason}
+    function_name, payload = _call_tool_or_decline(
+        messages, _build_edit_tool_schema(editable_entities), {"edit_entity"},
+        call_chat_completion, api_url, timeout,
+    )
+    if function_name is None:
+        return {"edited": False, "reason": payload}
+    arguments = payload
 
     name = arguments.get("name")
     if name not in editable_entities:

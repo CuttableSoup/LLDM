@@ -2879,6 +2879,46 @@ class TestItemInteraction(DMTestCase):
         self.assertEqual(result["description"], "A bit of pocket lint.")
         self.assertIn("cursed dagger", self.dm_core.entities["chest"]["inventory"])  # untouched
 
+    def test_taking_the_target_itself_is_not_takeable(self):
+        self._unlock_the_chest()
+        self._open_the_chest()
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "take", "item_name": "chest", "input": "I take the chest",
+        })
+
+        result = self.resolved[-1]
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "not_takeable")
+
+    def test_examine_currency_reports_amount_without_moving_it(self):
+        self._unlock_the_chest()
+        self._open_the_chest()
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "examine", "item_name": "currency", "input": "I check the chest for coins",
+        })
+
+        result = self.resolved[-1]
+        self.assertTrue(result["found"])
+        self.assertEqual(result["description"], "20 currency")
+        self.assertEqual(self.dm_core.entities["chest"]["currency"], 20)
+
+    def test_taking_currency_moves_all_of_it(self):
+        self._unlock_the_chest()
+        self._open_the_chest()
+        starting_currency = self.dm_core.entities["gladstone"]["currency"]
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "take", "item_name": "currency", "input": "I take the coins",
+        })
+
+        result = self.resolved[-1]
+        self.assertTrue(result["found"])
+        self.assertEqual(result["amount"], 20)
+        self.assertEqual(self.dm_core.entities["chest"]["currency"], 0)
+        self.assertEqual(self.dm_core.entities["gladstone"]["currency"], starting_currency + 20)
+
 
 class TestItemTargetedSkillCheck(DMTestCase):
     scenario_name = "dungeon"
@@ -2982,6 +3022,36 @@ class TestGiveAndTrade(DMTestCase):
         self.assertEqual(self.dm_core.entities["chest"]["currency"], 25)
         self.assertIn("cursed dagger", self.dm_core.entities["gladstone"]["inventory"])
         self.assertNotIn("cursed dagger", self.dm_core.entities["chest"]["inventory"])
+
+    def test_give_declines_with_no_recipient(self):
+        self.dm_core.scenario = {"entities": [{"name": "gladstone", "band": 1}]}
+        self.dm_core.load_scenario()
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "give", "item_name": "health potion", "input": "I give away a health potion",
+        })
+
+        result = self.resolved[-1]
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "no_recipient")
+        self.assertIn("health potion", self.dm_core.entities["gladstone"]["inventory"])
+
+    def test_trade_declines_when_player_cant_afford_it(self):
+        self.dm_core.scenario = {"entities": [{"name": "gladstone", "band": 1}, {"name": "chest", "band": 1}]}
+        self.dm_core.load_scenario()
+        self.dm_core.dismiss_condition("chest", "locked")
+        self.dm_core.dismiss_condition("chest", "closed")
+        self.dm_core.entities["gladstone"]["currency"] = 0
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "trade", "item_name": "cursed dagger", "input": "I buy the cursed dagger",
+        })
+
+        result = self.resolved[-1]
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "cant_afford")
+        self.assertEqual(result["price"], 5)
+        self.assertNotIn("cursed dagger", self.dm_core.entities["gladstone"]["inventory"])
 
 
 class TestUseItem(DMTestCase):
