@@ -4,6 +4,7 @@ import re
 from DM_CharacterCreation import CharacterCreationMixin
 from DM_Combat import CombatMixin
 from DM_Dialogue import DialogueMixin
+from DM_Encounters import EncounterMixin
 from DM_Help import HelpMixin
 from DM_Improvisation import ImprovisationMixin
 from DM_Inventory import InventoryMixin
@@ -14,7 +15,7 @@ from DM_Rules import RulesMixin, scenario_file_path
 from DM_Social import SocialMixin
 from DM_Status import StatusMixin
 
-class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixin, RulesMixin, PersistenceMixin, CharacterCreationMixin, NpcGenerationMixin, DialogueMixin, HelpMixin, ImprovisationMixin):
+class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixin, RulesMixin, PersistenceMixin, CharacterCreationMixin, NpcGenerationMixin, DialogueMixin, HelpMixin, ImprovisationMixin, EncounterMixin):
     """!
     @brief Main class handling the core mechanics of the RPG system. The implementation is
         composed from domain mixins in sibling files -- DM_Rules.py (rules/scenario
@@ -22,16 +23,18 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         status/condition system and entity tests), DM_Inventory.py (currency/item
         transfer, plus the equip/drop/use/container item-interaction intents), DM_Social.py
         (attitudes and character description), DM_Movement.py (distance tracking,
-        advance/retreat, range-based difficulty, plus the room-transition/formation
-        item-interaction intents), DM_Persistence.py (save/load), DM_CharacterCreation.py
+        advance/retreat, range-based difficulty, plus the room-transition/location-travel/
+        formation item-interaction intents), DM_Persistence.py (save/load), DM_CharacterCreation.py
         (baking a finished character-creation result -- race + point-buy skill allocation,
         see Character_Creation.py's own module docstring -- onto the player entity),
         DM_NpcGeneration.py (turning a generate=true template into a real stat block at
         instancing time, see NPC_Generation.py's own module docstring), DM_Dialogue.py
         (resolving who's being directly addressed in free-form conversation), DM_Help.py
         (the reserved "ADaM" out-of-character help channel -- see its own module docstring),
-        and DM_Improvisation.py (ad hoc entity creation/removal via LLM function calling, see
-        its own module docstring and AdHoc_Generation.py) -- so that every
+        DM_Improvisation.py (ad hoc entity creation/removal via LLM function calling, see
+        its own module docstring and AdHoc_Generation.py), and DM_Encounters.py (resolving a
+        location/room's own [[location.encounter]] weighted-choice table on entry -- see its
+        own module docstring) -- so that every
         dm_core.<method>(...) call site throughout the codebase and
         test_all.py keeps working unchanged regardless of which file actually defines a given
         method (Python's MRO flattens every mixin method onto this one class). DM_Core.py
@@ -78,15 +81,18 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         self.entity_templates = {}
         self.scenario = {}
         self.scenario_entities = []
-        # The instance names from [scenario].entities (ex: the player, plus any ally like
-        # crypt.toml's "thane" meant to persist across the whole dungeon) -- kept separate
-        # from self.scenario_entities so _populate_room can rebuild the latter as
-        # persistent_entities + the current room's own local entities on every room
-        # transition, instead of collapsing back down to just the player (see DM_Rules.py).
+        # Populated for real by load_scenario_definition -- location_key -> location table (a
+        # place: a town square, a building, a dungeon -- see CLAUDE.md's "Scenarios and rooms").
+        # self.current_location_key/self.location_runtime track which one is active and each
+        # location's own per-visit instancing cache; self.rooms/self.current_room_key/
+        # self.visited_rooms/self.persistent_entities keep their exact pre-existing meaning, but
+        # now describe the *current location's* own state, re-pointed by DM_Rules.py's
+        # _enter_location every time the active location changes rather than fixed once at
+        # scenario-load time (see that method's own docstring).
+        self.locations = {}
+        self.current_location_key = None
+        self.location_runtime = {}
         self.persistent_entities = []
-        # Populated for real by load_scenario_definition -- empty/None here is what a plain
-        # single-room scenario (arena/tavern/field/dungeon) keeps permanently, since it has
-        # no [[room]] tables at all (see DM_Rules.py's "Scenario instancing"/room-graph notes).
         self.rooms = {}
         self.current_room_key = None
         self.visited_rooms = {}
@@ -538,8 +544,10 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         @brief Event handler for a free-text item-interaction match (see NLPCore.map_to_item):
             "examine"/"take"/"give"/"trade"/"use"/"equip"/"unequip"/"drop" against a named
             item, "open"/"close" against the scene target itself, "advance"/"retreat"
-            against the whole scene, or "move" (with a "direction") to take a declared exit
-            to a different room of the current multi-room dungeon. Deliberately bypasses the
+            against the whole scene, "move" (with a "direction") to take a declared exit
+            to a different room of the current location, or "travel" to take a declared
+            [[location.exit]] (or the current location's own "return_to") to a different
+            location entirely. Deliberately bypasses the
             whole skill/dice system -- none of these warrant a roll (see DM_Movement.py's
             module docstring for why movement specifically is deterministic, not a check).
             Publishes "item_interaction_resolved" either way, with enough detail for
@@ -570,8 +578,11 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             -- to a new follow_offset, taking effect immediately.
         @param data The item_interaction_detected payload from NLPCore
             ({intent, item_name, input, score}). "item_name" is None for "open"/"close",
-            "advance"/"retreat", "formation_behind"/"formation_abreast", and "move", none of
-            which act on a named item; "move" also carries a "direction" (ex: "forward", "right").
+            "advance"/"retreat", "formation_behind"/"formation_abreast", "move", and "travel",
+            none of which act on a named item; "move" also carries a "direction" (ex: "forward",
+            "right"). "travel" carries no pre-parsed destination at all -- unlike "move",
+            NLPCore has no catalog of location names to match against, so DMCore resolves the
+            destination itself from the raw input (see _resolve_travel_intent).
         """
         intent = data.get("intent")
         item_name = data.get("item_name")
@@ -620,6 +631,14 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             # nothing to do with reaching a container's contents, same reasoning advance/
             # retreat above already follows.
             self._resolve_room_transition_intent(data.get("direction"), resolved)
+            return
+
+        if intent == "travel":
+            # Location-to-location travel (see DM_Movement.py's _resolve_travel_intent) --
+            # also unrelated to target_name/the locked gate. Unlike "move", NLPCore never
+            # resolves *which* location this names (it has no access to self.locations) --
+            # it just recognizes the input as travel-flavored and hands the raw text through.
+            self._resolve_travel_intent(input_text, resolved)
             return
 
         if intent == "use":

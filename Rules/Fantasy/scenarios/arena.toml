@@ -1,16 +1,35 @@
 [scenario]
 name = "The Arena"
 description = "A large arena. Dried blood spatters paint the dirt. The crowd demands to be entertained."
+start_location = "arena_grounds"
+
+# A single location wrapping one [[location.room]] -- see CLAUDE.md's "Scenarios and rooms" for
+# the [[location]] shape. This scenario has no real reason for more than one place, so it never
+# declares any [[location.exit]] at all.
+[[location]]
+key = "arena_grounds"
+name = "The Arena"
+description = "A large arena. Dried blood spatters paint the dirt. The crowd demands to be entertained."
+start_room = "grounds"
+# Whoever persists across the whole location -- the player and thane -- never the room's own
+# local creatures (see DM_Rules.py's _populate_room: a room's own "entities" never repeats them).
+entities = [
+    { name = "player", band = 1 },
+    { name = "thane", band = 1 }
+]
+
+[[location.room]]
+key = "grounds"
+name = "The Arena"
+description = "A large arena. Dried blood spatters paint the dirt. The crowd demands to be entertained."
 # Walled combat ring -- enclosed = true, so retreat is capped at band "bands" rather than
 # unbounded (see DM_Movement.py's "Movement and range"). 4 bands gives room to kite before
 # hitting the wall.
 bands = 4
 enclosed = true
 entities = [
-    { name = "player", band = 1 },
     { name = "wolf", band = 1 },
     { name = "wolf", band = 1 },
-    { name = "thane", band = 1 }
 ]
 
 # Local copies of every npc/creature entity this scenario references (see DM_Rules.py's

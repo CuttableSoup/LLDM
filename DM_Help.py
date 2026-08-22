@@ -5,8 +5,9 @@ class HelpMixin(DMCoreProtocol):
     """!
     @brief Out-of-character help/guidance (DMCore mixin -- only ever composed into DMCore,
         never instantiated on its own; relies on self.entities/self.player_name/
-        self.scenario_entities/self.rooms/self.event_bus, set up by DMCore.__init__, plus
-        RulesMixin's _current_room/_current_scene_name/_current_scene_description/
+        self.scenario_entities/self.rooms/self.locations/self.current_location_key/
+        self.event_bus, set up by DMCore.__init__, plus RulesMixin's
+        _current_room/_current_scene_name/_current_scene_description/
         _describe_scenario_characters and CombatMixin's resolve_ability. Inherits
         DMCoreProtocol purely so type checkers can resolve these shared attributes/cross-mixin
         methods -- see DM_Types.py.
@@ -70,26 +71,40 @@ class HelpMixin(DMCoreProtocol):
 
     def _describe_available_exits(self):
         """!
-        @brief The current room's own declared exits, for a multi-room dungeon -- [] for a
-            flat single-room scenario (self.rooms empty), which has no [[room.exit]] tables
-            at all. Reports each exit's own "destination" room key resolved to that room's
-            friendly "name" (falling back to the raw key if it's somehow unresolvable) rather
-            than the bare key itself, so ADaM's reply reads as a place name, not internal data.
-        @return A list of {"direction", "destination_name"} dicts, in the room's own
-                declaration order.
+        @brief Every declared way out of here: the current room's own [[location.room.exit]]
+            list (a band-gated direction, ex: "forward") if a room is active, plus the current
+            location's own [[location.exit]] list (a named destination, ex: "the blacksmith" --
+            no direction, reachable from anywhere in the location) if it has any. Reports each
+            exit's own "destination" key resolved to that place's friendly "name" (falling back
+            to the raw key if it's somehow unresolvable) rather than the bare key itself, so
+            ADaM's reply reads as a place name, not internal data.
+        @return A list of {"direction", "destination_name"} dicts, room exits (if any) first,
+                then location exits ("direction" always None for these) -- [] if neither this
+                room nor this location declares any.
         """
-        if not self.rooms:
-            return []
-        room = self._current_room() or {}
-        return [
+        exits = []
+        room = self._current_room()
+        if room:
+            exits.extend(
+                {
+                    "direction": exit_def.get("direction"),
+                    "destination_name": self.rooms.get(exit_def.get("destination"), {}).get(
+                        "name", exit_def.get("destination")
+                    ),
+                }
+                for exit_def in room.get("exit", [])
+            )
+        location = self.locations.get(self.current_location_key, {})
+        exits.extend(
             {
-                "direction": exit_def.get("direction"),
-                "destination_name": self.rooms.get(exit_def.get("destination"), {}).get(
+                "direction": None,
+                "destination_name": self.locations.get(exit_def.get("destination"), {}).get(
                     "name", exit_def.get("destination")
                 ),
             }
-            for exit_def in room.get("exit", [])
-        ]
+            for exit_def in location.get("exit", [])
+        )
+        return exits
 
     def _on_help_detected(self, data):
         """!

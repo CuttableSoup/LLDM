@@ -1,0 +1,148 @@
+# Reference only -- shape for the top-level [[location]] table, a SUPERSET of [[room]] (see
+# DM_Rules.py's load_scenario_definition / CLAUDE.md's "Scenarios and rooms"). Hierarchy:
+# [scenario] (start_location) -> [[location]] -> optionally [[location.room]] (identical shape
+# to [[room]], just nested one level deeper and scoped to its own location -- a room's own "key"
+# only needs to be unique within its owning location, not scenario-wide).
+#
+# A [[location]] may declare "entities" directly, [[location.room]], or both -- they're not
+# mutually exclusive. On a location with no rooms at all, "entities" is genuinely freeform: no
+# bands, every entry lands at an implicit band 1 (same default RulesMixin._instance_entities
+# already applies to any band-less entry) -- fine for anywhere that never needs real positioning
+# (town_square/blacksmith, below). On a location that DOES have [[location.room]] (opted into
+# only when real positioning is needed -- combat with meaningful advance/retreat/range, or a
+# genuine multi-room interior), "entities" instead plays exactly the role [scenario].entities
+# already plays today: whoever should persist across *every* room in this location's own graph
+# (ex: a party member following the player through a multi-room dungeon) -- still positioned via
+# ordinary room bands, not freeform. A location with neither is a valid bare pass-through hub.
+
+[[location]]
+key = "town_square"                         # Required, unique across every [[location]] loaded
+                                             # -- what a sibling [[location.exit]]'s own
+                                             # "destination" and [scenario].start_location
+                                             # reference. Never shown to the player.
+name = "The Market Square"                  # Shown to the LLM narrator. Also the default phrase
+                                             # an exit into this location is matched against.
+description = "A wide cobbled square ringed with stalls, the smell of woodsmoke and bread drifting from every corner."
+kind = "district"                           # Freeform, purely descriptive (like an entity's own
+                                             # supertype/subtype) -- narration flavor only,
+                                             # nothing branches on it.
+
+entities = [
+    { name = "town crier" },
+    { name = "market stall" },
+]
+
+# Random encounters -- layered on top of hand-placed entities, re-rolled fresh every time
+# "trigger" fires (not instanced-once like visited_rooms). "encounter" is a weighted-choice list
+# -- the same [ { "choice" = weight }, ... ] shape NPC_Generation.py's resolve_varied_value
+# already resolves for template_schema.toml's own hint/qualities.race. Each key resolves in
+# order: (1) a real [[entity]]/[[entity_template]] name -> instanced like any ordinary
+# {name = ...}/{template = ...} entry (band defaults to 1); friendly or hostile is decided
+# entirely by that entity's own [entity.attitudes]/[[entity.behavior]] data, same as every other
+# entity in the game; (2) the reserved key "nothing" -> a deliberate no-op, no narration; (3)
+# otherwise -> the string itself is a flavor narration beat, no entity created.
+[[location.encounter]]
+name = "town square encounter"              # Id/flavor label, never shown to the player.
+trigger = "on_enter"                        # Checked once, the moment this location is entered.
+encounter = [
+    { "A ragged child tugs at your sleeve, asking if you've seen their missing cat." = 30 },
+    { "A street performer juggles knives for scattered coin." = 30 },
+    { "generated_beggar" = 10 },             # A real [[entity_template]] name.
+    { "nothing" = 30 },
+]
+
+# Exits -- a named-destination graph edge BETWEEN LOCATIONS, not a [[room.exit]]: no band gate,
+# no fixed direction word. Reachability is by naming where you want to go -- NLPCore spots the
+# destination's own "name" (or an "aliases" entry) whole-word/case-insensitive in the input, the
+# same pattern _resolve_dialogue_target already uses to find an addressed entity by name.
+#
+# Hostile gate: never blocks a location-to-location move taken from a location's own freeform
+# "entities" space. Always blocks one taken from inside a [[location.room]] -- the exact same
+# "blocked_by_enemies" check _resolve_room_transition_intent already runs for an ordinary
+# [[location.room.exit]] move (this room's own occupants only), whether the destination is
+# another room in the same location or a jump to a different [[location]] entirely.
+[[location.exit]]
+destination = "blacksmith"                  # Another [[location]]'s own "key".
+aliases = [ "smithy", "forge" ]             # Optional extra phrases that also route here.
+# arrival_room/arrival_band (see old_well, below) only apply when the destination has rooms.
+
+[[location.exit]]
+destination = "old_well"
+aliases = [ "well" ]
+
+# return_to -- the one implicit exit every location may declare: a single location "key" to go
+# back to on a generic "leave"/"go outside"/"exit" phrase. Absent on a location with no obvious
+# "outside" (ex: town_square, the top of this graph) -- a bare "leave" there is denied
+# (reason "no_exit"), same as a room with no matching exit denies "forward" today.
+# return_to = "town_square"                 # (Omitted here -- town_square IS the top level.)
+
+# =============================================================================================
+# Worked example 1 -- another freeform location, no rooms.
+[[location]]
+key = "blacksmith"
+name = "The Sooted Anvil"
+description = "Heat rolls off the forge in the back; every surface is dark with soot and old iron."
+kind = "building"
+entities = [
+    { name = "blacksmith" },
+]
+return_to = "town_square"
+
+# =============================================================================================
+# Worked example 2 -- a location that DOES need real positioning, so it opts into
+# [[location.room]] instead of "entities". Reached via town_square's "old_well" exit above.
+[[location]]
+key = "old_well"
+name = "The Old Well"
+description = "A stone well, its rope ladder disappearing into darkness below."
+kind = "district"
+start_room = "shaft"                        # Required whenever a location has rooms -- which
+                                             # [[location.room]] the player lands in by default,
+                                             # and the default arrival room for any
+                                             # [[location.exit]] into this location that doesn't
+                                             # specify its own "arrival_room".
+return_to = "town_square"
+
+[[location.room]]
+key = "shaft"
+name = "The Well Shaft"
+description = "A narrow stone shaft, the ladder groaning underfoot."
+bands = 2
+enclosed = true
+
+# Same [[location.encounter]] mechanism as town_square's own, above, just
+# [[location.room.encounter]] instead -- this location holds its content in rooms.
+[[location.room.encounter]]
+name = "well shaft encounter"
+trigger = "on_enter"
+encounter = [
+    { "goblin scout" = 30 },                # A real, hostile [[entity]]/[[entity_template]].
+    { "giant rat" = 25 },                   # A second, distinct non-"nothing" option.
+    { "nothing" = 45 },
+]
+
+[[location.room.exit]]
+band = 2
+direction = "forward"
+destination = "den"
+arrival_band = 1
+
+[[location.room]]
+key = "den"
+name = "The Goblin Den"
+description = "A cramped, foul-smelling burrow lit by a single guttering torch."
+bands = 2
+enclosed = true
+entities = [
+    { name = "goblin", band = 1 },
+]
+# The exit BACK to "shaft" would be another [[location.room.exit]] here, same as any other room.
+
+[[location.exit]]
+destination = "town_square"                 # A location.exit can point back the way an ordinary
+                                             # [[location.room.exit]] can't (rooms only ever
+                                             # point at sibling rooms in the same location) --
+                                             # old_well's own "return_to" already covers the
+                                             # generic "leave" phrase; a named exit like this one
+                                             # is only needed to also make "go to the market
+                                             # square" work explicitly from in here.

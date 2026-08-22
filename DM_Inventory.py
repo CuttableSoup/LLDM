@@ -204,16 +204,16 @@ class InventoryMixin(DMCoreProtocol):
     def _current_ground_items(self):
         """!
         @brief The mutable list of item names dropped in the current room/scene -- a room's
-            own "ground" key for a multi-room dungeon (persists across a revisit the same way
-            a cleared trap does -- see DM_Rules.py's room-graph notes), or the flat
-            scenario's own "ground" key otherwise. Created empty on first use; never
-            authored in TOML. Saved/restored by DM_Persistence.py's save_game/load_game (keyed
-            per room_key for a dungeon, a flat list otherwise), same shape this method itself
-            branches on.
+            own "ground" key when the current location has one active (persists across a
+            revisit the same way a cleared trap does -- see DM_Rules.py's room-graph notes),
+            or the current location's own "ground" key for a freeform location otherwise.
+            Created empty on first use; never authored in TOML. Saved/restored by
+            DM_Persistence.py's save_game/load_game (keyed per location, and per room_key
+            within a room-based one), same shape this method itself branches on.
         @return The mutable ground list itself (not a copy) -- callers append/remove in place.
         """
         room = self._current_room()
-        scope = room if room is not None else self.scenario
+        scope = room if room is not None else self.locations[self.current_location_key]
         return scope.setdefault("ground", [])
 
     def _resolve_drop_intent(self, item_name, resolved):

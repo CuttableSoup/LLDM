@@ -13,10 +13,24 @@
 [scenario]
 name = "The Testing Grounds"
 description = "A bare, featureless room built only to exercise the game engine."
+start_location = "testing_grounds"
+
+[[location]]
+key = "testing_grounds"
+name = "The Testing Grounds"
+description = "A bare, featureless room built only to exercise the game engine."
+start_room = "grounds"
+entities = [
+    { name = "player", band = 1 },
+]
+
+[[location.room]]
+key = "grounds"
+name = "The Testing Grounds"
+description = "A bare, featureless room built only to exercise the game engine."
 bands = 4
 enclosed = true
 entities = [
-    { name = "player", band = 1 },
     { name = "wolf", band = 1 },
 ]
 

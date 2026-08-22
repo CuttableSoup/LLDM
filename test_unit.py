@@ -46,6 +46,7 @@ from Intent_Classification import (
     RETREAT_KEYWORDS,
     TAKE_KEYWORDS,
     TRADE_KEYWORDS,
+    TRAVEL_KEYWORDS,
     UNEQUIP_KEYWORDS,
     USE_KEYWORDS,
     IntentClassifier,
@@ -142,6 +143,23 @@ class DMTestCase(unittest.TestCase):
     def setUp(self):
         self.event_bus = EventBus()
         self.dm_core = DMCore(self.event_bus, scenario_name=self.scenario_name)
+
+    def _load_ad_hoc_scenario(self, entities, bands=None, enclosed=True):
+        """Swaps in a throwaway [[location]] (freeform if bands is None, else one
+        [[location.room]] with the given bands/enclosed) and loads it -- the ad-hoc-scenario
+        equivalent of directly authoring a scenario TOML file, for a test that just needs a
+        specific, minimal entity roster rather than any of the real shipped scenarios. Mirrors
+        DM_Rules.py's own [[location]] shape exactly, just built in Python instead of TOML."""
+        if bands is None:
+            location = {"key": "ad_hoc", "entities": entities}
+        else:
+            location = {
+                "key": "ad_hoc", "start_room": "ad_hoc_room",
+                "rooms": {"ad_hoc_room": {"key": "ad_hoc_room", "bands": bands, "enclosed": enclosed, "entities": entities}},
+            }
+        self.dm_core.locations = {"ad_hoc": location}
+        self.dm_core.scenario = {"start_location": "ad_hoc"}
+        self.dm_core.load_scenario()
 
     def _capture(self, event_name):
         events = []
@@ -549,6 +567,7 @@ class TestIntentClassification(unittest.TestCase):
             "FORMATION_BEHIND_KEYWORDS": FORMATION_BEHIND_KEYWORDS,
             "FORMATION_ABREAST_KEYWORDS": FORMATION_ABREAST_KEYWORDS,
             "DIALOGUE_KEYWORDS": DIALOGUE_KEYWORDS,
+            "TRAVEL_KEYWORDS": TRAVEL_KEYWORDS,
         }
         # Known, pre-existing exceptions -- not introduced by this refactor, and out of this
         # refactor's own scope to fix (a pure, zero-behavior-change extraction). "examine" is
@@ -832,8 +851,7 @@ class TestMultipleActions(DMTestCase):
         # numbers -- isolates the penalty itself, same "practice_dummy" pattern TestCombatLoop
         # already uses.
         self.dm_core.entities["practice_dummy"] = {"name": "practice_dummy", "max_hp": 20, "skills": {}}
-        self.dm_core.scenario = {"entities": [{"name": "gladstone", "band": 1}, {"name": "practice_dummy", "band": 1}]}
-        self.dm_core.load_scenario()
+        self._load_ad_hoc_scenario([{"name": "gladstone", "band": 1}, {"name": "practice_dummy", "band": 1}])
         round_events = self._capture("round_resolved")
         starting_round = self.dm_core.round_number
 
@@ -854,8 +872,7 @@ class TestMultipleActions(DMTestCase):
 
     def test_three_actions_apply_minus_2d(self):
         self.dm_core.entities["practice_dummy"] = {"name": "practice_dummy", "max_hp": 20, "skills": {}}
-        self.dm_core.scenario = {"entities": [{"name": "gladstone", "band": 1}, {"name": "practice_dummy", "band": 1}]}
-        self.dm_core.load_scenario()
+        self._load_ad_hoc_scenario([{"name": "gladstone", "band": 1}, {"name": "practice_dummy", "band": 1}])
         round_events = self._capture("round_resolved")
 
         with patch("random.randint", return_value=3):
@@ -897,8 +914,7 @@ class TestMultipleActions(DMTestCase):
         # just like an opposed attack does -- distinct from a diceless item *interaction*
         # (give/take/equip/...), covered by the tests below.
         self.dm_core.entities["practice_dummy"] = {"name": "practice_dummy", "max_hp": 20, "skills": {}}
-        self.dm_core.scenario = {"entities": [{"name": "gladstone", "band": 1}, {"name": "practice_dummy", "band": 1}]}
-        self.dm_core.load_scenario()
+        self._load_ad_hoc_scenario([{"name": "gladstone", "band": 1}, {"name": "practice_dummy", "band": 1}])
         round_events = self._capture("round_resolved")
 
         with patch("random.randint", return_value=3):
@@ -1009,8 +1025,7 @@ class TestCombatLoop(DMTestCase):
     def test_successful_attack_applies_damage_to_the_target(self):
         # Give the player an opponent with no matching opposing skill, so the attack auto-succeeds (difficulty 0).
         self.dm_core.entities["practice_dummy"] = {"name": "practice_dummy", "max_hp": 20, "skills": {}}
-        self.dm_core.scenario = {"entities": [{"name": "practice_dummy", "band": 1}]}
-        self.dm_core.load_scenario()
+        self._load_ad_hoc_scenario([{"name": "practice_dummy", "band": 1}])
 
         with patch("random.randint", return_value=3):
             self.dm_core._on_turn_detected({"clauses": [{"kind": "action", "skill": "blades"}], "input": "I attack with my sword"})
@@ -1181,11 +1196,9 @@ class TestBandit(DMTestCase):
 
     def setUp(self):
         super().setUp()
-        self.dm_core.scenario = {
-            "bands": 8, "enclosed": False,
-            "entities": [{"name": "gladstone", "band": 1}, {"name": "bandit", "band": 5}],
-        }
-        self.dm_core.load_scenario()
+        self._load_ad_hoc_scenario(
+            [{"name": "gladstone", "band": 1}, {"name": "bandit", "band": 5}], bands=8, enclosed=False,
+        )
 
 
     def test_favors_the_bow_at_a_distance(self):
@@ -1224,8 +1237,10 @@ class TestStatusEvaluation(DMTestCase):
 
 class TestScenarioLoading(DMTestCase):
     def test_duplicate_entities_get_unique_instance_names(self):
-        # arena.toml lists gladstone once, wolf twice, and thane (an ally) once.
-        self.assertEqual(self.dm_core.scenario_entities, ["gladstone", "wolf", "wolf_2", "thane"])
+        # arena.toml's own location lists gladstone and thane (persistent across the whole
+        # location); its one room lists wolf twice (room-local) -- scenario_entities is
+        # persistent_entities + this room's own instances, in that order.
+        self.assertEqual(self.dm_core.scenario_entities, ["gladstone", "thane", "wolf", "wolf_2"])
         self.assertIn("wolf", self.dm_core.entities)
         self.assertIn("wolf_2", self.dm_core.entities)
 
@@ -2318,7 +2333,7 @@ class TestReachableEntityNames(DMTestCase):
     """
 
     def test_includes_scene_ground_and_inventory_equipped_items_but_excludes_the_player(self):
-        self.dm_core.scenario.setdefault("ground", []).append("a stone")
+        self.dm_core._current_ground_items().append("a stone")
         self.dm_core.entities["gladstone"]["inventory"] = ["a rope"]
         self.dm_core.entities["gladstone"]["equipped"] = {"main_hand": "a dagger"}
 
@@ -3005,8 +3020,7 @@ class TestGiveAndTrade(DMTestCase):
     def test_trade_charges_the_items_toml_value_and_moves_it_to_the_player(self):
         # dungeon.toml's chest holds "cursed dagger" (value = 5); tavern's innkeeper has
         # neither, so build an ad-hoc scenario reusing the chest as a "shop" for this test.
-        self.dm_core.scenario = {"entities": [{"name": "gladstone", "band": 1}, {"name": "chest", "band": 1}]}
-        self.dm_core.load_scenario()
+        self._load_ad_hoc_scenario([{"name": "gladstone", "band": 1}, {"name": "chest", "band": 1}])
         self.dm_core.dismiss_condition("chest", "locked")
         self.dm_core.dismiss_condition("chest", "closed")
         starting_currency = self.dm_core.entities["gladstone"]["currency"]
@@ -3024,8 +3038,7 @@ class TestGiveAndTrade(DMTestCase):
         self.assertNotIn("cursed dagger", self.dm_core.entities["chest"]["inventory"])
 
     def test_give_declines_with_no_recipient(self):
-        self.dm_core.scenario = {"entities": [{"name": "gladstone", "band": 1}]}
-        self.dm_core.load_scenario()
+        self._load_ad_hoc_scenario([{"name": "gladstone", "band": 1}])
 
         self.dm_core._on_item_interaction_detected({
             "intent": "give", "item_name": "health potion", "input": "I give away a health potion",
@@ -3037,8 +3050,7 @@ class TestGiveAndTrade(DMTestCase):
         self.assertIn("health potion", self.dm_core.entities["gladstone"]["inventory"])
 
     def test_trade_declines_when_player_cant_afford_it(self):
-        self.dm_core.scenario = {"entities": [{"name": "gladstone", "band": 1}, {"name": "chest", "band": 1}]}
-        self.dm_core.load_scenario()
+        self._load_ad_hoc_scenario([{"name": "gladstone", "band": 1}, {"name": "chest", "band": 1}])
         self.dm_core.dismiss_condition("chest", "locked")
         self.dm_core.dismiss_condition("chest", "closed")
         self.dm_core.entities["gladstone"]["currency"] = 0
@@ -3232,13 +3244,10 @@ class TestNpcDialogue(DMTestCase):
         # "fire elemental" (creatures.toml) rather than "wolf" -- it's the one creature still
         # loaded via load_rules regardless of scenario, so it's resolvable here even though
         # this fixture boots "tavern" (which never references it).
-        self.dm_core.scenario = {
-            "entities": [
-                { "name": "gladstone", "band": 1 },
-                { "name": "fire elemental", "band": 1 },
-            ],
-        }
-        self.dm_core.load_scenario()
+        self._load_ad_hoc_scenario([
+            { "name": "gladstone", "band": 1 },
+            { "name": "fire elemental", "band": 1 },
+        ])
 
         self.dm_core._on_turn_detected({"clauses": [{"kind": "action", "skill": "blades"}], "input": "I attack the fire elemental"})
 
@@ -3305,8 +3314,7 @@ class TestFreeformDialogue(DMTestCase):
         self.assertEqual(result["reason"], "cant_talk")
 
     def test_no_addressee_at_all_is_denied(self):
-        self.dm_core.scenario = {"entities": [{"name": "gladstone", "band": 1}]}
-        self.dm_core.load_scenario()
+        self._load_ad_hoc_scenario([{"name": "gladstone", "band": 1}])
 
         result = self._talk("hello? is anyone there")
 

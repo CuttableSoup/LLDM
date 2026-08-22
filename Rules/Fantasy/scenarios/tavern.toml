@@ -1,10 +1,24 @@
 [scenario]
 name = "The Rusty Tankard"
 description = "A cozy tavern. A fire crackles in the hearth while a few locals nurse their drinks."
+start_location = "tavern_floor"
+
+[[location]]
+key = "tavern_floor"
+name = "The Rusty Tankard"
+description = "A cozy tavern. A fire crackles in the hearth while a few locals nurse their drinks."
+start_room = "floor"
+entities = [
+    { name = "player", band = 1 },
+]
+
+[[location.room]]
+key = "floor"
+name = "The Rusty Tankard"
+description = "A cozy tavern. A fire crackles in the hearth while a few locals nurse their drinks."
 bands = 2
 enclosed = true
 entities = [
-    { name = "player", band = 1 },
     { name = "innkeeper", band = 1 }
 ]
 

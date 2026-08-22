@@ -36,6 +36,7 @@ class LLMCore:
         self.event_bus.subscribe("action_resolved", self.generate_response)
         self.event_bus.subscribe("action_not_understood", self.generate_clarification_response)
         self.event_bus.subscribe("item_interaction_resolved", self.generate_item_interaction_response)
+        self.event_bus.subscribe("encounter_triggered", self.generate_encounter_response)
         self.event_bus.subscribe("dialogue_resolved", self.generate_npc_dialogue)
         self.event_bus.subscribe("help_resolved", self.generate_adam_response)
         self.event_bus.subscribe("save_requested", self._on_save_requested)
@@ -287,10 +288,12 @@ class LLMCore:
         @param data The "item_interaction_resolved" payload ({intent, item_name, input, found,
             description?, container?, reason?, amount?, price?, moved?, members?, stance?}).
             "item_name" is None for "open"/"close"/"advance"/"retreat"/"formation_behind"/
-            "formation_abreast", which act on the scene directly rather than a named item;
-            "moved" (advance/retreat only) is advance_or_retreat's own list of {entity, before,
-            after} distance changes; "members"/"stance" (formation only) are
-            DMCore._resolve_formation_intent's own resolved party member(s) and new stance.
+            "formation_abreast"/"move"/"travel", which act on the scene directly rather than a
+            named item; "moved" (advance/retreat only) is advance_or_retreat's own list of
+            {entity, before, after} distance changes; "members"/"stance" (formation only) are
+            DMCore._resolve_formation_intent's own resolved party member(s) and new stance;
+            "location_name"/"location_description" (travel only) are the arrival location's own
+            fields, alongside the same "room_name"/"room_description" "move" already carries.
         """
         intent = data.get("intent")
         self.event_bus.publish("log_info", f"Generating item interaction response ({intent}).")
@@ -450,8 +453,8 @@ class LLMCore:
                 f"Narrate this brief bit of party direction in 1-2 sentences as the Game Master."
             )
         elif intent == "move":
-            # Taking a declared exit to a different room of the current multi-room dungeon
-            # (see DM_Rules.py's room-graph notes) -- unlike advance/retreat (repositioning
+            # Taking a declared exit to a different room of the current location (see
+            # DM_Rules.py's room-graph notes) -- unlike advance/retreat (repositioning
             # within one room), this replaces the whole scene, so the room's own name/
             # description/characters (DMCore._resolve_room_transition_intent) get folded into
             # ongoing narration grounding exactly the way generate_scene_intro does for a
@@ -469,6 +472,26 @@ class LLMCore:
                 f"\"{data.get('room_name', '')}\".\n"
                 f"{self.scenario_description}{characters_text}\n"
                 f"Narrate arriving in this new area in 2-3 sentences as the Game Master."
+            )
+        elif intent == "travel":
+            # Taking a declared [[location.exit]] (or the current location's own "return_to")
+            # to a different [[location]] entirely (see DM_Movement.py's _resolve_travel_intent)
+            # -- the location-graph counterpart to "move" above, same grounding-refresh
+            # reasoning. Grounds on the arrival *room*'s own name/description when the new
+            # location has one active (ex: walking straight into a building's own interior),
+            # else the location's own name/description (ex: an open town square with nothing
+            # more specific to narrate).
+            scene_name = data.get("room_name") or data.get("location_name", "")
+            self.scenario_description = data.get("room_description") or data.get("location_description", "")
+            self.scenario_characters = data.get("characters", [])
+            characters_text = (
+                "\nCharacters present: " + " | ".join(self.scenario_characters)
+                if self.scenario_characters else ""
+            )
+            prompt = (
+                f"The player travels to: \"{scene_name}\".\n"
+                f"{self.scenario_description}{characters_text}\n"
+                f"Narrate arriving in this new place in 2-3 sentences as the Game Master."
             )
         elif item_name == "currency":
             if intent == "give":
@@ -500,6 +523,32 @@ class LLMCore:
         self._queue_narration(
             prompt, rag_query=data.get("input"), present_entities=data.get("present_entities"),
         )
+
+    def generate_encounter_response(self, data):
+        """!
+        @brief Narrates a location/room's own random encounter roll (see DM_Encounters.py) --
+            unlike every other trigger here, this one is never a response to something the
+            player *did*; it fires as a side effect of simply arriving somewhere. Either a pure
+            flavor beat ("description") or a newly-instanced entity ("entity_name") -- never
+            both.
+        @param data The "encounter_triggered" payload ({description?, entity_name?,
+            present_entities}).
+        """
+        self.event_bus.publish("log_info", "Generating encounter response.")
+
+        entity_name = data.get("entity_name")
+        if entity_name:
+            prompt = (
+                f"As the player arrives, something new is here: \"{entity_name}\".\n"
+                f"Narrate this arrival in 1-2 sentences as the Game Master, introducing them "
+                f"into the scene."
+            )
+        else:
+            prompt = (
+                f"As the player arrives: {data.get('description', '')}\n"
+                f"Narrate this brief moment in 1-2 sentences as the Game Master."
+            )
+        self._queue_narration(prompt, present_entities=data.get("present_entities"))
 
     def generate_npc_dialogue(self, data):
         """!
@@ -810,8 +859,14 @@ class LLMCore:
         if help_data.get("present"):
             system_message += "\nPresent here: " + " | ".join(help_data["present"])
         if help_data.get("exits"):
+            # A room exit carries a "direction" ("forward", to a sibling room in the same
+            # location); a location exit doesn't (reachable by naming the destination itself,
+            # from anywhere in the location -- see DM_Movement.py's _resolve_travel_intent) --
+            # rendered without the "direction (to X)" framing so it doesn't read as "None (to
+            # The Sooted Anvil)".
             exits = ", ".join(
-                f"{exit_info.get('direction')} (to {exit_info.get('destination_name')})"
+                f"{exit_info['direction']} (to {exit_info.get('destination_name')})"
+                if exit_info.get("direction") else str(exit_info.get("destination_name"))
                 for exit_info in help_data["exits"]
             )
             system_message += f"\nExits from here: {exits}"

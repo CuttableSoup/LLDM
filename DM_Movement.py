@@ -103,7 +103,10 @@ class MovementMixin(DMCoreProtocol):
         @param band The candidate band number.
         @return The clamped band number.
         """
-        scene = self._current_room() or self.scenario
+        # A freeform location (no active room) has no bands of its own at all -- pinned to a
+        # single enclosed band 1, which is what makes advance/retreat there always a no-op,
+        # consistent with "no real positioning" (see DM_Rules.py's _enter_location).
+        scene = self._current_room() or {"enclosed": True, "bands": 1}
         band = max(1, band)
         if scene.get("enclosed", True):
             band = min(band, scene.get("bands", 1))
@@ -307,17 +310,17 @@ class MovementMixin(DMCoreProtocol):
 
     def _resolve_room_transition_intent(self, direction, resolved):
         """!
-        @brief Handles "move" -- taking a declared exit to a different room of the current
-            multi-room dungeon (see DM_Rules.py's "Scenario instancing"/room-graph notes and
-            _find_room_exit). Denied (reason "no_exit") if the current room has no exit at
-            all in that direction -- including every plain, single-room scenario (arena/
-            tavern/field/dungeon), which has no rooms/exits to speak of and so always fails
-            this check, same as a "close" aimed at a creature fails "not_openable"; denied
-            (reason "wrong_band") if that direction exists in this room but not from the
-            player's current band; denied (reason "blocked_by_enemies") if any living
-            hostile creature remains in the current room -- a dungeon-crawl convention: a
-            room is cleared before moving past it, not slipped around while something is
-            still actively fighting the player.
+        @brief Handles "move" -- taking a declared exit to a different room *within the current
+            location* (see DM_Rules.py's [[location.room]] notes and _find_room_exit). Denied
+            (reason "no_exit") if the current room has no exit at all in that direction --
+            including a single-room location (ex: arena/tavern), whose one room simply declares
+            none, same as a "close" aimed at a creature fails "not_openable"; denied (reason
+            "wrong_band") if that direction exists in this room but not from the player's
+            current band; denied (reason "blocked_by_enemies") if any living hostile creature
+            remains in the current room -- a dungeon-crawl convention: a room is cleared before
+            moving past it, not slipped around while something is still actively fighting the
+            player. See _resolve_travel_intent, below, for the location-to-location counterpart
+            of this same move.
         @param direction "forward"/"back"/"left"/"right", from NLPCore's direction match.
         @param resolved The item_interaction_resolved publisher closure from
             DMCore._on_item_interaction_detected.
@@ -338,6 +341,82 @@ class MovementMixin(DMCoreProtocol):
         new_room = self._current_room()
         resolved(
             True,
+            room_name=new_room.get("name", "") if new_room else "",
+            room_description=new_room.get("description", "") if new_room else "",
+            characters=self._describe_scenario_characters(),
+        )
+
+    def _resolve_location_exit(self, input_text):
+        """!
+        @brief Finds the current location's own declared [[location.exit]] named in input_text
+            -- searching for any exit's destination location's own "name" (or one of its
+            "aliases"), whole-word and case-insensitive, present in input_text. Same
+            "search the raw input for a known name" pattern _resolve_formation_intent already
+            uses for a party member's own name, just against multi-word phrases.
+        @param input_text The raw (lowercased, prefix-stripped) player input.
+        @return The matched [[location.exit]] table, or None if no destination is named.
+        """
+        location = self.locations.get(self.current_location_key, {})
+        for exit_def in location.get("exit", []):
+            destination = self.locations.get(exit_def.get("destination"), {})
+            candidates = [destination.get("name", "")] + list(exit_def.get("aliases", []))
+            for phrase in candidates:
+                if phrase and re.search(rf"\b{re.escape(phrase.lower())}\b", input_text or ""):
+                    return exit_def
+        return None
+
+    def _resolve_travel_intent(self, input_text, resolved):
+        """!
+        @brief Handles "travel" -- taking a declared [[location.exit]] to a different
+            [[location]] entirely, the location-graph counterpart to
+            _resolve_room_transition_intent's own room-graph move. Unlike a room's exits
+            (band-gated, a fixed direction vocabulary), a location's exits are reachable by
+            naming where you want to go (see _resolve_location_exit), from anywhere within the
+            current location. Falls back to the current location's own "return_to" (a generic
+            "leave"/"go outside" phrase) if no destination is named at all -- denied (reason
+            "no_exit") if that's also absent (ex: town_square, the top of the graph, has
+            nowhere to "leave" to).
+
+            Hostile gate: never blocks a move taken from a location's own freeform "entities"
+            space (self.rooms empty) -- an open square is non-linear on purpose, so ducking
+            into a shop mid-fight is allowed. Always blocks one taken from inside a
+            [[location.room]] (self.rooms populated) -- the exact same "blocked_by_enemies"
+            check _resolve_room_transition_intent already runs, scoped to this one room's own
+            occupants, whether the destination is another room in the same location or a jump
+            to a different location entirely.
+        @param input_text The raw (lowercased, prefix-stripped) player input.
+        @param resolved The item_interaction_resolved publisher closure from
+            DMCore._on_item_interaction_detected.
+        """
+        exit_def = self._resolve_location_exit(input_text)
+        if exit_def is not None:
+            destination_key = exit_def["destination"]
+            arrival_room = exit_def.get("arrival_room")
+            arrival_band = exit_def.get("arrival_band", 1)
+        else:
+            return_to = self.locations.get(self.current_location_key, {}).get("return_to")
+            if not return_to or return_to not in self.locations:
+                resolved(False, reason="no_exit")
+                return
+            destination_key = return_to
+            arrival_room = None
+            arrival_band = 1
+
+        if self.rooms:
+            for entity_name in self.scenario_entities:
+                if entity_name == self.player_name:
+                    continue
+                if self.is_hostile(entity_name, self.player_name) and self.get_current_hp(entity_name) > 0:
+                    resolved(False, reason="blocked_by_enemies")
+                    return
+
+        self._enter_location(destination_key, arrival_room=arrival_room, arrival_band=arrival_band)
+        new_location = self.locations.get(self.current_location_key, {})
+        new_room = self._current_room()
+        resolved(
+            True,
+            location_name=new_location.get("name", ""),
+            location_description=new_location.get("description", ""),
             room_name=new_room.get("name", "") if new_room else "",
             room_description=new_room.get("description", "") if new_room else "",
             characters=self._describe_scenario_characters(),

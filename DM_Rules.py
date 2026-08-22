@@ -104,17 +104,28 @@ class RulesMixin(DMCoreProtocol):
             return None
         return self.rooms.get(self.current_room_key)
 
+    def _current_location(self):
+        """!
+        @brief The current location's own table (see load_scenario_definition's own
+            [[location]] notes), or {} if no location is active yet (before the first
+            load_scenario() call completes).
+        @return self.locations[self.current_location_key], or {}.
+        """
+        return self.locations.get(self.current_location_key, {})
+
     def _current_scene_name(self):
         """!
-        @brief The name to narrate the current scene with -- the room's own name if this is a
-            multi-room dungeon (ex: "Entrance Hall"), else the flat scenario's own name (ex:
-            "The Rusty Tankard"). Used for both the initial scenario_loaded payload and every
-            later room_entered payload, so a multi-room dungeon's intro and every subsequent
-            room transition are narrated the same way.
+        @brief The name to narrate the current scene with -- the room's own name if the current
+            location has one active (ex: "Entrance Hall"), else the current location's own name
+            (ex: "The Market Square") -- a location's own name is what's shown when there's no
+            room to narrate more specifically (a freeform location, or a room-based one before
+            any room is entered). Used for both the initial scenario_loaded payload and every
+            later room/location-entered payload, so a scene's intro and every subsequent
+            transition are narrated the same way.
         @return The scene name string.
         """
         room = self._current_room()
-        return room.get("name", "") if room else self.scenario.get("name", "")
+        return room.get("name", "") if room else self._current_location().get("name", "")
 
     def _current_scene_description(self):
         """!
@@ -122,7 +133,7 @@ class RulesMixin(DMCoreProtocol):
         @return The scene description string.
         """
         room = self._current_room()
-        return room.get("description", "") if room else self.scenario.get("description", "")
+        return room.get("description", "") if room else self._current_location().get("description", "")
 
     def load_rules(self, rules_dir):
         base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -224,38 +235,36 @@ class RulesMixin(DMCoreProtocol):
 
     def load_scenario_definition(self, scenario_name):
         """!
-        @brief Reads a named scenario file from Rules/Fantasy/scenarios/ into self.scenario.
-            Scenarios live in their own subdirectory rather than the flat Rules/Fantasy/
-            scan in load_rules (which only keeps whichever [scenario] table it reads last),
-            so multiple named scenarios can coexist and one is selected explicitly by name.
+        @brief Reads a named scenario file from Rules/Fantasy/scenarios/ into self.scenario/
+            self.locations. Scenarios live in their own subdirectory rather than the flat
+            Rules/Fantasy/ scan in load_rules (which only keeps whichever [scenario] table it
+            reads last), so multiple named scenarios can coexist and one is selected explicitly
+            by name.
 
-            A scenario file is either a plain single room (arena/tavern/field/dungeon --
-            entities listed directly under [scenario]) or a multi-room dungeon: one or more
-            [[room]] tables, each with its own "entities"/"bands"/"enclosed" plus a list of
-            [[room.exit]] sub-tables ({band, direction, destination, arrival_band}), and
-            [scenario].start_room naming which room to begin in. A room's own "entities"
-            list never includes the player -- only room-local creatures/traps/chests -- the
-            player (and anything else meant to persist across the whole dungeon) is instead
-            listed once, at the top level, under [scenario].entities, positioned at their
-            starting band in the starting room (see load_scenario/_populate_room). Each exit
-            is only usable from the specific band it names, which is what lets a room have
-            more than one exit at all (ex: one exit at band 2 leading right to a side room,
-            another at band 3 continuing forward) -- a real branch, not just a corridor's
-            forward/back pair. self.rooms stays an empty dict for the plain-scenario shape --
-            load_scenario/enter_room both branch on "is self.rooms populated" rather than a
-            separate flag, so a plain scenario file never has to declare anything extra just
-            to opt out of the room-graph machinery.
+            A scenario is one or more [[location]] tables (a place: a town square, a building,
+            a dungeon), self.scenario's own "start_location" naming which one to begin in --
+            see CLAUDE.md's "Scenarios and rooms" for the full [[location]] shape. A location
+            may declare "entities" directly (freeform, no bands) and/or its own [[location.room]]
+            list (identical shape to a standalone [[room]]: bands/enclosed/entities plus
+            [[location.room.exit]] sub-tables to sibling rooms *within that same location*) --
+            each location's own "room" TOML array is folded into a {room_key: room_table} dict
+            here, exactly like this method already did for self.rooms at the scenario's own top
+            level before locations existed, just one level deeper and scoped per-location (a
+            room's own "key" only has to be unique within its owning location, not
+            scenario-wide). A location's own "exit"/"encounter" lists (see DM_Movement.py's
+            _resolve_travel_intent / DM_Encounters.py) are kept as-is, read directly from the
+            location table.
 
             A scenario file may also declare its own [[entity]]/[[entity_template]] tables,
-            sibling to [scenario]/[[room]] -- the same two top-level keys load_rules reads from
-            every flat Rules/<setting>/*.toml file, just scoped to this one scenario instead.
-            This is what lets a scenario-specific entity (a boss, a one-off prop) or a
+            sibling to [scenario]/[[location]] -- the same two top-level keys load_rules reads
+            from every flat Rules/<setting>/*.toml file, just scoped to this one scenario
+            instead. This is what lets a scenario-specific entity (a boss, a one-off prop) or a
             scenario-specific NPC-generation stub (see "NPC generation") live in the same file
             as the scenario that references it, rather than having to be authored into a shared
-            file like creatures.toml/items.toml just to be nameable at all --
-            [scenario].entities and every [[room]].entities list resolve a "name"/"template"
-            against self.entities/self.entity_templates exactly the same way regardless of
-            which file actually defined it. Loaded after load_rules (see DMCore.__init__/
+            file like creatures.toml/items.toml just to be nameable at all -- every location's
+            own "entities"/room "entities" list resolves a "name"/"template" against
+            self.entities/self.entity_templates exactly the same way regardless of which file
+            actually defined it. Loaded after load_rules (see DMCore.__init__/
             DM_Persistence.py's load_game, both of which call load_rules immediately before
             this), so a scenario-local entity/template can reuse a shared name on purpose to
             override it for this one scenario, and so both are re-populated fresh on every
@@ -275,17 +284,23 @@ class RulesMixin(DMCoreProtocol):
         with open(filepath, "rb") as f:
             data = tomllib.load(f)
         self.scenario = data.get("scenario", {})
-        self.rooms = {room.get("key"): room for room in data.get("room", [])}
+        self.locations = {}
+        for location in data.get("location", []):
+            location = dict(location)
+            location["rooms"] = {room.get("key"): room for room in location.get("room", [])}
+            self.locations[location.get("key")] = location
         for entity in data.get("entity", []):
             self.entities[entity.get("name")] = entity
         for entity_template in data.get("entity_template", []):
             self.entity_templates[entity_template.get("name")] = entity_template
-        self.current_room_key = self.scenario.get("start_room")
-        # room_key -> the list of instance names created for it the first time it was
-        # entered (see enter_room) -- what makes a revisited room stay exactly as the player
-        # left it (a cleared trap stays cleared, a dead creature stays dead, a looted chest
-        # stays empty) instead of respawning fresh from template on every visit.
+        # Reset per-playthrough location/room state -- populated for real by _enter_location
+        # (called from load_scenario(), below) once entities/templates are all loaded.
+        self.current_location_key = None
+        self.location_runtime = {}
+        self.rooms = {}
+        self.current_room_key = None
         self.visited_rooms = {}
+        self.persistent_entities = []
 
     def _instance_entities(self, entity_entries, party_pool=None, skip_llm_generation=False):
         """!
@@ -508,45 +523,123 @@ class RulesMixin(DMCoreProtocol):
 
     def load_scenario(self, skip_llm_generation=False):
         """!
-        @brief Instances the scenario's own top-level "entities" list -- for a plain
-            single-room scenario (arena/tavern/field/dungeon) that's everyone in the scene;
-            for a multi-room dungeon it's just whatever persists across the whole
-            playthrough (today, only the player, positioned at their own starting band --
-            see load_scenario_definition), with the *starting room's* own entities merged in
-            via _populate_room. Always a fresh instancing (covers __init__, load_game, and
-            ad-hoc test scenarios that reassign self.scenario/self.rooms directly and call
-            this again) -- see "Scenario instancing" in CLAUDE.md.
-        @param skip_llm_generation Forwarded to _instance_entities/_populate_room -- true only
-            from DM_Persistence.py's load_game (re-instancing a save shouldn't pay for a real
+        @brief Enters the scenario's own start_location -- see _enter_location for what that
+            actually does. Always a fresh instancing (covers __init__, load_game, and ad-hoc
+            test scenarios that reassign self.scenario/self.locations directly and call this
+            again) -- see "Scenario instancing" in CLAUDE.md.
+        @param skip_llm_generation Forwarded to _enter_location -- true only from
+            DM_Persistence.py's load_game (re-instancing a save shouldn't pay for a real
             LLM round trip just to immediately overwrite the result with saved values).
         """
-        # party_pool = [] for this top-level call: nothing persistent exists yet (this is
-        # what's *building* self.persistent_entities), so a generate=true template at the
-        # scenario's own top level resolving target_cr = "party" can only see whichever
-        # player/is_party entities have already been instanced earlier in this same list --
-        # see _apply_npc_generation's own docstring for why self.scenario_entities itself
-        # isn't usable here.
-        self.scenario_entities = self._instance_entities(
-            self.scenario.get("entities", []), party_pool=[], skip_llm_generation=skip_llm_generation,
+        self._enter_location(self.scenario.get("start_location"), skip_llm_generation=skip_llm_generation)
+        self.event_bus.publish("log_info", f"Scenario loaded: {self.scenario_entities}")
+
+    def _instance_location_persistent_names(self, location, skip_llm_generation=False):
+        """!
+        @brief Instances a location's own "entities" list (whoever persists across the whole
+            location, ex: crypt's thane/anne) and guarantees the player is among them --
+            shared by _enter_location (below) and DM_Persistence.py's load_game, which both
+            need this exact same "build this location's own persistent_names, once" logic
+            (load_game pre-populates every visited location's own cache up front, before
+            _enter_location ever runs, so a saved mid-playthrough location switch finds it
+            already there instead of re-instancing).
+        @param location A [[location]] table (self.locations[some_key]).
+        @param skip_llm_generation Forwarded to _instance_entities.
+        @return The list of persistent instance names, player_name always included.
+        """
+        # party_pool = [] here: nothing else about this location is known yet (this is what's
+        # *building* this location's own persistent_names) -- same reasoning load_scenario's
+        # old top-level call already followed, just scoped per-location.
+        persistent_names = self._instance_entities(
+            location.get("entities", []), party_pool=[], skip_llm_generation=skip_llm_generation,
         )
-        self.persistent_entities = list(self.scenario_entities)
-        if self.rooms:
+        # The player doesn't need to be (and, in a multi-location scenario, should NOT be)
+        # named in a location's own "entities" -- unlike thane/anne/etc., re-instancing the
+        # player via _instance_entities on every new location's first visit would silently
+        # wipe active_conditions (any status effect gained mid-playthrough), since that
+        # unconditionally overwrites from the template's static "conditions" field. The player
+        # is guaranteed present here without ever touching self.entities[player_name] itself --
+        # its band is set explicitly by _enter_location regardless of this list.
+        if self.player_name not in persistent_names:
+            persistent_names.insert(0, self.player_name)
+        return persistent_names
+
+    def _enter_location(self, location_key, arrival_room=None, arrival_band=1, skip_llm_generation=False):
+        """!
+        @brief Moves the player into a different [[location]] -- the location-graph
+            counterpart to enter_room's room-graph move, called both for the scenario's own
+            starting location (load_scenario, above) and for every later player-issued travel
+            (DM_Movement.py's _resolve_travel_intent). self.rooms/self.current_room_key/
+            self.visited_rooms keep their exact existing meaning (see enter_room/_populate_room/
+            _find_room_exit, all otherwise UNCHANGED) -- this method just re-points them at
+            whichever location is now active, via self.location_runtime's own per-location
+            cache (location_key -> {"persistent_names", "visited_rooms"}), the same "instance
+            once, restore thereafter" treatment visited_rooms itself already gives a single
+            room.
+
+            A location's own "entities" list (if any) is instanced exactly once per location,
+            the first time it's ever entered, and cached as this location's own
+            "persistent_names" -- exactly the role self.persistent_entities/[scenario].entities
+            already play today, just scoped per-location instead of scenario-wide (see
+            location_schema.toml's own note on why "entities" isn't mutually exclusive with
+            having rooms: a party member persisting across every room of *this* location, ex:
+            crypt's thane/anne, still needs this same list). For a location with no rooms at
+            all, that's the entire scene (freeform, no band positioning); for one that does have
+            [[location.room]], self.current_room_key (arrival_room, or the location's own
+            start_room) is populated via the existing _populate_room, merging this location's
+            own persistent_names with that specific room's own local entities exactly as today.
+        @param location_key Another [[location]]'s own "key".
+        @param arrival_room Which of the destination location's own [[location.room]] entries to
+            land in -- defaults to that location's own "start_room" if absent. Ignored for a
+            freeform (room-less) location.
+        @param arrival_band Where the player ends up within arrival_room -- ignored for a
+            freeform location, where the player is always pinned to band 1 (no real positioning).
+        @param skip_llm_generation Forwarded to _instance_entities/_populate_room -- true only
+            from DM_Persistence.py's load_game.
+        """
+        self.current_location_key = location_key
+        location = self.locations.get(location_key, {})
+        cache = self.location_runtime.setdefault(location_key, {})
+
+        if "persistent_names" not in cache:
+            cache["persistent_names"] = self._instance_location_persistent_names(
+                location, skip_llm_generation=skip_llm_generation,
+            )
+        # A direct reference, not a copy -- remove_entity_from_scene mutates
+        # self.persistent_entities in place (ex: removing a party member), which has to reach
+        # this location's own cache directly so a later re-entry doesn't resurrect it. Mirrors
+        # self.visited_rooms below, which is already a direct reference for the same reason.
+        self.persistent_entities = cache["persistent_names"]
+
+        if location.get("rooms"):
+            self.rooms = location["rooms"]
+            self.visited_rooms = cache.setdefault("visited_rooms", {})
+            self.current_room_key = arrival_room or location.get("start_room")
             self._populate_room(self.current_room_key, skip_llm_generation=skip_llm_generation)
+            self.entities[self.player_name]["band"] = arrival_band
+        else:
+            self.rooms = {}
+            self.current_room_key = None
+            self.visited_rooms = {}
+            self.scenario_entities = list(self.persistent_entities)
+            # No bands to speak of in a freeform location -- pinning everyone (the player
+            # included) to band 1 is what keeps is_in_range/get_distance_between correct with
+            # zero special-casing (see DM_Movement.py's _clamp_band).
+            self.entities[self.player_name]["band"] = 1
 
         # Snaps thane/anne/etc. into formation around wherever the player actually starts --
         # a party member's own TOML-authored "band" is a starting guess, not authoritative,
         # since _apply_party_formation always wins on the very next player move anyway (see
-        # DM_Movement.py); doing it here too means a scenario/room that starts the player
+        # DM_Movement.py); doing it here too means a location/room that starts the player
         # somewhere other than band 1 doesn't leave the party visibly out of formation before
         # anyone's taken a single action.
         self._apply_party_formation()
 
-        # Keeps current_target in sync with scenario_entities on every load -- covers
-        # __init__, load_game, and ad-hoc test scenarios that reassign self.scenario directly
-        # and call load_scenario() again (see CLAUDE.md's "Scenario instancing").
+        # Keeps current_target in sync with scenario_entities on every location entry -- covers
+        # __init__, load_game, and every later travel/room move alike.
         self.current_target = self._choose_combat_target()
 
-        self.event_bus.publish("log_info", f"Scenario loaded: {self.scenario_entities}")
+        self._resolve_location_encounter(self._current_room() or location)
 
     def enter_room(self, room_key, arrival_band=1, skip_llm_generation=False):
         """!

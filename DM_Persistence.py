@@ -33,46 +33,48 @@ class PersistenceMixin(DMCoreProtocol):
 
     def _all_known_instance_names(self):
         """!
-        @brief Every instance name whose state save_game needs to persist -- just
-            scenario_entities for a plain single-room scenario, but for a multi-room dungeon
-            (see DM_Rules.py's room-graph notes) every persistent entity (the player, plus
-            anything else declared at [scenario].entities, ex: crypt.toml's "thane" -- never
-            themselves part of any room's own instance list, see DM_Rules.py's _populate_room)
-            plus the union of *every visited room's* own instance list, not only the room the
-            player happens to be standing in right now. Without the union, saving mid-dungeon
-            and reloading would silently forget that an earlier room's trap was already
-            disarmed or its creature already killed -- the room itself would still be marked
-            visited (see visited_rooms) and so wouldn't be re-instanced fresh, but nothing
-            would have restored its saved state either.
+        @brief Every instance name whose state save_game needs to persist, across *every*
+            location the player has ever visited this playthrough (self.location_runtime --
+            see DM_Rules.py's _enter_location), not just the one currently active -- each
+            location's own "persistent_names" (its own entities list, ex: the player, and for
+            a room-based location anything else meant to persist across its whole room graph,
+            ex: crypt's "thane") plus, for a room-based location, the union of *every visited
+            room's* own instance list within it. Without walking every location, saving in one
+            place and reloading would silently forget the state of anything left behind in a
+            location the player already passed through (an earlier room's trap already
+            disarmed, an NPC already talked to) -- that location stays visited (so it isn't
+            re-instanced fresh), but nothing would have restored its saved state either.
         @return A list of instance names, player included, deduplicated.
         """
-        if not self.rooms:
-            return list(self.scenario_entities)
-        seen = list(self.persistent_entities)
-        for instance_names in self.visited_rooms.values():
-            for name in instance_names:
+        seen = []
+        for cache in self.location_runtime.values():
+            for name in cache.get("persistent_names", []):
                 if name not in seen:
                     seen.append(name)
+            for instance_names in cache.get("visited_rooms", {}).values():
+                for name in instance_names:
+                    if name not in seen:
+                        seen.append(name)
         return seen
 
     def _collect_ad_hoc_entities(self):
         """!
         @brief Every ad hoc entity (DM_Improvisation.py -- entity["ad_hoc"] = True) currently
-            *reachable* -- present in some ground list, or in some known instance's own
-            inventory/equipped mapping -- for save_game to persist in full (there's no static
-            TOML template to re-derive an ad hoc entity's fields from on reload, unlike every
-            other instance's own diff-based state). Reachability, not a scan of self.entities,
-            is deliberate: remove_entity_from_scene never deletes an entity outright, just
-            unreferences it everywhere, so an orphaned ad hoc entity naturally stops being
-            collected here too -- no separate cleanup needed for it to fall out of future saves.
+            *reachable* -- present in some ground list (across every location and, within a
+            room-based one, every room), or in some known instance's own inventory/equipped
+            mapping -- for save_game to persist in full (there's no static TOML template to
+            re-derive an ad hoc entity's fields from on reload, unlike every other instance's
+            own diff-based state). Reachability, not a scan of self.entities, is deliberate:
+            remove_entity_from_scene never deletes an entity outright, just unreferences it
+            everywhere, so an orphaned ad hoc entity naturally stops being collected here too --
+            no separate cleanup needed for it to fall out of future saves.
         @return {name: full_entity_dict, ...} for every reachable ad hoc entity.
         """
         names = set()
-        if self.rooms:
-            for room in self.rooms.values():
+        for location in self.locations.values():
+            names.update(location.get("ground", []))
+            for room in location.get("rooms", {}).values():
                 names.update(room.get("ground", []))
-        else:
-            names.update(self.scenario.get("ground", []))
         for instance_name in self._all_known_instance_names():
             entity = self.entities.get(instance_name, {})
             names.update(entity.get("inventory", []))
@@ -94,9 +96,10 @@ class PersistenceMixin(DMCoreProtocol):
             freeze stale stats if templates are edited between sessions. LLMCore
             independently saves its own sibling file (context_window) for the same slot --
             see CLAUDE.md's "Saving and loading" section for why the two cores don't share
-            one combined file. For a multi-room dungeon, also saves current_room_key and
-            visited_rooms so a resumed save picks up in the same room with every previously
-            visited room's state intact (see _all_known_instance_names/load_game).
+            one combined file. Also saves "current_location_key" and "location_runtime" (every
+            visited location's own {persistent_names, visited_rooms} cache -- see DM_Rules.py's
+            _enter_location) so a resumed save picks up in the same location/room, with every
+            previously visited place's state intact (see _all_known_instance_names/load_game).
 
             Also saves "equipped" per instance -- unlike inventory (the item names), the
             [entity.equipped] slot mapping otherwise re-derives from the static template's own
@@ -105,11 +108,11 @@ class PersistenceMixin(DMCoreProtocol):
 
             Also saves "ground" -- items dropped since the scenario started, which
             _current_ground_items (DM_Inventory.py) stores directly on the current room's own
-            table (or the flat scenario's, for a single-room scenario), neither of which is
-            otherwise part of any instance's own state. Keyed per room_key for a multi-room
-            dungeon (mirroring visited_rooms), or a flat list for a single-room scenario --
-            self.rooms being populated is what distinguishes the two shapes, same branch
-            _current_ground_items itself already makes.
+            table (or the current location's own, for a freeform location), neither of which
+            is otherwise part of any instance's own state. Keyed per location_key, each holding
+            its own flat "ground" list and/or a "rooms" dict of room_key -> ground list --
+            walks every location the same way _collect_ad_hoc_entities already does, not just
+            the currently active one.
 
             A generated entity (DM_NpcGeneration.py -- entity["generated"] = True) also gets
             its own skills/max_hp/name/description/qualities/attitudes saved, since (unlike
@@ -164,23 +167,31 @@ class PersistenceMixin(DMCoreProtocol):
                 state["description"] = entity.get("description", "")
             return state
 
-        if self.rooms:
-            ground_state = {
-                room_key: list(room["ground"]) for room_key, room in self.rooms.items() if room.get("ground")
+        ground_state = {}
+        for location_key, location in self.locations.items():
+            location_ground = {}
+            if location.get("ground"):
+                location_ground["ground"] = list(location["ground"])
+            rooms_ground = {
+                room_key: list(room["ground"]) for room_key, room in location.get("rooms", {}).items()
+                if room.get("ground")
             }
-        else:
-            ground_state = list(self.scenario.get("ground", []))
+            if rooms_ground:
+                location_ground["rooms"] = rooms_ground
+            if location_ground:
+                ground_state[location_key] = location_ground
 
         data = {
-            "version": 1,
+            "version": 2,
             "setting": self.setting,
             "scenario_key": self.scenario_key,
             "player_name": self.player_name,
             "round_number": self.round_number,
             "current_target": self.current_target,
             "scenario_entities": self.scenario_entities,
+            "current_location_key": self.current_location_key,
             "current_room_key": self.current_room_key,
-            "visited_rooms": self.visited_rooms,
+            "location_runtime": self.location_runtime,
             "ground": ground_state,
             "instances": {name: _instance_state(name) for name in instance_names},
             "ad_hoc_entities": self._collect_ad_hoc_entities(),
@@ -203,30 +214,40 @@ class PersistenceMixin(DMCoreProtocol):
             inventory/equipped on top. A saved instance with no matching entity after
             re-instancing (ex: the scenario file changed) is skipped rather than crashing.
 
-            "ground" is restored right after load_scenario() -- before the per-room
-            re-instancing loop below, since it only needs self.rooms/self.scenario populated
-            (both already are by then), not any particular room's entities -- onto
-            self.rooms[room_key]["ground"] for a multi-room dungeon (only for room keys that
-            still exist; a stale key from a since-edited scenario file is dropped rather than
-            resurrecting a room reference) or self.scenario["ground"] for a single-room
-            scenario, mirroring exactly where save_game read it from and
-            _current_ground_items (DM_Inventory.py) itself looks for it during play.
-
             "removed_entities" is restored *before* load_scenario_definition/load_scenario run
             (see below), since DM_Rules.py's _instance_entities consults self.removed_entities
             while re-instancing -- restoring it any later would let a removed hand-authored
-            entity respawn on this very reload. Every _instance_entities call this method makes
-            (the starting room via load_scenario(), the visited-rooms loop, and enter_room for
-            a saved non-starting room) happens after this restore, so one restore point is
-            sufficient -- enter_room in particular never calls _instance_entities itself for an
-            already-visited room (see _populate_room's own "restore from cache" branch).
+            entity respawn on this very reload.
 
-            "ad_hoc_entities" is restored right alongside "ground" (right after
-            load_scenario()) -- a full dict replacement per entity (there's no template to
-            overlay onto), then "item_catalog_updated" is published once, as a batch, so
-            NLPCore's own item_embeddings/item_indices catch up (a reload never republishes
-            "rules_loaded", so nothing else would ever re-register them -- see NLP_Core.py's
-            own _on_item_catalog_updated).
+            Every location the save file's own "location_runtime" says was ever visited gets
+            re-instanced fresh from templates *before* load_scenario() runs -- each location's
+            own "entities" (its persistent_names) once, and, for a room-based location, each of
+            its own visited rooms' entities once, mirroring exactly how a single room's own
+            entities were already re-derived from the room's static list rather than trusting
+            the saved instance names directly (same reasoning the load_rules call below already
+            follows: re-instance from current TOML, not whatever's live in memory -- and
+            _instance_entities' own occurrence-counting is idempotent, so re-running it here
+            reproduces the exact same instance names every time). This populates
+            self.location_runtime *before* load_scenario()/_enter_location ever look at it, so
+            their own "already cached, don't re-instance" check finds it and reuses it instead
+            of paying for a second real LLM round trip on a generate=true template. Then
+            load_scenario() lands at the scenario's own start_location; if the save says the
+            player was actually somewhere else, _enter_location (or, within the same location,
+            the existing enter_room) jumps there -- arrival_band/room don't matter for either
+            jump, since the "instances" overlay loop below restores the player's real saved
+            band/room-state on top regardless.
+
+            "ground" is restored right after, walking every location the save file remembers
+            (only for location/room keys that still exist; a stale key from a since-edited
+            scenario file is dropped rather than resurrecting a stale reference), mirroring
+            exactly where save_game read it from and _current_ground_items (DM_Inventory.py)
+            itself looks for it during play.
+
+            "ad_hoc_entities" is restored alongside "ground" -- a full dict replacement per
+            entity (there's no template to overlay onto), then "item_catalog_updated" is
+            published once, as a batch, so NLPCore's own item_embeddings/item_indices catch up
+            (a reload never republishes "rules_loaded", so nothing else would ever re-register
+            them -- see NLP_Core.py's own _on_item_catalog_updated).
 
             The load_rules call is not optional: self.entities holds both static templates
             and live instances under the same keys (a single-occurrence instance like
@@ -242,14 +263,6 @@ class PersistenceMixin(DMCoreProtocol):
             opening scene on every resume. Publishes "game_load_failed" if the slot doesn't
             exist, so the player gets feedback rather than the request silently doing
             nothing (same rule action_not_understood already follows for unmatched input).
-
-            For a multi-room dungeon, load_scenario() (below) only instances the *starting*
-            room -- every other room the save file says was already visited gets
-            re-instanced fresh from templates here too (same reasoning as the load_rules call
-            above: re-instancing from current TOML, not whatever's live in memory), then
-            enter_room moves into whichever room the player actually saved in. This has to
-            happen before the "instances" overlay loop below, so saved hp/inventory/etc. has
-            a real entity dict to land on for every visited room, not just the starting one.
 
             Every re-instancing call below passes skip_llm_generation=True: a generate=true
             template (DM_NpcGeneration.py) would otherwise pay for a real LLM round trip here
@@ -277,7 +290,33 @@ class PersistenceMixin(DMCoreProtocol):
         self.removed_entities = set(data.get("removed_entities", []))
         self.load_rules(os.path.join("Rules", self.setting))
         self.load_scenario_definition(self.scenario_key)
+
+        for location_key, saved_cache in data.get("location_runtime", {}).items():
+            location = self.locations.get(location_key)
+            if location is None:
+                continue
+            cache = self.location_runtime.setdefault(location_key, {})
+            cache["persistent_names"] = self._instance_location_persistent_names(
+                location, skip_llm_generation=True,
+            )
+            if location.get("rooms"):
+                cache["visited_rooms"] = {}
+                for room_key in saved_cache.get("visited_rooms", {}):
+                    room = location["rooms"].get(room_key)
+                    if room:
+                        cache["visited_rooms"][room_key] = self._instance_entities(
+                            room.get("entities", []), party_pool=cache["persistent_names"],
+                            skip_llm_generation=True,
+                        )
+
         self.load_scenario(skip_llm_generation=True)
+
+        saved_location_key = data.get("current_location_key")
+        saved_room_key = data.get("current_room_key")
+        if saved_location_key and saved_location_key != self.current_location_key:
+            self._enter_location(saved_location_key, arrival_room=saved_room_key, skip_llm_generation=True)
+        elif saved_room_key and saved_room_key != self.current_room_key:
+            self.enter_room(saved_room_key, skip_llm_generation=True)
 
         saved_ad_hoc_entities = data.get("ad_hoc_entities")
         if saved_ad_hoc_entities:
@@ -290,31 +329,16 @@ class PersistenceMixin(DMCoreProtocol):
                 ],
             })
 
-        saved_ground = data.get("ground")
-        if saved_ground:
-            if self.rooms:
-                for room_key, items in saved_ground.items():
-                    room = self.rooms.get(room_key)
-                    if room is not None:
-                        room["ground"] = list(items)
-            else:
-                self.scenario["ground"] = list(saved_ground)
-
-        if self.rooms:
-            for room_key in data.get("visited_rooms", {}):
-                if room_key == self.current_room_key:
-                    continue  # load_scenario() (above) already instanced the starting room
-                room = self.rooms.get(room_key)
-                if room:
-                    self.visited_rooms[room_key] = self._instance_entities(
-                        room.get("entities", []), party_pool=self.persistent_entities,
-                        skip_llm_generation=True,
-                    )
-            saved_room_key = data.get("current_room_key")
-            if saved_room_key and saved_room_key != self.current_room_key:
-                # arrival_band doesn't matter here -- the "instances" overlay loop below
-                # restores the player's real saved band on top regardless.
-                self.enter_room(saved_room_key, skip_llm_generation=True)
+        for location_key, saved_ground in data.get("ground", {}).items():
+            location = self.locations.get(location_key)
+            if location is None:
+                continue
+            if saved_ground.get("ground"):
+                location["ground"] = list(saved_ground["ground"])
+            for room_key, items in saved_ground.get("rooms", {}).items():
+                room = location.get("rooms", {}).get(room_key)
+                if room is not None:
+                    room["ground"] = list(items)
 
         for name, state in data.get("instances", {}).items():
             entity = self.entities.get(name)

@@ -1,14 +1,22 @@
-# A multi-room dungeon crawl (see DM_Rules.py's "Scenario instancing"/room-graph notes) --
-# unlike arena/tavern/field/dungeon (one flat room each), this declares several [[room]]
-# tables plus start_room. [scenario].entities lists only whoever persists across the *whole*
-# dungeon (today, just the player) -- a room's own "entities" list never repeats the player,
-# only its own local creatures/traps/chests (see DM_Rules.py's _populate_room). The player
-# moves between rooms with a direction word ("forward"/"back"/"left"/"right" --
-# NLPCore.DIRECTION_PHRASES) matched against the current room's own [[room.exit]] list, each
-# of which is only usable from the specific band it's declared at -- guard_chamber below is
-# the one room with a real branch (an exit "right" at band 2 into a side room, another
-# "forward" at band 3 continuing the main path), not just a linear forward/back corridor.
+# A multi-room dungeon crawl, all one [[location]] (see CLAUDE.md's "Scenarios and rooms") --
+# unlike arena/tavern/field/dungeon (one location wrapping one room each), this location
+# declares several [[location.room]] tables plus its own start_room. The location's own
+# "entities" lists whoever persists across the *whole* dungeon (the player, thane, anne) -- a
+# room's own "entities" list never repeats them, only its own local creatures/traps/chests (see
+# DM_Rules.py's _populate_room). The player moves between rooms with a direction word
+# ("forward"/"back"/"left"/"right" -- NLPCore.DIRECTION_PHRASES) matched against the current
+# room's own [[location.room.exit]] list, each of which is only usable from the specific band
+# it's declared at -- guard_chamber below is the one room with a real branch (an exit "right"
+# at band 2 into a side room, another "forward" at band 3 continuing the main path), not just a
+# linear forward/back corridor. This whole dungeon never declares a [[location.exit]] of its
+# own -- nothing outside it exists in this scenario.
 [scenario]
+name = "The Sunken Crypt"
+description = "A crypt long since swallowed by the earth, its passages choked with rubble and the smell of old stone."
+start_location = "crypt"
+
+[[location]]
+key = "crypt"
 name = "The Sunken Crypt"
 description = "A crypt long since swallowed by the earth, its passages choked with rubble and the smell of old stone."
 start_room = "entrance"
@@ -280,7 +288,7 @@ dodge = { dice = 2, pips = 0 }
 strength = { dice = 5, pips = 0 }
 brawling = { dice = 5, pips = 0 }
 
-[[room]]
+[[location.room]]
 key = "entrance"
 name = "Entrance Hall"
 description = "A low, dusty antechamber. Something about the far wall doesn't look quite right."
@@ -290,13 +298,13 @@ entities = [
     { name = "dart trap", band = 2 },
 ]
 
-[[room.exit]]
+[[location.room.exit]]
 band = 2
 direction = "forward"
 destination = "hall_of_webs"
 arrival_band = 1
 
-[[room]]
+[[location.room]]
 key = "hall_of_webs"
 name = "The Hall of Webs"
 description = "Thick sheets of webbing span the corridor from floor to ceiling, swaying faintly though there's no wind down here."
@@ -306,19 +314,19 @@ entities = [
     { name = "giant spider", band = 1 },
 ]
 
-[[room.exit]]
+[[location.room.exit]]
 band = 1
 direction = "forward"
 destination = "guard_chamber"
 arrival_band = 1
 
-[[room.exit]]
+[[location.room.exit]]
 band = 1
 direction = "back"
 destination = "entrance"
 arrival_band = 2
 
-[[room]]
+[[location.room]]
 key = "guard_chamber"
 name = "The Guard Chamber"
 description = "A small stone room with a rotted table and a single iron chest against the wall, long abandoned by whoever once stood watch here. A narrow side passage breaks off to the right partway across."
@@ -334,7 +342,7 @@ entities = [
     { name = "iron chest", band = 3 },
 ]
 
-[[room.exit]]
+[[location.room.exit]]
 band = 1
 direction = "back"
 destination = "hall_of_webs"
@@ -343,19 +351,19 @@ arrival_band = 1
 # The branch: from band 2, "right" peels off into a small optional side room instead of
 # continuing the main path -- reaching it means actually advancing to band 2 first (ordinary
 # intra-room advance/retreat, unrelated to this exit list), not just saying a direction.
-[[room.exit]]
+[[location.room.exit]]
 band = 2
 direction = "right"
 destination = "hidden_alcove"
 arrival_band = 1
 
-[[room.exit]]
+[[location.room.exit]]
 band = 3
 direction = "forward"
 destination = "collapsed_passage"
 arrival_band = 1
 
-[[room]]
+[[location.room]]
 key = "hidden_alcove"
 name = "The Hidden Alcove"
 description = "A cramped, easy-to-miss nook off the main passage. A small coffer sits half-buried in the rubble."
@@ -365,13 +373,13 @@ entities = [
     { name = "dusty coffer", band = 1 },
 ]
 
-[[room.exit]]
+[[location.room.exit]]
 band = 1
 direction = "back"
 destination = "guard_chamber"
 arrival_band = 2
 
-[[room]]
+[[location.room]]
 key = "collapsed_passage"
 name = "The Collapsed Passage"
 description = "Rubble narrows the way ahead to a single crawlspace. A faint metallic glint catches the light overhead."
@@ -381,19 +389,19 @@ entities = [
     { name = "scythe trap", band = 2 },
 ]
 
-[[room.exit]]
+[[location.room.exit]]
 band = 2
 direction = "forward"
 destination = "bone_gallery"
 arrival_band = 1
 
-[[room.exit]]
+[[location.room.exit]]
 band = 1
 direction = "back"
 destination = "guard_chamber"
 arrival_band = 3
 
-[[room]]
+[[location.room]]
 key = "bone_gallery"
 name = "The Bone Gallery"
 description = "Alcoves line both walls, each holding the remains of the dead -- except one, which is standing."
@@ -403,19 +411,19 @@ entities = [
     { name = "skeleton warrior", band = 1 },
 ]
 
-[[room.exit]]
+[[location.room.exit]]
 band = 1
 direction = "forward"
 destination = "sanctum"
 arrival_band = 1
 
-[[room.exit]]
+[[location.room.exit]]
 band = 1
 direction = "back"
 destination = "collapsed_passage"
 arrival_band = 2
 
-[[room]]
+[[location.room]]
 key = "sanctum"
 name = "The Sanctum"
 description = "A small, reverent chamber untouched by the collapse elsewhere in the crypt. An ornate reliquary sits at its center."
@@ -425,19 +433,19 @@ entities = [
     { name = "ornate reliquary", band = 1 },
 ]
 
-[[room.exit]]
+[[location.room.exit]]
 band = 1
 direction = "forward"
 destination = "boss_chamber"
 arrival_band = 1
 
-[[room.exit]]
+[[location.room.exit]]
 band = 1
 direction = "back"
 destination = "bone_gallery"
 arrival_band = 1
 
-[[room]]
+[[location.room]]
 key = "boss_chamber"
 name = "The Warden's Vault"
 description = "A vast circular chamber, its walls carved with warnings in a script no living tongue still speaks. Something vast rises from the dark at its center."
@@ -447,7 +455,7 @@ entities = [
     { name = "the bone warden", band = 1 },
 ]
 
-[[room.exit]]
+[[location.room.exit]]
 band = 1
 direction = "back"
 destination = "sanctum"

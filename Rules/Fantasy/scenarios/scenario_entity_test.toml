@@ -12,10 +12,24 @@
 [scenario]
 name = "The Sealed Vault"
 description = "A bare stone vault built only to exercise scenario-local entity definitions."
+start_location = "vault"
+
+[[location]]
+key = "vault"
+name = "The Sealed Vault"
+description = "A bare stone vault built only to exercise scenario-local entity definitions."
+start_room = "chamber"
+entities = [
+    { name = "player", band = 1 },
+]
+
+[[location.room]]
+key = "chamber"
+name = "The Sealed Vault"
+description = "A bare stone vault built only to exercise scenario-local entity definitions."
 bands = 2
 enclosed = true
 entities = [
-    { name = "player", band = 1 },
     { name = "vault sentinel", band = 1 },
 ]
 

@@ -197,8 +197,9 @@ that does roll, ex: picking a lock, both counts *and* gets penalized).
 **Detection.** `Intent_Classification.py`'s `IntentClassifier.classify` splits input into
 clauses once (`split_action_clauses`, on `ACTION_CLAUSE_PATTERN`: `--`, `?`, `,`, `;`, `:`, and
 the standalone words `"and"`/`"then"`, `\b`-anchored so a word merely containing one of those
-substrings never splits), after save/load and inter-room movement have had their whole-input
-shot. Each clause is classified independently, in two passes:
+substrings never splits), after save/load, inter-room movement, and location-to-location travel
+have all had their whole-input shot (in that order — see "Location-to-location travel"). Each
+clause is classified independently, in two passes:
 1. **Item-interaction pass.** `detect_item_intent` runs per clause. `EXEMPT_ITEM_INTENTS`
    (`advance`/`retreat`/`formation_behind`/`formation_abreast`) publish their own free-standing
    `item_interaction_detected` immediately and never join the shared turn (so `"attack the wolf
@@ -336,7 +337,9 @@ key, so a generated NPC's LLM-invented name is what's actually narrated.
 ## Movement and range
 
 Every scenario entity — the player included — has an objective, 1-indexed `band`: a position on
-the current room's (or scenario's) band line, not a distance-from-player.
+the current room's own band line, not a distance-from-player. A freeform location (see
+"Scenarios, locations, and rooms") has no band line of its own at all — everyone in it is
+pinned to an implicit band 1, so advance/retreat there is always a no-op.
 `get_distance_between(a, b)` is the absolute difference between two band numbers. The player
 moves via `advance_or_retreat(direction)` (`DM_Movement.py`): shifts the player's band by up to
 their `speed` (default 1) toward or away from `current_target`. A creature/ally moves the same
@@ -357,7 +360,7 @@ nothing can reach the fleeing entity.
 read by `_apply_party_formation` to snap that entity's band to `player_band + follow_offset`
 (ex: `crypt.toml`'s `anne` trails one band behind to favor her ranged spellwork). This is a flat
 teleport, not a speed-limited move, and only ever fires where the *player's* band changes
-(`advance_or_retreat`, `enter_room`) — never from a creature/ally's own combat-turn movement,
+(`advance_or_retreat`, `enter_room`, `_enter_location`) — never from a creature/ally's own combat-turn movement,
 which stays free to drift out of formation until the player's next move snaps it back. The
 player can override `follow_offset` in play: "stay behind me"/"walk beside me" resolve to
 `item_interaction_detected` intents `"formation_behind"`/`"formation_abreast"`
@@ -438,33 +441,57 @@ only ever starts the *first* game a session has. `on_load_requested` no-ops sile
 since File → Load... is meaningful at any time: every load after the first is handled solely by
 `DMCore`'s own `_on_load_requested`, subscribed during its `__init__` as always.
 
-## Scenarios and rooms
+## Scenarios, locations, and rooms
 
-`Rules/Fantasy/scenarios/*.toml` (`arena`, `tavern`, `field`, `dungeon`, `crypt`, plus
-`character_test`/`scenario_entity_test` — see "Testing") each hold one `[scenario]` table, kept
-in their own subdirectory so multiple scenarios can coexist without the flat `load_rules` scan
-(which only keeps the last `[scenario]` table it reads) overwriting one with another.
+`Rules/Fantasy/scenarios/*.toml` (`arena`, `tavern`, `field`, `dungeon`, `crypt`, `town`, plus
+`character_test`/`scenario_entity_test`/`npc_generation_test` — see "Testing") each hold one
+`[scenario]` table, kept in their own subdirectory so multiple scenarios can coexist without the
+flat `load_rules` scan (which only keeps the last `[scenario]` table it reads) overwriting one
+with another. Every scenario is `[scenario]` (just `name`/`description`/`start_location`) →
+one or more `[[location]]` tables → optionally, per location, one or more `[[location.room]]`
+tables — a location is a *superset* of a room, not a sister of it: `[[room]]`/`[[room.exit]]`
+still exist, just renamed `[[location.room]]`/`[[location.room.exit]]` and nested one level
+deeper, completely unchanged in shape and behavior. `Rules/Fantasy/reference/location_schema.toml`
+is the field-by-field reference for the `[[location]]` shape.
 
-A scenario is either a **plain single room** (entities listed directly under `[scenario]`) or a
-**multi-room dungeon** (`crypt`): one or more `[[room]]` tables, each with its own
-`entities`/`bands`/`enclosed` plus `[[room.exit]]` sub-tables (`{band, direction, destination,
-arrival_band}`), and `[scenario].start_room` naming the starting room. A room's `entities` list
-never includes the player — only room-local creatures/traps/chests; the player is listed once
-at the scenario's top level. `self.rooms` stays empty for a plain scenario, which is what lets
-`load_scenario`/`enter_room` branch on room-graph vs. flat behavior without a separate flag.
+**A location may declare `entities` directly, `[[location.room]]`, or both.** On a location with
+no rooms at all (ex: `town.toml`'s `town_square`/`blacksmith`), `entities` is genuinely
+freeform — no bands, every entry lands at an implicit band 1 (same default
+`_instance_entities` already applies to any band-less entry) — fine for anywhere that never
+needs real positioning. On a location that *does* have `[[location.room]]` (opted into only
+when real positioning is needed — combat with meaningful advance/retreat/range, or a genuine
+multi-room interior, ex: `crypt.toml`'s whole dungeon, wrapped in one location), `entities`
+instead plays exactly the role a room's own `entities` doesn't: whoever persists across *every*
+room in that location's own graph (ex: `crypt`'s `thane`/`anne`, following the player from room
+to room) — still positioned via ordinary room bands, not freeform. A room's own `entities` list
+never repeats them, only that room's local creatures/traps/chests.
 
-**The player is referenced generically.** Every scenario/room's `entities` list names the
-player with the reserved sentinel `"player"` (`DM_Rules.py`'s `PLAYER_PLACEHOLDER`), never a
-real template name. `_instance_entities` resolves it to `self.player_name` before the template
-lookup, so a scenario keeps working regardless of which template is `is_player = true` or what
-a freshly-created character was renamed to.
+**Rooms never float free at the scenario's top level.** `self.rooms`/`self.current_room_key`/
+`self.visited_rooms` keep their exact pre-`[[location]]` meaning and every method that reads
+them (`_current_room`, `_populate_room`, `enter_room`, `_find_room_exit`,
+`_resolve_room_transition_intent`, `_clamp_band`, `_current_ground_items`, ...) is unchanged —
+they just get re-pointed at whichever location is currently active by `_enter_location`
+(`DM_Rules.py`), instead of being fixed once at scenario-load time. `self.rooms` is `{}` (and
+`_current_room()` returns `None`) whenever the active location is freeform.
 
-**A scenario file can define its own `[[entity]]` tables**, sibling to `[scenario]`/`[[room]]`,
-scoped to this one scenario — letting a boss or one-off prop live in the same file as the
-scenario referencing it. `load_scenario_definition` reads these into `self.entities` after
-`load_rules` has run, so a scenario-local entity can reuse a shared name on purpose to override
-it just for this scenario. `scenario_entity_test.toml` (excluded from
-`list_available_scenarios`) exists solely to exercise this.
+**The player is referenced generically, and never needs to be named in any location's own
+`entities` at all.** A scenario/room's `entities` list may still name the player with the
+reserved sentinel `"player"` (`DM_Rules.py`'s `PLAYER_PLACEHOLDER`, resolved to
+`self.player_name` before the template lookup) for a location visited exactly once — but
+`_instance_location_persistent_names` guarantees the player is present in every location's own
+`persistent_names` regardless, *without* re-instancing them: unlike `thane`/`anne`,
+re-instancing the player via `_instance_entities` on every new location's first visit would
+silently wipe `active_conditions` (any status effect gained mid-playthrough), since that
+unconditionally overwrites from the template's static `conditions` field. `town.toml`'s own
+locations never name the player at all, relying entirely on this guarantee.
+
+**A scenario file can define its own `[[entity]]`/`[[entity_template]]` tables**, sibling to
+`[scenario]`/`[[location]]`, scoped to this one scenario — letting a boss, one-off prop, or NPC-
+generation stub live in the same file as the scenario referencing it. `load_scenario_definition`
+reads these into `self.entities`/`self.entity_templates` after `load_rules` has run, so a
+scenario-local entity can reuse a shared name on purpose to override it just for this scenario.
+`scenario_entity_test.toml` (excluded from `list_available_scenarios`) exists solely to
+exercise this.
 
 **Every real gameplay scenario owns its own local copy of every npc/creature entity it
 references** — playable standalone, without a shared creatures/characters file.
@@ -483,18 +510,69 @@ caught the way colliding with `gladstone`/`fire elemental` still is —
 
 `DMCore.__init__(event_bus, scenario_name="arena")` loads via `load_scenario_definition`, which
 raises `FileNotFoundError` for an unknown name (fatal on purpose — an empty `self.scenario`
-would let the LLM hallucinate an opening scene with no real content). `load_scenario()`
-deep-copies each named template into an independent instance, tags it with its starting `band`,
-disambiguates duplicates (`wolf`, `wolf_2`, ...), and gives each instance its own `entity_id`.
+would let the LLM hallucinate an opening scene with no real content), then `load_scenario()` →
+`_enter_location(self.scenario.get("start_location"))`. `_instance_entities` deep-copies each
+named template into an independent instance, tags it with its starting `band`, disambiguates
+duplicates (`wolf`, `wolf_2`, ...), and gives each instance its own `entity_id`.
 
-`enter_room(room_key, arrival_band)` — gated on the current room declaring a matching exit at
-the player's band and on no living hostile remaining. Moves only the player's band;
-HP/inventory/currency/conditions carry over. A room visited before is restored from
-`self.visited_rooms` rather than re-instanced, so a cleared trap or looted chest stays that way.
+`enter_room(room_key, arrival_band)` — the room-to-room move, entirely unchanged from before
+`[[location]]` existed — is gated on the current room declaring a matching exit at the player's
+band and on no living hostile remaining. Moves only the player's band; HP/inventory/currency/
+conditions carry over. A room visited before is restored from `self.visited_rooms` rather than
+re-instanced, so a cleared trap or looted chest stays that way.
+
+**`_enter_location(location_key, arrival_room=None, arrival_band=1)`** (`DM_Rules.py`) is the
+location-to-location counterpart: re-points `self.rooms`/`self.current_room_key`/
+`self.visited_rooms`/`self.persistent_entities` at the new location via `self.location_runtime`
+(`location_key -> {"persistent_names", "visited_rooms"}`), the same "instance once, restore
+thereafter" cache `visited_rooms` itself already gives a single room, just one level up. A
+location with rooms lands at `arrival_room` (or its own `start_room`) via the unchanged
+`_populate_room`; a freeform location pins the player to band 1 (no real positioning exists to
+place them at). Also resolves this location/room's own random encounter table on the way in
+(see "Random encounters", below).
+
+**Location-to-location travel** is reachable by naming where you want to go, not a fixed
+direction word — `DM_Movement.py`'s `_resolve_location_exit` searches the current location's
+own `[[location.exit]]` list for any destination whose `name` (or an `aliases` entry) appears
+whole-word/case-insensitive in the input, the same "search input for a known name" pattern
+`_resolve_dialogue_target`/`_resolve_formation_intent` already use for entity names — detected
+by `Intent_Classification.py`'s `detect_travel_intent` (a `TRAVEL_KEYWORDS` phrase table plus a
+`\bleave\b` word-boundary check, publishing a generic `"travel"` item-interaction intent with no
+pre-parsed destination at all, unlike `"move"`'s own direction). `_resolve_travel_intent` falls
+back to the current location's own `return_to` (a generic "leave"/"go outside" phrase) if no
+destination is named, denied `reason="no_exit"` if that's also absent. **Hostile gate:** never
+blocks a move taken from a location's own freeform space; always blocks one taken from inside a
+`[[location.room]]` — the exact same `blocked_by_enemies` check `_resolve_room_transition_intent`
+already runs for an ordinary room-to-room move, scoped to that one room's own occupants, whether
+the destination is another room in the same location or a jump to a different location entirely.
 
 **`self.entities` holds templates and live instances under the same keys** — instancing a
 single-occurrence entity overwrites its template slot. `load_game` re-runs `load_rules()` before
 re-instancing for this reason (see "Saving and loading").
+
+## Random encounters
+
+`[[location.encounter]]` (or `[[location.room.encounter]]`, same shape) is a weighted-choice
+table resolved once, `on_enter`, every time its own location/room is entered —
+`DM_Encounters.py`'s `EncounterMixin`, called from `_enter_location`. `trigger` is always
+`"on_enter"` today (a repeating per-turn `"ambient"` roll is a deferred, undesigned extension).
+`encounter` is the exact same `[ { "choice" = weight }, ... ]` shape `NPC_Generation.py`'s
+`resolve_varied_value` already resolves for an `[[entity_template]]`'s own `hint`/
+`qualities.race` (see "NPC generation") — reused directly, not a new probability mechanism, and
+rolled fresh every visit rather than instanced-once-and-cached the way `visited_rooms` treats
+ordinary entities. Each resolved key is handled the same way an ordinary `entities`-list entry
+already would, tried in order: (1) a real `[[entity]]`/`[[entity_template]]` name — instanced
+exactly like any other `{name = ...}`/`{template = ...}` entry (band defaults to the player's
+own current band), joins `self.scenario_entities`, and claims `current_target` if hostile and
+nothing's already engaged (`ImprovisationMixin._claim_current_target_if_free`) — friendly or
+hostile is decided entirely by *that entity's own* `[entity.attitudes]`/`[[entity.behavior]]`
+data, same as every other entity in the game, not by any field on the encounter itself; (2) the
+reserved key `"nothing"` — a deliberate no-op, no entity, no narration; (3) otherwise — the
+string itself is a flavor narration beat, no entity created (same shape ad hoc generation's own
+`describe_scenery` already produces). Publishes `encounter_triggered` either way (skipped
+entirely for a `"nothing"` result), narrated by `LLMCore.generate_encounter_response` — the one
+narration trigger that's never a response to something the player did; it fires as a side effect
+of simply arriving somewhere.
 
 ## Status and conditions
 
@@ -709,9 +787,11 @@ Publishes `help_detected {input}`.
 `DM_Help.py`'s `HelpMixin._on_help_detected` gathers a fresh snapshot of live state every time
 it fires (no memory of past exchanges — see below) and publishes `help_resolved`: the player's
 skills/abilities/equipped/inventory, the current scene's name/description, the present-character
-roster, and `exits` (`[]` for a flat scenario, else the room's exits resolved to friendly
-names). No `_publish_party_status()` for the ordinary informational path — except when a removal
-actually went through (see "Ad hoc entity creation and removal"), the one exception on purpose.
+roster, and `exits` (the current room's own exits, if a room is active, followed by the current
+location's own `[[location.exit]]` list, resolved to friendly destination names — `[]` if
+neither exists, ex: a location with no rooms and no declared exits of its own). No
+`_publish_party_status()` for the ordinary informational path — except when a removal actually
+went through (see "Ad hoc entity creation and removal"), the one exception on purpose.
 
 **Deliberately excluded from `context_window`.** Every other narration trigger appends both
 prompt and reply to `LLMCore`'s shared rolling window. ADaM's own `generate_adam_response`/
@@ -857,12 +937,15 @@ capability above that introduces a name or description change republishes this e
 - `action_not_understood` → `generate_clarification_response` — acknowledges input that didn't
   resolve to any action.
 - `item_interaction_resolved` → `generate_item_interaction_response` — covers examine/take/give/
-  trade/open/close/use/equip/unequip/drop and room transitions.
+  trade/open/close/use/equip/unequip/drop, room transitions, and location-to-location travel.
 - `dialogue_resolved` → `generate_npc_dialogue` — a found target routes through
   `_queue_dialogue`; a denied one falls back to an ordinary `_queue_narration` explanation.
 - `game_load_failed` → `generate_load_failed_response`.
 - `help_resolved` → `generate_adam_response` — routes through `_queue_adam_response`, the one
   trigger here that never touches `context_window` at all.
+- `encounter_triggered` → `generate_encounter_response` — a location/room's own random
+  encounter roll (see "Random encounters"), the one trigger here that's never a response to
+  something the player did.
 
 The scenario/room setting and character roster are re-injected into the system message on every
 request, so narration stays grounded even after the intro scrolls out of the rolling 100-message
@@ -887,16 +970,25 @@ has no request/response mechanism, so each core owns and persists its own slice.
 (see "Booting the game" for the cold-start case), or by `Textual_Core`'s Save/Load buttons.
 
 `DMCore.save_game` writes a diff from a fresh instantiation: `setting`, `scenario_key`,
-`player_name`, `round_number`, `current_room_key`, `scenario_entities`, `ground`, and
-per-instance `{hp, active_conditions, currency, inventory, equipped, band}`. `load_game` re-runs
-`load_rules()`, then the same scenario-load path `__init__` uses, then overlays each saved
-instance's mutable fields; a saved instance with no post-reload match is skipped. Publishes
-`game_loaded` on success (not `scenario_loaded`, which would re-narrate an opening scene) or
-`game_load_failed {"slot", "reason"}` on failure, then re-publishes `party_status_changed`.
+`player_name`, `round_number`, `current_location_key`, `current_room_key`, `location_runtime`
+(every visited location's own `{persistent_names, visited_rooms}` cache — see "Scenarios,
+locations, and rooms"), `scenario_entities`, `ground`, and per-instance `{hp, active_conditions,
+currency, inventory, equipped, band}`. `load_game` re-runs `load_rules()`, then re-instances
+every location the save file's own `location_runtime` says was ever visited (each location's own
+`entities` once, each of its visited rooms' own entities once — mirroring exactly how a single
+room's own instance list was already re-derived from the room's static entities rather than
+trusted directly, so `_instance_entities`' own idempotent occurrence-counting reproduces the
+identical instance names every time) *before* `load_scenario()`/`_enter_location` ever look at
+`self.location_runtime`, so their own "already cached" check finds it and reuses it. Then jumps
+to the saved `current_location_key`/`current_room_key` if they differ from the scenario's own
+`start_location`. Finally overlays each saved instance's mutable fields; a saved instance with
+no post-reload match is skipped. Publishes `game_loaded` on success (not `scenario_loaded`,
+which would re-narrate an opening scene) or `game_load_failed {"slot", "reason"}` on failure,
+then re-publishes `party_status_changed`.
 
-`ground` (items dropped since the scenario started) round-trips too: a flat list for a
-single-room scenario, or a dict keyed by `room_key` for a multi-room dungeon, mirroring the same
-branch `_current_ground_items` (`DM_Inventory.py`) already makes.
+`ground` (items dropped since the scenario started) round-trips too, keyed per location
+(`{location_key: {"ground": [...], "rooms": {room_key: [...]}}}`), mirroring the same
+location/room branch `_current_ground_items` (`DM_Inventory.py`) already makes.
 
 `LLMCore.save_game`/`load_game` persist/restore `context_window` plus scenario name/description/
 characters; loading is silent. `GUICore.save_game`/`load_game` persist/restore the Notes tab's
@@ -1044,10 +1136,13 @@ Not yet started, except where noted:
 - Actions sway attitudes by varying degrees — a resolved action (combat, theft, a favor) should
   nudge attitude axes proportionally, not just be gated by attitude that already exists.
 - Random encounters, enemy generator — procedurally populate a scene/room with creatures instead
-  of every encounter being scenario-authored. **Partially started**: "NPC generation" fits a
-  `generate = true` template's *stats* to a target CR at instancing time, but the template
-  itself (attitudes/behavior/abilities/equipment, and whether/where it appears at all) is still
-  hand-authored.
+  of every encounter being scenario-authored. **Partially started**: `[[location.encounter]]`
+  (see "Random encounters") lets a location/room roll a weighted table of outcomes on entry —
+  but the table itself, and every entity/template it can resolve to, is still hand-authored;
+  there's no procedural encounter *design*, only randomized *selection* among authored options.
+  "NPC generation" separately fits a `generate = true` template's *stats* to a target CR at
+  instancing time, but the template itself (attitudes/behavior/abilities/equipment, and
+  whether/where it appears at all) is still hand-authored too.
 - Scenario, quest, NPC, item, and location generators — procedurally author the TOML data itself
   rather than every scenario/entity being hand-written. Same caveat as above.
 - ADaM acting proactively, not just when addressed by name — today ADaM only reacts to an

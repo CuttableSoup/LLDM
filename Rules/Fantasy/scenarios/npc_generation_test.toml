@@ -8,10 +8,24 @@
 [scenario]
 name = "The Generation Grounds"
 description = "A bare, featureless room built only to exercise NPC generation."
+start_location = "generation_grounds"
+
+[[location]]
+key = "generation_grounds"
+name = "The Generation Grounds"
+description = "A bare, featureless room built only to exercise NPC generation."
+start_room = "grounds"
+entities = [
+    { name = "player", band = 1 },
+]
+
+[[location.room]]
+key = "grounds"
+name = "The Generation Grounds"
+description = "A bare, featureless room built only to exercise NPC generation."
 bands = 4
 enclosed = true
 entities = [
-    { name = "player", band = 1 },
     { template = "generated_stranger", band = 2 },
 ]
 

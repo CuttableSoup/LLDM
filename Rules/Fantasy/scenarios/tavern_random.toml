@@ -1,10 +1,24 @@
 [scenario]
 name = "The Rusty Tankard, Tonight"
 description = "The same cozy tavern, but who's behind the bar and who's nursing a drink changes with every visit -- new faces, new stories."
+start_location = "tavern_tonight"
+
+[[location]]
+key = "tavern_tonight"
+name = "The Rusty Tankard"
+description = "The same cozy tavern, but who's behind the bar and who's nursing a drink changes with every visit -- new faces, new stories."
+start_room = "floor"
+entities = [
+    { name = "player", band = 1 },
+]
+
+[[location.room]]
+key = "floor"
+name = "The Rusty Tankard"
+description = "The same cozy tavern, but who's behind the bar and who's nursing a drink changes with every visit -- new faces, new stories."
 bands = 3
 enclosed = true
 entities = [
-    { name = "player", band = 1 },
     { template = "generated_innkeeper", band = 1 },
     { template = "generated_stranger", band = 2 },
     { template = "generated_regular", band = 3 }

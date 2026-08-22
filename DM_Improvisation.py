@@ -205,15 +205,11 @@ class ImprovisationMixin(DMCoreProtocol):
             if name in instance_names:
                 instance_names.remove(name)
 
-        if self.rooms:
-            for room in self.rooms.values():
-                ground = room.get("ground")
+        for location in self.locations.values():
+            for scope in [location, *location.get("rooms", {}).values()]:
+                ground = scope.get("ground")
                 if ground and name in ground:
                     ground.remove(name)
-        else:
-            ground = self.scenario.get("ground")
-            if ground and name in ground:
-                ground.remove(name)
 
         for instance_name in self._all_known_instance_names():
             entity = self.entities.get(instance_name, {})
@@ -244,11 +240,10 @@ class ImprovisationMixin(DMCoreProtocol):
         @return A fresh set (safe for the caller to mutate/narrow further).
         """
         reachable = set(self.scenario_entities)
-        if self.rooms:
-            for room in self.rooms.values():
+        for location in self.locations.values():
+            reachable.update(location.get("ground", []))
+            for room in location.get("rooms", {}).values():
                 reachable.update(room.get("ground", []))
-        else:
-            reachable.update(self.scenario.get("ground", []))
         for instance_name in self._all_known_instance_names():
             entity = self.entities.get(instance_name, {})
             reachable.update(entity.get("inventory", []))

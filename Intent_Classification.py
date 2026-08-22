@@ -145,6 +145,24 @@ EDIT_KEYWORDS = (
     "change", "edit", "make the", "make it", "is now", "describe it as", "describe the",
 )
 
+# Location-to-location travel (see DM_Movement.py's _resolve_travel_intent) -- a different axis
+# from DIRECTION_PHRASES below: a room's own exits are a fixed forward/back/left/right
+# vocabulary, but a location's own exits are reachable by naming where you want to go, which
+# this module has no catalog of (self.locations lives on DMCore, not here) -- so unlike
+# detect_direction, this only recognizes that the input *smells like* a travel attempt at all;
+# DMCore resolves *which* location it names from the raw input itself (same "search input for a
+# known name" pattern _resolve_dialogue_target/_resolve_formation_intent already use). Checked
+# ahead of item-interaction detection, same tier as DIRECTION_PHRASES. Deliberately no "travel
+# to " here -- it would collide with skills.toml's own navigation keyword "travel" (see
+# test_item_and_dialogue_keywords_never_collide_with_a_real_skill_keyword), so "go to "/"head
+# to "/"walk to " cover the same phrasing without that risk.
+TRAVEL_KEYWORDS = ("go to ", "head to ", "walk to ", "enter the ", "go outside", "exit the")
+# Checked separately from TRAVEL_KEYWORDS' own plain substring match -- a bare "leave" collides
+# with axes' own "cleave" skill keyword the same way ADAM_NAME_PATTERN's "adam" would collide
+# with plenty of ordinary words without \b-anchoring; word-boundary matching is what a short,
+# common word like this needs, same precedent ADAM_NAME_PATTERN already sets.
+LEAVE_PATTERN = re.compile(r"\bleave\b")
+
 DIRECTION_PHRASES = {
     "forward": (
         "next room", "proceed deeper", "continue deeper", "go deeper", "through the door",
@@ -356,6 +374,11 @@ def detect_direction(processed_text):
     return None
 
 
+def detect_travel_intent(processed_text):
+    """!@brief True if processed_text contains any TRAVEL_KEYWORDS phrase, or the word "leave"."""
+    return bool(LEAVE_PATTERN.search(processed_text)) or _keyword_gate(processed_text, TRAVEL_KEYWORDS)
+
+
 def detect_save_load_intent(processed_text):
     """!
     @brief Checks processed input for a "save"/"load" command, ahead of item and skill
@@ -450,6 +473,14 @@ class IntentClassifier:
             events.append({"event": "item_interaction_detected", "payload": {
                 "intent": "move", "item_name": None, "direction": direction,
                 "input": processed, "score": None,
+            }})
+            return processed, events
+
+        if detect_travel_intent(processed):
+            # Same tier as the direction check above, but for location-to-location travel --
+            # see TRAVEL_KEYWORDS' own module note for why no destination is resolved here.
+            events.append({"event": "item_interaction_detected", "payload": {
+                "intent": "travel", "item_name": None, "input": processed, "score": None,
             }})
             return processed, events
 
