@@ -18,7 +18,7 @@ import tomllib
 from Challenge_Rating import calculate_challenge_rating, skill_rating
 from LLM_Client import call_chat_completion as _real_call_chat_completion
 
-DEFAULT_API_URL = "http://127.0.0.1:1234/v1/chat/completions"
+DEFAULT_API_URL = "http://127.0.0.1:11434/v1/chat/completions"
 
 # A named "key skill" landing at 0D would read as a design bug, not a deliberately weak NPC --
 # 1D (rating 3) is the floor a fitted skill can ever land on.
@@ -148,7 +148,7 @@ def _build_tool_schema(npc_keywords):
         "describe_npc" function whose "keywords" field is enum-constrained to the real
         catalog (see load_npc_keywords) -- constraining the LLM to a fixed vocabulary instead
         of free text is what makes this reliable with small local models (verified live
-        against LM Studio during design).
+        against Ollama during design).
     @param npc_keywords {keyword_name: [skill_name, ...]}, from load_npc_keywords.
     @return The "tools" list for call_chat_completion.
     """
@@ -205,10 +205,10 @@ def _describe_qualities(qualities):
 def _fallback_npc_stats(npc_keywords, target_cr, hp_share):
     """!
     @brief The offline/failure path generate_npc_stats falls back to -- no network call at
-        all, so it's instant and safe to use both when LM Studio is genuinely unreachable and
+        all, so it's instant and safe to use both when Ollama is genuinely unreachable and
         when a save-game reload deliberately wants to skip generation (see
         DM_Persistence.py's load_game / DM_Rules.py's skip_llm_generation). Matches the rest
-        of the app's "LM Studio is best-effort, never blocks core gameplay" posture (RagIndex
+        of the app's "Ollama is best-effort, never blocks core gameplay" posture (RagIndex
         returns [] until ready; generate_load_failed_response still narrates on failure).
     @param npc_keywords {keyword_name: [skill_name, ...]}, from load_npc_keywords.
     @param target_cr The already variance-rolled challenge rating to fit toward.

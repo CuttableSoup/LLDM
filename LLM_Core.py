@@ -22,7 +22,11 @@ class LLMCore:
         """
         self.event_bus = event_bus
         self.event_bus.publish("log_info", "LLMCore initialized.")
-        self.api_url = "http://127.0.0.1:1234/v1/chat/completions"
+        self.api_url = "http://127.0.0.1:11434/v1/chat/completions"
+        # Ollama's OpenAI-compat endpoint 400s without an explicit "model" field (it can have
+        # many models pulled at once, unlike LM Studio's "whatever's currently loaded"), so
+        # every request built below includes this.
+        self.model = "gemma4"
         # Builds itself on a background thread (see RagIndex.__init__) -- perform_rag returns
         # no context at all until it's ready, rather than blocking LLMCore's own boot on
         # potentially minutes of first-time PDF extraction/embedding.
@@ -625,8 +629,8 @@ class LLMCore:
         @brief Projects context_window entries down to the bare {"role", "content"} shape the
             chat-completions API actually expects, stripping the "present" bookkeeping tag
             (see _queue_narration's own present_entities param) that never leaves this process
-            -- it's local presence metadata for _filter_present_history, not something LM
-            Studio has any use for.
+            -- it's local presence metadata for _filter_present_history, not something Ollama
+            has any use for.
         @param entries A list of context_window-shaped entries.
         @return The same entries, each reduced to just role/content.
         """
@@ -654,7 +658,7 @@ class LLMCore:
         """!
         @brief The network call + response handling shared by _queue_narration/_queue_dialogue/
             _queue_adam_response's own background fetch threads -- everything downstream of
-            "here are the messages to send" is identical either way: POST to LM Studio,
+            "here are the messages to send" is identical either way: POST to Ollama,
             optionally append the reply to the shared context_window (tagged with
             present_entities, same as the prompt that prompted it, so it becomes part of what
             everyone present has now witnessed), and publish llm_response_ready/
@@ -669,7 +673,7 @@ class LLMCore:
             whose exchanges are deliberately excluded from the shared window entirely (see
             _queue_adam_response's own docstring for why).
         """
-        data = {"messages": messages, "temperature": 0.7, "max_tokens": 4096}
+        data = {"model": self.model, "messages": messages, "temperature": 0.7, "max_tokens": 4096}
         # Exactly what's about to go over the wire, formatted for a human -- see
         # display_llm_debug (GUI_Core.py)'s Debug tab, not narration itself.
         query_text = "\n\n".join(f"[{m['role']}]\n{m['content']}" for m in messages)

@@ -2,7 +2,7 @@
 
 An autonomous dungeon master: the player types free-text actions, NLP maps them to a skill,
 a simplified D6 (West End Games) engine rolls dice and resolves outcomes, and a local LLM
-(currently Gemma via LM Studio at `http://127.0.0.1:1234`) narrates what happened. Skills,
+(currently Gemma via Ollama at `http://127.0.0.1:11434`) narrates what happened. Skills,
 entities, items, spells, rules, and scenarios are all data-driven via TOML, organized into
 "settings" — self-contained sibling directories under `Rules/` (`Rules/Fantasy/`,
 `Rules/Zombie/`), each independently scanned by `load_rules`. None of the engine itself is
@@ -72,7 +72,7 @@ the game" for when and how it's actually constructed.
   publishes `action_not_understood` instead. `IntentMatcher.register_item` incrementally
   re-registers a newly-created/reload-restored ad hoc entity's name/description on
   `item_catalog_updated`, the one event here that isn't input-driven.
-- **`LLM_Core.py`** — posts to LM Studio's OpenAI-compatible `/v1/chat/completions` on a
+- **`LLM_Core.py`** — posts to Ollama's OpenAI-compatible `/v1/chat/completions` on a
   background thread, with a rolling 100-message context window. Subscribes to eight narration
   triggers (see "Narration").
 - **`GUI_Core.py`** — Tkinter window: history pane + tabbed Party/Notes/Map/Debug panels, plus
@@ -305,7 +305,7 @@ random.uniform(1-variance, 1+variance)` before fitting — that plus keyword cho
 randomness comes from; `fit_skills_to_cr` itself stays deterministic and directly testable. On
 any failure (no `tool_calls`, malformed JSON, network error, timeout, or
 `skip_llm_generation=True`) it falls back to a random keyword pick with no network call —
-matching the app's "LM Studio is best-effort, never blocks core gameplay" posture.
+matching the app's "Ollama is best-effort, never blocks core gameplay" posture.
 
 `LLM_Client.py`'s `call_chat_completion` is a small, synchronous, stateless POST — deliberately
 not shared with `LLM_Core.py`'s async `fetch_from_llm` (`fetch_from_llm` must never raise; this
@@ -1032,10 +1032,75 @@ directly in input can resolve it via `map_to_action` before a bare skill would.
 
 ## LLM integration
 
-Endpoint is LM Studio's OpenAI-compatible API. `/v1/models` lists the catalog, not what's
-currently loaded — a chat completion can still 400 with `"No models loaded"` even when
-`/v1/models` shows one. The request payload has no explicit `"model"` field, which only works
-correctly when exactly one chat model is loaded.
+Endpoint is Ollama's OpenAI-compatible API (`http://127.0.0.1:11434/v1/chat/completions`,
+`ollama serve`'s default). Unlike LM Studio, Ollama can have several models pulled at once, so
+every request payload carries an explicit `"model"` field — `LLM_Client.py`'s own
+`DEFAULT_MODEL` ("gemma4") and `LLM_Core.py`'s own `self.model`, each independently, mirroring
+the same intentional non-sharing `_save_slot_dir`'s own module note documents. `/v1/models`
+lists every locally pulled model (Ollama's native `/api/tags` is the same catalog, non-OpenAI-
+shaped); a chat completion against a model name that hasn't been pulled 404s rather than
+falling back to whatever's loaded.
+
+`Ollama_Launcher.py`'s `ensure_ollama_running` is a best-effort local server bootstrap, called
+once from `LLDM.py`'s own `main()` right after `GUICore` is constructed (before `NLPCore`/
+`LLMCore`/`DMCore`) — specifically so its window already exists to report progress into (see
+"Booting the game"): a fast no-op if something's already listening at `127.0.0.1:11434`.
+Otherwise it resolves an `ollama.exe` to run —
+preferring a real system install (`shutil.which("ollama")`) over a vendored one, so installing
+Ollama for real later transparently takes over from a downloaded copy — and if neither exists
+at all, downloads Ollama's own official portable Windows build straight from its GitHub
+releases (`ollama-windows-amd64.zip`, resolved via the stable `.../releases/latest/download/...`
+URL, so this always tracks whatever's currently latest) into `vendor/ollama/`, a gitignored,
+per-machine directory exactly like `Saves/` — never committed, never shipped in the repo. The
+download is verified against Ollama's own published `sha256sum.txt` before extracting;
+`os.walk`-based `_find_executable` locates `ollama.exe` inside the extracted tree without
+assuming a particular zip layout. Windows-only by design (`ollama.exe`, the win_amd64 asset,
+`CREATE_NO_WINDOW`) — matches this project's own current platform (win32).
+
+Once an executable is resolved, `ensure_ollama_running` spawns `ollama serve` and returns
+immediately — deliberately not blocking on the new *process* actually becoming ready, since
+`NLPCore`'s own `sentence-transformers` model load (the very next boot step, ~15-20s) already
+gives a freshly-spawned Ollama plenty of time to come up in the background. The one-time
+*install* step, by contrast, does block main() — there's no "just try again later" fallback for
+a binary that doesn't exist on disk yet, and this only ever runs once per machine (every later
+launch finds the already-extracted executable first). Every failure mode (no network, a failed
+checksum, an unwritable `vendor/`, the process failing to launch) just logs and lets the app
+continue exactly as it already would with no Ollama available at all — the same best-effort
+posture every other LLM integration point in this codebase already follows. `main()` registers
+an `atexit` cleanup that terminates the spawned process, but only the one this call itself
+started — a pre-existing Ollama instance (started by hand, or by another app) is never touched.
+
+A running server alone doesn't mean narration will work — a chat completion against a model
+name that hasn't been pulled 404s (see this section's own opening paragraph), so
+`ensure_ollama_running` also calls `_ensure_model_pulled` right after resolving/spawning a
+server, whichever branch reached that point. Unlike the server spawn itself, this step *does*
+wait (up to `ready_timeout`, default 15s) for the server to actually answer — there's no way to
+know what's pulled, let alone pull something missing, without talking to it — then checks
+`GET /api/tags` (Ollama's own native listing, not the OpenAI-compat one) and, if `model` (default
+`DEFAULT_MODEL`, `"gemma4"` — kept in sync by hand with `LLM_Client.py`/`LLM_Core.py`'s own same-
+named defaults, the same duplicated-not-shared convention as everything else in this module)
+isn't listed, streams `POST /api/pull` and relays Ollama's own NDJSON progress lines through
+`log`, throttled to roughly every 10% per phase so it reads as a progress bar rather than a
+flood. `_model_already_pulled` treats a bare request name (`"gemma4"`) as matching its own
+implicit `":latest"` tag, since `/api/tags` always reports one even when none was given at pull
+time. Every failure here (server never comes up, network error mid-pull, an unknown model name)
+is the same best-effort "log and give up" as everything else in this module — the app's own
+existing "Could not connect to the local LLM"/404 handling is still the real fallback if a model
+genuinely never gets pulled.
+
+`ensure_ollama_running`'s own `log` callback, as wired by `LLDM.py`'s `main()`, reports status
+two ways: `event_bus.publish("log_info", ...)` (`Logger.py`'s ordinary console mirror) and
+`GUICore.display_system_status` (a `"[System] ..."` line in the History pane, the same prefix
+convention `display_game_saved`/`display_game_loaded`/`display_game_load_failed` already use).
+The latter is why `GUICore` is constructed first among the three event-subscribing cores in
+`main()` (ahead of `NLPCore`/`LLMCore`) rather than last — its window has to already exist for
+the (possibly multi-minute, first-run-only) download to have somewhere to report into.
+`display_system_status` calls `self.root.update()` after every line so progress is actually
+visible before `gui_core.start()`'s own `mainloop()` ever runs — the same manual event-loop-pump
+pattern `get_user_input` already uses elsewhere in this file. This construction reorder is safe
+only because none of `GUICore`'s own subscriptions (`llm_response_ready`, `rules_loaded`, ...)
+can fire this early regardless of order — nothing publishes them until `DMCore` exists, and
+`DMCore` isn't constructed until well after this point (see "Booting the game").
 
 ## RAG / sourcebook grounding
 
@@ -1091,16 +1156,16 @@ Practical constraints when touching this file:
   double defined alongside it), no model load, EventBus, or DMCore needed. Most other classes
   share fixture setup via `DMTestCase` (`scenario_name` class attribute, plus
   `_capture`/`_capture_any` helpers) and `LLMTestCase`.
-- **`test_integration.py`** — every test needing a real, running LM Studio, gated on
-  `_lm_studio_reachable()` so they skip together when nothing's listening on `127.0.0.1:1234`.
+- **`test_integration.py`** — every test needing a real, running Ollama, gated on
+  `_ollama_reachable()` so they skip together when nothing's listening on `127.0.0.1:11434`.
   `_LivePipelineTestCase`'s own optional `character` class attribute is forwarded straight into
   `DMCore`'s `character` param. `TestNpcGenerationLive` is a plain `unittest.TestCase` (no
   NLPCore/LLMCore) since NPC generation runs synchronously during `DMCore`'s own construction —
   a real tool-calling round trip. The pure fitting math and DMCore-side wiring both live in
   `test_unit.py` instead (patching `NPC_Generation._real_call_chat_completion` with a
   deterministic fake), so most of NPC generation stays covered by the fast offline suite — only
-  the "does the currently-loaded model actually return a valid tool call" question needs a live
-  LM Studio.
+  the "does the configured model actually return a valid tool call" question needs a live
+  Ollama.
 
 `python -m pytest -q` runs both files; `python -m pytest -q test_unit.py` runs the fast, offline
 subset only.

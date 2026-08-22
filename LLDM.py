@@ -1,4 +1,5 @@
 import argparse
+import atexit
 import json
 import os
 import sys
@@ -9,8 +10,21 @@ from LLM_Core import LLMCore
 from DM_Core import DMCore, scenario_file_path
 from GUI_Core import GUICore
 from NLP_Core import NLPCore
+from Ollama_Launcher import ensure_ollama_running
 
 DEFAULT_SCENARIO = "arena"
+
+
+def _stop_ollama(process):
+    """!
+    @brief atexit cleanup for a locally-spawned Ollama server -- only ever registered for a
+        process ensure_ollama_running() itself started (see main()), never one that was already
+        running before LLDM launched, so this can never kill an Ollama instance something else
+        depends on. terminate(), not kill() -- gives the server a chance to shut down cleanly.
+    @param process The subprocess.Popen handle ensure_ollama_running() returned.
+    """
+    if process.poll() is None:
+        process.terminate()
 
 
 def _peek_saved_scenario_key(slot_name, fallback, fallback_setting="Fantasy"):
@@ -85,13 +99,33 @@ def main():
     event_bus = EventBus()
     logger = Logger(event_bus)
 
+    # 1.5. GUICore is constructed before everything else below it, specifically so its window
+    # already exists for the Ollama bootstrap (next) to report progress into -- none of its own
+    # subscriptions (llm_response_ready, rules_loaded, ...) can fire this early regardless of
+    # construction order, since nothing publishes them until DMCore exists.
+    gui_core = GUICore(event_bus)
+
+    # 1.6. Best-effort local Ollama bootstrap -- installs a local copy if nothing's found
+    # anywhere (one-time, blocking; see Ollama_Launcher.py's own module note), then spawns it
+    # fire-and-forget, not waiting on the server itself becoming ready. Only registers cleanup
+    # for a process this call itself started, never a pre-existing one. Status is relayed both
+    # to the console (Logger.py, via log_info) and into the GUI's own History pane
+    # (display_system_status, which manually pumps the Tk event loop so progress is visible
+    # even before mainloop() starts running at the very end of this function) -- the only way
+    # a potentially multi-minute first-run download doesn't just look like a hung window.
+    def _report_ollama_status(message):
+        event_bus.publish("log_info", message)
+        gui_core.display_system_status(message)
+
+    ollama_process = ensure_ollama_running(log=_report_ollama_status)
+    if ollama_process is not None:
+        atexit.register(_stop_ollama, ollama_process)
+
     # 2. Initialize cores that subscribe to events
     # NLPCore needs to hear 'rules_loaded' from DMCore
     nlp_core = NLPCore(event_bus)
     # LLMCore needs to hear 'action_resolved' from DMCore
     llm_core = LLMCore(event_bus)
-    # GUICore needs to hear 'llm_response_ready' and 'rules_loaded'
-    gui_core = GUICore(event_bus)
 
     # 2.5. No scenario/character is loaded automatically -- DMCore (and the scenario it
     # publishes "scenario_loaded" for during its own __init__) is only ever constructed in

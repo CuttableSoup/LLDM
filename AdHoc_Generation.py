@@ -32,7 +32,7 @@ import random
 from LLM_Client import call_chat_completion as _real_call_chat_completion
 from NPC_Generation import fit_skills_to_cr
 
-DEFAULT_API_URL = "http://127.0.0.1:1234/v1/chat/completions"
+DEFAULT_API_URL = "http://127.0.0.1:11434/v1/chat/completions"
 DEFAULT_TIMEOUT = 8
 
 # The item-interaction verbs eligible for the ad hoc creation fallback, partitioned by which

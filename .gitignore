@@ -4,6 +4,7 @@ Saves/
 .vscode
 .pytest_cache
 Settings
+vendor/
 .agents
 .claude
 skills-lock.json

@@ -192,6 +192,20 @@ class GUICore:
     def display_llm_response(self, text):
         self.append_to_history(f"{text}\n\n")
 
+    def display_system_status(self, message):
+        """!
+        @brief Shows a one-off status line in the History pane, prefixed the same "[System]"
+            way display_game_saved/display_game_loaded/display_game_load_failed already are --
+            for out-of-band status that isn't narration but the player still needs to see (ex:
+            Ollama_Launcher.py's own download-progress/startup messages, relayed by LLDM.py's
+            main() before mainloop() is running yet -- see append_to_history's own root.update()
+            call below, which is what makes that visible without a running event loop, the same
+            manual-pump pattern get_user_input already uses).
+        @param message Plain text, no trailing newline needed.
+        """
+        self.append_to_history(f"[System] {message}\n")
+        self.root.update()
+
     def display_llm_debug(self, data):
         """!
         @brief Replaces the Debug tab's Query/Response boxes with the most recent LLM

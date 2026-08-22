@@ -7,6 +7,7 @@ import threading
 import tkinter as tk
 import tomllib
 import unittest
+import zipfile
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -58,6 +59,8 @@ from Intent_Classification import (
 )
 import LLDM
 from LLM_Core import LLMCore
+import Ollama_Launcher
+from Ollama_Launcher import ensure_ollama_running
 from LLM_Rag import RagIndex
 from NLP_Core import NLPCore
 from NPC_Generation import (
@@ -1461,7 +1464,7 @@ class TestNpcGeneration(unittest.TestCase):
 
     def test_generate_npc_stats_falls_back_when_call_chat_completion_raises(self):
         def failing_call(*args, **kwargs):
-            raise ConnectionError("no LM Studio")
+            raise ConnectionError("no Ollama")
 
         npc_keywords = {"warrior": ["blades", "axes", "athletics", "strength"]}
         result = generate_npc_stats(npc_keywords, target_cr=20, call_chat_completion=failing_call)
@@ -1621,7 +1624,7 @@ class TestAdHocGeneration(unittest.TestCase):
 
     def test_generate_ad_hoc_item_never_fabricates_when_call_chat_completion_raises(self):
         def failing_call(*args, **kwargs):
-            raise ConnectionError("no LM Studio")
+            raise ConnectionError("no Ollama")
 
         result = generate_ad_hoc_item("a stone", "take", "A dungeon.", call_chat_completion=failing_call)
         self.assertFalse(result["created"])
@@ -2348,7 +2351,7 @@ class TestReachableEntityNames(DMTestCase):
 
 class TestShopScenario(DMTestCase):
     """!
-    @brief End-to-end proof (mocked LLM, no live LM Studio needed) that Rules/Fantasy/
+    @brief End-to-end proof (mocked LLM, no live Ollama needed) that Rules/Fantasy/
         scenarios/shop.toml's "shopkeeper" can sell "most general goods... despite not being
         defined entities" (the scenario this file exists to exercise) -- TARGET_CENTRIC_INTENTS'
         own "trade" handling in DM_Improvisation.py. "dagger" is the shopkeeper's one real,
@@ -2444,7 +2447,7 @@ class TestNpcGenerationDMCoreIntegration(DMTestCase):
         against npc_generation_test.toml's own local "generated_stranger" entity_template --
         no live LLM, NPC_Generation._real_call_chat_completion is patched with a deterministic
         fake so this stays part of the fast offline suite (see test_integration.py for a real
-        end-to-end LM Studio round trip).
+        end-to-end Ollama round trip).
     """
     scenario_name = "npc_generation_test"
 
@@ -2766,6 +2769,190 @@ class TestPeekSavedScenarioKey(unittest.TestCase):
             "test_peek_scenario_key_setting", {"scenario_key": "rooftop", "setting": "Zombie"},
         )
         self.assertEqual(LLDM._peek_saved_scenario_key(slot, "arena"), ("rooftop", "Zombie"))
+
+
+class TestOllamaLauncher(unittest.TestCase):
+    """!
+    @brief Ollama_Launcher.py's ensure_ollama_running -- exercised entirely through its own
+        is_reachable/which/popen/download/fetch_text injection seams (the same dependency-
+        injection pattern call_chat_completion's own callers use elsewhere), so this needs no
+        real network probe, PATH lookup, subprocess spawn, or multi-gigabyte download. Every
+        test that could otherwise reach _install_vendored_ollama passes its own isolated
+        vendor_dir (a TemporaryDirectory), never the real vendor/ this module ships with.
+    """
+
+    def _write_fake_zip(self, zip_path):
+        with zipfile.ZipFile(zip_path, "w") as zf:
+            zf.writestr("ollama.exe", b"fake-binary-contents")
+
+    def test_already_running_is_a_noop(self):
+        fake_which = MagicMock()
+        fake_popen = MagicMock()
+        fake_pull = MagicMock()
+        result = ensure_ollama_running(
+            is_reachable=lambda host: True, which=fake_which, popen=fake_popen,
+            list_models=lambda host: ["gemma4:latest"], pull_model=fake_pull,
+        )
+        self.assertIsNone(result)
+        fake_which.assert_not_called()
+        fake_popen.assert_not_called()
+        fake_pull.assert_not_called()  # already pulled -- nothing to do
+
+    def test_spawns_ollama_serve_when_system_executable_found(self):
+        fake_process = MagicMock(pid=1234)
+        fake_popen = MagicMock(return_value=fake_process)
+        result = ensure_ollama_running(
+            is_reachable=lambda host: False, which=lambda name: "C:\\real\\ollama.exe", popen=fake_popen,
+            ready_timeout=0,  # never becomes reachable in this test -- skip the model-pull wait
+        )
+        self.assertIs(result, fake_process)
+        args, kwargs = fake_popen.call_args
+        self.assertEqual(args[0], ["C:\\real\\ollama.exe", "serve"])
+
+    def test_failed_launch_returns_none(self):
+        def exploding_popen(*args, **kwargs):
+            raise OSError("no permission")
+
+        result = ensure_ollama_running(
+            is_reachable=lambda host: False, which=lambda name: "C:\\real\\ollama.exe", popen=exploding_popen,
+        )
+        self.assertIsNone(result)
+
+    def test_missing_everywhere_and_failed_install_returns_none(self):
+        with tempfile.TemporaryDirectory() as vendor_dir:
+            def failing_download(url, dest_path, log):
+                raise ConnectionError("offline")
+
+            fake_popen = MagicMock()
+            result = ensure_ollama_running(
+                is_reachable=lambda host: False, which=lambda name: None, popen=fake_popen,
+                download=failing_download, fetch_text=lambda url: "", vendor_dir=vendor_dir,
+            )
+            self.assertIsNone(result)
+            fake_popen.assert_not_called()
+
+    def test_installs_a_vendored_copy_when_nothing_found(self):
+        with tempfile.TemporaryDirectory() as vendor_dir:
+            def fake_download(url, dest_path, log):
+                self._write_fake_zip(dest_path)
+
+            fake_process = MagicMock(pid=99)
+            fake_popen = MagicMock(return_value=fake_process)
+
+            result = ensure_ollama_running(
+                is_reachable=lambda host: False, which=lambda name: None, popen=fake_popen,
+                download=fake_download, fetch_text=lambda url: "", vendor_dir=vendor_dir,
+                ready_timeout=0,  # never becomes reachable in this test -- skip the model-pull wait
+            )
+
+            self.assertIs(result, fake_process)
+            args, kwargs = fake_popen.call_args
+            self.assertTrue(args[0][0].endswith("ollama.exe"))
+            self.assertTrue(os.path.exists(args[0][0]))
+            # The downloaded zip archive itself is cleaned up after extraction, not left behind.
+            self.assertEqual(os.listdir(vendor_dir), ["ollama.exe"])
+
+    def test_reuses_a_previously_vendored_copy_without_downloading(self):
+        with tempfile.TemporaryDirectory() as vendor_dir:
+            existing = os.path.join(vendor_dir, "ollama.exe")
+            with open(existing, "wb") as f:
+                f.write(b"already installed")
+
+            fake_download = MagicMock()
+            fake_process = MagicMock(pid=7)
+            fake_popen = MagicMock(return_value=fake_process)
+
+            result = ensure_ollama_running(
+                is_reachable=lambda host: False, which=lambda name: None, popen=fake_popen,
+                download=fake_download, vendor_dir=vendor_dir,
+                ready_timeout=0,  # never becomes reachable in this test -- skip the model-pull wait
+            )
+
+            self.assertIs(result, fake_process)
+            fake_download.assert_not_called()
+            args, kwargs = fake_popen.call_args
+            self.assertEqual(args[0][0], existing)
+
+    def test_checksum_mismatch_discards_the_download(self):
+        with tempfile.TemporaryDirectory() as vendor_dir:
+            def fake_download(url, dest_path, log):
+                self._write_fake_zip(dest_path)
+
+            fake_popen = MagicMock()
+            result = ensure_ollama_running(
+                is_reachable=lambda host: False, which=lambda name: None, popen=fake_popen,
+                download=fake_download,
+                fetch_text=lambda url: "0" * 64 + "  ./ollama-windows-amd64.zip\n",
+                vendor_dir=vendor_dir,
+            )
+
+            self.assertIsNone(result)
+            fake_popen.assert_not_called()
+            self.assertEqual(os.listdir(vendor_dir), [])
+
+    def test_pulls_a_missing_model_once_the_server_is_reachable(self):
+        fake_pull = MagicMock()
+        result = ensure_ollama_running(
+            is_reachable=lambda host: True, list_models=lambda host: [], pull_model=fake_pull,
+        )
+        self.assertIsNone(result)  # already running -- no process for this call to own
+        fake_pull.assert_called_once()
+        args, kwargs = fake_pull.call_args
+        self.assertEqual(args[1], "gemma4")  # (host, model, log)
+
+    def test_skips_pulling_a_model_already_present_under_its_implicit_latest_tag(self):
+        # /api/tags always reports a tag ("gemma4:latest"), even though the bare "gemma4" (the
+        # default model requested here) never explicitly names one -- _model_already_pulled has
+        # to bridge that, not just do an exact string match.
+        fake_pull = MagicMock()
+        ensure_ollama_running(
+            is_reachable=lambda host: True, list_models=lambda host: ["gemma4:latest"], pull_model=fake_pull,
+        )
+        fake_pull.assert_not_called()
+
+    def test_gives_up_on_model_check_if_server_never_becomes_reachable(self):
+        fake_list_models = MagicMock()
+        fake_pull = MagicMock()
+        logged = []
+        result = ensure_ollama_running(
+            is_reachable=lambda host: False, which=lambda name: "C:\\real\\ollama.exe",
+            popen=MagicMock(return_value=MagicMock(pid=1)), list_models=fake_list_models,
+            pull_model=fake_pull, ready_timeout=0, log=logged.append,
+        )
+        self.assertIsNotNone(result)  # the server process itself still spawned successfully
+        fake_list_models.assert_not_called()
+        fake_pull.assert_not_called()
+        self.assertTrue(any("never became reachable" in message for message in logged))
+
+    def test_default_pull_model_tolerates_a_total_with_no_completed_yet(self):
+        # Regression: Ollama's own "pulling <digest>" status line can carry "total" before
+        # "completed" has appeared at all -- _default_pull_model used to compute
+        # `completed * 100 // total` unconditionally once total was truthy, crashing with
+        # "unsupported operand type(s) for *: 'NoneType' and 'int'" on a real pull.
+        class _FakeStreamResponse:
+            def __init__(self, lines):
+                self._lines = lines
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def __iter__(self):
+                return iter(self._lines)
+
+        lines = [
+            json.dumps({"status": "pulling manifest"}).encode("utf-8"),
+            json.dumps({"status": "pulling abc123", "total": 100}).encode("utf-8"),
+            json.dumps({"status": "pulling abc123", "total": 100, "completed": 50}).encode("utf-8"),
+            json.dumps({"status": "success"}).encode("utf-8"),
+        ]
+        logged = []
+        with patch("urllib.request.urlopen", return_value=_FakeStreamResponse(lines)):
+            Ollama_Launcher._default_pull_model("http://127.0.0.1:11434", "gemma4", logged.append)
+
+        self.assertIn("success", logged)
 
 
 class TestLockedChest(DMTestCase):
@@ -3861,7 +4048,7 @@ class TestLlmDebugEvent(LLMTestCase):
     @brief fetch_from_llm's own network path (LLM_Core.py's _queue_narration) never runs for
         real in this offline suite -- threading.Thread is patched so its target is captured
         and invoked directly/synchronously instead of on a real background thread, with
-        urllib.request.urlopen mocked in place of a real LM Studio connection."""
+        urllib.request.urlopen mocked in place of a real Ollama connection."""
 
     def _run_fetch(self, prompt, urlopen_result=None, urlopen_side_effect=None):
         with patch("threading.Thread") as mock_thread, \
@@ -4188,6 +4375,14 @@ class TestGUICore(unittest.TestCase):
                            "party_status_changed", "game_saved", "game_loaded",
                            "game_load_failed", "save_requested", "load_requested"):
             self.assertIn(event_name, self.event_bus.subscribers)
+
+    def test_display_system_status_appends_to_the_history_pane(self):
+        # Used by LLDM.py's main() to relay Ollama_Launcher.py's own bootstrap status into the
+        # GUI (see CLAUDE.md's "LLM integration") -- same "[System] ..." prefix convention
+        # display_game_saved/display_game_loaded/display_game_load_failed already use.
+        self.gui.display_system_status("Ollama already running.")
+        content = self.gui.history_text.get("1.0", tk.END)
+        self.assertIn("[System] Ollama already running.", content)
 
     def test_menu_bar_layout_character_create_file_save_load_scenario_load(self):
         self.assertEqual(self.gui.menu_bar.entrycget(0, "label"), "Character")

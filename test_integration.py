@@ -1,9 +1,9 @@
 """!
 @file test_integration.py
-@brief Integration tests that hit a real, running LM Studio -- as opposed to test_unit.py,
+@brief Integration tests that hit a real, running Ollama -- as opposed to test_unit.py,
     which is entirely fast and network-independent. Every TestCase/test function here is
-    gated on the same _lm_studio_reachable() check, so each *skips* (not fails) when nothing's
-    listening on 127.0.0.1:1234, rather than dragging the rest of the suite's pass/fail status
+    gated on the same _ollama_reachable() check, so each *skips* (not fails) when nothing's
+    listening on 127.0.0.1:11434, rather than dragging the rest of the suite's pass/fail status
     down with them. Run with `python -m pytest -q test_integration.py` (or just let
     `python -m pytest -q` pick both files up); expect ~20-40s per test against a real,
     already-loaded model (TestSaveAndResumeConversation costs roughly double that, since it
@@ -27,9 +27,9 @@ from Textual_Core import TextualCore
 from textual.widgets import RichLog
 
 
-def _lm_studio_reachable():
+def _ollama_reachable():
     try:
-        urllib.request.urlopen("http://127.0.0.1:1234/v1/models", timeout=2)
+        urllib.request.urlopen("http://127.0.0.1:11434/v1/models", timeout=2)
         return True
     except Exception:
         return False
@@ -43,7 +43,7 @@ class _LivePipelineTestCase(unittest.TestCase):
     """!
     @brief Shared setup/polling helpers for TestCase-based integration tests that drive the
         real NLPCore/LLMCore/DMCore pipeline via literal user_input_submitted publishes
-        against a live LM Studio. Not a test itself -- pytest/unittest only collect classes
+        against a live Ollama. Not a test itself -- pytest/unittest only collect classes
         named "Test*" by default, and this one deliberately isn't. Subclasses set
         scenario_name and call self._boot() from their own setUp.
     """
@@ -72,7 +72,7 @@ class _LivePipelineTestCase(unittest.TestCase):
             time.sleep(0.2)
         self.assertGreaterEqual(
             len(self.responses), count,
-            f"Timed out waiting for the {count}th LLM response (LM Studio may be slow/unloaded).",
+            f"Timed out waiting for the {count}th LLM response (Ollama may be slow/unloaded).",
         )
 
     def _say(self, player_input):
@@ -81,13 +81,13 @@ class _LivePipelineTestCase(unittest.TestCase):
         return self.responses[-1]
 
 
-@unittest.skipUnless(_lm_studio_reachable(), "LM Studio not reachable at http://127.0.0.1:1234")
+@unittest.skipUnless(_ollama_reachable(), "Ollama not reachable at http://127.0.0.1:11434")
 class TestInnkeeperConversation(_LivePipelineTestCase):
     """!
-    @brief End-to-end conversation test against a real, running LM Studio -- the only way to
+    @brief End-to-end conversation test against a real, running Ollama -- the only way to
            actually verify the LLM uses fed context (scenario setting, character roster,
            per-turn defender_details) rather than just checking the prompt shape. Skipped
-           entirely (not failed) when LM Studio isn't reachable, so the rest of the suite
+           entirely (not failed) when Ollama isn't reachable, so the rest of the suite
            stays fast and network-independent.
     """
     scenario_name = "tavern"
@@ -145,7 +145,7 @@ class TestInnkeeperConversation(_LivePipelineTestCase):
         # signal. The printed transcript above is how this actually gets verified.
 
 
-@unittest.skipUnless(_lm_studio_reachable(), "LM Studio not reachable at http://127.0.0.1:1234")
+@unittest.skipUnless(_ollama_reachable(), "Ollama not reachable at http://127.0.0.1:11434")
 class TestRagGroundedNarration(_LivePipelineTestCase):
     """!
     @brief Verifies the real, end-to-end RAG pipeline (Settings/Fantasy/*.pdf -> RagIndex's
@@ -153,7 +153,7 @@ class TestRagGroundedNarration(_LivePipelineTestCase):
         fires against a live LLM request -- test_unit.py's TestRagIndex/TestLlmPerformRag cover
         each piece in isolation with fakes, but this is the only way to confirm the whole chain
         is wired together correctly, the same reasoning TestInnkeeperConversation gives for why
-        a live LM Studio conversation test earns its keep alongside the offline suite.
+        a live Ollama conversation test earns its keep alongside the offline suite.
 
         Skipped (not failed) if the index isn't built/cached yet -- the first build takes
         minutes against the real sourcebook (see CLAUDE.md's "RAG / sourcebook grounding"),
@@ -191,7 +191,7 @@ class TestRagGroundedNarration(_LivePipelineTestCase):
         )
 
 
-@unittest.skipUnless(_lm_studio_reachable(), "LM Studio not reachable at http://127.0.0.1:1234")
+@unittest.skipUnless(_ollama_reachable(), "Ollama not reachable at http://127.0.0.1:11434")
 class TestArenaCombatConversation(_LivePipelineTestCase):
     """!
     @brief Dialogue's combat counterpart: real NLPCore/DMCore/LLMCore driving several rounds
@@ -238,7 +238,7 @@ class TestArenaCombatConversation(_LivePipelineTestCase):
         self.assertIn("thane", first_round_actors)
 
 
-@unittest.skipUnless(_lm_studio_reachable(), "LM Studio not reachable at http://127.0.0.1:1234")
+@unittest.skipUnless(_ollama_reachable(), "Ollama not reachable at http://127.0.0.1:11434")
 class TestMultiActionCombatConversation(_LivePipelineTestCase):
     """!
     @brief The West End Games multi-action rule's own live-pipeline proof (see DM_Core.py's
@@ -300,7 +300,7 @@ class TestMultiActionCombatConversation(_LivePipelineTestCase):
         self.assertEqual(len(round_events[1]["actions"]), 1)
 
 
-@unittest.skipUnless(_lm_studio_reachable(), "LM Studio not reachable at http://127.0.0.1:1234")
+@unittest.skipUnless(_ollama_reachable(), "Ollama not reachable at http://127.0.0.1:11434")
 class TestCreatedCharacterConversation(_LivePipelineTestCase):
     """!
     @brief End-to-end proof that a freshly created, custom-named, custom-race character --
@@ -337,7 +337,7 @@ class TestCreatedCharacterConversation(_LivePipelineTestCase):
         self.assertEqual(round_events[0]["actions"][0]["entity"], "Aria")
 
 
-@unittest.skipUnless(_lm_studio_reachable(), "LM Studio not reachable at http://127.0.0.1:1234")
+@unittest.skipUnless(_ollama_reachable(), "Ollama not reachable at http://127.0.0.1:11434")
 class TestChestSagaConversation(_LivePipelineTestCase):
     """!
     @brief Item-interaction's full-pipeline counterpart: real NLPCore/DMCore/LLMCore driving
@@ -448,7 +448,7 @@ class TestChestSagaConversation(_LivePipelineTestCase):
             print(f"> {player_input}\n{response}\n")
 
 
-@unittest.skipUnless(_lm_studio_reachable(), "LM Studio not reachable at http://127.0.0.1:1234")
+@unittest.skipUnless(_ollama_reachable(), "Ollama not reachable at http://127.0.0.1:11434")
 class TestChestTradeConversation(_LivePipelineTestCase):
     """!
     @brief Economy's full-pipeline counterpart: real NLPCore/DMCore/LLMCore driving a "buy"
@@ -500,7 +500,7 @@ class TestChestTradeConversation(_LivePipelineTestCase):
         print(f"> buy the cursed dagger (funded)\n{bought_response}\n")
 
 
-@unittest.skipUnless(_lm_studio_reachable(), "LM Studio not reachable at http://127.0.0.1:1234")
+@unittest.skipUnless(_ollama_reachable(), "Ollama not reachable at http://127.0.0.1:11434")
 class TestCryptDungeonConversation(_LivePipelineTestCase):
     """!
     @brief The multi-room dungeon's full-pipeline counterpart: real NLPCore/DMCore/LLMCore
@@ -607,7 +607,7 @@ class TestCryptDungeonConversation(_LivePipelineTestCase):
             print(f"> {player_input}\n{response}\n")
 
 
-@unittest.skipUnless(_lm_studio_reachable(), "LM Studio not reachable at http://127.0.0.1:1234")
+@unittest.skipUnless(_ollama_reachable(), "Ollama not reachable at http://127.0.0.1:11434")
 class TestSaveAndResumeConversation(unittest.TestCase):
     """!
     @brief Simulates an actual app restart, not just a save_game/load_game round-trip: session
@@ -635,7 +635,7 @@ class TestSaveAndResumeConversation(unittest.TestCase):
             time.sleep(0.2)
         self.assertGreaterEqual(
             len(responses), count,
-            f"Timed out waiting for the {count}th LLM response (LM Studio may be slow/unloaded).",
+            f"Timed out waiting for the {count}th LLM response (Ollama may be slow/unloaded).",
         )
 
     def test_session_resumes_with_prior_context_via_real_save_load_commands(self):
@@ -698,7 +698,7 @@ class TestSaveAndResumeConversation(unittest.TestCase):
         print(f"> have you heard anything about trouble on the road\n{resumed_response}")
 
 
-@unittest.skipUnless(_lm_studio_reachable(), "LM Studio not reachable at http://127.0.0.1:1234")
+@unittest.skipUnless(_ollama_reachable(), "Ollama not reachable at http://127.0.0.1:11434")
 class TestAdHocRemovalLive(unittest.TestCase):
     """!
     @brief A real, live tool-calling round trip against decide_entity_removal (AdHoc_Generation.py)
@@ -746,10 +746,10 @@ class TestAdHocRemovalLive(unittest.TestCase):
         self.assertNotIn("thane", self.dm_core.scenario_entities)
 
 
-@unittest.skipUnless(_lm_studio_reachable(), "LM Studio not reachable at http://127.0.0.1:1234")
+@unittest.skipUnless(_ollama_reachable(), "Ollama not reachable at http://127.0.0.1:11434")
 class TestNpcGenerationLive(unittest.TestCase):
     """!
-    @brief A real, live tool-calling round trip against LM Studio -- test_unit.py's own
+    @brief A real, live tool-calling round trip against Ollama -- test_unit.py's own
         TestNpcGeneration/TestNpcGenerationDMCoreIntegration cover the pure math and the
         DMCore-side wiring with an injected fake, but only a real call actually proves the
         currently-loaded model reliably returns a valid tool_calls response shaped the way
@@ -788,12 +788,12 @@ class TestNpcGenerationLive(unittest.TestCase):
         self.assertTrue(roster_line.startswith(entity["name"]))
 
 
-@pytest.mark.skipif(not _lm_studio_reachable(), reason="LM Studio not reachable at 127.0.0.1:1234")
+@pytest.mark.skipif(not _ollama_reachable(), reason="Ollama not reachable at 127.0.0.1:11434")
 @pytest.mark.asyncio
 async def test_innkeeper_dialogue_through_textual():
     """!
     @brief Full-stack integration test for the tavern dialogue: the real NLPCore, LLMCore
-        (hitting a real, running LM Studio -- skipped, not failed, if nothing's listening),
+        (hitting a real, running Ollama -- skipped, not failed, if nothing's listening),
         DMCore, and TextualCore all wired together, driven by actual keystrokes into
         "#input_box" rather than synthetic event_bus.publish calls. This is the Textual
         counterpart to TestInnkeeperConversation above, which drives the identical conversation
@@ -822,7 +822,7 @@ async def test_innkeeper_dialogue_through_textual():
         while len(responses) < count and time.time() < deadline:
             await pilot.pause(0.2)
         assert len(responses) >= count, (
-            f"Timed out waiting for the {count}th LLM response (LM Studio may be slow/unloaded)."
+            f"Timed out waiting for the {count}th LLM response (Ollama may be slow/unloaded)."
         )
         # One more pump so a response that just arrived is actually written into the widget --
         # TextualCore's call_safely posts through call_from_thread, which needs the app's own
@@ -833,7 +833,7 @@ async def test_innkeeper_dialogue_through_textual():
         # The scene intro is queued during DMCore.__init__, before the app ever mounted --
         # TextualCore buffers it and on_mount flushes it once mounting finishes (see
         # test_unit.py's test_events_published_before_mount_are_buffered_then_flushed), but the
-        # real LM Studio call behind it can still take a few seconds, so this waits on the
+        # real Ollama call behind it can still take a few seconds, so this waits on the
         # event itself rather than assuming it's already landed.
         await wait_for_response_count(pilot, 1)
 
