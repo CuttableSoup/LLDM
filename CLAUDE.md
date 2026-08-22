@@ -1196,26 +1196,6 @@ Practical constraints when touching this file:
 `python -m pytest -q` runs both files; `python -m pytest -q test_unit.py` runs the fast, offline
 subset only.
 
-## Known gaps
-
-- `Intent_Classification.py` — a keyword-driven skill match can still dominate an unrelated
-  whole-sentence embedding match (ex: "identify the dagger" resolves to the wrong skill). One
-  instance confirmed live by `test_unit.py`'s own keyword-collision invariant test:
-  `DIALOGUE_KEYWORDS`' `"ask "` is a substring of a real skill's own `"mask"` keyword, so a
-  sentence using "mask" as a whole word could still misfire as dialogue detection — not fixed,
-  since changing keyword-matching behavior was out of scope for the refactor that found it.
-- `DM_Rules.py`'s `_instance_entities` disambiguates duplicate names (`"wolf"`/`"wolf_2"`) via a
-  counter scoped to one call's own `entity_entries` list, not against the live `self.entities`
-  universe — deliberately, since it has to stay idempotent across repeated `load_scenario()`/
-  `load_game()` calls over the *same* entity list (see that method's own comment). The accepted
-  cost: two *different* rooms in the same multi-room dungeon that happen to declare the same
-  creature name would silently collide — the second room's own instance would overwrite the
-  first's live HP/conditions in `self.entities` rather than disambiguating to `"_2"`. Not
-  currently reachable by any shipped scenario, and not fixed, since a real fix needs the engine
-  to track which room a name came from, a bigger change than any deepening pass attempted so
-  far — see `DM_Improvisation.py`'s own `_unique_entity_key`, a separate mechanism for ad hoc
-  placement that checks `self.entities` directly and doesn't share this gap (or this fix).
-
 ## Extended goals
 
 Not yet started, except where noted:

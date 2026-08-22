@@ -120,7 +120,7 @@ specializations = ["longbow", "crossbow", "sling"]
 [[skill]]
 name = "appraise"
 description = "Determining the financial or historical value of items."
-keywords = ["evaluation", "commerce", "investigation", "value", "price", "worth", "cost", "identify", "examine", "appraise"]
+keywords = ["evaluation", "commerce", "investigation", "value", "price", "worth", "cost", "identify", "appraise"]
 opposes = ["forgery", "deception"]
 specializations = ["jewelry", "weapons", "antiques"]
 

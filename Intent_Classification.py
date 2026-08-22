@@ -300,45 +300,67 @@ def detect_item_intent(processed_text):
         "open", "close", "advance", "retreat", "formation_behind", "formation_abreast",
         or None.
     """
-    if any(keyword in processed_text for keyword in EXAMINE_KEYWORDS):
+    if _keyword_gate(processed_text, EXAMINE_KEYWORDS):
         return "examine"
-    # Checked ahead of EQUIP_KEYWORDS -- "unequip " contains EQUIP_KEYWORDS' own "equip "
-    # as a literal substring ("un" + "equip "), so this order isn't optional.
-    if any(keyword in processed_text for keyword in UNEQUIP_KEYWORDS):
+    # Checked ahead of EQUIP_KEYWORDS purely as defense in depth -- _phrase_matches' own
+    # word-boundary check already keeps "unequip " from matching EQUIP_KEYWORDS' "equip "
+    # (no boundary between the "un" and "equip" it's fused to), but TAKE_KEYWORDS' "take "
+    # genuinely is a separate, correctly-bounded word inside "take off my armor", so this
+    # order still matters for that one.
+    if _keyword_gate(processed_text, UNEQUIP_KEYWORDS):
         return "unequip"
-    if any(keyword in processed_text for keyword in EQUIP_KEYWORDS):
+    if _keyword_gate(processed_text, EQUIP_KEYWORDS):
         return "equip"
-    if any(keyword in processed_text for keyword in DROP_KEYWORDS):
+    if _keyword_gate(processed_text, DROP_KEYWORDS):
         return "drop"
-    if any(keyword in processed_text for keyword in TAKE_KEYWORDS):
+    if _keyword_gate(processed_text, TAKE_KEYWORDS):
         return "take"
-    if any(keyword in processed_text for keyword in GIVE_KEYWORDS):
+    if _keyword_gate(processed_text, GIVE_KEYWORDS):
         return "give"
-    if any(keyword in processed_text for keyword in TRADE_KEYWORDS):
+    if _keyword_gate(processed_text, TRADE_KEYWORDS):
         return "trade"
-    if any(keyword in processed_text for keyword in USE_KEYWORDS):
+    if _keyword_gate(processed_text, USE_KEYWORDS):
         return "use"
-    if any(keyword in processed_text for keyword in OPEN_KEYWORDS):
+    if _keyword_gate(processed_text, OPEN_KEYWORDS):
         return "open"
-    if any(keyword in processed_text for keyword in CLOSE_KEYWORDS):
+    if _keyword_gate(processed_text, CLOSE_KEYWORDS):
         return "close"
     # Checked ahead of ADVANCE_KEYWORDS -- "stand behind"/"walk abreast" etc. don't
     # collide with any advance/retreat phrase, but formation is the more specific match
     # whenever both could plausibly apply.
-    if any(keyword in processed_text for keyword in FORMATION_BEHIND_KEYWORDS):
+    if _keyword_gate(processed_text, FORMATION_BEHIND_KEYWORDS):
         return "formation_behind"
-    if any(keyword in processed_text for keyword in FORMATION_ABREAST_KEYWORDS):
+    if _keyword_gate(processed_text, FORMATION_ABREAST_KEYWORDS):
         return "formation_abreast"
-    if any(keyword in processed_text for keyword in ADVANCE_KEYWORDS):
+    if _keyword_gate(processed_text, ADVANCE_KEYWORDS):
         return "advance"
-    if any(keyword in processed_text for keyword in RETREAT_KEYWORDS):
+    if _keyword_gate(processed_text, RETREAT_KEYWORDS):
         return "retreat"
     return None
 
 
+def _phrase_matches(phrase, processed_text):
+    """!
+    @brief Whole-word/whole-phrase containment check -- a word-boundary regex, not the raw
+        substring test every keyword tuple in this file used to be checked with. A short
+        phrase (ex: DIALOGUE_KEYWORDS' "ask ") could otherwise false-positive against a
+        longer, unrelated word that merely happens to end the same way (ex: "mask", a real
+        skill's own keyword -- see CLAUDE.md's "Known gaps" and this file's own
+        test_item_and_dialogue_keywords_never_collide_with_a_real_skill_keyword in
+        test_unit.py, which is what caught this live). Every internal space in a multi-word
+        phrase (ex: "close the ") stays literal; only the phrase's own two outer edges get a
+        \\b boundary -- the leading/trailing whitespace most phrases in this file are
+        authored with is stripped first so it doesn't end up inside that boundary.
+    @param phrase One keyword/phrase from a KEYWORDS tuple.
+    @param processed_text The cleaned and processed player input (or one clause of it).
+    @return True if phrase appears in processed_text as a whole word/phrase.
+    """
+    return re.search(rf"\b{re.escape(phrase.strip())}\b", processed_text) is not None
+
+
 def _keyword_gate(processed_text, keywords):
     """!@brief Shared "does this phrase contain any of these keyword phrases" check."""
-    return any(keyword in processed_text for keyword in keywords)
+    return any(_phrase_matches(keyword, processed_text) for keyword in keywords)
 
 
 def detect_dialogue_intent(processed_text):
@@ -369,7 +391,7 @@ def detect_edit_intent(processed_text):
 def detect_direction(processed_text):
     """!@brief Returns "forward"/"back"/"left"/"right", or None -- see DIRECTION_PHRASES."""
     for direction, phrases in DIRECTION_PHRASES.items():
-        if any(phrase in processed_text for phrase in phrases):
+        if _keyword_gate(processed_text, phrases):
             return direction
     return None
 

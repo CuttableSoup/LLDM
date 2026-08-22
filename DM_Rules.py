@@ -301,6 +301,24 @@ class RulesMixin(DMCoreProtocol):
         self.current_room_key = None
         self.visited_rooms = {}
         self.persistent_entities = []
+        # Both persist for the rest of this DMCore's lifetime (until the next
+        # load_scenario_definition -- __init__ or load_game) -- see _instance_entities' own
+        # docstring for why this has to survive across separate calls now, not just within one.
+        self.entity_occurrence_counts = {}
+        # name -> a pristine deep copy of self.entities[name] as it stood the moment it was
+        # first ever instanced, captured before _place_new_entity's own self.entities[name] =
+        # instance overwrite -- see _instance_entities' own docstring.
+        self._pristine_entity_templates = {}
+        # The exact chronological sequence of "a location/room scope was instanced for the
+        # first time" events this playthrough -- ("location", location_key) or ("room",
+        # location_key, room_key) tuples, appended by _enter_location/_populate_room's own
+        # cache-miss branches (never by _instance_entities itself, which also runs for
+        # encounter-conjured entities that aren't a location/room scope at all). Saved and
+        # replayed verbatim by DM_Persistence.py's load_game, so a reload's own from-scratch
+        # re-instancing reproduces the same "wolf"/"wolf_2" assignments the original live
+        # playthrough made even when two *different* locations were visited in an interleaved
+        # order -- see _instance_entities' own docstring for the disambiguation this feeds.
+        self.entity_instancing_order = []
 
     def _instance_entities(self, entity_entries, party_pool=None, skip_llm_generation=False):
         """!
@@ -345,19 +363,46 @@ class RulesMixin(DMCoreProtocol):
                 entry whose resolved instance_name is in self.removed_entities (see
                 DM_Improvisation.py's remove_entity_from_scene), which is skipped entirely
                 rather than being re-instanced.
+
+            Disambiguation (self.entity_occurrence_counts) is scoped to this whole DMCore's
+            lifetime, not to one call -- deliberately not a fresh per-call counter, and
+            deliberately not _unique_entity_key's own "check self.entities" logic either (see
+            that method's own docstring for the *different* case it solves). self.entities is
+            one flat namespace for the entire game, so two *different* calls (ex: two different
+            rooms in the same multi-room dungeon that happen to declare the same creature name)
+            have to be disambiguated against each other too, not just within their own
+            entity_entries list -- a call-scoped counter would have both independently produce
+            "wolf" and silently collide, the second call's own _place_new_entity overwriting the
+            first's live HP/conditions. A shared, ever-incrementing counter fixes that: whichever
+            call happens first claims the bare name, every later call with the same template_name
+            gets the next suffix, regardless of which scope it came from. self._pristine_entity_
+            templates (a "name"-branch-only sibling cache, same lifetime) fixes the other half of
+            the same problem: without it, a second occurrence's own deep copy would come from
+            whatever the first occurrence's own _place_new_entity already overwrote self.entities
+            [template_name] with -- a live, possibly-wounded instance -- rather than the original
+            authored data.
+
+            This still stays correct for DM_Persistence.py's load_game, which re-derives every
+            visited location/room from scratch rather than trusting live instance names: every
+            call site that could otherwise repeat the *same* scope's own instancing (a location
+            already cached, a room already in self.visited_rooms) is gated by its caller's own
+            cache check (_enter_location's "persistent_names" cache, _populate_room's
+            visited_rooms cache) before it ever reaches here -- so within one load_game() call,
+            each location/room scope's own entities are only ever instanced once. self.entity_
+            instancing_order (appended by those same two cache-miss branches, never by this
+            method) records the exact chronological sequence those scopes were first instanced
+            in, live -- saved and replayed verbatim by load_game, so the disambiguation above
+            reproduces the original playthrough's own "wolf"/"wolf_2" assignments even when the
+            player interleaved visits across two *different* locations (left one location
+            mid-dungeon, visited a second, then returned to the first for new rooms), not just
+            within a single location's own rooms. A save written before this ordering existed
+            has no self.entity_instancing_order of its own; load_game falls back to its own
+            previous nested location-then-rooms replay for one of those, which stays exactly as
+            correct as it always was for the non-interleaved case.
         """
         party_pool = party_pool if party_pool is not None else []
         instance_names = []
-        # Deliberately a fresh per-call counter, not _unique_entity_key's own "check
-        # self.entities" logic (see that method's own docstring for the *different* case it
-        # solves) -- this call must be idempotent w.r.t. entity_entries alone: load_scenario()/
-        # load_game() both re-run the exact same top-level entities list against the same
-        # self.entities more than once in a single DMCore's lifetime, and every re-run has to
-        # reproduce the identical "wolf"/"wolf_2" sequence so DM_Persistence.py's own saved-
-        # state overlay (matched back onto re-instanced entities by name) still lines up.
-        # Checking self.entities directly, as _unique_entity_key does, would see the *previous*
-        # run's own "wolf" as already taken and cascade into "wolf_3", "wolf_4", ... instead.
-        occurrence_counts = {}
+        occurrence_counts = self.entity_occurrence_counts
 
         for entry in entity_entries:
             is_generated_template = "template" in entry
@@ -377,6 +422,20 @@ class RulesMixin(DMCoreProtocol):
                 if template is None:
                     self.event_bus.publish("log_error", f"Scenario references unknown entity: {template_name}")
                     continue
+                # self.entities holds templates and live instances under the same key -- the
+                # very first entry naming template_name still finds the pristine, hand-authored
+                # data here (nothing has instanced it yet), but a *second* entry (a different
+                # room/location scope reusing the same creature name -- the whole reason
+                # self.entity_occurrence_counts now spans more than one call, above) would
+                # otherwise find whatever the first entry's own _place_new_entity already
+                # overwrote that key with instead: a live, possibly-wounded instance, not the
+                # original template. Snapshotting it here, once, the first time this
+                # template_name is ever seen, is what keeps every later occurrence a clean copy
+                # of the authored original regardless of what's happened to the first instance
+                # since.
+                if template_name not in self._pristine_entity_templates:
+                    self._pristine_entity_templates[template_name] = copy.deepcopy(template)
+                template = self._pristine_entity_templates[template_name]
 
             occurrence_counts[template_name] = occurrence_counts.get(template_name, 0) + 1
             occurrence = occurrence_counts[template_name]
@@ -441,13 +500,15 @@ class RulesMixin(DMCoreProtocol):
             (or the player) for DM_Improvisation.py's own ad hoc item/creature placement -- a
             single name straight from the LLM, never enum-constrained, unlike
             decide_entity_removal/decide_entity_edit's own name field. Checked against the live
-            self.entities universe directly (unlike _instance_entities' own occurrence_counts,
-            deliberately a fresh per-call counter instead -- see that method's own docstring for
-            why: it has to stay idempotent across repeated load_scenario()/load_game() calls
-            over the *same* entity_entries, which checking self.entities directly would break).
-            A single ad hoc placement has no such repeat-call concern -- it only ever runs once,
-            live -- so checking self.entities directly is both safe and necessary here: without
-            it, self.entities[name] = entity would silently clobber whatever already held that
+            self.entities universe directly (unlike _instance_entities' own
+            self.entity_occurrence_counts, which tracks claimed names itself rather than
+            re-deriving them from self.entities -- see that method's own docstring for why: a
+            location/room scope that load_game re-instances has to stay idempotent across that
+            one call, and self.entities can hold a stale, not-yet-overwritten previous instance
+            at the moment a scope is re-derived). A single ad hoc placement has no such
+            repeat-call concern -- it only ever runs once, live -- so checking self.entities
+            directly is both safe and necessary here: without it, self.entities[name] = entity
+            would silently clobber whatever already held that
             key, up to and including the player entity itself if the LLM happened to invent a
             matching name. entity["name"] (the display text narration reads) is left untouched
             by the caller -- DM_Social.py's describe_character already falls back to
@@ -519,6 +580,7 @@ class RulesMixin(DMCoreProtocol):
                 skip_llm_generation=skip_llm_generation,
             )
             self.visited_rooms[room_key] = list(room_entities)
+            self.entity_instancing_order.append(("room", self.current_location_key, room_key))
         self.scenario_entities = list(self.persistent_entities) + room_entities
 
     def load_scenario(self, skip_llm_generation=False):
@@ -605,6 +667,7 @@ class RulesMixin(DMCoreProtocol):
             cache["persistent_names"] = self._instance_location_persistent_names(
                 location, skip_llm_generation=skip_llm_generation,
             )
+            self.entity_instancing_order.append(("location", location_key))
         # A direct reference, not a copy -- remove_entity_from_scene mutates
         # self.persistent_entities in place (ex: removing a party member), which has to reach
         # this location's own cache directly so a later re-entry doesn't resurrect it. Mirrors

@@ -51,6 +51,7 @@ from Intent_Classification import (
     UNEQUIP_KEYWORDS,
     USE_KEYWORDS,
     IntentClassifier,
+    _phrase_matches,
     detect_dialogue_intent,
     detect_help_intent,
     detect_item_intent,
@@ -546,13 +547,12 @@ class TestIntentClassification(unittest.TestCase):
         # Turns the prose scattered across Intent_Classification.py's own keyword-tuple
         # comments (ex: "TRADE_KEYWORDS deliberately avoids every word in skills.toml's
         # 'appraise' keywords list") into one executable invariant: no item/dialogue keyword
-        # phrase this file declares should be findable inside a plain sentence that merely uses
-        # a real skill's own keyword as a whole word -- otherwise a sentence clearly about that
-        # skill could get silently swallowed by item/dialogue detection, which always runs
-        # first. Skill keywords are checked space-padded (" {keyword} "), the minimal sentence
-        # context a keyword could plausibly appear in, since the real detection code matches
-        # each phrase (with whatever leading/trailing space it was authored with, ex:
-        # "ask " or "close the ") against the whole processed sentence, not an isolated word.
+        # phrase this file declares should actually *match* (via _phrase_matches -- the same
+        # word-boundary check every real gate uses, not a raw substring test) a plain sentence
+        # that merely uses a real skill's own keyword as a whole word -- otherwise a sentence
+        # clearly about that skill could get silently swallowed by item/dialogue detection,
+        # which always runs first. Skill keywords are checked space-padded (" {keyword} "), the
+        # minimal sentence context a keyword could plausibly appear in.
         skills_path = os.path.join("Rules", "Fantasy", "skills.toml")
         with open(skills_path, "rb") as f:
             skills_data = tomllib.load(f)
@@ -572,31 +572,27 @@ class TestIntentClassification(unittest.TestCase):
             "DIALOGUE_KEYWORDS": DIALOGUE_KEYWORDS,
             "TRAVEL_KEYWORDS": TRAVEL_KEYWORDS,
         }
-        # Known, pre-existing exceptions -- not introduced by this refactor, and out of this
-        # refactor's own scope to fix (a pure, zero-behavior-change extraction). "examine" is
-        # deliberately both an EXAMINE_KEYWORDS phrase (item detection, checked first) and one
-        # of appraise's own skills.toml keywords (CLAUDE.md's "Known gaps": "a keyword-driven
-        # skill match can still dominate an unrelated whole-sentence embedding match"), so
-        # "examine the dagger" always resolves as an item-examine rather than ever reaching
-        # appraise -- accepted. "ask " colliding with "mask" (ex: a disguise/stealth skill's
-        # own keyword) was NOT previously known or documented anywhere -- this test found it
-        # live; flagged here rather than silently fixed, since changing DIALOGUE_KEYWORDS'
-        # matching behavior is a real behavior change, out of scope for this pass.
-        known_exceptions = {
-            ("EXAMINE_KEYWORDS", "examine", "examine"),
-            ("DIALOGUE_KEYWORDS", "ask ", "mask"),
-        }
-
+        # No known exceptions remain: appraise's own skills.toml keywords deliberately exclude
+        # "examine" (EXAMINE_KEYWORDS' own item-detection word, checked first) precisely so this
+        # matrix can be a real, unconditional invariant rather than needing a carve-out for a
+        # skill keyword that could never actually be reached anyway.
         for tuple_name, keyword_tuple in keyword_tuples_by_name.items():
             for phrase in keyword_tuple:
                 for skill_keyword in skill_keywords:
-                    if (tuple_name, phrase, skill_keyword) in known_exceptions:
-                        continue
-                    self.assertNotIn(
-                        phrase, f" {skill_keyword} ",
-                        f"{tuple_name}'s {phrase!r} is findable inside a sentence using skill "
-                        f"keyword {skill_keyword!r}",
+                    self.assertFalse(
+                        _phrase_matches(phrase, f" {skill_keyword} "),
+                        f"{tuple_name}'s {phrase!r} matches a sentence using skill keyword "
+                        f"{skill_keyword!r}",
                     )
+
+    def test_dialogue_keyword_no_longer_false_positives_on_a_containing_skill_keyword(self):
+        # The regression this fix closes: DIALOGUE_KEYWORDS' "ask " used to be a raw substring
+        # of "mask" (disguise's own skills.toml keyword), so a sentence about disguising with a
+        # mask -- naming no item-interaction verb at all -- would misfire as dialogue detection
+        # before skill matching ever got a chance to run.
+        self.assertFalse(detect_dialogue_intent("mask my presence"))
+        # The true positive this fix must not have broken in the process.
+        self.assertTrue(detect_dialogue_intent("ask the guard about the road"))
 
 
 class TestClarificationResponse(LLMTestCase):
@@ -4056,6 +4052,178 @@ class TestMultiRoomSaveLoad(DMTestCase):
         self.assertEqual(fresh_dm.rooms["entrance"].get("ground"), ["health potion"])
         self.assertEqual(fresh_dm.current_room_key, "hall_of_webs")
         self.assertEqual(fresh_dm.entities["gladstone"]["inventory"].count("health potion"), 2)
+
+
+class TestDuplicateEntityNamesAcrossRooms(DMTestCase):
+    """!
+    @brief The DM_Rules.py "Known gaps" entry this fixes: self.entity_occurrence_counts is now
+        scoped to the whole DMCore's lifetime, not to one _instance_entities call, so two
+        different rooms in the same multi-room dungeon (crypt.toml) that happen to declare the
+        same creature name disambiguate against each other instead of the second one's own
+        _place_new_entity silently overwriting the first's live HP/conditions under the same
+        self.entities key. crypt.toml itself never actually declares such a collision (see its
+        own comment on "kept in sync by hand"), so this injects a second room reusing
+        "giant spider" (already real in hall_of_webs) directly onto self.dm_core.rooms, the
+        same "inject a room, then enter_room into it" technique TestMultiRoomDungeon's own
+        move/revisit tests already use.
+    """
+    scenario_name = "crypt"
+
+    def _inject_colliding_room(self):
+        self.dm_core.rooms["ambush_nook"] = {
+            "key": "ambush_nook", "name": "Ambush Nook", "bands": 1, "enclosed": True,
+            "entities": [{"name": "giant spider", "band": 1}],
+        }
+
+    def test_second_rooms_duplicate_name_disambiguates_instead_of_colliding(self):
+        self.dm_core.enter_room("hall_of_webs")
+        self.assertIn("giant spider", self.dm_core.entities)
+        self.dm_core.apply_damage("giant spider", 9)  # 14 max_hp -> 5, so an overwrite is detectable
+        self.assertEqual(self.dm_core.get_current_hp("giant spider"), 5)
+
+        self._inject_colliding_room()
+        self.dm_core.enter_room("ambush_nook")
+
+        self.assertEqual(self.dm_core.scenario_entities, ["gladstone", "thane", "anne", "giant spider_2"])
+        self.assertIn("giant spider_2", self.dm_core.entities)
+        # The second instance is a fresh, full-HP copy of the template -- not the first's own
+        # wounded dict reused/aliased.
+        self.assertEqual(self.dm_core.get_current_hp("giant spider_2"), 14)
+        # The critical assertion: the first spider's live, wounded state must survive
+        # untouched -- before this fix, the second room's own instancing overwrote
+        # self.entities["giant spider"] outright.
+        self.assertEqual(self.dm_core.get_current_hp("giant spider"), 5)
+
+    def test_save_then_load_restores_both_disambiguated_instances_correctly(self):
+        self.dm_core.enter_room("hall_of_webs")
+        self.dm_core.apply_damage("giant spider", 9)
+        self._inject_colliding_room()
+        self.dm_core.enter_room("ambush_nook")
+        self.dm_core.apply_damage("giant spider_2", 3)
+
+        slot_name = "test_crypt_duplicate_name_slot"
+        slot_dir = self.dm_core._save_slot_dir(slot_name)
+        self.addCleanup(shutil.rmtree, slot_dir, ignore_errors=True)
+        self.dm_core.save_game(slot_name)
+
+        # load_game's own load_scenario_definition re-reads crypt.toml fresh from disk, which
+        # would otherwise wipe the injected "ambush_nook" room -- re-inject it the moment
+        # self.locations exists again, exactly where load_game itself populates it, before the
+        # location_runtime replay loop (which needs it present) runs.
+        fresh_dm = DMCore(EventBus(), scenario_name="crypt")
+        real_load_scenario_definition = fresh_dm.load_scenario_definition
+
+        def load_scenario_definition_with_ambush_nook(scenario_name):
+            real_load_scenario_definition(scenario_name)
+            fresh_dm.locations["crypt"]["rooms"]["ambush_nook"] = {
+                "key": "ambush_nook", "name": "Ambush Nook", "bands": 1, "enclosed": True,
+                "entities": [{"name": "giant spider", "band": 1}],
+            }
+
+        fresh_dm.load_scenario_definition = load_scenario_definition_with_ambush_nook
+        fresh_dm.load_game(slot_name)
+
+        self.assertEqual(fresh_dm.get_current_hp("giant spider"), 5)
+        self.assertEqual(fresh_dm.get_current_hp("giant spider_2"), 11)
+
+
+class TestInterleavedLocationSaveLoad(DMTestCase):
+    """!
+    @brief The residual gap _instance_entities' own docstring used to carry even after
+        TestDuplicateEntityNamesAcrossRooms' fix: a same-location, cross-*room* collision was
+        already correctly disambiguated live, but DM_Persistence.py's load_game re-derived every
+        visited scope from scratch via a *nested* "each location, then all of that location's
+        own rooms" loop -- which doesn't reproduce the true chronological order when the player
+        interleaves visits across two *different* locations (leaves one location mid-dungeon,
+        visits a second, then returns to the first for a room they hadn't seen yet). self.entity_
+        instancing_order (DM_Rules.py) now records that exact live order and load_game replays it
+        verbatim instead. crypt.toml is one location -- this test injects a second, "b_wing", to
+        actually exercise cross-location interleaving, the same "inject after construction, then
+        drive it with low-level DMCore calls directly" technique TestDuplicateEntityNamesAcrossRooms
+        already uses for a single extra room.
+    """
+    scenario_name = "crypt"
+
+    def _inject_b_wing(self, dm_core):
+        dm_core.locations["b_wing"] = {
+            "key": "b_wing", "name": "B Wing", "start_room": "b_room", "entities": [],
+            "rooms": {
+                "b_room": {
+                    "key": "b_room", "name": "B Room", "bands": 1, "enclosed": True,
+                    "entities": [{"name": "giant spider", "band": 1}],
+                },
+            },
+        }
+
+    def test_save_then_load_preserves_interleaved_cross_location_disambiguation(self):
+        # True chronological order: b_wing's own spider is instanced *before* crypt's
+        # guard_chamber (visited only after returning from b_wing), even though crypt itself
+        # was entered first (at __init__) and would sort first under a naive "group every
+        # location's own rooms together" replay.
+        self._inject_b_wing(self.dm_core)
+        # A second, colliding reference alongside guard_chamber's own real "iron chest" --
+        # crypt.toml itself declares no such collision (kept collision-free by hand, per its
+        # own comments), so this is injected the same way TestDuplicateEntityNamesAcrossRooms
+        # injects its own "ambush_nook" room.
+        self.dm_core.locations["crypt"]["rooms"]["guard_chamber"]["entities"].append(
+            {"name": "giant spider", "band": 3},
+        )
+
+        self.dm_core._enter_location("b_wing")  # first ever "giant spider" -> "giant spider"
+        self.dm_core._enter_location("crypt", arrival_room="guard_chamber")  # second -> "_2"
+
+        self.assertIn("giant spider", self.dm_core.entities)
+        self.assertIn("giant spider_2", self.dm_core.entities)
+        self.dm_core.apply_damage("giant spider", 9)  # b_wing's own spider: 14 -> 5
+        self.dm_core.apply_damage("giant spider_2", 3)  # crypt's guard_chamber spider: 14 -> 11
+
+        slot_name = "test_crypt_interleaved_location_slot"
+        self.addCleanup(shutil.rmtree, self.dm_core._save_slot_dir(slot_name), ignore_errors=True)
+        self.dm_core.save_game(slot_name)
+
+        fresh_dm = DMCore(EventBus(), scenario_name="crypt")
+        real_load_scenario_definition = fresh_dm.load_scenario_definition
+
+        def load_scenario_definition_with_b_wing(scenario_name):
+            real_load_scenario_definition(scenario_name)
+            self._inject_b_wing(fresh_dm)
+            fresh_dm.locations["crypt"]["rooms"]["guard_chamber"]["entities"].append(
+                {"name": "giant spider", "band": 3},
+            )
+
+        fresh_dm.load_scenario_definition = load_scenario_definition_with_b_wing
+        fresh_dm.load_game(slot_name)
+
+        # Had load_game fallen back to grouping crypt's own rooms together (the pre-fix
+        # replay order), guard_chamber's spider would have claimed the bare "giant spider"
+        # name instead -- these two assertions are the real regression guard.
+        self.assertEqual(fresh_dm.get_current_hp("giant spider"), 5)
+        self.assertEqual(fresh_dm.get_current_hp("giant spider_2"), 11)
+
+    def test_load_falls_back_gracefully_for_a_save_missing_entity_instancing_order(self):
+        # Backward compatibility: a save written before self.entity_instancing_order existed
+        # simply has no such key -- load_game must still restore the game (via
+        # _replay_nested_instancing), not crash.
+        self.dm_core.enter_room("hall_of_webs")
+        self.dm_core.apply_damage("giant spider", 6)  # 14 -> 8
+
+        slot_name = "test_crypt_no_instancing_order_slot"
+        slot_dir = self.dm_core._save_slot_dir(slot_name)
+        self.addCleanup(shutil.rmtree, slot_dir, ignore_errors=True)
+        self.dm_core.save_game(slot_name)
+
+        save_path = os.path.join(slot_dir, "dm_state.json")
+        with open(save_path) as f:
+            data = json.load(f)
+        del data["entity_instancing_order"]
+        with open(save_path, "w") as f:
+            json.dump(data, f)
+
+        fresh_dm = DMCore(EventBus(), scenario_name="crypt")
+        fresh_dm.load_game(slot_name)
+
+        self.assertEqual(fresh_dm.current_room_key, "hall_of_webs")
+        self.assertEqual(fresh_dm.get_current_hp("giant spider"), 8)
 
 
 class TestLLMSaveLoad(LLMTestCase):

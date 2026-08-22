@@ -132,6 +132,15 @@ class PersistenceMixin(DMCoreProtocol):
             -- every name ever forcibly removed via ImprovisationMixin.remove_entity_from_scene
             (DM_Improvisation.py), so a reload doesn't let a scenario/room's own static
             "entities" list respawn something the player (or ADaM, on their behalf) removed.
+
+            Also saves "entity_instancing_order" (DM_Rules.py's self.entity_instancing_order) --
+            the exact chronological sequence every location/room scope was first instanced in,
+            live. load_game replays this verbatim rather than its own nested "each location,
+            then all of that location's rooms" loop, so a save's own disambiguated "wolf"/
+            "wolf_2" instance names still line up correctly even when the player interleaved
+            visits across two different locations (see DM_Rules.py's _instance_entities' own
+            docstring). Absent from a save written before this field existed -- load_game falls
+            back to its previous replay order for those.
         @param slot_name The save slot's name (used as a directory name under Saves/).
         """
         slot_dir = self._save_slot_dir(slot_name)
@@ -196,6 +205,7 @@ class PersistenceMixin(DMCoreProtocol):
             "instances": {name: _instance_state(name) for name in instance_names},
             "ad_hoc_entities": self._collect_ad_hoc_entities(),
             "removed_entities": list(self.removed_entities),
+            "entity_instancing_order": [list(entry) for entry in self.entity_instancing_order],
         }
         with open(os.path.join(slot_dir, "dm_state.json"), "w") as f:
             json.dump(data, f, indent=2)
@@ -204,6 +214,89 @@ class PersistenceMixin(DMCoreProtocol):
         # this directly so a save gets a plain visible confirmation in the main history pane
         # without spending an LLM call narrating something as mundane as "you saved the game."
         self.event_bus.publish("game_saved", {"slot": slot_name})
+
+    def _replay_ordered_instancing(self, saved_instancing_order):
+        """!
+        @brief load_game's preferred replay path -- re-instances every location/room scope in
+            the exact chronological order the original live playthrough first instanced them in
+            (DM_Rules.py's self.entity_instancing_order, round-tripped through the save as
+            plain lists), rather than grouping every location's own rooms together the way
+            self.location_runtime's own dict shape would otherwise suggest. This is what keeps
+            DM_Rules.py's self.entity_occurrence_counts-driven "wolf"/"wolf_2" disambiguation
+            correct even when the player interleaved visits across two different locations --
+            see _instance_entities' own docstring. Deliberately calls
+            _instance_location_persistent_names/_instance_entities directly, the same as
+            _replay_nested_instancing below, rather than _enter_location/_populate_room -- this
+            is a from-scratch bulk re-derivation of *every* visited scope, not a live move, and
+            must not re-trigger _enter_location's own party-formation/current_target/random-
+            encounter side effects for anywhere other than the player's actual current location.
+        @param saved_instancing_order The save file's own "entity_instancing_order" list --
+            ["location", location_key] or ["room", location_key, room_key] entries, in order.
+            Guaranteed non-empty by the caller (an empty list means no save this recent has ever
+            been written, which can't happen -- __init__ always enters a start location).
+        """
+        # _instance_location_persistent_names/_instance_entities don't append to
+        # self.entity_instancing_order themselves (only _enter_location/_populate_room's own
+        # cache-miss branches do, for the live path) -- set it directly from the save's own
+        # recorded sequence up front, since that's exactly what it should end up holding.
+        self.entity_instancing_order = [tuple(entry) for entry in saved_instancing_order]
+
+        for entry in saved_instancing_order:
+            kind = entry[0]
+            location_key = entry[1]
+            location = self.locations.get(location_key)
+            if location is None:
+                continue
+            cache = self.location_runtime.setdefault(location_key, {})
+            if kind == "location":
+                if "persistent_names" not in cache:
+                    cache["persistent_names"] = self._instance_location_persistent_names(
+                        location, skip_llm_generation=True,
+                    )
+            else:
+                room_key = entry[2]
+                room = location.get("rooms", {}).get(room_key)
+                visited_rooms = cache.setdefault("visited_rooms", {})
+                if room and room_key not in visited_rooms:
+                    visited_rooms[room_key] = self._instance_entities(
+                        room.get("entities", []), party_pool=cache.get("persistent_names", []),
+                        skip_llm_generation=True,
+                    )
+
+    def _replay_nested_instancing(self, saved_location_runtime):
+        """!
+        @brief load_game's fallback replay path, for a save written before self.entity_
+            instancing_order existed (see _replay_ordered_instancing, above): re-instances each
+            location the save's own "location_runtime" names, and, for a room-based location,
+            all of that location's own visited rooms together, right after. Correct as long as
+            the player never interleaved visits across two different locations -- the same
+            limitation this whole mechanism carried before self.entity_instancing_order was
+            introduced. Rebuilds self.entity_instancing_order to match this same replay order
+            (rather than leaving it at load_scenario_definition's own empty reset) -- a save
+            written before this field existed has no better history to fall back on, but at
+            least carries a self-consistent order forward for _replay_ordered_instancing to use
+            on any *later* reload.
+        @param saved_location_runtime The save file's own "location_runtime" dict.
+        """
+        for location_key, saved_cache in saved_location_runtime.items():
+            location = self.locations.get(location_key)
+            if location is None:
+                continue
+            cache = self.location_runtime.setdefault(location_key, {})
+            cache["persistent_names"] = self._instance_location_persistent_names(
+                location, skip_llm_generation=True,
+            )
+            self.entity_instancing_order.append(("location", location_key))
+            if location.get("rooms"):
+                cache["visited_rooms"] = {}
+                for room_key in saved_cache.get("visited_rooms", {}):
+                    room = location["rooms"].get(room_key)
+                    if room:
+                        cache["visited_rooms"][room_key] = self._instance_entities(
+                            room.get("entities", []), party_pool=cache["persistent_names"],
+                            skip_llm_generation=True,
+                        )
+                        self.entity_instancing_order.append(("room", location_key, room_key))
 
     def load_game(self, slot_name):
         """!
@@ -225,12 +318,21 @@ class PersistenceMixin(DMCoreProtocol):
             its own visited rooms' entities once, mirroring exactly how a single room's own
             entities were already re-derived from the room's static list rather than trusting
             the saved instance names directly (same reasoning the load_rules call below already
-            follows: re-instance from current TOML, not whatever's live in memory -- and
-            _instance_entities' own occurrence-counting is idempotent, so re-running it here
-            reproduces the exact same instance names every time). This populates
-            self.location_runtime *before* load_scenario()/_enter_location ever look at it, so
-            their own "already cached, don't re-instance" check finds it and reuses it instead
-            of paying for a second real LLM round trip on a generate=true template. Then
+            follows: re-instance from current TOML, not whatever's live in memory). load_rules
+            (via load_scenario_definition, called just above) resets self.entity_occurrence_
+            counts/self.entity_instancing_order to {}/[], and this loop below is the only thing
+            that advances them before load_scenario() runs. The save's own "entity_instancing_
+            order" (present on every save written by this version) drives the replay directly,
+            in the exact chronological order those scopes were first instanced in live -- so the
+            disambiguated "wolf"/"wolf_2" names this produces line up with the saved per-instance
+            overlay below even if the player interleaved visits across two different locations,
+            not just within one (see DM_Rules.py's _instance_entities' own docstring). A save
+            written before that field existed has none; the loop falls back to its own previous
+            "each location, then all of that location's own rooms" replay order for those, which
+            stays exactly as correct as it always was outside that interleaved case. This
+            populates self.location_runtime *before* load_scenario()/_enter_location ever look at
+            it, so their own "already cached, don't re-instance" check finds it and reuses it
+            instead of paying for a second real LLM round trip on a generate=true template. Then
             load_scenario() lands at the scenario's own start_location; if the save says the
             player was actually somewhere else, _enter_location (or, within the same location,
             the existing enter_room) jumps there -- arrival_band/room don't matter for either
@@ -291,23 +393,11 @@ class PersistenceMixin(DMCoreProtocol):
         self.load_rules(os.path.join("Rules", self.setting))
         self.load_scenario_definition(self.scenario_key)
 
-        for location_key, saved_cache in data.get("location_runtime", {}).items():
-            location = self.locations.get(location_key)
-            if location is None:
-                continue
-            cache = self.location_runtime.setdefault(location_key, {})
-            cache["persistent_names"] = self._instance_location_persistent_names(
-                location, skip_llm_generation=True,
-            )
-            if location.get("rooms"):
-                cache["visited_rooms"] = {}
-                for room_key in saved_cache.get("visited_rooms", {}):
-                    room = location["rooms"].get(room_key)
-                    if room:
-                        cache["visited_rooms"][room_key] = self._instance_entities(
-                            room.get("entities", []), party_pool=cache["persistent_names"],
-                            skip_llm_generation=True,
-                        )
+        saved_instancing_order = data.get("entity_instancing_order")
+        if saved_instancing_order:
+            self._replay_ordered_instancing(saved_instancing_order)
+        else:
+            self._replay_nested_instancing(data.get("location_runtime", {}))
 
         self.load_scenario(skip_llm_generation=True)
 
