@@ -43,22 +43,35 @@ the game" for when and how it's actually constructed.
   persona), and `DM_Improvisation.py` (ad hoc entity creation/removal via LLM function calling).
   Python's MRO flattens every mixin method onto one `DMCore` instance, so call sites don't care
   which file defines a given method.
-- **`NLP_Core.py`** — `sentence-transformers` (`all-MiniLM-L6-v2`) embeds each skill's
-  name/description/keywords as separate phrases, then cosine-matches player input against all
-  of them. Also matches free text against item names/directions/save-load prefixes (see "Items
-  and movement as intents"), against `DIALOGUE_KEYWORDS` (see "Dialogue"), and against the
-  reserved `ADAM_NAME_PATTERN` (see "ADaM") — gated by `REMOVAL_KEYWORDS`, a cheap local
-  pre-check for whether an ADaM-addressed message is worth a synchronous ad hoc-removal LLM call
-  (see "Ad hoc entity creation and removal"). An item-verb clause whose item name doesn't match
-  anything is tracked and, if the whole turn would otherwise resolve to nothing, published as
-  `improvisation_requested` instead of `action_not_understood`. Also incrementally re-registers
-  a newly-created/reload-restored ad hoc entity's name/description on `item_catalog_updated`,
-  the one event here that isn't input-driven. Splits input into one or more clauses
-  (`_split_action_clauses`) and classifies each independently as an item interaction or a
-  skill/ability action — merged into one `turn_detected {clauses: [{kind: "item", intent,
-  item_name} | {kind: "action", skill, score, target?}, ...], input}` event, always a list, even
-  for the ordinary single-clause input (see "Multiple actions" for the full classification
-  order); if no clause resolves to anything, publishes `action_not_understood` instead.
+- **`NLP_Core.py`** — thin EventBus glue: subscribes to `user_input_submitted`/
+  `rules_loaded`/`item_catalog_updated`, delegates to `Intent_Classification.py`'s
+  `IntentClassifier`, and publishes whatever events come back. Also defines
+  `SentenceTransformerMatcher`, the production `IntentMatcher` adapter — owns the loaded
+  `sentence-transformers` (`all-MiniLM-L6-v2`) model and every precomputed skill/item/target
+  embedding tensor, and is the one place in this file that still touches the EventBus for
+  granular "mapped input to X" diagnostics, since encoding/scoring is where those facts become
+  known. `NLPCore` itself owns no classification logic.
+- **`Intent_Classification.py`** — pure, EventBus-independent: `IntentClassifier.classify()`
+  is what used to be `NLPCore._on_user_input`, returning `(processed_text, events)` — a list of
+  one or more `{"event", "payload"}` dicts for the glue layer to publish, rather than publishing
+  anything itself (`AdHoc_Generation.py`/`DM_Improvisation.py` is the same pure/glue split).
+  Depends on one seam, `IntentMatcher` (embedding-based skill/item/target matching —
+  `SentenceTransformerMatcher` in production, a canned `FakeMatcher` in tests), for everything
+  it can't resolve by keyword/regex alone. Matches free text against item names/directions/
+  save-load prefixes (see "Items and movement as intents"), against `DIALOGUE_KEYWORDS` (see
+  "Dialogue"), and against the reserved `ADAM_NAME_PATTERN` (see "ADaM") — gated by
+  `REMOVAL_KEYWORDS`, a cheap local pre-check for whether an ADaM-addressed message is worth a
+  synchronous ad hoc-removal LLM call (see "Ad hoc entity creation and removal"). An item-verb
+  clause whose item name doesn't match anything is tracked and, if the whole turn would
+  otherwise resolve to nothing, published as `improvisation_requested` instead of
+  `action_not_understood`. Splits input into one or more clauses (`split_action_clauses`) and
+  classifies each independently as an item interaction or a skill/ability action — merged into
+  one `turn_detected {clauses: [{kind: "item", intent, item_name} | {kind: "action", skill,
+  score, target?}, ...], input}` event, always a list, even for the ordinary single-clause input
+  (see "Multiple actions" for the full classification order); if no clause resolves to anything,
+  publishes `action_not_understood` instead. `IntentMatcher.register_item` incrementally
+  re-registers a newly-created/reload-restored ad hoc entity's name/description on
+  `item_catalog_updated`, the one event here that isn't input-driven.
 - **`LLM_Core.py`** — posts to LM Studio's OpenAI-compatible `/v1/chat/completions` on a
   background thread, with a rolling 100-message context window. Subscribes to eight narration
   triggers (see "Narration").
@@ -181,12 +194,12 @@ movement as intents") costs a turn slot exactly like a skill/ability entry does.
 receives `dice_penalty` itself, since it never rolled anything to begin with (an item *test*
 that does roll, ex: picking a lock, both counts *and* gets penalized).
 
-**Detection.** `NLPCore._on_user_input` splits input into clauses once (`_split_action_clauses`,
-on `ACTION_CLAUSE_PATTERN`: `--`, `?`, `,`, `;`, `:`, and the standalone words `"and"`/`"then"`,
-`\b`-anchored so a word merely containing one of those substrings never splits), after save/load
-and inter-room movement have had their whole-input shot. Each clause is classified
-independently, in two passes:
-1. **Item-interaction pass.** `_detect_item_intent` runs per clause. `EXEMPT_ITEM_INTENTS`
+**Detection.** `Intent_Classification.py`'s `IntentClassifier.classify` splits input into
+clauses once (`split_action_clauses`, on `ACTION_CLAUSE_PATTERN`: `--`, `?`, `,`, `;`, `:`, and
+the standalone words `"and"`/`"then"`, `\b`-anchored so a word merely containing one of those
+substrings never splits), after save/load and inter-room movement have had their whole-input
+shot. Each clause is classified independently, in two passes:
+1. **Item-interaction pass.** `detect_item_intent` runs per clause. `EXEMPT_ITEM_INTENTS`
    (`advance`/`retreat`/`formation_behind`/`formation_abreast`) publish their own free-standing
    `item_interaction_detected` immediately and never join the shared turn (so `"attack the wolf
    and retreat"` still lets the retreat through). Everything else resolving as an item
@@ -547,7 +560,13 @@ permanent `"identified"` condition — the content it reveals is read back off t
 - **`transfer_currency(from_name, to_name, amount=None)`** — moves currency; `amount=None`
   moves all of it; clamps to what's available; no-ops on a missing entity.
 - **`transfer_item(from_name, to_name, item_name)`** — moves one matching `inventory` entry;
-  duplicates represent quantity, so callers loop for more than one.
+  duplicates represent quantity, so callers loop for more than one. Always needs a real
+  `from_name` to remove the item from.
+- **`place_new_item(destination_name, item_name)`** — adds an item to `destination_name`'s
+  inventory with no source at all; the primitive `transfer_item` can't cover, for a freshly
+  conjured ad hoc item that never existed anywhere before this moment (see "Ad hoc entity
+  creation and removal" — `DM_Improvisation.py`'s own placement logic is this primitive's one
+  caller today).
 - **`loot_entity(from_name, to_name)`** — sweeps all currency plus every inventory item.
 
 ## Items and movement as intents
@@ -555,20 +574,21 @@ permanent `"identified"` condition — the content it reveals is read back off t
 Looking at, taking, giving, trading, opening, closing, using, equipping, dropping, moving
 between rooms, and directing the party's formation all bypass the *skill/dice* system entirely
 — none of them warrant a roll (most still cost a turn action and share in the multi-action
-penalty pool — see "Multiple actions"). `NLPCore._detect_item_intent` recognizes phrase-level
-keywords for thirteen intents, run per clause once save/load and inter-room movement have had
-their own whole-input shot: `examine`, `equip` (`equip`/`wear`/`wield`/`put on`), `unequip`
-(`unequip`/`take off` — deliberately not a broader `remove`, which would collide with
-items.toml's own trap names and finesse's `disarm`/`trap` keywords), `drop`
-(`drop`/`discard`/`put down`), `take`, `give`, `trade`, `open`, `close`, `use` (currently
-`drink`/`quaff`), `formation_behind`/`formation_abreast`, and direction/movement phrases for
-`advance`/`retreat`/`move`. `advance`/`retreat`/`formation_*` are `EXEMPT_ITEM_INTENTS` — free,
-published as their own free-standing `item_interaction_detected` and never joining the shared
-turn; `open`/`close` (`NO_ITEM_LOOKUP_INTENTS`) still cost a turn slot but act on the current
-scene target directly rather than a named item; `move` is checked separately, against the whole
-input, ahead of per-clause classification. Every other intent runs through `NLPCore.map_to_item`,
-an embedding match against every `supertype == "object"` entity's name/description (currency
-checked first as a fixed synonym list, returning the sentinel `"currency"`), and — if it
+penalty pool — see "Multiple actions"). `Intent_Classification.py`'s `detect_item_intent`
+recognizes phrase-level keywords for thirteen intents, run per clause once save/load and
+inter-room movement have had their own whole-input shot: `examine`, `equip`
+(`equip`/`wear`/`wield`/`put on`), `unequip` (`unequip`/`take off` — deliberately not a broader
+`remove`, which would collide with items.toml's own trap names and finesse's `disarm`/`trap`
+keywords), `drop` (`drop`/`discard`/`put down`), `take`, `give`, `trade`, `open`, `close`, `use`
+(currently `drink`/`quaff`), `formation_behind`/`formation_abreast`, and direction/movement
+phrases for `advance`/`retreat`/`move`. `advance`/`retreat`/`formation_*` are
+`EXEMPT_ITEM_INTENTS` — free, published as their own free-standing `item_interaction_detected`
+and never joining the shared turn; `open`/`close` (`NO_ITEM_LOOKUP_INTENTS`) still cost a turn
+slot but act on the current scene target directly rather than a named item; `move` is checked
+separately, against the whole input, ahead of per-clause classification. Every other intent runs
+through the `IntentMatcher` seam's own `map_to_item`, an embedding match against every
+`supertype == "object"` entity's name/description (currency checked first as a fixed synonym
+list, returning the sentinel `"currency"`), and — if it
 resolves — joins the same shared per-turn clause list a skill/ability action does.
 
 `DMCore._on_item_interaction_detected` resolves with zero dice rolls:
@@ -587,13 +607,22 @@ resolves — joins the same shared per-turn clause list a skill/ability action d
     round trip.
   - A later `"examine"`/`"take"` aimed at a ground item is resolved by `_resolve_ground_intent`
     before falling through to the ordinary target-based path below.
-- A locked container denies everything (`reason: "locked"`).
+- `"examine"`/`"take"` against an item already sitting in the player's own inventory (ex: an ad
+  hoc item `DM_Improvisation.py` placed straight into inventory) resolve directly against the
+  player, computed as its own `already_owned` flag right alongside the ground-item check above —
+  checked *ahead of* the locked/closed-target gates and the item-is-target-itself check below,
+  not just the source/destination resolution, so an unrelated locked/closed container elsewhere
+  in the scene never blocks examining something the player already possesses.
+- A locked container denies everything else (`reason: "locked"`).
 - `item_name` equal to the current target's own name addresses the target itself, not something
   inside it.
 - A closed (but unlocked) container denies reaching its contents (`reason: "closed"`) while still
   allowing examine/open.
 - `"take"`/`"trade"` move an item to the player; `"give"` moves one to the target; `"trade"`
-  additionally charges the item's TOML `value` (`reason: "cant_afford"` if unaffordable).
+  additionally charges the item's TOML `value` (`reason: "cant_afford"` if unaffordable) —
+  deliberately excluded from the `already_owned` short-circuit above, since buying an
+  already-owned item is nonsensical and `"trade"`'s own price-payment always pays whatever the
+  scene target happens to be, independent of source/destination.
 - `_resolve_open_close_intent` is gated to `subtype == "container"`; toggles `"closed"`,
   independent of `"locked"` — a picked lock still needs its own `"open"`. A successful open
   attaches `contents`: one flavor-description string per item inside.
@@ -636,7 +665,7 @@ rather than looked up, and the result is a generated in-character reply, not a s
 mechanical outcome. Distinct from a *skill-based* social check (persuade/intimidate/deceive) —
 those still roll dice via `resolve_opposed_action` and narrate in third person as the omniscient
 GM; free-form talking never rolls anything and speaks as the addressed entity.
-`NLPCore._detect_dialogue_intent` recognizes `DIALOGUE_KEYWORDS` phrases (`"talk to"`/`"ask"`/
+`Intent_Classification.py`'s `detect_dialogue_intent` recognizes `DIALOGUE_KEYWORDS` phrases (`"talk to"`/`"ask"`/
 `"tell"`/`"greet"`/...), checked after item-interaction detection has had its shot (so
 `"give the sword to Anne"` is never swallowed as dialogue) and before skill matching, publishing
 `dialogue_detected {input, score}` with no further resolution.
@@ -670,7 +699,7 @@ always-available, explicitly out-of-character persona the player can address for
 Unlike Dialogue, there's no addressee to resolve and no way to deny it — it always resolves, and
 is unconditionally free: it never joins the shared multi-action turn economy.
 
-`NLP_Core.py`'s `ADAM_NAME_PATTERN` (`\badam\b`, case-insensitive) is checked as its own
+`Intent_Classification.py`'s `ADAM_NAME_PATTERN` (`\badam\b`, case-insensitive) is checked as its own
 whole-input, pre-clause-split reserved word — right after save/load detection, ahead of both
 inter-room direction detection and the item-interaction pass — so it reaches the help channel
 rather than being swallowed by `DIALOGUE_KEYWORDS` or an item verb first. Reserves the literal
@@ -710,11 +739,11 @@ minimal `[entity.test]`) and to ambient scenery detail (`describe_scenery`, no e
 (2) **ADaM-gated**, behind explicitly naming ADaM (higher risk — can affect combat balance or
 mutate any entity): removal (`removal_candidate`), creature conjuring (`creature_candidate`),
 editing (`edit_candidate`) — each gated by its own cheap local keyword pre-check
-(`NLP_Core.py`'s `REMOVAL_KEYWORDS`/`CREATURE_KEYWORDS`/`EDIT_KEYWORDS`, attached to
+(`Intent_Classification.py`'s `REMOVAL_KEYWORDS`/`CREATURE_KEYWORDS`/`EDIT_KEYWORDS`, attached to
 `help_detected`'s payload only once `ADAM_NAME_PATTERN` matched), with the LLM's own
 `tool_choice="auto"`/`decline` still the real arbiter.
 
-**Creation.** `NLP_Core.py` tracks any clause matching `IMPROVISABLE_INTENTS`
+**Creation.** `Intent_Classification.py` tracks any clause matching `IMPROVISABLE_INTENTS`
 (`examine`/`take`/`give`/`equip`/`unequip`/`use`/`drop`/`trade`) whose `map_to_item` found
 nothing. If the whole turn resolves to nothing at all, the first such candidate is published as
 `improvisation_requested {intent, phrase, input}` instead of `action_not_understood`.
@@ -750,15 +779,23 @@ An item can opt into `"use"` (`usable = true`, `healing`/`poison` `{dice, pips}`
 fraction of consumables should come back poisonous, not a guaranteed free heal.
 
 **Placement.** The model's `location` choice (`"ground"`/`"inventory"`) is narrative judgment,
-but which one actually works depends on the triggering intent: `PLAYER_CENTRIC_INTENTS`
-(`give`/`equip`/`unequip`/`use`/`drop`) always land in the player's inventory and re-dispatch
-normally. `GROUND_AWARE_INTENTS` (`examine`/`take`) honor the model's placement: `"ground"`
-appends to `_current_ground_items()` and re-dispatches; `"inventory"` publishes a bespoke
-`item_interaction_resolved` directly plus a manual `_publish_party_status()`.
-`TARGET_CENTRIC_INTENTS` (`trade` alone) ignores `location` and stocks the entity into the
-current scene target's own inventory — this is what lets a shopkeeper sell "most general goods"
-without every item being pre-authored (`Rules/Fantasy/scenarios/shop.toml`); short-circuits to
-a decline if there's no current scene target to sell from.
+but which one actually works depends on the triggering intent. Every placement that lands in an
+inventory goes through `DM_Inventory.py`'s `place_new_item` (see "Inventory and currency") and
+then re-dispatches through the ordinary, unchanged `_on_item_interaction_detected` uniformly —
+`PLAYER_CENTRIC_INTENTS` (`give`/`equip`/`unequip`/`use`/`drop`) always land in the player's own
+inventory this way regardless of the model's own `location` choice; `GROUND_AWARE_INTENTS`
+(`examine`/`take`) honor it — `"ground"` appends to `_current_ground_items()` instead and
+re-dispatches the same way, `"inventory"` places into the player's own inventory exactly like a
+player-centric intent does. `TARGET_CENTRIC_INTENTS` (`trade` alone) ignores `location` and
+stocks the entity into the current scene target's own inventory via the same `place_new_item`
+call — this is what lets a shopkeeper sell "most general goods" without every item being
+pre-authored (`Rules/Fantasy/scenarios/shop.toml`); short-circuits to a decline if there's no
+current scene target to sell from. `_on_item_interaction_detected` itself resolves "examine"/
+"take" directly against the player whenever the item is already sitting in their own inventory
+(checked ahead of the locked/closed-target gates, not just the source/destination resolution, so
+an unrelated locked container elsewhere in the scene never blocks examining something the player
+already possesses — see "Items and movement as intents") — which is what lets every one of these
+placements redispatch through the same unchanged pipeline with no bespoke narration of its own.
 
 **Removal.** `DM_Help.py`'s `_on_help_detected` calls `_attempt_entity_removal` first when
 flagged — builds the real universe of removable names (every scene/ground/inventory entity,
@@ -802,12 +839,13 @@ restored *before* scenario/room loading runs so a removed entity can't respawn. 
 hand-authored entity still has a real template, so only `entity["edited"] = True` is needed to
 make `save_game` include `"description"` in its diff and `load_game` restore it.
 
-**NLPCore catch-up.** `item_embeddings`/`item_indices` are otherwise only ever built once, from
-`"rules_loaded"` — an ad hoc entity created/restored after that would be permanently unreachable
-to `map_to_item` without `item_catalog_updated`: `_on_item_catalog_updated` encodes each
-`{name, description}` pair and appends onto the existing tensor/index list (`torch.cat`) rather
-than rebuilding from scratch. Every capability above that introduces a name or description
-change republishes this event.
+**NLPCore catch-up.** `SentenceTransformerMatcher`'s `item_embeddings`/`item_indices` are
+otherwise only ever built once, from `"rules_loaded"` — an ad hoc entity created/restored after
+that would be permanently unreachable to `map_to_item` without `item_catalog_updated`: `NLPCore`
+forwards each entry in that event's payload to `IntentClassifier.register_item`, which delegates
+to the matcher's own `register_item`, encoding the `{name, description}` pair and appending onto
+the existing tensor/index list (`torch.cat`) rather than rebuilding from scratch. Every
+capability above that introduces a name or description change republishes this event.
 
 ## Narration
 
@@ -844,7 +882,8 @@ Three sibling JSON files per slot — `Saves/<slot>/dm_state.json`, `llm_state.j
 has no request/response mechanism, so each core owns and persists its own slice.
 
 **Trigger:** `save_requested`/`load_requested {"slot": slot_name}`, published by
-`NLPCore._detect_save_load_intent`, by `GUICore`'s File → Save... / Character → Load... popups
+`Intent_Classification.py`'s `detect_save_load_intent` (via `IntentClassifier.classify`), by
+`GUICore`'s File → Save... / Character → Load... popups
 (see "Booting the game" for the cold-start case), or by `Textual_Core`'s Save/Load buttons.
 
 `DMCore.save_game` writes a diff from a fresh instantiation: `setting`, `scenario_key`,
@@ -953,9 +992,13 @@ Practical constraints when touching this file:
 - **`test_unit.py`** — offline `unittest.TestCase` classes: one representative test per
   genuinely distinct mechanism/branch, not one per edge case or flavor variant of an
   already-covered code path. `TestGameBoot` and `TestNlpConfidenceThreshold` load the real
-  `sentence-transformers` model via `setUpClass`. Most other classes share fixture setup via
-  `DMTestCase` (`scenario_name` class attribute, plus `_capture`/`_capture_any` helpers) and
-  `LLMTestCase`.
+  `sentence-transformers` model via `setUpClass`, narrowed to what actually needs it
+  (confidence-threshold/keyword-fallback scoring, real embedding registration).
+  `TestIntentClassification` covers `Intent_Classification.py`'s gate/precedence order instead
+  — `IntentClassifier` exercised directly against `FakeMatcher` (a canned `IntentMatcher`
+  double defined alongside it), no model load, EventBus, or DMCore needed. Most other classes
+  share fixture setup via `DMTestCase` (`scenario_name` class attribute, plus
+  `_capture`/`_capture_any` helpers) and `LLMTestCase`.
 - **`test_integration.py`** — every test needing a real, running LM Studio, gated on
   `_lm_studio_reachable()` so they skip together when nothing's listening on `127.0.0.1:1234`.
   `_LivePipelineTestCase`'s own optional `character` class attribute is forwarded straight into
@@ -972,9 +1015,24 @@ subset only.
 
 ## Known gaps
 
-- `NLP_Core.py` — a keyword-driven skill match can still dominate an unrelated whole-sentence
-  embedding match (ex: "identify the dagger" resolves to the wrong skill); no multi-instance
-  disambiguation (ex: "the wounded wolf" vs. "the other wolf").
+- `Intent_Classification.py` — a keyword-driven skill match can still dominate an unrelated
+  whole-sentence embedding match (ex: "identify the dagger" resolves to the wrong skill); no
+  multi-instance disambiguation (ex: "the wounded wolf" vs. "the other wolf"). One instance
+  confirmed live by `test_unit.py`'s own keyword-collision invariant test: `DIALOGUE_KEYWORDS`'
+  `"ask "` is a substring of a real skill's own `"mask"` keyword, so a sentence using "mask" as
+  a whole word could still misfire as dialogue detection — not fixed, since changing keyword-
+  matching behavior was out of scope for the refactor that found it.
+- `DM_Rules.py`'s `_instance_entities` disambiguates duplicate names (`"wolf"`/`"wolf_2"`) via a
+  counter scoped to one call's own `entity_entries` list, not against the live `self.entities`
+  universe — deliberately, since it has to stay idempotent across repeated `load_scenario()`/
+  `load_game()` calls over the *same* entity list (see that method's own comment). The accepted
+  cost: two *different* rooms in the same multi-room dungeon that happen to declare the same
+  creature name would silently collide — the second room's own instance would overwrite the
+  first's live HP/conditions in `self.entities` rather than disambiguating to `"_2"`. Not
+  currently reachable by any shipped scenario, and not fixed, since a real fix needs the engine
+  to track which room a name came from, a bigger change than any deepening pass attempted so
+  far — see `DM_Improvisation.py`'s own `_unique_entity_key`, a separate mechanism for ad hoc
+  placement that checks `self.entities` directly and doesn't share this gap (or this fix).
 
 ## Extended goals
 

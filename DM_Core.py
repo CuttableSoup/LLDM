@@ -549,7 +549,11 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
 
             "take"/"trade" move an item from the target to the player; "give" moves one from
             the player to the target -- same transfer_item/transfer_currency primitives,
-            just with source/destination swapped. "trade" additionally charges the item's
+            just with source/destination swapped. "examine"/"take" against an item already
+            sitting in the player's own inventory (ex: DM_Improvisation.py placing an ad hoc
+            item straight into inventory) resolve directly against the player instead --
+            there's nothing to actually transfer, and falling back to the scene target would
+            wrongly report it as not present. "trade" additionally charges the item's
             TOML `value` as a price (denied outright if the player can't afford it, rather
             than a partial payment). "examine" and "open"/"close" never move anything;
             "advance"/"retreat" move every living scenario entity's distance at once (see
@@ -578,6 +582,14 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         item_name = data.get("item_name")
         input_text = data.get("input")
         target_name = self._get_target_name()
+        # "examine"/"take" against an item already sitting in the player's own inventory (ex:
+        # DM_Improvisation.py placing an ad hoc item straight into inventory) resolve directly
+        # against the player -- computed early, alongside the ground-item check below, so a
+        # locked/closed *unrelated* scene target never blocks examining something the player
+        # already possesses (the same reasoning the ground-item check already follows: reaching
+        # something the player can already reach without going through target_name at all must
+        # never be gated on target_name's own state).
+        already_owned = intent in ("examine", "take") and item_name in self.entities.get(self.player_name, {}).get("inventory", [])
 
         def resolved(found, **extra):
             self.event_bus.publish("item_interaction_resolved", {
@@ -637,7 +649,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             self._resolve_ground_intent(intent, item_name, resolved)
             return
 
-        if target_name and self.is_locked(target_name):
+        if not already_owned and target_name and self.is_locked(target_name):
             resolved(False, reason="locked", container=target_name)
             return
 
@@ -645,7 +657,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             self._resolve_open_close_intent(intent, target_name, resolved)
             return
 
-        if item_name == target_name:
+        if not already_owned and item_name == target_name:
             # Interacting with the container/creature itself, not something inside it -- there's
             # nothing to "take"/"give"/"trade" about the target as a whole.
             if intent == "examine":
@@ -655,7 +667,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
                 resolved(False, reason="not_takeable")
             return
 
-        if target_name and self.is_closed(target_name):
+        if not already_owned and target_name and self.is_closed(target_name):
             # A closed (but unlocked) container can still be examined/opened from the outside
             # (handled above/below) -- only reaching its *contents* is gated here.
             resolved(False, reason="closed", container=target_name)
@@ -666,6 +678,15 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
                 resolved(False, reason="no_recipient")
                 return
             source_name, destination_name = self.player_name, target_name
+        elif already_owned:
+            # Already in the player's own inventory (ex: an ad hoc item conjured straight into
+            # inventory, DM_Improvisation.py) -- nothing to actually transfer, so source and
+            # destination are the same rather than falling back to whatever the scene target
+            # happens to be. Deliberately excludes "trade": buying an already-owned item is
+            # nonsensical, and trade's own price-payment logic pays target_name directly,
+            # independent of source_name/destination_name -- including it here would silently
+            # charge the player currency against an unrelated scene target.
+            source_name = destination_name = self.player_name
         else:
             source_name, destination_name = target_name, self.player_name
 
@@ -699,7 +720,11 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             # only once is_identified is true (a passed [entity.test], ex: an arcane check)
             # does examining it start including what that check actually revealed.
             revealed = list(self.entities.get(item_name, {}).get("tags", [])) if self.is_identified(item_name) else []
-            resolved(True, description=description, container=target_name, revealed=revealed)
+            # No real container involved when source_name/destination_name are both the player
+            # (the "already in your own inventory" branch above) -- narration shouldn't claim
+            # the item came from target_name when nothing was actually taken from it.
+            container = target_name if source_name != destination_name else None
+            resolved(True, description=description, container=container, revealed=revealed)
         elif intent == "trade":
             price = self.entities.get(item_name, {}).get("value", 0)
             buyer_currency = self.entities.get(self.player_name, {}).get("currency", 0)
@@ -711,7 +736,8 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             resolved(True, container=target_name, price=price)
         else:
             self.transfer_item(source_name, destination_name, item_name)
-            resolved(True, container=target_name)
+            container = target_name if source_name != destination_name else None
+            resolved(True, container=container)
 
     def _on_dialogue_detected(self, data):
         """!
@@ -857,3 +883,24 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             if self.get_current_hp(instance_name) > 0:
                 return instance_name
         return None
+
+    def _target_is_engaged(self):
+        """!
+        @brief Whether self.current_target is a fight actually in progress right now -- present,
+            alive, and hostile toward the player. The one condition DM_Improvisation.py's own
+            _claim_current_target_if_free (checked before letting a freshly-placed entity
+            preempt current_target) and this class's own _choose_combat_target share in spirit
+            (both care whether an active engagement should be left alone), even though the two
+            callers otherwise ask genuinely different questions -- _choose_combat_target picks
+            the best target across the whole scene from scratch, while
+            _claim_current_target_if_free only ever asks "should I disturb what's already
+            there," which is exactly this one check.
+        @return True if current_target is a live, hostile-toward-the-player entity still
+                present in the scene.
+        """
+        return bool(
+            self.current_target
+            and self.current_target in self.scenario_entities
+            and self.get_current_hp(self.current_target) > 0
+            and self.is_hostile(self.current_target, self.player_name)
+        )

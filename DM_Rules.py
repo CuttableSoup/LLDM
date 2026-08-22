@@ -333,6 +333,15 @@ class RulesMixin(DMCoreProtocol):
         """
         party_pool = party_pool if party_pool is not None else []
         instance_names = []
+        # Deliberately a fresh per-call counter, not _unique_entity_key's own "check
+        # self.entities" logic (see that method's own docstring for the *different* case it
+        # solves) -- this call must be idempotent w.r.t. entity_entries alone: load_scenario()/
+        # load_game() both re-run the exact same top-level entities list against the same
+        # self.entities more than once in a single DMCore's lifetime, and every re-run has to
+        # reproduce the identical "wolf"/"wolf_2" sequence so DM_Persistence.py's own saved-
+        # state overlay (matched back onto re-instanced entities by name) still lines up.
+        # Checking self.entities directly, as _unique_entity_key does, would see the *previous*
+        # run's own "wolf" as already taken and cascade into "wolf_3", "wolf_4", ... instead.
         occurrence_counts = {}
 
         for entry in entity_entries:
@@ -388,9 +397,9 @@ class RulesMixin(DMCoreProtocol):
             item_catalog_updated publishing differ per caller (front-insert vs end-append vs
             never; claimed vs not; published vs not) and stay the caller's own job.
         @param name The entity's own self.entities key (already disambiguated by the caller --
-            _instance_entities' own occurrence_counts for a load batch,
-            ImprovisationMixin._unique_entity_key for a single ad hoc placement -- two genuinely
-            different scopes this primitive doesn't need to know about).
+            _instance_entities' own occurrence_counts for a load batch, _unique_entity_key
+            (below) for a single ad hoc placement -- two genuinely different scopes this
+            primitive doesn't need to know about).
         @param entity The raw entity dict (a deep-copied template, or one an LLM just invented).
             Mutated in place and also returned for convenience.
         @param band Objective, 1-indexed band position (see DM_Movement.py) -- every entity
@@ -410,6 +419,34 @@ class RulesMixin(DMCoreProtocol):
         entity.setdefault("active_conditions", dict(entity.get("conditions", {})))
         self.entities[name] = entity
         return entity
+
+    def _unique_entity_key(self, base_name):
+        """!
+        @brief Picks a self.entities key guaranteed not to collide with anything currently live
+            (or the player) for DM_Improvisation.py's own ad hoc item/creature placement -- a
+            single name straight from the LLM, never enum-constrained, unlike
+            decide_entity_removal/decide_entity_edit's own name field. Checked against the live
+            self.entities universe directly (unlike _instance_entities' own occurrence_counts,
+            deliberately a fresh per-call counter instead -- see that method's own docstring for
+            why: it has to stay idempotent across repeated load_scenario()/load_game() calls
+            over the *same* entity_entries, which checking self.entities directly would break).
+            A single ad hoc placement has no such repeat-call concern -- it only ever runs once,
+            live -- so checking self.entities directly is both safe and necessary here: without
+            it, self.entities[name] = entity would silently clobber whatever already held that
+            key, up to and including the player entity itself if the LLM happened to invent a
+            matching name. entity["name"] (the display text narration reads) is left untouched
+            by the caller -- DM_Social.py's describe_character already falls back to
+            entity.get("name", entity_name) for exactly this dict-key-vs-display-name split, the
+            same split a generated NPC's own occurrence-suffixed instance name already relies on.
+        @param base_name The LLM-invented name to disambiguate.
+        @return base_name unchanged if free, else base_name with a "_2", "_3", ... suffix.
+        """
+        if base_name != self.player_name and base_name not in self.entities:
+            return base_name
+        suffix = 2
+        while f"{base_name}_{suffix}" in self.entities or f"{base_name}_{suffix}" == self.player_name:
+            suffix += 1
+        return f"{base_name}_{suffix}"
 
     def _auto_roll_notice(self, instance_name):
         """!

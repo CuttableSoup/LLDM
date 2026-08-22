@@ -1,7 +1,7 @@
 import os
 
 from AdHoc_Generation import (
-    GROUND_AWARE_INTENTS, PLAYER_CENTRIC_INTENTS, TARGET_CENTRIC_INTENTS, decide_entity_edit,
+    GROUND_AWARE_INTENTS, TARGET_CENTRIC_INTENTS, decide_entity_edit,
     decide_entity_removal, generate_ad_hoc_creature, generate_ad_hoc_item,
 )
 from DM_Types import DMCoreProtocol
@@ -12,8 +12,8 @@ from NPC_Generation import load_npc_keywords
 # container/trap is opened/examined-as-itself the same way a hand-authored one is (see
 # DM_Core.py's own _on_item_interaction_detected, which resolves "open"/"close" and a bare
 # "examine <the target itself>" against self._get_target_name(), not a ground/inventory lookup).
-# Unrelated to PLAYER_CENTRIC_INTENTS/GROUND_AWARE_INTENTS/TARGET_CENTRIC_INTENTS (imported
-# from AdHoc_Generation.py, below) -- NLP_Core.py has no mirror of this one, so it stays local.
+# Unrelated to GROUND_AWARE_INTENTS/TARGET_CENTRIC_INTENTS (imported from AdHoc_Generation.py,
+# above) -- Intent_Classification.py has no mirror of this one, so it stays local.
 SCENE_PLACED_SUBTYPES = frozenset({"container", "trap"})
 
 
@@ -24,12 +24,12 @@ class ImprovisationMixin(DMCoreProtocol):
         self.scenario_entities/self.persistent_entities/self.visited_rooms/self.rooms/
         self.scenario/self.removed_entities/self.current_target/self.setting/self.event_bus,
         set up by DMCore.__init__, plus RulesMixin's _current_scene_description/
-        _place_new_entity/_all_known_instance_names (PersistenceMixin), InventoryMixin's
-        _current_ground_items,
+        _place_new_entity/_unique_entity_key/_all_known_instance_names (PersistenceMixin),
+        InventoryMixin's _current_ground_items/place_new_item,
         CombatMixin's get_equip_slots/get_challenge_rating, SocialMixin's is_hostile,
         MovementMixin's get_band, StatusMixin's apply_condition/dismiss_condition/get_current_hp,
         and DMCore's
-        own _on_item_interaction_detected/_publish_party_status. Inherits DMCoreProtocol purely
+        own _on_item_interaction_detected/_target_is_engaged. Inherits DMCoreProtocol purely
         so type checkers can resolve these shared attributes/cross-mixin methods -- see
         DM_Types.py. AdHoc_Generation.py is the pure, DMCore-independent LLM-calling half this
         mixin is glue for -- same split DM_NpcGeneration.py is to NPC_Generation.py.
@@ -52,31 +52,6 @@ class ImprovisationMixin(DMCoreProtocol):
           gates each of these behind a cheap local keyword pre-check.
     """
 
-    def _unique_entity_key(self, base_name):
-        """!
-        @brief Picks a self.entities key guaranteed not to collide with anything currently live
-            (or the player) for an ad hoc item/creature whose own name comes straight from the
-            LLM and is never enum-constrained, unlike decide_entity_removal/decide_entity_edit's
-            own name field. Mirrors the disambiguation _instance_entities already gives
-            hand-authored duplicates (ex: "wolf"/"wolf_2") -- just keyed against the live
-            self.entities universe instead of one call's own entity_entries list, since there's
-            no batch to disambiguate within here; without this, self.entities[name] = entity
-            would silently clobber whatever already held that key, up to and including the
-            player entity itself if the LLM happened to invent a matching name. entity["name"]
-            (the display text narration reads) is left untouched by the caller -- DM_Social.py's
-            describe_character already falls back to entity.get("name", entity_name) for exactly
-            this dict-key-vs-display-name split, the same split a generated NPC's own
-            occurrence-suffixed instance name already relies on.
-        @param base_name The LLM-invented name to disambiguate.
-        @return base_name unchanged if free, else base_name with a "_2", "_3", ... suffix.
-        """
-        if base_name != self.player_name and base_name not in self.entities:
-            return base_name
-        suffix = 2
-        while f"{base_name}_{suffix}" in self.entities or f"{base_name}_{suffix}" == self.player_name:
-            suffix += 1
-        return f"{base_name}_{suffix}"
-
     def _on_improvisation_requested(self, data):
         """!
         @brief Event handler for "improvisation_requested" (NLP_Core.py's own last-resort
@@ -88,14 +63,15 @@ class ImprovisationMixin(DMCoreProtocol):
             choice -- ambient detail, not a discrete object), publishes a bespoke
             "item_interaction_resolved" with no entity created at all -- a pure flavor beat,
             nothing to persist, same treatment an ordinary "examine" description already gets.
-            On an actual creation, places the new entity and resolves the *original* triggering
-            intent against it, reusing the ordinary, otherwise-unchanged item-interaction
-            pipeline wherever that pipeline actually supports the placement (see
-            PLAYER_CENTRIC_INTENTS/GROUND_AWARE_INTENTS/TARGET_CENTRIC_INTENTS/
-            SCENE_PLACED_SUBTYPES above for why the four-way split is necessary, not just tidy)
-            -- a container/trap always takes the SCENE_PLACED_SUBTYPES path regardless of which
-            of those three intents triggered it, since a locked chest or an armed trap has to
-            become the addressable scene target either way.
+            On an actual creation, places the new entity (via DM_Inventory.py's place_new_item
+            for anything landing in an inventory -- see SCENE_PLACED_SUBTYPES above for the one
+            placement that isn't) and resolves the *original* triggering intent against it,
+            reusing the ordinary, otherwise-unchanged item-interaction pipeline uniformly for
+            every placement, container/trap included -- DM_Core.py's own
+            _on_item_interaction_detected resolves "examine"/"take" directly against the player
+            whenever the item's already in their own inventory (its own docstring), which is
+            what lets every placement branch below redispatch the same way instead of needing
+            its own bespoke narration.
 
             "trade" short-circuits to a decline *before* ever asking the LLM if there's no
             current scene target at all (_get_target_name()) -- there's no one to buy from, the
@@ -146,7 +122,10 @@ class ImprovisationMixin(DMCoreProtocol):
         # the ordinary, unchanged item-interaction pipeline (DM_Core.py's own
         # _on_item_interaction_detected -- 180 lines of real currency/pricing/container-gating/
         # transfer logic this deliberately reuses rather than re-implementing narration from a
-        # bespoke placement result) via one dispatch call below, shared by every branch but one.
+        # bespoke placement result) via one dispatch call below, shared by every branch,
+        # including this one -- DM_Core.py's own source-resolution now recognizes an item
+        # already sitting in the player's own inventory (see that method's own docstring), so
+        # every placement path below can redispatch uniformly; none needs its own narration.
         if entity.get("subtype") in SCENE_PLACED_SUBTYPES:
             # A container/trap becomes a live, targetable scene participant, not a ground/
             # inventory item -- inserted at the front of scenario_entities so
@@ -178,36 +157,21 @@ class ImprovisationMixin(DMCoreProtocol):
             # is about to sell), so it's ignored; the item is stocked directly into the target's
             # own inventory instead, then the ordinary "trade" dispatch (DM_Core.py) charges the
             # entity's own "value" as a price and transfers it exactly like a real one.
-            self.entities.setdefault(target_name, {}).setdefault("inventory", []).append(name)
-        elif intent in PLAYER_CENTRIC_INTENTS:
-            # "give"/"equip"/"unequip"/"use"/"drop" all resolve against the *player's own*
-            # inventory regardless of source/destination direction (DM_Inventory.py/DM_Core.py's
-            # own _on_item_interaction_detected dispatcher never checks _current_ground_items()
-            # for any of these) -- so the item lands directly in inventory either way, whether
-            # the LLM's own "location" said "ground" or "inventory". A ground placement here
-            # just means "you spot it and immediately act on it" collapses into one beat rather
-            # than a separate explicit "take" first.
-            self.entities.setdefault(self.player_name, {}).setdefault("inventory", []).append(name)
-        elif result["location"] == "ground":
-            # intent in GROUND_AWARE_INTENTS ("examine"/"take") -- the only two intents the
-            # ordinary dispatcher actually checks _current_ground_items() for.
+            self.place_new_item(target_name, name)
+        elif result["location"] == "ground" and intent in GROUND_AWARE_INTENTS:
+            # The only two intents ("examine"/"take") the ordinary dispatcher actually checks
+            # _current_ground_items() for -- everything else below lands in inventory instead.
             self._current_ground_items().append(name)
         else:
-            # location == "inventory", intent in GROUND_AWARE_INTENTS: conjured directly onto
-            # the player (ex: "check my pockets for a match"). Re-dispatching "examine"/"take"
-            # here would incorrectly check the scene's own default target's inventory instead of
-            # the player's (DM_Core.py's _on_item_interaction_detected routes
-            # source_name = target_name for both), so this publishes a bespoke success response
-            # directly instead of going through the dispatcher -- the one placement outcome that
-            # doesn't share the trailing dispatch call below.
-            self.entities.setdefault(self.player_name, {}).setdefault("inventory", []).append(name)
-            self.event_bus.publish("item_interaction_resolved", {
-                "intent": intent, "item_name": name, "input": input_text, "found": True,
-                "description": entity.get("description", ""),
-                "present_entities": list(self.scenario_entities),
-            })
-            self._publish_party_status()
-            return
+            # PLAYER_CENTRIC_INTENTS ("give"/"equip"/"unequip"/"use"/"drop", which resolve
+            # against the player's own inventory regardless of source/destination direction --
+            # DM_Inventory.py/DM_Core.py's own _on_item_interaction_detected dispatcher never
+            # checks _current_ground_items() for any of these), or GROUND_AWARE_INTENTS with
+            # location == "inventory" (conjured straight onto the player, ex: "check my pockets
+            # for a match") -- both land in the player's own inventory the same way. A ground
+            # placement for a player-centric intent just means "you spot it and immediately act
+            # on it" collapses into one beat rather than a separate explicit "take" first.
+            self.place_new_item(self.player_name, name)
 
         self._on_item_interaction_detected({"intent": intent, "item_name": name, "input": input_text})
 
@@ -347,12 +311,7 @@ class ImprovisationMixin(DMCoreProtocol):
             that decision reads self.current_target's own hostility).
         @param name The entity to claim as the current target, if nothing else already is.
         """
-        if not (
-            self.current_target
-            and self.current_target in self.scenario_entities
-            and self.get_current_hp(self.current_target) > 0
-            and self.is_hostile(self.current_target, self.player_name)
-        ):
+        if not self._target_is_engaged():
             self.current_target = name
 
     def _attempt_creature_conjuring(self, input_text):
@@ -364,12 +323,13 @@ class ImprovisationMixin(DMCoreProtocol):
             CombatMixin) -- a single-target encounter framing appropriate for an ad hoc,
             mid-scene spawn, unlike real NPC generation's own party-pool resolution (see
             DM_NpcGeneration.py's _resolve_npc_target_cr), which isn't needed here since there's
-            no entity_template's own target_cr field to resolve against. On success, places the
-            new entity via RulesMixin's own _place_new_entity (DM_Rules.py) -- the same
-            entity_id/band/active_conditions primitive _instance_entities itself is built on --
-            then appends directly to self.scenario_entities, since _instance_entities' own
-            occurrence-disambiguation/removed_entities-skip/NPC-generation/notice-roll wrapping
-            around that primitive is only relevant at scenario/room load time (see CLAUDE.md's
+            no entity_template's own target_cr field to resolve against. On success, disambiguates
+            via RulesMixin's own _unique_entity_key and places the new entity via RulesMixin's
+            own _place_new_entity (DM_Rules.py) -- the same entity_id/band/active_conditions
+            primitive _instance_entities itself is built on -- then appends directly to
+            self.scenario_entities, since _instance_entities' own occurrence-disambiguation/
+            removed_entities-skip/NPC-generation/notice-roll wrapping around that primitive is
+            only relevant at scenario/room load time (see CLAUDE.md's
             "Ad hoc entity creation and removal" -- the same reasoning generate_ad_hoc_item's own
             item placement already follows). A hostile creature also claims self.current_target (see
             _claim_current_target_if_free) -- so the very next player action can fight it

@@ -5,6 +5,7 @@ import shutil
 import tempfile
 import threading
 import tkinter as tk
+import tomllib
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -31,6 +32,29 @@ from DM_Core import DMCore
 from DM_Rules import list_available_scenarios
 from Event_Bus import EventBus
 from GUI_Core import GUICore
+from Intent_Classification import (
+    ADVANCE_KEYWORDS,
+    CLOSE_KEYWORDS,
+    DIALOGUE_KEYWORDS,
+    DROP_KEYWORDS,
+    EQUIP_KEYWORDS,
+    EXAMINE_KEYWORDS,
+    FORMATION_ABREAST_KEYWORDS,
+    FORMATION_BEHIND_KEYWORDS,
+    GIVE_KEYWORDS,
+    OPEN_KEYWORDS,
+    RETREAT_KEYWORDS,
+    TAKE_KEYWORDS,
+    TRADE_KEYWORDS,
+    UNEQUIP_KEYWORDS,
+    USE_KEYWORDS,
+    IntentClassifier,
+    detect_dialogue_intent,
+    detect_help_intent,
+    detect_item_intent,
+    detect_save_load_intent,
+    split_action_clauses,
+)
 import LLDM
 from LLM_Core import LLMCore
 from LLM_Rag import RagIndex
@@ -160,8 +184,8 @@ class TestGameBoot(unittest.TestCase):
         # 4. Initialize DMCore (this triggers rules_loaded)
         dm_core = DMCore(event_bus)
 
-        # Verify that skills were actually loaded into nlp_core
-        self.assertGreater(len(nlp_core.skill_names), 0, "No skills loaded into NLPCore")
+        # Verify that skills were actually loaded into the real SentenceTransformerMatcher
+        self.assertGreater(len(nlp_core.matcher.skill_names), 0, "No skills loaded into NLPCore")
 
         # 5. Simulate user input
         test_input = "I attack with my sword"
@@ -176,6 +200,13 @@ class TestGameBoot(unittest.TestCase):
 
 
 class TestNlpConfidenceThreshold(unittest.TestCase):
+    """!
+    @brief Covers behavior that genuinely needs the real SentenceTransformer model --
+        confidence-threshold/keyword-fallback scoring and real embedding registration. Gate
+        order and precedence (which used to also live here, reaching into NLPCore's own
+        private methods) now live in TestIntentClassification, which exercises
+        IntentClassifier directly with a FakeMatcher and needs no model load at all.
+    """
     # setUpClass (not setUp) so the slow sentence-transformers load only happens once for
     # every test method in this class, not once per method.
     @classmethod
@@ -186,18 +217,10 @@ class TestNlpConfidenceThreshold(unittest.TestCase):
 
     def setUp(self):
         # cls.dm_core is shared across every test in this class (setUpClass, not setUp) to
-        # avoid paying the slow model load repeatedly -- but several methods trigger *real*
-        # combat against the scenario's wolf/wolf_2 (ex: test_clear_action_still_triggers_
-        # above_threshold's "I attack with my sword"), so without a reset, HP damage
-        # accumulated silently across nominally-independent tests in alphabetical execution
-        # order. That's what made test_full_pipeline_naming_a_non_hostile_entity_does_not_
-        # redirect_current_target occasionally flaky: two earlier tests' real combat rounds
-        # could leave "wolf" already dead by the time it ran, flipping current_target to
-        # "wolf_2" out from under an assertion that never expected combat history to matter.
-        # Re-running the same load_rules/load_scenario_definition/load_scenario sequence
-        # __init__ and load_game both use resets every mutable field (hp, active_conditions,
-        # currency, inventory, round_number, current_target) back to a pristine "arena" load
-        # before each test method, without re-paying for a new NLPCore/model load.
+        # avoid paying the slow model load repeatedly. Re-running the same load_rules/
+        # load_scenario_definition/load_scenario sequence __init__ and load_game both use
+        # resets every mutable field back to a pristine "arena" load before each test method,
+        # without re-paying for a new NLPCore/model load.
         self.dm_core.load_rules(os.path.join("Rules", "Fantasy"))
         self.dm_core.load_scenario_definition(self.dm_core.scenario_key)
         self.dm_core.load_scenario()
@@ -227,7 +250,7 @@ class TestNlpConfidenceThreshold(unittest.TestCase):
         self.assertEqual(len(detected_actions), 1)
         action = detected_actions[0]["clauses"][0]
         self.assertEqual(action["skill"], "blades")
-        self.assertGreaterEqual(action["score"], self.nlp_core.confidence_threshold)
+        self.assertGreaterEqual(action["score"], self.nlp_core.matcher.confidence_threshold)
 
     def test_keyword_fallback_rescues_a_below_threshold_literal_keyword_hit(self):
         # "bargain" isn't a keyword for anything, but "cost" is a literal keyword of
@@ -243,209 +266,17 @@ class TestNlpConfidenceThreshold(unittest.TestCase):
         self.assertEqual(len(detected_actions), 1)
         action = detected_actions[0]["clauses"][0]
         self.assertEqual(action["skill"], "appraise")
-        self.assertLess(action["score"], self.nlp_core.confidence_threshold)
-        self.assertGreaterEqual(action["score"], self.nlp_core.keyword_fallback_floor)
-
-
-    def test_detect_item_intent_examine_vs_take_vs_neither(self):
-        self.assertEqual(self.nlp_core._detect_item_intent("examine the dagger"), "examine")
-        self.assertEqual(self.nlp_core._detect_item_intent("take the gold"), "take")
-        self.assertIsNone(self.nlp_core._detect_item_intent("attack with my sword"))
-
-
-    def test_detect_dialogue_intent_vs_item_and_skill_phrasing(self):
-        self.assertTrue(self.nlp_core._detect_dialogue_intent("talk to the innkeeper"))
-        self.assertTrue(self.nlp_core._detect_dialogue_intent("ask the guard about the road"))
-        self.assertFalse(self.nlp_core._detect_dialogue_intent("take the gold"))
-        self.assertFalse(self.nlp_core._detect_dialogue_intent("attack with my sword"))
-
-    def test_dialogue_phrase_publishes_dialogue_detected_not_action_detected(self):
-        # Full pipeline: a real "talk to" phrase should never reach map_to_action at all --
-        # item-interaction detection is checked first and finds nothing here, so this is what
-        # actually proves dialogue detection is wired into _on_user_input, not just callable
-        # in isolation.
-        dialogue_events = []
-        action_events = []
-        self.event_bus.subscribe("dialogue_detected", dialogue_events.append)
-        self.event_bus.subscribe("turn_detected", action_events.append)
-
-        self.event_bus.publish("user_input_submitted", "I want to talk to the wolf")
-
-        self.assertEqual(len(dialogue_events), 1)
-        self.assertEqual(action_events, [])
-        self.assertIn("wolf", dialogue_events[0]["input"])
-
-
-    def test_split_action_clauses_on_and_then_and_punctuation(self):
-        self.assertEqual(
-            self.nlp_core._split_action_clauses("attack the orc and cast a ward"),
-            ["attack the orc", "cast a ward"],
-        )
-        self.assertEqual(
-            self.nlp_core._split_action_clauses("attack and then retreat"),
-            ["attack", "retreat"],
-        )
-        self.assertEqual(
-            self.nlp_core._split_action_clauses("attack with my sword"),
-            ["attack with my sword"],
-        )
-        # \b-anchored -- "and"/"then" appearing inside another word must never split
-        # (ex: "handle"/"sandbox" both literally contain the substring "and").
-        self.assertEqual(
-            self.nlp_core._split_action_clauses("handle the sandbox carefully"),
-            ["handle the sandbox carefully"],
-        )
-
-    def test_multi_clause_input_publishes_multiple_actions(self):
-        # Full pipeline: NLPCore's own conjunction-aware split, not just the pure method above.
-        detected_actions = []
-        self.event_bus.subscribe("turn_detected", detected_actions.append)
-
-        self.event_bus.publish("user_input_submitted", "I attack with my sword and pick the lock")
-
-        self.assertEqual(len(detected_actions), 1)
-        skills = [action["skill"] for action in detected_actions[0]["clauses"]]
-        self.assertEqual(skills, ["blades", "finesse"])
-
-    def test_mixed_item_and_action_clause_publishes_one_merged_turn(self):
-        # The pipeline merge: an item-interaction clause and a skill/ability clause in one
-        # input now join the same turn_detected event, not two separate, uncoordinated ones.
-        turn_events = []
-        item_events = []
-        self.event_bus.subscribe("turn_detected", turn_events.append)
-        self.event_bus.subscribe("item_interaction_detected", item_events.append)
-
-        self.event_bus.publish("user_input_submitted", "I take the longsword and attack the wolf")
-
-        self.assertEqual(item_events, [])  # "take" no longer publishes on its own
-        self.assertEqual(len(turn_events), 1)
-        clauses = turn_events[0]["clauses"]
-        self.assertEqual(len(clauses), 2)
-        self.assertEqual(clauses[0], {"kind": "item", "intent": "take", "item_name": "longsword"})
-        self.assertEqual(clauses[1]["kind"], "action")
-        self.assertEqual(clauses[1]["skill"], "blades")
-
-    def test_exempt_clause_mixed_with_an_item_clause_still_publishes_separately(self):
-        # "retreat" stays free (West End Games' own movement exception) and never joins the
-        # shared turn, even when another clause in the same input is a genuine item action.
-        turn_events = []
-        item_events = []
-        self.event_bus.subscribe("turn_detected", turn_events.append)
-        self.event_bus.subscribe("item_interaction_detected", item_events.append)
-
-        self.event_bus.publish("user_input_submitted", "take the longsword and retreat")
-
-        self.assertEqual(len(item_events), 1)
-        self.assertEqual(item_events[0]["intent"], "retreat")
-        self.assertEqual(len(turn_events), 1)
-        self.assertEqual(turn_events[0]["clauses"], [{"kind": "item", "intent": "take", "item_name": "longsword"}])
-
-    def test_item_verb_still_takes_priority_over_dialogue(self):
-        # Preserves the old single-clause priority: a genuine item verb naming an entity is
-        # never swallowed as dialogue, even now that item detection runs per clause.
-        turn_events = []
-        dialogue_events = []
-        self.event_bus.subscribe("turn_detected", turn_events.append)
-        self.event_bus.subscribe("dialogue_detected", dialogue_events.append)
-
-        self.event_bus.publish("user_input_submitted", "give the longsword to thane")
-
-        self.assertEqual(dialogue_events, [])
-        self.assertEqual(len(turn_events), 1)
-        self.assertEqual(turn_events[0]["clauses"], [{"kind": "item", "intent": "give", "item_name": "longsword"}])
-
-    def test_detect_help_intent_matches_whole_word_adam_only(self):
-        self.assertTrue(self.nlp_core._detect_help_intent("adam, what are my skills?"))
-        self.assertTrue(self.nlp_core._detect_help_intent("ADaM help me"))
-        # \b-anchored -- "adam" appearing inside another word must never match.
-        self.assertFalse(self.nlp_core._detect_help_intent("this sword is adamantine"))
-        self.assertFalse(self.nlp_core._detect_help_intent("attack the wolf"))
-
-    def test_adam_wins_over_both_item_verb_and_dialogue_in_the_same_input(self):
-        # Checked ahead of both the item-interaction pass and DIALOGUE_KEYWORDS -- naming
-        # "adam" anywhere in the input always reaches the help channel, never ordinary
-        # dialogue (whose own target resolution would never find "adam" among
-        # scenario_entities and would silently fall back to the default scene target instead).
-        help_events = []
-        dialogue_events = []
-        turn_events = []
-        self.event_bus.subscribe("help_detected", help_events.append)
-        self.event_bus.subscribe("dialogue_detected", dialogue_events.append)
-        self.event_bus.subscribe("turn_detected", turn_events.append)
-
-        self.event_bus.publish("user_input_submitted", "talk to ADaM and give the longsword to thane")
-
-        self.assertEqual(len(help_events), 1)
-        self.assertEqual(dialogue_events, [])
-        self.assertEqual(turn_events, [])
-        self.assertIn("adam", help_events[0]["input"])
-
-    def test_unmatched_item_verb_triggers_improvisation_instead_of_action_not_understood(self):
-        # DMCore's own real (unmocked) _on_improvisation_requested handler is also subscribed
-        # on this class's shared cls.dm_core -- AdHoc_Generation._real_call_chat_completion is
-        # patched to fail instantly rather than let it attempt a real, slow network call to a
-        # local LM Studio that isn't running in this offline suite (its own failure path
-        # publishes "action_not_understood" right back, which is fine -- this test only cares
-        # that NLPCore published "improvisation_requested" in the first place).
-        improvisation_events = []
-        self.event_bus.subscribe("improvisation_requested", improvisation_events.append)
-
-        with patch("AdHoc_Generation._real_call_chat_completion", side_effect=ConnectionError("no LM Studio")):
-            self.event_bus.publish("user_input_submitted", "take the strange glowing talisman")
-
-        self.assertEqual(len(improvisation_events), 1)
-        self.assertEqual(improvisation_events[0]["intent"], "take")
-
-    def test_matched_clause_elsewhere_in_input_still_wins_over_improvisation(self):
-        # A compound input where one clause resolves normally still takes the ordinary path --
-        # extending ad hoc creation into multi-clause turns is deliberately out of scope (see
-        # CLAUDE.md's "Ad hoc entity creation and removal"). No network patching needed here --
-        # turn_clauses ends up non-empty, so the improvisation branch never runs at all.
-        improvisation_events = []
-        turn_events = []
-        self.event_bus.subscribe("improvisation_requested", improvisation_events.append)
-        self.event_bus.subscribe("turn_detected", turn_events.append)
-
-        self.event_bus.publish("user_input_submitted", "take the strange glowing talisman and attack the wolf")
-
-        self.assertEqual(improvisation_events, [])
-        self.assertEqual(len(turn_events), 1)
-
-    def test_removal_candidate_flag_only_set_when_removal_keywords_present(self):
-        help_events = []
-        self.event_bus.subscribe("help_detected", help_events.append)
-
-        self.event_bus.publish("user_input_submitted", "adam, get rid of that torch")
-        self.assertTrue(help_events[-1]["removal_candidate"])
-
-        self.event_bus.publish("user_input_submitted", "adam, what are my skills")
-        self.assertFalse(help_events[-1]["removal_candidate"])
-
-    def test_creature_and_edit_candidate_flags_only_set_when_their_own_keywords_present(self):
-        help_events = []
-        self.event_bus.subscribe("help_detected", help_events.append)
-
-        self.event_bus.publish("user_input_submitted", "adam, summon a wolf")
-        self.assertTrue(help_events[-1]["creature_candidate"])
-        self.assertFalse(help_events[-1]["edit_candidate"])
-        self.assertFalse(help_events[-1]["removal_candidate"])
-
-        self.event_bus.publish("user_input_submitted", "adam, change the torch's description")
-        self.assertTrue(help_events[-1]["edit_candidate"])
-        self.assertFalse(help_events[-1]["creature_candidate"])
-
-        self.event_bus.publish("user_input_submitted", "adam, what are my skills")
-        self.assertFalse(help_events[-1]["creature_candidate"])
-        self.assertFalse(help_events[-1]["edit_candidate"])
+        self.assertLess(action["score"], self.nlp_core.matcher.confidence_threshold)
+        self.assertGreaterEqual(action["score"], self.nlp_core.matcher.keyword_fallback_floor)
 
     def test_item_catalog_updated_registers_a_new_item_matchable_afterward(self):
         # cls.nlp_core is shared across this whole class (setUpClass, not setUp) -- restore
-        # its embeddings/indices afterward so registering a new item here can't leak into any
-        # other test's own map_to_item/improvisation-fallback behavior.
-        original_embeddings = self.nlp_core.item_embeddings
-        original_indices = list(self.nlp_core.item_indices)
+        # its matcher's embeddings/indices afterward so registering a new item here can't leak
+        # into any other test's own map_to_item/improvisation-fallback behavior.
+        original_embeddings = self.nlp_core.matcher.item_embeddings
+        original_indices = list(self.nlp_core.matcher.item_indices)
         try:
-            item_name, _score = self.nlp_core.map_to_item("a glowing rubber chicken talisman")
+            item_name, _score = self.nlp_core.matcher.map_to_item("a glowing rubber chicken talisman")
             self.assertIsNone(item_name)
 
             self.event_bus.publish("item_catalog_updated", {
@@ -455,22 +286,295 @@ class TestNlpConfidenceThreshold(unittest.TestCase):
                 }],
             })
 
-            item_name, _score = self.nlp_core.map_to_item("a glowing rubber chicken talisman")
+            item_name, _score = self.nlp_core.matcher.map_to_item("a glowing rubber chicken talisman")
             self.assertEqual(item_name, "rubber chicken talisman")
         finally:
-            self.nlp_core.item_embeddings = original_embeddings
-            self.nlp_core.item_indices = original_indices
+            self.nlp_core.matcher.item_embeddings = original_embeddings
+            self.nlp_core.matcher.item_indices = original_indices
+
+
+class FakeMatcher:
+    """!
+    @brief Test-only IntentMatcher adapter -- returns pre-configured (name, score) tuples for
+        exact clause-text lookups instead of running any real embedding model, so
+        TestIntentClassification can exercise IntentClassifier's own gate/precedence order at
+        full speed, with no SentenceTransformer load. Unmapped text always misses (None, 0.0),
+        the same "confidently below threshold" shape SentenceTransformerMatcher returns for
+        genuinely unmatched input. Real adapter: NLP_Core.py's SentenceTransformerMatcher --
+        two adapters is what justifies IntentMatcher as a real seam rather than a hypothetical
+        one authored just in case.
+    """
+
+    def __init__(self, actions=None, items=None, targets=None):
+        self._actions = actions or {}
+        self._items = items or {}
+        self._targets = targets or {}
+
+    def on_rules_loaded(self, data):
+        pass
+
+    def register_item(self, name, description):
+        pass
+
+    def map_to_action(self, processed_text):
+        return self._actions.get(processed_text, (None, 0.0))
+
+    def map_to_item(self, processed_text):
+        return self._items.get(processed_text, (None, 0.0))
+
+    def map_to_target(self, processed_text):
+        return self._targets.get(processed_text, (None, 0.0))
+
+
+class TestIntentClassification(unittest.TestCase):
+    """!
+    @brief Fast, offline coverage of Intent_Classification.py -- IntentClassifier.classify()
+        exercised directly against a FakeMatcher, no EventBus/DMCore/SentenceTransformer
+        needed at all. Covers exactly the precedence/gate-order question the pre-refactor
+        NLPCore test suite never actually walked as an integrated sequence (ex:
+        test_adam_wins_over_both_item_verb_and_dialogue, below) -- previously only individual
+        mechanisms were covered in isolation. Pure gate functions (detect_item_intent,
+        detect_dialogue_intent, detect_help_intent, detect_save_load_intent,
+        split_action_clauses) are tested directly, with no classifier/matcher setup at all,
+        since they need none.
+    """
+
+    def test_detect_item_intent_examine_vs_take_vs_neither(self):
+        self.assertEqual(detect_item_intent("examine the dagger"), "examine")
+        self.assertEqual(detect_item_intent("take the gold"), "take")
+        self.assertIsNone(detect_item_intent("attack with my sword"))
+
+    def test_detect_item_intent_unequip_wins_over_equip_substring(self):
+        # "unequip " literally contains EQUIP_KEYWORDS' own "equip " as a substring -- this is
+        # the one ordering dependency in item_intent detection most likely to regress silently
+        # if the tuples were ever reordered.
+        self.assertEqual(detect_item_intent("take off my armor"), "unequip")
+        self.assertEqual(detect_item_intent("equip the armor"), "equip")
+
+    def test_detect_item_intent_formation_wins_over_advance(self):
+        self.assertEqual(detect_item_intent("stay behind me"), "formation_behind")
+        self.assertEqual(detect_item_intent("walk beside me"), "formation_abreast")
+        self.assertEqual(detect_item_intent("advance toward the wolf"), "advance")
+
+    def test_detect_item_intent_close_requires_the_or_it_not_bare_close(self):
+        # CLOSE_KEYWORDS requires "the"/"it" specifically so a bare "close " (as in "I fight in
+        # close combat") can't misfire before skill matching gets a chance to run.
+        self.assertEqual(detect_item_intent("close the chest"), "close")
+        self.assertIsNone(detect_item_intent("i fight in close combat"))
+
+    def test_detect_dialogue_intent_vs_item_and_skill_phrasing(self):
+        self.assertTrue(detect_dialogue_intent("talk to the innkeeper"))
+        self.assertTrue(detect_dialogue_intent("ask the guard about the road"))
+        self.assertFalse(detect_dialogue_intent("take the gold"))
+        self.assertFalse(detect_dialogue_intent("attack with my sword"))
+
+    def test_detect_help_intent_matches_whole_word_adam_only(self):
+        self.assertTrue(detect_help_intent("adam, what are my skills?"))
+        self.assertTrue(detect_help_intent("ADaM help me"))
+        # \b-anchored -- "adam" appearing inside another word must never match.
+        self.assertFalse(detect_help_intent("this sword is adamantine"))
+        self.assertFalse(detect_help_intent("attack the wolf"))
 
     def test_detect_save_load_intent_parses_slot_names(self):
-        self.assertEqual(self.nlp_core._detect_save_load_intent("save as arena run 1"), ("save", "arena run 1"))
+        self.assertEqual(detect_save_load_intent("save as arena run 1"), ("save", "arena run 1"))
+        self.assertEqual(detect_save_load_intent("save game as arena-run-1"), ("save", "arena-run-1"))
+        self.assertEqual(detect_save_load_intent("save boss-fight"), ("save", "boss-fight"))
+        self.assertEqual(detect_save_load_intent("load boss-fight"), ("load", "boss-fight"))
+        self.assertEqual(detect_save_load_intent("load game as boss-fight"), ("load", "boss-fight"))
+
+    def test_split_action_clauses_on_and_then_and_punctuation(self):
         self.assertEqual(
-            self.nlp_core._detect_save_load_intent("save game as arena-run-1"), ("save", "arena-run-1")
+            split_action_clauses("attack the orc and cast a ward"),
+            ["attack the orc", "cast a ward"],
         )
-        self.assertEqual(self.nlp_core._detect_save_load_intent("save boss-fight"), ("save", "boss-fight"))
-        self.assertEqual(self.nlp_core._detect_save_load_intent("load boss-fight"), ("load", "boss-fight"))
+        self.assertEqual(split_action_clauses("attack and then retreat"), ["attack", "retreat"])
+        self.assertEqual(split_action_clauses("attack with my sword"), ["attack with my sword"])
+        # \b-anchored -- "and"/"then" appearing inside another word must never split
+        # (ex: "handle"/"sandbox" both literally contain the substring "and").
         self.assertEqual(
-            self.nlp_core._detect_save_load_intent("load game as boss-fight"), ("load", "boss-fight")
+            split_action_clauses("handle the sandbox carefully"),
+            ["handle the sandbox carefully"],
         )
+
+    def test_save_load_short_circuits_before_anything_else(self):
+        classifier = IntentClassifier(FakeMatcher())
+        _processed, events = classifier.classify("save as arena run 1")
+        self.assertEqual(events, [{"event": "save_requested", "payload": {"slot": "arena run 1"}}])
+
+    def test_multi_clause_input_publishes_multiple_actions(self):
+        classifier = IntentClassifier(FakeMatcher(actions={
+            "attack with my sword": ("blades", 0.9),
+            "pick the lock": ("finesse", 0.8),
+        }))
+        _processed, events = classifier.classify("I attack with my sword and pick the lock")
+
+        self.assertEqual(len(events), 1)
+        skills = [clause["skill"] for clause in events[0]["payload"]["clauses"]]
+        self.assertEqual(skills, ["blades", "finesse"])
+
+    def test_mixed_item_and_action_clause_publishes_one_merged_turn(self):
+        # The pipeline merge: an item-interaction clause and a skill/ability clause in one
+        # input join the same turn_detected event, not two separate, uncoordinated ones.
+        classifier = IntentClassifier(FakeMatcher(
+            items={"take the longsword": ("longsword", 0.9)},
+            actions={"attack the wolf": ("blades", 0.9)},
+        ))
+        _processed, events = classifier.classify("I take the longsword and attack the wolf")
+
+        self.assertEqual(len(events), 1)
+        clauses = events[0]["payload"]["clauses"]
+        self.assertEqual(len(clauses), 2)
+        self.assertEqual(clauses[0], {"kind": "item", "intent": "take", "item_name": "longsword"})
+        self.assertEqual(clauses[1]["kind"], "action")
+        self.assertEqual(clauses[1]["skill"], "blades")
+
+    def test_exempt_clause_mixed_with_an_item_clause_still_publishes_separately(self):
+        # "retreat" stays free (West End Games' own movement exception) and never joins the
+        # shared turn, even when another clause in the same input is a genuine item action.
+        classifier = IntentClassifier(FakeMatcher(items={"take the longsword": ("longsword", 0.9)}))
+        _processed, events = classifier.classify("take the longsword and retreat")
+
+        self.assertEqual(len(events), 2)
+        self.assertEqual(events[0]["event"], "item_interaction_detected")
+        self.assertEqual(events[0]["payload"]["intent"], "retreat")
+        self.assertEqual(events[1]["event"], "turn_detected")
+        self.assertEqual(
+            events[1]["payload"]["clauses"], [{"kind": "item", "intent": "take", "item_name": "longsword"}],
+        )
+
+    def test_item_verb_still_takes_priority_over_dialogue(self):
+        # A genuine item verb naming an entity is never swallowed as dialogue, even though
+        # "to thane" would otherwise read as conversational address.
+        classifier = IntentClassifier(FakeMatcher(items={"give the longsword to thane": ("longsword", 0.9)}))
+        _processed, events = classifier.classify("give the longsword to thane")
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["event"], "turn_detected")
+        self.assertEqual(
+            events[0]["payload"]["clauses"], [{"kind": "item", "intent": "give", "item_name": "longsword"}],
+        )
+
+    def test_dialogue_wins_once_item_pass_finds_nothing(self):
+        classifier = IntentClassifier(FakeMatcher())
+        _processed, events = classifier.classify("talk to the wolf")
+        self.assertEqual(events, [{"event": "dialogue_detected", "payload": {"input": "talk to the wolf", "score": None}}])
+
+    def test_adam_wins_over_both_item_verb_and_dialogue_in_the_same_input(self):
+        # Checked ahead of both the item-interaction pass and DIALOGUE_KEYWORDS -- naming
+        # "adam" anywhere in the input always reaches the help channel, never ordinary
+        # dialogue or a real item turn, no matter what else the input contains.
+        classifier = IntentClassifier(FakeMatcher(items={"the longsword to thane": ("longsword", 0.9)}))
+        _processed, events = classifier.classify("talk to ADaM and give the longsword to thane")
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["event"], "help_detected")
+        self.assertIn("adam", events[0]["payload"]["input"])
+
+    def test_removal_candidate_flag_only_set_when_removal_keywords_present(self):
+        classifier = IntentClassifier(FakeMatcher())
+
+        _processed, events = classifier.classify("adam, get rid of that torch")
+        self.assertTrue(events[0]["payload"]["removal_candidate"])
+
+        _processed, events = classifier.classify("adam, what are my skills")
+        self.assertFalse(events[0]["payload"]["removal_candidate"])
+
+    def test_creature_and_edit_candidate_flags_only_set_when_their_own_keywords_present(self):
+        classifier = IntentClassifier(FakeMatcher())
+
+        _processed, events = classifier.classify("adam, summon a wolf")
+        self.assertTrue(events[0]["payload"]["creature_candidate"])
+        self.assertFalse(events[0]["payload"]["edit_candidate"])
+        self.assertFalse(events[0]["payload"]["removal_candidate"])
+
+        _processed, events = classifier.classify("adam, change the torch's description")
+        self.assertTrue(events[0]["payload"]["edit_candidate"])
+        self.assertFalse(events[0]["payload"]["creature_candidate"])
+
+        _processed, events = classifier.classify("adam, what are my skills")
+        self.assertFalse(events[0]["payload"]["creature_candidate"])
+        self.assertFalse(events[0]["payload"]["edit_candidate"])
+
+    def test_unmatched_item_verb_triggers_improvisation_instead_of_action_not_understood(self):
+        # FakeMatcher's map_to_item/map_to_action both miss (default) for this phrase -- the
+        # whole turn would otherwise resolve to nothing at all, so the recognized-but-unmatched
+        # "take" verb becomes DM_Improvisation.py's own last-resort candidate instead.
+        classifier = IntentClassifier(FakeMatcher())
+        _processed, events = classifier.classify("take the strange glowing talisman")
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["event"], "improvisation_requested")
+        self.assertEqual(events[0]["payload"]["intent"], "take")
+
+    def test_matched_clause_elsewhere_in_input_still_wins_over_improvisation(self):
+        # A compound input where one clause resolves normally still takes the ordinary path --
+        # extending ad hoc creation into multi-clause turns is deliberately out of scope (see
+        # CLAUDE.md's "Ad hoc entity creation and removal").
+        classifier = IntentClassifier(FakeMatcher(actions={"attack the wolf": ("blades", 0.9)}))
+        _processed, events = classifier.classify("take the strange glowing talisman and attack the wolf")
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["event"], "turn_detected")
+
+    def test_low_confidence_input_publishes_action_not_understood(self):
+        classifier = IntentClassifier(FakeMatcher())
+        _processed, events = classifier.classify("Hey there innkeeper")
+        self.assertEqual(events[0]["event"], "action_not_understood")
+
+    def test_item_and_dialogue_keywords_never_collide_with_a_real_skill_keyword(self):
+        # Turns the prose scattered across Intent_Classification.py's own keyword-tuple
+        # comments (ex: "TRADE_KEYWORDS deliberately avoids every word in skills.toml's
+        # 'appraise' keywords list") into one executable invariant: no item/dialogue keyword
+        # phrase this file declares should be findable inside a plain sentence that merely uses
+        # a real skill's own keyword as a whole word -- otherwise a sentence clearly about that
+        # skill could get silently swallowed by item/dialogue detection, which always runs
+        # first. Skill keywords are checked space-padded (" {keyword} "), the minimal sentence
+        # context a keyword could plausibly appear in, since the real detection code matches
+        # each phrase (with whatever leading/trailing space it was authored with, ex:
+        # "ask " or "close the ") against the whole processed sentence, not an isolated word.
+        skills_path = os.path.join("Rules", "Fantasy", "skills.toml")
+        with open(skills_path, "rb") as f:
+            skills_data = tomllib.load(f)
+        skill_keywords = set()
+        for skill in skills_data.get("skill", []):
+            skill_keywords.update(skill.get("keywords", []))
+
+        keyword_tuples_by_name = {
+            "EXAMINE_KEYWORDS": EXAMINE_KEYWORDS, "EQUIP_KEYWORDS": EQUIP_KEYWORDS,
+            "UNEQUIP_KEYWORDS": UNEQUIP_KEYWORDS, "DROP_KEYWORDS": DROP_KEYWORDS,
+            "TAKE_KEYWORDS": TAKE_KEYWORDS, "GIVE_KEYWORDS": GIVE_KEYWORDS,
+            "TRADE_KEYWORDS": TRADE_KEYWORDS, "USE_KEYWORDS": USE_KEYWORDS,
+            "OPEN_KEYWORDS": OPEN_KEYWORDS, "CLOSE_KEYWORDS": CLOSE_KEYWORDS,
+            "ADVANCE_KEYWORDS": ADVANCE_KEYWORDS, "RETREAT_KEYWORDS": RETREAT_KEYWORDS,
+            "FORMATION_BEHIND_KEYWORDS": FORMATION_BEHIND_KEYWORDS,
+            "FORMATION_ABREAST_KEYWORDS": FORMATION_ABREAST_KEYWORDS,
+            "DIALOGUE_KEYWORDS": DIALOGUE_KEYWORDS,
+        }
+        # Known, pre-existing exceptions -- not introduced by this refactor, and out of this
+        # refactor's own scope to fix (a pure, zero-behavior-change extraction). "examine" is
+        # deliberately both an EXAMINE_KEYWORDS phrase (item detection, checked first) and one
+        # of appraise's own skills.toml keywords (CLAUDE.md's "Known gaps": "a keyword-driven
+        # skill match can still dominate an unrelated whole-sentence embedding match"), so
+        # "examine the dagger" always resolves as an item-examine rather than ever reaching
+        # appraise -- accepted. "ask " colliding with "mask" (ex: a disguise/stealth skill's
+        # own keyword) was NOT previously known or documented anywhere -- this test found it
+        # live; flagged here rather than silently fixed, since changing DIALOGUE_KEYWORDS'
+        # matching behavior is a real behavior change, out of scope for this pass.
+        known_exceptions = {
+            ("EXAMINE_KEYWORDS", "examine", "examine"),
+            ("DIALOGUE_KEYWORDS", "ask ", "mask"),
+        }
+
+        for tuple_name, keyword_tuple in keyword_tuples_by_name.items():
+            for phrase in keyword_tuple:
+                for skill_keyword in skill_keywords:
+                    if (tuple_name, phrase, skill_keyword) in known_exceptions:
+                        continue
+                    self.assertNotIn(
+                        phrase, f" {skill_keyword} ",
+                        f"{tuple_name}'s {phrase!r} is findable inside a sentence using skill "
+                        f"keyword {skill_keyword!r}",
+                    )
 
 
 class TestClarificationResponse(LLMTestCase):
@@ -1824,7 +1928,13 @@ class TestImprovisation(DMTestCase):
         self.assertEqual(result["poisoned"], 7)
         self.assertEqual(self.dm_core.get_current_hp("gladstone"), starting_hp - 7)
 
-    def test_inventory_placement_examine_publishes_a_bespoke_response(self):
+    def test_inventory_placement_examine_resolves_through_the_ordinary_pipeline(self):
+        # Placement (place_new_item) and narration both go through the same redispatch every
+        # other branch uses -- DM_Core.py's own source-resolution recognizes the item is
+        # already in gladstone's inventory (see _on_item_interaction_detected's docstring), so
+        # this no longer needs its own bespoke publish. found=True here is itself the real
+        # regression guard: a broken source-resolution would fall back to the scene target's
+        # own (empty) inventory and report not_present instead.
         with patch("DM_Improvisation.generate_ad_hoc_item", return_value=self._fake_creation(location="inventory")):
             self.dm_core._on_improvisation_requested({
                 "intent": "examine", "phrase": "my pockets", "input": "check my pockets",
@@ -1833,6 +1943,7 @@ class TestImprovisation(DMTestCase):
         result = self.item_events[-1]
         self.assertTrue(result["found"])
         self.assertEqual(result["item_name"], "stone")
+        self.assertIsNone(result["container"])
         self.assertIn("stone", self.dm_core.entities["gladstone"]["inventory"])
 
     def test_decline_falls_back_to_action_not_understood(self):
@@ -2746,6 +2857,27 @@ class TestItemInteraction(DMTestCase):
         self.assertTrue(result["found"])
         self.assertIn("cursed dagger", self.dm_core.entities["gladstone"]["inventory"])
         self.assertNotIn("cursed dagger", self.dm_core.entities["chest"]["inventory"])
+
+    def test_examine_an_item_already_in_inventory_ignores_an_unrelated_locked_target(self):
+        # The chest (this scenario's own default scene target) stays locked and untouched --
+        # proves source-resolution checks the player's own inventory *before* the locked-target
+        # gate, not just when there's no target at all. Without that ordering, an ad hoc item
+        # placed straight into inventory (DM_Improvisation.py) would wrongly report "locked"
+        # whenever a locked container happened to be the scene's current default target.
+        self.dm_core.entities["pocket lint"] = {
+            "name": "pocket lint", "supertype": "object", "description": "A bit of pocket lint.",
+        }
+        self.dm_core.place_new_item("gladstone", "pocket lint")
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "examine", "item_name": "pocket lint", "input": "examine the pocket lint",
+        })
+
+        result = self.resolved[-1]
+        self.assertTrue(result["found"])
+        self.assertIsNone(result["container"])
+        self.assertEqual(result["description"], "A bit of pocket lint.")
+        self.assertIn("cursed dagger", self.dm_core.entities["chest"]["inventory"])  # untouched
 
 
 class TestItemTargetedSkillCheck(DMTestCase):

@@ -53,8 +53,23 @@ class InventoryMixin(DMCoreProtocol):
 
         source_inventory.remove(item_name)
         destination.setdefault("inventory", []).append(item_name)
+
         self.event_bus.publish("log_info", f"{item_name} moved from {from_name} to {to_name}.")
         return True
+
+    def place_new_item(self, destination_name, item_name):
+        """!
+        @brief Adds item_name to destination_name's inventory with no source entity --
+            transfer_item always needs a real "from" to remove the item from, but a freshly
+            conjured ad hoc item (DM_Improvisation.py, AdHoc_Generation.py) never had one; it
+            simply starts existing already in someone's possession. Unlike transfer_item, this
+            never fails on a missing destination -- setdefault creates the entity's own
+            "inventory" list the first time it's needed, same as transfer_item's own
+            destination.setdefault("inventory", []) already does for an existing entity.
+        @param destination_name The entity item_name should end up owned by.
+        @param item_name The item entity's own name/entity_id.
+        """
+        self.entities.setdefault(destination_name, {}).setdefault("inventory", []).append(item_name)
 
     def resolve_equip_slot(self, entity_name, item_name):
         """!
