@@ -806,8 +806,10 @@ those still roll dice via `resolve_opposed_action` and narrate in third person a
 GM; free-form talking never rolls anything and speaks as the addressed entity.
 `Intent_Classification.py`'s `detect_dialogue_intent` recognizes `DIALOGUE_KEYWORDS` phrases (`"talk to"`/`"ask"`/
 `"tell"`/`"greet"`/...), checked after item-interaction detection has had its shot (so
-`"give the sword to Anne"` is never swallowed as dialogue) and before skill matching, publishing
-`dialogue_detected {input, score}` with no further resolution.
+`"give the sword to Anne"` is never swallowed as dialogue) and before skill matching. Once
+detected, `IntentClassifier.classify` also calls the matcher's own `classify_sentiment(processed)`
+(see "Dialogue sentiment" below) and publishes `dialogue_detected {input, score, sentiment}` with
+no further resolution.
 
 `DMCore._on_dialogue_detected` delegates to `DM_Dialogue.py`'s `DialogueMixin`:
 `_resolve_dialogue_target` searches the input for any present entity's name (whole-word,
@@ -816,9 +818,47 @@ named. `_resolve_dialogue` gates on the target being present/alive (`reason: "no
 and not an inanimate `"object"` (`reason: "cant_talk"`) — but deliberately **not** on hostility:
 addressing a hostile entity is allowed (shouting mid-fight), and the model is free to read that
 as hostile/dismissive in character rather than being denied outright. A found target's
-`persona`/`attitude` are attached for `LLMCore` to speak from. Publishes `dialogue_resolved
-{target, input, found, present_entities, persona?, attitude?, reason?}` — no
-`_publish_party_status()`, since dialogue never changes HP/equipment/inventory/conditions.
+disposition is nudged by `sentiment` (`nudge_attitude`, see below) before `persona`/`attitude`
+are attached for `LLMCore` to speak from — so the same turn's own reply already reflects it.
+Publishes `dialogue_resolved {target, input, found, present_entities, persona?, attitude?,
+reason?}` — no `_publish_party_status()`, since dialogue never changes HP/equipment/inventory/
+conditions (attitude drift isn't surfaced on the Party tab either, so this still holds).
+
+**Dialogue sentiment.** The tone of what the player says nudges the addressed entity's own
+disposition toward them — classified locally (`NLP_Core.py`'s `SentenceTransformerMatcher.
+classify_sentiment`, backed by a separate fine-tuned transformer pipeline
+(`SENTIMENT_MODEL_NAME`, `cardiffnlp/twitter-roberta-base-sentiment-latest` — a 3-way negative/
+neutral/positive classifier trained on tweets, chosen over a movie-review-trained default for
+its closer register match to terse, informal, second-person dialogue) rather than this class's
+own embedding model or a lexicon-based analyzer: sentiment-of-an-utterance needs broad,
+compositional coverage across however a player might phrase something (ex: "get out of my
+sight" — clearly hostile, but with no single word a dictionary lookup would flag), which only a
+model trained on real labeled sentiment examples reliably provides. `classify_sentiment` returns
+`(label, score)` — the winning class's own softmax probability — gated at its own
+`sentiment_confidence_threshold` (0.5, "meaningfully more confident than the ~0.33 a 3-way
+coin-flip would give") and short-circuited to `(None, score)` whenever the model's own winning
+class is "neutral", covering purely informational dialogue as well as genuinely neutral
+phrasing. Still local, single-forward-pass inference — no network call — deliberately not an
+LLM call: dialogue is the single most frequent player action, so adding LLM latency to every
+turn was rejected in favor of a fast, local, general-purpose classifier. `DM_Social.py`'s
+`nudge_attitude(entity_name, toward_name, sentiment, score)` applies a capped drift into
+`entity["attitude_deltas"][toward_name]` (disposition axis only for v1) whose *magnitude* is
+`score` itself — `classify_sentiment`'s own confidence, already 0..1 — times
+`SENTIMENT_INTENSITY_SCALE` (currently `1`, i.e. unscaled; a single tunable knob rather than a
+hand-tuned delta table), not a flat per-sentiment amount: a line the classifier read as more
+intensely negative/positive moves disposition further than a mildly-worded one. Clamped to
+`±TALK_ATTITUDE_DRIFT_CAP` (40) — a cap on *accumulated drift*, not on the resolved
+value, so sustained same-direction talk can still push a base value already close to
+`is_hostile`'s `-100` threshold across it (an intentional emergent outcome: insult someone long
+enough and they turn on you). `get_attitude` adds `attitude_deltas` elementwise on top of
+whichever name/supertype/default array it resolves, so `is_hostile`/`describe_attitude`/the GUI
+all see the drifted value transparently, with no other call site changes. An entity with no
+`[entity.attitudes]` table at all (ex: `arena.toml`'s wolf) stays hostile unconditionally
+regardless of drift, since `is_hostile` short-circuits on the table's absence before ever reading
+a disposition value. `attitude_deltas` is genuinely dynamic runtime state, so it round-trips
+through save/load in the ordinary per-instance diff (`DM_Persistence.py`) for *every* entity, not
+just generated/ad-hoc ones. Out of scope for v1: the other five attitude axes, and the sibling "Extended goals" item
+(resolved actions like combat/theft/favors swaying attitude) — see that section.
 
 **Room-level presence.** Every DM-published narration event carries `present_entities`: a
 snapshot of `self.scenario_entities` at publish time. `LLMCore` tags each `context_window`
@@ -1336,8 +1376,10 @@ subset only.
 Not yet started, except where noted:
 - Characters are language-dependent — an entity's own comprehension of the language it's
   addressed in should gate dialogue/narration, not just its attitude data.
-- Dialogue sentiment sways attitudes — the sentiment of what the player says, not just which
-  skill check they made, should be able to move an entity's `[entity.attitudes]` axes.
+- ~~Dialogue sentiment sways attitudes~~ — **Done**: free-form dialogue's own tone (classified
+  locally, no LLM call) nudges the addressed entity's disposition toward the player, capped and
+  persistent — see CLAUDE.md's "Dialogue sentiment". Scoped to disposition only (not all six
+  axes) and to free-form dialogue only (not the two goals below, which remain unstarted).
 - Actions sway attitudes by varying degrees — a resolved action (combat, theft, a favor) should
   nudge attitude axes proportionally, not just be gated by attitude that already exists.
 - Random encounters, enemy generator — procedurally populate a scene/room with creatures instead

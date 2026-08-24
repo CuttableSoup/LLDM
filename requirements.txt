@@ -3,6 +3,7 @@
 # on Linux it's a separate OS package (e.g. `apt install python3-tk`).
 
 sentence-transformers==5.1.2
+transformers==4.57.1
 numpy==2.3.3
 textual==8.2.8
 pypdf==6.14.2

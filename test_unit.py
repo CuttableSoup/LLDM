@@ -31,6 +31,7 @@ from Character_Creation_GUI import CharacterCreationDialog
 from Challenge_Rating import calculate_challenge_rating, calculate_party_challenge_rating, skill_rating
 from DM_Core import DMCore
 from DM_Rules import list_available_scenarios
+from DM_Social import TALK_ATTITUDE_DRIFT_CAP
 from Event_Bus import EventBus
 from GUI_Core import GUICore
 from Intent_Classification import (
@@ -220,6 +221,30 @@ class TestGameBoot(unittest.TestCase):
         self.assertGreater(last_action["score"], 0.5)
         print(f"Integration Test Success: '{test_input}' -> {last_action['skill']} ({last_action['score']:.4f})")
 
+    def test_sentiment_classification_via_fine_tuned_transformer(self):
+        # classify_sentiment is backed by a separate fine-tuned sentiment pipeline
+        # (SENTIMENT_MODEL_NAME), not this class's own embedding model, so this needs no
+        # DMCore/rules load at all -- just NLPCore itself, constructed the same way every other
+        # real-model test here does rather than instantiating SentenceTransformerMatcher
+        # directly.
+        nlp_core = NLPCore(EventBus())
+
+        hostile_label, hostile_score = nlp_core.matcher.classify_sentiment("I hate you and never want to see you again")
+        warm_label, warm_score = nlp_core.matcher.classify_sentiment("thank you so much, you have been wonderful and I am truly grateful")
+        informational_label, _score = nlp_core.matcher.classify_sentiment("how far is it to the next town")
+        # A lexicon-based analyzer (this project's earlier VADER-backed implementation) reads
+        # this as flat neutral -- no single word here is in its dictionary. A model trained on
+        # real labeled sentiment examples has to actually generalize compositionally to catch
+        # it, which is the whole reason this class was swapped in over VADER.
+        curt_dismissal_label, _score = nlp_core.matcher.classify_sentiment("get out of my sight")
+
+        self.assertEqual(hostile_label, "negative")
+        self.assertEqual(warm_label, "positive")
+        self.assertEqual(curt_dismissal_label, "negative")
+        self.assertGreaterEqual(hostile_score, nlp_core.matcher.sentiment_confidence_threshold)
+        self.assertGreaterEqual(warm_score, nlp_core.matcher.sentiment_confidence_threshold)
+        self.assertIsNone(informational_label)
+
 
 class TestNlpConfidenceThreshold(unittest.TestCase):
     """!
@@ -327,10 +352,11 @@ class FakeMatcher:
         one authored just in case.
     """
 
-    def __init__(self, actions=None, items=None, targets=None):
+    def __init__(self, actions=None, items=None, targets=None, sentiments=None):
         self._actions = actions or {}
         self._items = items or {}
         self._targets = targets or {}
+        self._sentiments = sentiments or {}
 
     def on_rules_loaded(self, data):
         pass
@@ -346,6 +372,9 @@ class FakeMatcher:
 
     def map_to_target(self, processed_text):
         return self._targets.get(processed_text, (None, 0.0))
+
+    def classify_sentiment(self, processed_text):
+        return self._sentiments.get(processed_text, (None, 0.0))
 
 
 class TestIntentClassification(unittest.TestCase):
@@ -479,7 +508,24 @@ class TestIntentClassification(unittest.TestCase):
     def test_dialogue_wins_once_item_pass_finds_nothing(self):
         classifier = IntentClassifier(FakeMatcher())
         _processed, events = classifier.classify("talk to the wolf")
-        self.assertEqual(events, [{"event": "dialogue_detected", "payload": {"input": "talk to the wolf", "score": None}}])
+        self.assertEqual(
+            events,
+            [{
+                "event": "dialogue_detected",
+                "payload": {"input": "talk to the wolf", "score": None, "sentiment": None, "sentiment_score": 0.0},
+            }],
+        )
+
+    def test_dialogue_detected_carries_the_matcher_own_sentiment_classification(self):
+        # classify_sentiment is only ever called once dialogue is confirmed detected -- the
+        # matcher's own canned (label, score) result for the processed input rides along on the
+        # same event, not a second round trip DMCore would have to fetch separately. The score
+        # matters just as much as the label now -- DM_Social.py's nudge_attitude scales the
+        # actual attitude drift by it (see CLAUDE.md's "Dialogue sentiment").
+        classifier = IntentClassifier(FakeMatcher(sentiments={"talk to the innkeeper, thank you": ("positive", 0.7)}))
+        _processed, events = classifier.classify("talk to the innkeeper, thank you")
+        self.assertEqual(events[0]["payload"]["sentiment"], "positive")
+        self.assertEqual(events[0]["payload"]["sentiment_score"], 0.7)
 
     def test_adam_wins_over_both_item_verb_and_dialogue_in_the_same_input(self):
         # Checked ahead of both the item-interaction pass and DIALOGUE_KEYWORDS -- naming
@@ -3826,8 +3872,8 @@ class TestFreeformDialogue(DMTestCase):
         super().setUp()
         self.dialogue_events = self._capture("dialogue_resolved")
 
-    def _talk(self, input_text):
-        self.dm_core._on_dialogue_detected({"input": input_text})
+    def _talk(self, input_text, sentiment=None, score=1.0):
+        self.dm_core._on_dialogue_detected({"input": input_text, "sentiment": sentiment, "sentiment_score": score})
         return self.dialogue_events[-1]
 
     def test_named_target_resolves_over_the_default(self):
@@ -3887,6 +3933,67 @@ class TestFreeformDialogue(DMTestCase):
     def test_every_dialogue_resolution_is_tagged_with_current_presence(self):
         result = self._talk("i talk to the innkeeper")
         self.assertEqual(set(result["present_entities"]), set(self.dm_core.scenario_entities))
+
+    def test_positive_sentiment_raises_disposition_and_negative_lowers_it(self):
+        # score=1.0 (max confidence) with SENTIMENT_INTENSITY_SCALE at its current default of 1
+        # means one turn's own nudge is exactly +-1.0 -- see DM_Social.py's nudge_attitude.
+        before = self.dm_core.get_attitude("innkeeper", self.dm_core.player_name)[0]
+
+        self._talk("i talk to the innkeeper", sentiment="positive", score=1.0)
+        after_positive = self.dm_core.get_attitude("innkeeper", self.dm_core.player_name)[0]
+        self.assertEqual(after_positive, before + 1.0)
+
+        self._talk("i talk to the innkeeper", sentiment="negative", score=1.0)
+        after_negative = self.dm_core.get_attitude("innkeeper", self.dm_core.player_name)[0]
+        self.assertEqual(after_negative, before)
+
+    def test_a_more_confident_sentiment_score_moves_disposition_further(self):
+        # The whole point of scaling by score instead of a flat per-sentiment amount: a line the
+        # classifier was only mildly confident about should move the needle less than one it was
+        # very confident about. Calls nudge_attitude directly (not through _talk/dialogue
+        # resolution) against two different entities so the two magnitudes can be compared
+        # without one call's own drift compounding onto the other's.
+        self.dm_core.nudge_attitude("innkeeper", self.dm_core.player_name, "positive", 0.55)
+        mild_drift = self.dm_core.entities["innkeeper"]["attitude_deltas"][self.dm_core.player_name][0]
+
+        self.dm_core.entities["test_entity_two"] = {"name": "test_entity_two"}
+        self.dm_core.nudge_attitude("test_entity_two", self.dm_core.player_name, "positive", 0.95)
+        strong_drift = self.dm_core.entities["test_entity_two"]["attitude_deltas"][self.dm_core.player_name][0]
+
+        self.assertEqual(mild_drift, 0.55)
+        self.assertEqual(strong_drift, 0.95)
+        self.assertLess(mild_drift, strong_drift)
+
+    def test_sentiment_drift_is_capped_and_reflected_in_this_turn_own_reply(self):
+        base = self.dm_core.entities["innkeeper"].get("attitudes", {}).get("default", [0, 0, 0, 0, 0, 0])[0]
+
+        for _ in range(50):
+            result = self._talk("i talk to the innkeeper", sentiment="positive", score=1.0)
+
+        disposition = self.dm_core.get_attitude("innkeeper", self.dm_core.player_name)[0]
+
+        self.assertEqual(disposition, base + TALK_ATTITUDE_DRIFT_CAP)
+        # This turn's own returned attitude description already reflects the (capped) drift --
+        # the local-classification design's whole point over an async LLM call, which would
+        # only apply the nudge after the reply had already been built.
+        self.assertTrue(result["attitude"])
+
+    def test_neutral_or_unrecognized_sentiment_never_nudges_attitude(self):
+        before = self.dm_core.get_attitude("innkeeper", self.dm_core.player_name)[0]
+        self._talk("i ask the innkeeper about the road", sentiment=None, score=0.0)
+        self.assertEqual(self.dm_core.get_attitude("innkeeper", self.dm_core.player_name)[0], before)
+
+    def test_attitude_drift_survives_save_and_load(self):
+        slot_name = "test_sentiment_drift_slot"
+        self.addCleanup(shutil.rmtree, self.dm_core._save_slot_dir(slot_name), ignore_errors=True)
+
+        self._talk("i talk to the innkeeper", sentiment="negative")
+        drifted = self.dm_core.get_attitude("innkeeper", self.dm_core.player_name)[0]
+
+        self.dm_core.save_game(slot_name)
+        self.dm_core.load_game(slot_name)
+
+        self.assertEqual(self.dm_core.get_attitude("innkeeper", self.dm_core.player_name)[0], drifted)
 
 
 class TestHelpChannel(DMTestCase):
@@ -4051,7 +4158,7 @@ class TestSaveLoad(DMTestCase):
         gladstone_state = data["instances"]["gladstone"]
         self.assertEqual(
             set(gladstone_state.keys()),
-            {"hp", "active_conditions", "currency", "inventory", "equipped", "band"},
+            {"hp", "active_conditions", "currency", "inventory", "equipped", "band", "attitude_deltas"},
         )
 
 

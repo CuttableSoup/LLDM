@@ -4,9 +4,10 @@
     delegates classification, and publishes whatever events come back. Owns no classification
     logic itself: SentenceTransformerMatcher (below) is the production IntentMatcher adapter,
     holding the loaded SentenceTransformer model and its precomputed skill/item/target
-    embeddings; NLPCore only ever subscribes to events and publishes the classifier's own
-    results, the same "pure module + thin glue" split AdHoc_Generation.py/DM_Improvisation.py
-    already established.
+    embeddings, plus a separate fine-tuned transformer pipeline for dialogue tone (see
+    classify_sentiment); NLPCore only ever subscribes to events and publishes the classifier's
+    own results, the same "pure module + thin glue" split AdHoc_Generation.py/
+    DM_Improvisation.py already established.
 """
 
 import re
@@ -14,8 +15,20 @@ import re
 import numpy as np
 import torch
 from sentence_transformers import SentenceTransformer, util
+from transformers import pipeline
 
 from Intent_Classification import CURRENCY_SYNONYMS, IntentClassifier, IntentMatcher
+
+# classify_sentiment's own model -- a general-purpose 3-class (negative/neutral/positive)
+# sentiment classifier fine-tuned on tweets, not this class's own semantic-similarity embedding
+# model. Sentiment-of-an-utterance needs broad, compositional coverage across however a player
+# might phrase something (ex: "get out of my sight" -- clearly hostile, but with no single word
+# a lexicon-based analyzer like VADER would flag), which only a model actually trained on
+# labeled sentiment examples provides; tweets are a much closer register match for terse,
+# informal, second-person dialogue than the movie-review data most "default" sentiment models
+# (ex: distilbert-sst2) are trained on. Named here, not inline in __init__, so it's easy to find/
+# swap without hunting through the constructor.
+SENTIMENT_MODEL_NAME = "cardiffnlp/twitter-roberta-base-sentiment-latest"
 
 # map_to_action's alternate-phrasing candidates: markers that introduce a topic clause rather
 # than describing the action itself (ex: "...about the road" in "have you heard anything about
@@ -57,6 +70,19 @@ class SentenceTransformerMatcher(IntentMatcher):
         # to clear this much lower floor, so a coincidental keyword collision on an otherwise
         # unrelated sentence doesn't get accepted on keyword evidence alone.
         self.keyword_fallback_floor = 0.2
+        # A separate pipeline, not self.model -- SENTIMENT_MODEL_NAME is a fine-tuned
+        # classification head (3-way softmax over negative/neutral/positive), not an embedding
+        # model, so there's no shared weights or shared encode() call to reuse here. Local, CPU
+        # inference (no device= override) -- consistent with everything else in this class,
+        # never a network call.
+        self.sentiment_pipeline = pipeline(
+            "sentiment-analysis", model=SENTIMENT_MODEL_NAME, tokenizer=SENTIMENT_MODEL_NAME,
+        )
+        # The winning class's own softmax probability has to clear this before classify_sentiment
+        # commits to a label -- for a 3-way split, chance alone sits around 0.33, so this is
+        # "meaningfully more confident than chance," not an arbitrary tone-strength cutoff the
+        # way VADER's old compound-score threshold was.
+        self.sentiment_confidence_threshold = 0.5
 
     def _add_phrases(self, all_phrases, indices, key, data):
         """!
@@ -372,6 +398,34 @@ class SentenceTransformerMatcher(IntentMatcher):
 
         self.event_bus.publish("log_info", f"Mapped input to item: {best_item} (Score: {best_score:.4f})")
         return best_item, best_score
+
+    def classify_sentiment(self, processed_text):
+        """!
+        @brief Classifies the tone of a dialogue line via sentiment_pipeline's own 3-way
+            (negative/neutral/positive) softmax -- only called from Intent_Classification.py's
+            own dialogue branch (see CLAUDE.md's "Dialogue"), never for skill/item/target
+            matching. Uses a fine-tuned classifier rather than this class's own embedding model
+            or a lexicon-based analyzer: sentiment-of-an-utterance needs broad, compositional
+            coverage across however a player might phrase something (ex: "get out of my sight"
+            -- clearly hostile, no single word a lexicon lookup would flag), which only a model
+            trained on real labeled sentiment examples reliably provides.
+        @param processed_text The cleaned and processed player input.
+        @return A tuple of (sentiment_label, confidence_score); confidence_score is the winning
+                class's own softmax probability (0..1), keeping the same "always a non-negative
+                confidence" shape every other matcher method already returns. sentiment_label is
+                "negative"/"positive" once that probability clears sentiment_confidence_threshold
+                and the winning class isn't "neutral" -- None otherwise, the "no strong tone
+                either way" case, covering purely informational dialogue, genuinely neutral
+                phrasing, and a low-confidence call the model itself isn't sure about.
+        """
+        result = self.sentiment_pipeline(processed_text)[0]
+        raw_label, score = result["label"].lower(), result["score"]
+
+        if raw_label == "neutral" or score < self.sentiment_confidence_threshold:
+            return None, score
+
+        self.event_bus.publish("log_info", f"Classified dialogue sentiment: {raw_label} (Score: {score:.4f})")
+        return raw_label, score
 
     def map_to_target(self, processed_text):
         """!

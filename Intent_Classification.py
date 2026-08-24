@@ -227,13 +227,13 @@ LOAD_PREFIXES = ("load game as ", "load as ", "load game ", "load ")
 class IntentMatcher:
     """!
     @brief The one seam IntentClassifier depends on -- everything embedding-based
-        (skill/item/target matching) is real ML inference in production and a canned stub in
-        tests. Not a runtime-enforced interface (this project has no third-party Protocol
-        dependency beyond typing, and duck typing is enough here) -- purely documentation of
-        the three methods a matcher must provide, plus the two catalog-maintenance calls.
-        SentenceTransformerMatcher (NLP_Core.py) is the production adapter; FakeMatcher
-        (test_unit.py) is the test adapter -- two real adapters justify this seam existing at
-        all, not a hypothetical one authored just in case.
+        (skill/item/target matching, plus dialogue sentiment) is real ML inference in
+        production and a canned stub in tests. Not a runtime-enforced interface (this project
+        has no third-party Protocol dependency beyond typing, and duck typing is enough here)
+        -- purely documentation of the methods a matcher must provide, plus the two
+        catalog-maintenance calls. SentenceTransformerMatcher (NLP_Core.py) is the production
+        adapter; FakeMatcher (test_unit.py) is the test adapter -- two real adapters justify
+        this seam existing at all, not a hypothetical one authored just in case.
     """
 
     def on_rules_loaded(self, data):
@@ -254,6 +254,10 @@ class IntentMatcher:
 
     def map_to_target(self, processed_text):
         """!@brief Returns (entity_name, score); entity_name is None below confidence."""
+        raise NotImplementedError
+
+    def classify_sentiment(self, processed_text):
+        """!@brief Returns (sentiment_label, score); sentiment_label is None below confidence."""
         raise NotImplementedError
 
 
@@ -514,7 +518,18 @@ class IntentClassifier:
         # at all (no item interaction, no exempt movement/formation clause) -- the same
         # priority the old single-clause code already gave item intents over dialogue.
         if not turn_clauses and not found_exempt and detect_dialogue_intent(processed):
-            events.append({"event": "dialogue_detected", "payload": {"input": processed, "score": None}})
+            # Classified here, not left to DMCore, since sentiment-of-an-utterance is exactly
+            # the same kind of embedding-based judgment call skill/item/target matching already
+            # is -- the matcher seam is what lets this stay a fast local classification (see
+            # SentenceTransformerMatcher.classify_sentiment) rather than an LLM round trip.
+            # sentiment_score (the classifier's own confidence) rides along too -- DM_Social.py's
+            # nudge_attitude scales the actual attitude nudge by it, rather than every dialogue
+            # line of the same sentiment moving disposition by an identical flat amount.
+            sentiment, sentiment_score = self.matcher.classify_sentiment(processed)
+            events.append({
+                "event": "dialogue_detected",
+                "payload": {"input": processed, "score": None, "sentiment": sentiment, "sentiment_score": sentiment_score},
+            })
             return processed, events
 
         best_score = self._classify_skill_pass(remaining_clauses, turn_clauses)

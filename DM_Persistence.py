@@ -100,7 +100,8 @@ class PersistenceMixin(DMCoreProtocol):
         """!
         @brief Writes this core's mechanical state to Saves/<slot_name>/dm_state.json -- a
             diff from a fresh instantiation (round_number, scenario_entities, and each
-            instance's hp/active_conditions/currency/inventory/equipped/band), not a raw dump
+            instance's hp/active_conditions/currency/inventory/equipped/band/attitude_deltas),
+            not a raw dump
             of self.entities, which also holds every static template. Loading re-instantiates
             fresh from Rules/Fantasy TOML and overlays this diff on top, so a save doesn't
             freeze stale stats if templates are edited between sessions. LLMCore
@@ -166,6 +167,10 @@ class PersistenceMixin(DMCoreProtocol):
                 "inventory": entity.get("inventory", []),
                 "equipped": entity.get("equipped", {}),
                 "band": self.get_band(name),
+                # Runtime dialogue-sentiment drift (DM_Social.py's nudge_attitude) -- genuinely
+                # dynamic for every instance, hand-authored or not, so it's saved unconditionally
+                # here rather than gated behind the generated/edited special cases below.
+                "attitude_deltas": entity.get("attitude_deltas", {}),
             }
             if entity.get("generated"):
                 state["generated"] = True
@@ -469,6 +474,7 @@ class PersistenceMixin(DMCoreProtocol):
                 continue
             entity["hp"] = state.get("hp", entity.get("max_hp", 0))
             entity["active_conditions"] = state.get("active_conditions", {})
+            entity["attitude_deltas"] = state.get("attitude_deltas", {})
             entity["currency"] = state.get("currency", entity.get("currency", 0))
             entity["inventory"] = state.get("inventory", entity.get("inventory", []))
             entity["equipped"] = state.get("equipped", entity.get("equipped", {}))

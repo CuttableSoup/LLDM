@@ -1,5 +1,19 @@
 from DM_Types import DMCoreProtocol
 
+# nudge_attitude's own scaling factor -- the disposition delta for one dialogue turn is
+# classify_sentiment's own confidence score (already a 0..1 measure of how strongly the model
+# read the line as negative/positive) times this, not a flat per-sentiment amount. A plainer
+# "how intense should talk-driven drift be" knob than tuning a whole delta table by hand; left
+# at 1 for now (no rescaling at all) rather than tuned against real play yet. See CLAUDE.md's
+# "Dialogue sentiment" for the fuller rationale.
+SENTIMENT_INTENSITY_SCALE = 1
+# The max |value| pure talk can accumulate on one axis toward one entity, independent of
+# whatever that axis's own hand-authored base value already is. This is a real cap on drift, not
+# a cap on the resolved value -- a base already close to a threshold (ex: is_hostile's -100) can
+# still be pushed across it by sustained same-direction dialogue. Intentional: talking someone
+# into (or out of) a fight is a real tabletop outcome, not a bug -- see CLAUDE.md's "Dialogue".
+TALK_ATTITUDE_DRIFT_CAP = 40
+
 
 class SocialMixin(DMCoreProtocol):
     """!
@@ -12,23 +26,68 @@ class SocialMixin(DMCoreProtocol):
     def get_attitude(self, entity_name, toward_name):
         """!
         @brief Resolves entity_name's six-value attitude array toward toward_name: a specific
-            name override, then a supertype override, then the entity's default.
+            name override, then a supertype override, then the entity's default -- plus
+            whatever runtime drift nudge_attitude has accumulated toward toward_name
+            specifically (entity["attitude_deltas"], added elementwise on top). The static
+            override/default array itself is never mutated -- for a hand-authored entity it's
+            the literal TOML-sourced list object, shared across every call, so this always
+            returns a fresh list rather than editing that one in place.
         @param entity_name The name of the entity whose attitude is being read.
         @param toward_name The name of the entity being regarded.
         @return The [disposition, trust, confidence, respect, obligation, intimacy] attitude array.
         """
-        attitudes = self.entities.get(entity_name, {}).get("attitudes", {})
+        entity = self.entities.get(entity_name, {})
+        attitudes = entity.get("attitudes", {})
 
+        base = None
         for override in attitudes.get("name", []):
             if toward_name in override:
-                return override[toward_name]
+                base = override[toward_name]
+                break
 
-        toward_supertype = self.entities.get(toward_name, {}).get("supertype")
-        for override in attitudes.get("supertype", []):
-            if toward_supertype in override:
-                return override[toward_supertype]
+        if base is None:
+            toward_supertype = self.entities.get(toward_name, {}).get("supertype")
+            for override in attitudes.get("supertype", []):
+                if toward_supertype in override:
+                    base = override[toward_supertype]
+                    break
 
-        return attitudes.get("default", [0, 0, 0, 0, 0, 0])
+        if base is None:
+            base = attitudes.get("default", [0, 0, 0, 0, 0, 0])
+
+        deltas = entity.get("attitude_deltas", {}).get(toward_name)
+        if not deltas:
+            return list(base)
+        return [value + delta for value, delta in zip(base, deltas)]
+
+    def nudge_attitude(self, entity_name, toward_name, sentiment, score):
+        """!
+        @brief Applies a small, capped, persistent drift to entity_name's own disposition
+            toward toward_name, driven by the tone of something toward_name just said to it --
+            called from DM_Dialogue.py's _resolve_dialogue, right before persona/attitude are
+            read, so this turn's own reply already reflects the drift. The magnitude is score
+            itself (classify_sentiment's own confidence, already 0..1) times
+            SENTIMENT_INTENSITY_SCALE, not a flat per-sentiment amount -- a line the classifier
+            read as more intensely negative/positive moves disposition further than a mild one.
+            A no-op for None/unrecognized sentiment (there's no "neutral" case to scale -- see
+            NLP_Core.py's classify_sentiment, backed by a fine-tuned sentiment classifier), a
+            falsy score, or a missing entity.
+        @param entity_name The entity whose attitude is drifting.
+        @param toward_name The entity it's drifting toward (ex: self.player_name).
+        @param sentiment "negative", "positive", or None/anything else (no-op).
+        @param score classify_sentiment's own confidence in sentiment (0..1) -- the raw
+            magnitude before SENTIMENT_INTENSITY_SCALE is applied.
+        """
+        if sentiment not in ("negative", "positive") or not score:
+            return
+        entity = self.entities.get(entity_name)
+        if entity is None:
+            return
+
+        signed_delta = (score if sentiment == "positive" else -score) * SENTIMENT_INTENSITY_SCALE
+        deltas = entity.setdefault("attitude_deltas", {})
+        axis_deltas = deltas.setdefault(toward_name, [0, 0, 0, 0, 0, 0])
+        axis_deltas[0] = max(-TALK_ATTITUDE_DRIFT_CAP, min(TALK_ATTITUDE_DRIFT_CAP, axis_deltas[0] + signed_delta))
 
     def is_hostile(self, entity_name, toward_name):
         """!

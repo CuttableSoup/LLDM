@@ -837,11 +837,18 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             gating live in DialogueMixin._resolve_dialogue (DM_Dialogue.py); this handler only
             threads the raw input through and tags the result with who's currently present,
             the same "present_entities" snapshot every other narration-triggering event
-            carries (see scenario_loaded's own publish for why).
-        @param data The dialogue_detected payload from NLPCore ({input, score}).
+            carries (see scenario_loaded's own publish for why). "sentiment" (None, "negative",
+            or "positive" -- NLPCore's own local classification, see
+            SentenceTransformerMatcher.classify_sentiment) plus "sentiment_score" (the
+            classifier's own confidence, which scales how much the nudge below actually moves)
+            are threaded through to _resolve_dialogue so a found target's attitude toward the
+            player can drift with it (DM_Social.py's nudge_attitude) -- see CLAUDE.md's
+            "Dialogue".
+        @param data The dialogue_detected payload from NLPCore ({input, score, sentiment,
+            sentiment_score}).
         """
         input_text = data.get("input")
-        result = self._resolve_dialogue(input_text)
+        result = self._resolve_dialogue(input_text, data.get("sentiment"), data.get("sentiment_score"))
         result["input"] = input_text
         result["present_entities"] = list(self.scenario_entities)
         self.event_bus.publish("dialogue_resolved", result)

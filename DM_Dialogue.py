@@ -49,7 +49,7 @@ class DialogueMixin(DMCoreProtocol):
             return named[0]
         return self._get_target_name()
 
-    def _resolve_dialogue(self, input_text):
+    def _resolve_dialogue(self, input_text, sentiment=None, sentiment_score=None):
         """!
         @brief Resolves a dialogue attempt against whoever _resolve_dialogue_target names:
             gated on actually being present (in self.scenario_entities right now -- a room-
@@ -62,6 +62,14 @@ class DialogueMixin(DMCoreProtocol):
             produces for a hostile target is free to read as dismissive or aggressive in
             character, but the attempt itself is never denied for it.
         @param input_text The player's raw (already lowercased) input.
+        @param sentiment The tone of input_text (None, "negative", or "positive" -- NLPCore's
+            own local classification), applied via nudge_attitude (SocialMixin, DM_Social.py)
+            before persona/attitude are read, so a found target's own attitude description
+            already reflects this turn's drift. Only ever applied on a found target -- there's
+            nothing to nudge if no one's actually listening.
+        @param sentiment_score The classifier's own confidence in sentiment -- nudge_attitude
+            scales the actual drift by this, not a flat per-sentiment amount, so a more
+            intensely-worded line moves disposition further than a mild one.
         @return {"target", "found"} plus, on success, {"persona", "attitude"} (see
                 describe_character/describe_attitude, SocialMixin) for LLMCore to speak from;
                 on failure, {"reason"} instead ("no_one_here" if nothing could be resolved at
@@ -81,6 +89,8 @@ class DialogueMixin(DMCoreProtocol):
 
         if self.entities.get(target_name, {}).get("supertype") == "object":
             return {"target": target_name, "found": False, "reason": "cant_talk"}
+
+        self.nudge_attitude(target_name, self.player_name, sentiment, sentiment_score)
 
         return {
             "target": target_name,
