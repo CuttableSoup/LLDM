@@ -619,6 +619,16 @@ class TestClarificationResponse(LLMTestCase):
         description = self.llm_core._describe_outcome(result)
         self.assertIn("20 currency", description)
 
+    def test_describe_outcome_mentions_a_successful_summon(self):
+        # Without this, a summoning spell's own roll outcome narrates exactly like an ordinary
+        # no-damage opposed check -- nothing tells the LLM a creature actually appeared.
+        result = {
+            "input": "I summon a wolf", "skill": "arcane", "roll": 18, "difficulty": 12,
+            "success": True, "summoned": "spectral wolf",
+        }
+        description = self.llm_core._describe_outcome(result)
+        self.assertIn("summons spectral wolf", description)
+
 
 class TestFreeformDialogueNarration(LLMTestCase):
     """!
@@ -804,6 +814,37 @@ class TestDamageCalculation(DMTestCase):
 
         self.assertEqual(result["vulnerability_bonus"], 0)
         self.assertEqual(result["net_damage"], 0)
+
+
+    @patch("random.randint", return_value=3)
+    def test_resistance_bypass_tag_skips_the_defenders_own_resistance(self, mock_randint):
+        # fire elemental resists ["physical", "piercing", "bludgeoning", "slashing"] at 2D --
+        # opt it into a Pathfinder "DR/magic" shape and confirm a magic-tagged hit skips that
+        # reduction entirely, while an otherwise-identical mundane hit still gets reduced.
+        self.dm_core.entities["fire elemental"]["resistance_bypass_tags"] = ["magic"]
+
+        self.assertEqual(self.dm_core.get_damage_reduction("fire elemental", ["slashing"]), 6)
+        self.assertEqual(self.dm_core.get_damage_reduction("fire elemental", ["slashing", "magic"]), 0)
+
+
+    @patch("random.randint", return_value=3)
+    def test_armor_bypass_tag_skips_that_items_own_reduction(self, mock_randint):
+        # gladstone has no innate resistance of his own -- chain mail's armor_value/armor_tags
+        # is the only source of reduction here, so this isolates the item-side bypass path from
+        # get_damage_reduction's own resistance_bypass_tags branch above.
+        self.dm_core.entities["chain mail"]["armor_bypass_tags"] = ["magic"]
+
+        self.assertEqual(self.dm_core.get_damage_reduction("gladstone", ["bludgeoning"]), 6)
+        self.assertEqual(self.dm_core.get_damage_reduction("gladstone", ["bludgeoning", "magic"]), 0)
+
+
+    @patch("random.randint", return_value=3)
+    def test_wraith_resists_ordinary_weapons_but_silver_bypasses_it(self, mock_randint):
+        # creatures.toml's "wraith" is the shipped resistance_bypass_tags example (DR/silver).
+        # An ordinary slashing hit is reduced (3D @ 3 each = 9); the same hit tagged "silver"
+        # bypasses that reduction entirely, even though "slashing" still matches resistance_tags.
+        self.assertEqual(self.dm_core.get_damage_reduction("wraith", ["slashing"]), 9)
+        self.assertEqual(self.dm_core.get_damage_reduction("wraith", ["slashing", "silver"]), 0)
 
 
 class TestMultipleActions(DMTestCase):
@@ -1150,6 +1191,79 @@ class TestEntityBehavior(DMTestCase):
         self.assertEqual(behavior["action"], "punch")
 
 
+    def test_has_condition_gates_a_behavior_entry_off_the_entitys_own_condition(self):
+        # A paralyzed creature shouldn't "act" at 0 dice -- it should match nothing and stand
+        # down entirely, the same "no matching entry" fallback an entity with no behavior list
+        # at all already gets. See Rules/Fantasy/reference/pathfinder_conversion.md's §1
+        # Pattern A recipe.
+        self.dm_core.entities["paralyzed_dummy"] = {
+            "name": "paralyzed_dummy", "max_hp": 20, "skills": {},
+            "active_conditions": {"paralyzed": {"duration": "fleeting", "dismiss": ""}},
+            "behavior": [
+                {
+                    "requirements": [{"field": "has_condition:paralyzed", "operator": "==", "value": False}],
+                    "action": "bite",
+                },
+            ],
+        }
+        self.assertIsNone(self.dm_core.choose_behavior("paralyzed_dummy"))
+
+        del self.dm_core.entities["paralyzed_dummy"]["active_conditions"]["paralyzed"]
+        behavior = self.dm_core.choose_behavior("paralyzed_dummy")
+        self.assertEqual(behavior["action"], "bite")
+
+
+    def test_opponent_has_condition_reacts_to_the_targets_own_condition(self):
+        # A creature that presses its advantage while its target is stunned, falling back to a
+        # normal attack otherwise -- opponent_name has to be threaded through choose_behavior
+        # for this to resolve at all, same as distance_to_target above.
+        self.dm_core.entities["predator_dummy"] = {
+            "name": "predator_dummy", "max_hp": 20, "skills": {},
+            "behavior": [
+                {
+                    "requirements": [{"field": "opponent_has_condition:stunned", "operator": "==", "value": True}],
+                    "action": "finishing_blow",
+                },
+                {"requirements": [], "action": "bite"},
+            ],
+        }
+        self.assertEqual(self.dm_core.choose_behavior("predator_dummy", "gladstone")["action"], "bite")
+
+        self.dm_core.apply_condition("gladstone", "stunned", duration="fleeting", dismiss="")
+        self.assertEqual(
+            self.dm_core.choose_behavior("predator_dummy", "gladstone")["action"], "finishing_blow",
+        )
+
+        # No opponent_name at all -- resolves to None, same as distance_to_target with no
+        # opponent, never accidentally matching a status requirement (which never passes one).
+        self.assertIsNone(
+            self.dm_core.get_comparable_value("predator_dummy", "opponent_has_condition:stunned"),
+        )
+
+
+    def test_wraith_stands_down_entirely_while_warded(self):
+        # creatures.toml's "wraith" is the shipped has_condition example -- both its behavior
+        # entries share a "not warded" gate, so a holy ward suppresses its turn entirely rather
+        # than just its preferred attack (choose_behavior returns None, same as an entity with
+        # no behavior list at all).
+        self.assertEqual(self.dm_core.choose_behavior("wraith", "gladstone")["action"], "chilling claw")
+
+        self.dm_core.entities["wraith"]["active_conditions"] = {
+            "warded": {"duration": "scene", "dismiss": ""},
+        }
+        self.assertIsNone(self.dm_core.choose_behavior("wraith", "gladstone"))
+
+
+    def test_wraith_prefers_life_drain_against_a_wounded_target(self):
+        # creatures.toml's "wraith" is the shipped opponent_has_condition example -- it favors
+        # draining an already-wounded target over its plain claw, checked ahead of the fallback
+        # attack in declaration order.
+        self.assertEqual(self.dm_core.choose_behavior("wraith", "gladstone")["action"], "chilling claw")
+
+        self.dm_core.apply_condition("gladstone", "wounded", duration="permanent", dismiss="")
+        self.assertEqual(self.dm_core.choose_behavior("wraith", "gladstone")["action"], "life drain")
+
+
     def test_resolve_behavior_action_strikes_back_and_applies_damage(self):
         # An unarmored, skill-less target so the wolf's bite always lands and nothing
         # reduces the raw damage -- isolates resolve_behavior_action from armor/opposed-skill
@@ -1184,6 +1298,172 @@ class TestEntityBehavior(DMTestCase):
         with patch("random.randint", return_value=1):
             self.dm_core._on_turn_detected({"clauses": [{"kind": "action", "skill": "athletics"}], "input": "I reposition"})
         self.assertEqual(self.dm_core.current_target, "wolf_2")
+
+
+class TestRoundUpkeep(DMTestCase):
+    """!
+    @brief The generic per-round upkeep hook (run_round_upkeep/apply_round_upkeep/
+        get_condition_upkeep, DM_Status.py) and creatures.toml's "troll" -- the shipped
+        regeneration-suppressed-by-fire example (see rules.toml's own "regenerating"
+        [[condition]] entry and Rules/Fantasy/reference/pathfinder_conversion.md's #6).
+    """
+
+    def setUp(self):
+        super().setUp()
+        self._load_ad_hoc_scenario(
+            [{"name": "gladstone", "band": 1}, {"name": "troll", "band": 1}], bands=4, enclosed=True,
+        )
+
+    def test_instancing_seeds_the_regenerating_condition_from_the_template(self):
+        # creatures.toml's troll authors [entity.conditions.regenerating] permanently --
+        # _instance_entities copies it into active_conditions the moment it's placed in a scene.
+        self.assertIn("regenerating", self.dm_core.entities["troll"]["active_conditions"])
+
+    def test_get_condition_upkeep_reads_the_trolls_regenerating_condition(self):
+        upkeep = self.dm_core.get_condition_upkeep("troll")
+        self.assertEqual(upkeep["heal"], {"dice": 2, "pips": 0, "bonus": 0})
+        self.assertEqual(upkeep["damage"], {"dice": 0, "pips": 0, "bonus": 0})
+
+    def test_calculate_damage_records_recent_damage_tags_on_the_defender(self):
+        fireball = {"damage_value": {"dice": 2, "pips": 0, "bonus": 0}, "damage_tags": ["fire"]}
+        with patch("random.randint", return_value=3):
+            self.dm_core.calculate_damage("gladstone", "troll", fireball)
+        self.assertIn("fire", self.dm_core.entities["troll"]["recent_damage_tags"])
+
+    @patch("random.randint", return_value=3)
+    def test_apply_round_upkeep_heals_and_clears_recent_damage_tags(self, mock_randint):
+        self.dm_core.apply_damage("troll", 10)  # 40 -> 30
+        self.dm_core.entities["troll"]["recent_damage_tags"] = {"slashing"}
+
+        self.dm_core.apply_round_upkeep("troll")
+
+        self.assertEqual(self.dm_core.get_current_hp("troll"), 36)  # 30 + (2D @ 3 each = 6)
+        self.assertEqual(self.dm_core.entities["troll"]["recent_damage_tags"], set())
+
+    @patch("random.randint", return_value=3)
+    def test_apply_round_upkeep_suppressed_by_a_matching_fire_tag(self, mock_randint):
+        self.dm_core.apply_damage("troll", 10)  # 40 -> 30
+        self.dm_core.entities["troll"]["recent_damage_tags"] = {"fire"}
+
+        self.dm_core.apply_round_upkeep("troll")
+
+        self.assertEqual(self.dm_core.get_current_hp("troll"), 30)  # no heal this round
+        self.assertEqual(self.dm_core.entities["troll"]["recent_damage_tags"], set())
+
+    def test_run_round_upkeep_skips_dead_entities(self):
+        self.dm_core.apply_damage("troll", 999)
+        self.dm_core.run_round_upkeep()
+        self.assertEqual(self.dm_core.get_current_hp("troll"), 0)
+
+    @patch("random.randint", return_value=3)
+    def test_resolve_combat_round_regenerates_the_troll_unless_burned_this_round(self, mock_randint):
+        # _resolve_combat_round is the real per-round entry point (DM_Core.py) -- confirms the
+        # hook is actually wired in, not just directly callable.
+        self.dm_core.apply_damage("troll", 10)  # 40 -> 30, no fire tag recorded
+        self.dm_core._resolve_combat_round({"actions": []})
+        self.assertEqual(self.dm_core.get_current_hp("troll"), 36)  # healed 2D @ 3 = 6
+
+        self.dm_core.apply_damage("troll", 10)  # 36 -> 26
+        self.dm_core.entities["troll"]["recent_damage_tags"] = {"fire"}
+        self.dm_core._resolve_combat_round({"actions": []})
+        self.assertEqual(self.dm_core.get_current_hp("troll"), 26)  # suppressed this round
+
+
+class TestSummoning(DMTestCase):
+    """!
+    @brief A spell's own "summon" field (spells.toml's "summon spectral wolf"), DM_Summoning.py's
+        _summon_creature/_expire_summon_if_due, and DM_Core.py's own _apply_summon_if_hit/
+        _apply_damage_if_hit gating fix.
+    """
+
+    def test_summon_creature_places_a_living_non_hostile_ally(self):
+        name = self.dm_core._summon_creature({"name": "spectral wolf", "duration": 3})
+
+        self.assertEqual(name, "spectral wolf")
+        self.assertIn("spectral wolf", self.dm_core.scenario_entities)
+        entity = self.dm_core.entities["spectral wolf"]
+        self.assertEqual(entity["band"], self.dm_core.get_band("gladstone"))
+        self.assertTrue(entity["ad_hoc"])
+        self.assertEqual(entity["summon_expires_in"], 3)
+        self.assertFalse(self.dm_core.is_hostile("spectral wolf", self.dm_core.player_name))
+
+    def test_summon_creature_disambiguates_repeat_casts(self):
+        first = self.dm_core._summon_creature({"name": "spectral wolf", "duration": 3})
+        second = self.dm_core._summon_creature({"name": "spectral wolf", "duration": 3})
+
+        self.assertEqual(first, "spectral wolf")
+        self.assertEqual(second, "spectral wolf_2")
+        self.assertIn("spectral wolf", self.dm_core.scenario_entities)
+        self.assertIn("spectral wolf_2", self.dm_core.scenario_entities)
+
+    def test_summon_creature_returns_none_for_an_unknown_template(self):
+        before = list(self.dm_core.scenario_entities)
+        name = self.dm_core._summon_creature({"name": "nonexistent thing", "duration": 3})
+
+        self.assertIsNone(name)
+        self.assertEqual(self.dm_core.scenario_entities, before)
+
+    def test_expire_summon_if_due_removes_the_entity_at_zero(self):
+        self.dm_core._summon_creature({"name": "spectral wolf", "duration": 1})
+        self.dm_core.run_round_upkeep()
+        self.assertNotIn("spectral wolf", self.dm_core.scenario_entities)
+        self.assertNotIn("spectral wolf", self.dm_core.entities["spectral wolf"].get("active_conditions", {}))
+
+    def test_run_round_upkeep_survives_an_expiry_mid_iteration(self):
+        # Regression check for the list(self.scenario_entities) snapshot -- without it, removing
+        # "spectral wolf" from self.scenario_entities while still iterating it could skip
+        # whatever's ordered right after it. Order matters here: the wolf has to land *before*
+        # the troll in scenario_entities for a missing snapshot to actually skip the troll's own
+        # regeneration, so the troll is instanced and appended after the wolf, not before.
+        # Empty entities list -- avoids re-instancing "gladstone" a second time as an orphaned
+        # "gladstone_2" (see the previous test's own comment for why).
+        self._load_ad_hoc_scenario([])
+        self.dm_core._summon_creature({"name": "spectral wolf", "duration": 1})
+        self.dm_core._instance_entities([{"name": "troll", "band": 1}])
+        self.dm_core.scenario_entities.append("troll")
+        self.assertEqual(self.dm_core.scenario_entities, ["gladstone", "spectral wolf", "troll"])
+        self.dm_core.apply_damage("troll", 10)
+
+        self.dm_core.run_round_upkeep()
+
+        self.assertNotIn("spectral wolf", self.dm_core.scenario_entities)
+        self.assertGreater(self.dm_core.get_current_hp("troll"), 30)  # still healed this round
+
+    def test_apply_summon_if_hit_with_no_current_target_auto_succeeds(self):
+        # Empty entities list -- _instance_location_persistent_names' own "guarantee" fallback
+        # inserts self.player_name directly without re-instancing it, so this doesn't collide
+        # with the "gladstone" the parent setUp already instanced once via "arena" (unlike
+        # explicitly listing {"name": "gladstone", ...} again here, which would instead produce
+        # a second, orphaned "gladstone_2" instance -- see town.toml's own real-scenario
+        # precedent for this same "never name the player" convention).
+        self._load_ad_hoc_scenario([])
+        self.assertIsNone(self.dm_core.current_target)
+        resolved = self._capture("action_resolved")
+
+        with patch("random.randint", return_value=4):
+            self.dm_core._on_turn_detected({
+                "clauses": [{"kind": "action", "skill": "summon spectral wolf"}], "input": "I summon a wolf",
+            })
+
+        self.assertIn("spectral wolf", self.dm_core.scenario_entities)
+        self.assertEqual(resolved[-1]["actions"][0]["summoned"], "spectral wolf")
+        self.assertNotIn("damage", resolved[-1]["actions"][0])
+
+    def test_apply_summon_if_hit_against_a_hostile_target_ticks_this_rounds_upkeep_too(self):
+        # arena.toml's own default scenario already has a hostile wolf as current_target --
+        # this exercises the opposed-roll cast path, and confirms _resolve_combat_round's own
+        # run_round_upkeep (which fires later in the same turn) already counts this round
+        # against the freshly-summoned wolf's own duration.
+        resolved = self._capture("round_resolved")
+
+        with patch("random.randint", return_value=4):
+            self.dm_core._on_turn_detected({
+                "clauses": [{"kind": "action", "skill": "summon spectral wolf"}], "input": "I summon a wolf",
+            })
+
+        self.assertIn("spectral wolf", self.dm_core.scenario_entities)
+        self.assertEqual(resolved[-1]["actions"][0]["summoned"], "spectral wolf")
+        self.assertEqual(self.dm_core.entities["spectral wolf"]["summon_expires_in"], 3)  # 4 - 1
 
 
 class TestBandit(DMTestCase):
@@ -1232,6 +1512,51 @@ class TestStatusEvaluation(DMTestCase):
         self.assertIn("dead", self.dm_core.entities["gladstone"]["active_conditions"])
         self.dm_core.apply_healing("gladstone", 999)
         self.assertIn("dead", self.dm_core.entities["gladstone"]["active_conditions"])
+
+
+class TestConditionModifiers(DMTestCase):
+    """!
+    @brief get_condition_modifier (DM_Status.py) and its use in resolve_action/
+        resolve_opposed_action (DM_Combat.py) -- a [[condition]] entry's own modifier now
+        actually costs dice/pips/bonus, not just narration (see CLAUDE.md's "Status and
+        conditions").
+    """
+
+    def test_get_condition_modifier_sums_matching_active_conditions(self):
+        # rules.toml's own "wounded" [[condition]] entry is {dice: -1, pips: 0, bonus: 0}.
+        self.dm_core.apply_condition("gladstone", "wounded", duration="permanent", dismiss="")
+        self.assertEqual(
+            self.dm_core.get_condition_modifier("gladstone"),
+            {"dice": -1, "pips": 0, "bonus": 0},
+        )
+
+    def test_get_condition_modifier_ignores_conditions_with_no_rules_entry(self):
+        # "hidden" is a plain presence flag (see items.toml's dart trap) with no [[condition]]
+        # entry of its own -- it must not silently contribute a modifier.
+        self.dm_core.apply_condition("gladstone", "hidden", duration="permanent", dismiss="")
+        self.assertEqual(
+            self.dm_core.get_condition_modifier("gladstone"),
+            {"dice": 0, "pips": 0, "bonus": 0},
+        )
+
+    def test_resolve_action_folds_condition_dice_penalty_into_the_roll(self):
+        # gladstone's blades: 5D+0. "wounded" is -1D, same floor-at-zero rule dice_penalty uses.
+        self.dm_core.apply_condition("gladstone", "wounded", duration="permanent", dismiss="")
+        with patch("random.randint", return_value=3):
+            result = self.dm_core.resolve_action("gladstone", "blades")
+        self.assertEqual(result["roll"], 12)  # (5 - 1) * 3
+
+    def test_resolve_opposed_action_applies_the_defenders_own_condition_modifier(self):
+        # The defender's active_conditions reduce their own roll independently of
+        # dice_penalty, which never touches the defender's side at all (see
+        # TestMultipleActions.test_resolve_opposed_action_penalty_never_touches_the_defenders_roll).
+        self.dm_core.entities["test_defender"] = {
+            "name": "test_defender", "skills": {"dodge": {"dice": 6, "pips": 0}},
+        }
+        self.dm_core.apply_condition("test_defender", "stunned", duration="fleeting", dismiss="")
+        with patch("random.randint", return_value=3):
+            result = self.dm_core.resolve_opposed_action("gladstone", "blades", "test_defender")
+        self.assertEqual(result["difficulty"], 15)  # (6 - 1) * 3
 
 
 class TestScenarioLoading(DMTestCase):
@@ -3264,7 +3589,13 @@ class TestGiveAndTrade(DMTestCase):
         self.assertNotIn("cursed dagger", self.dm_core.entities["chest"]["inventory"])
 
     def test_give_declines_with_no_recipient(self):
-        self._load_ad_hoc_scenario([{"name": "gladstone", "band": 1}])
+        # Empty entities list -- _instance_location_persistent_names' own "guarantee" fallback
+        # inserts self.player_name directly without re-instancing it, so this doesn't collide
+        # with the "gladstone" the parent setUp already instanced once via "arena" (unlike
+        # explicitly listing {"name": "gladstone", ...} again here, which would instead produce
+        # a second, orphaned "gladstone_2" instance -- see town.toml's own real-scenario
+        # precedent for this same "never name the player" convention).
+        self._load_ad_hoc_scenario([])
 
         self.dm_core._on_item_interaction_detected({
             "intent": "give", "item_name": "health potion", "input": "I give away a health potion",
@@ -3540,7 +3871,13 @@ class TestFreeformDialogue(DMTestCase):
         self.assertEqual(result["reason"], "cant_talk")
 
     def test_no_addressee_at_all_is_denied(self):
-        self._load_ad_hoc_scenario([{"name": "gladstone", "band": 1}])
+        # Empty entities list -- _instance_location_persistent_names' own "guarantee" fallback
+        # inserts self.player_name directly without re-instancing it, so this doesn't collide
+        # with the "gladstone" the parent setUp already instanced once via "arena" (unlike
+        # explicitly listing {"name": "gladstone", ...} again here, which would instead produce
+        # a second, orphaned "gladstone_2" instance -- see town.toml's own real-scenario
+        # precedent for this same "never name the player" convention).
+        self._load_ad_hoc_scenario([])
 
         result = self._talk("hello? is anyone there")
 
@@ -3812,6 +4149,41 @@ class TestSaveLoad(DMTestCase):
 
         self.assertEqual(fresh_dm.entities["stone"], entity)
         self.assertIn("stone", fresh_dm._current_ground_items())
+
+    def test_collect_ad_hoc_entities_includes_scenario_entities_and_strips_damage_tags(self):
+        # A live scenario_entities-only ad hoc entity (no ground/inventory reachability at all)
+        # -- exactly DM_Summoning.py's own summoned allies and DM_Improvisation.py's own
+        # conjured creatures/containers/traps. "recent_damage_tags" (a plain set, not
+        # JSON-serializable) is stripped from the copied dict regardless of whether it's
+        # present, since save_game would otherwise crash trying to json.dump it.
+        name = self.dm_core._summon_creature({"name": "spectral wolf", "duration": 3})
+        self.dm_core.entities[name]["recent_damage_tags"] = {"cold"}
+
+        collected = self.dm_core._collect_ad_hoc_entities()
+
+        self.assertIn(name, collected)
+        self.assertNotIn("recent_damage_tags", collected[name])
+        self.assertEqual(collected[name]["summon_expires_in"], 3)
+
+    def test_ad_hoc_scene_participant_round_trips_through_save_load(self):
+        # The actual save/load round trip for the same shape the test above checks in
+        # isolation -- a summoned ally is a live scenario_entities participant with no ground/
+        # inventory reachability, so without _collect_ad_hoc_entities' own scenario_entities
+        # scan (and load_game re-appending it), it would silently vanish on reload even though
+        # every *other* ad hoc entity (ex: the ground-item "stone" above) already round-trips.
+        slot = self._track("test_ad_hoc_scene_participant_round_trip")
+        name = self.dm_core._summon_creature({"name": "spectral wolf", "duration": 3})
+        self.dm_core.apply_damage(name, 5)  # 16 -> 11
+        self.dm_core.save_game(slot)
+
+        fresh_dm = DMCore(EventBus(), scenario_name="arena")
+        self.assertNotIn(name, fresh_dm.scenario_entities)
+        fresh_dm.load_game(slot)
+
+        self.assertIn(name, fresh_dm.scenario_entities)
+        self.assertEqual(fresh_dm.get_current_hp(name), 11)
+        self.assertEqual(fresh_dm.entities[name]["summon_expires_in"], 3)
+        self.assertFalse(fresh_dm.is_hostile(name, fresh_dm.player_name))
 
     def test_removed_entity_does_not_respawn_after_save_load(self):
         slot = self._track("test_removed_entity_round_trip")

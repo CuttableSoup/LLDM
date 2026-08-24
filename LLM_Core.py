@@ -155,6 +155,13 @@ class LLMCore:
         else:
             loot_text = ""
 
+        # Set only by DMCore._apply_summon_if_hit on a successfully cast summoning spell/
+        # ability (its own "summon" field -- see DM_Summoning.py) -- without this, a summon's
+        # own roll outcome narrates exactly like an ordinary opposed check with no damage,
+        # never mentioning that a creature actually appeared.
+        summoned = action_result.get("summoned")
+        summoned_text = f" {actor.capitalize()} summons {summoned} to fight at their side." if summoned else ""
+
         defender_details = action_result.get("defender_details")
         details_text = f"\n{defender_details}" if defender_details else ""
 
@@ -165,7 +172,7 @@ class LLMCore:
             f"{attempt_line}"
             f"Skill used: {action_result.get('skill')} "
             f"(rolled {action_result.get('roll')} vs difficulty {action_result.get('difficulty')}{opposition}) "
-            f"- the action {outcome}.{damage_text}{revealed_text}{loot_text}{details_text}"
+            f"- the action {outcome}.{damage_text}{revealed_text}{loot_text}{summoned_text}{details_text}"
         )
 
     def _describe_player_actions(self, action_result):

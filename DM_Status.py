@@ -80,13 +80,14 @@ class StatusMixin(DMCoreProtocol):
         @brief Resolves a requirement's field name to a comparable value for an entity.
         @param entity_name The name of the entity to check.
         @param field The field name, either a derived value (ex: "hp_per_remain",
-            "distance_to_target") or an entity attribute (ex: "supertype").
+            "distance_to_target", "has_condition:<name>", "opponent_has_condition:<name>") or
+            an entity attribute (ex: "supertype").
         @param opponent_name The entity being acted against, if any -- only relevant to a
-            derived field defined relative to an opponent (currently just
-            "distance_to_target"); status requirements never pass one, since a status has no
-            notion of an opponent at all.
-        @return The resolved value, or None if it can't be determined (ex: "distance_to_target"
-                with no opponent_name given).
+            derived field defined relative to an opponent (currently "distance_to_target" and
+            "opponent_has_condition:<name>"); status requirements never pass one, since a
+            status has no notion of an opponent at all.
+        @return The resolved value, or None if it can't be determined (ex:
+                "distance_to_target"/"opponent_has_condition:<name>" with no opponent_name given).
         """
         if field == "hp_per_remain":
             entity = self.entities.get(entity_name, {})
@@ -105,6 +106,25 @@ class StatusMixin(DMCoreProtocol):
             if opponent_name is None:
                 return None
             return self.get_distance_between(entity_name, opponent_name)
+        if field.startswith("has_condition:"):
+            # Boolean presence check against entity_name's own active_conditions -- pair with
+            # operator = "==", value = true (or false) in a requirement. Ex: a creature that
+            # should stand down entirely while paralyzed rather than roll 0 dice and "act"
+            # harmlessly (see get_condition_modifier, which only zeroes the roll, not the
+            # turn) can gate its attack behavior on { field = "has_condition:paralyzed",
+            # operator = "==", value = false }.
+            condition_name = field[len("has_condition:"):]
+            return condition_name in self.entities.get(entity_name, {}).get("active_conditions", {})
+        if field.startswith("opponent_has_condition:"):
+            # Same check, against opponent_name's own active_conditions instead -- lets a
+            # behavior react to what state its *target* is in (ex: pressing the attack while
+            # they're stunned, or favoring a fleeing/frightened target over a healthy one).
+            # None with no opponent_name given, same as distance_to_target above -- never
+            # accidentally matches a status requirement, which never passes one.
+            if opponent_name is None:
+                return None
+            condition_name = field[len("opponent_has_condition:"):]
+            return condition_name in self.entities.get(opponent_name, {}).get("active_conditions", {})
         return self.entities.get(entity_name, {}).get(field)
 
     def entity_matches_requirements(self, entity_name, requirements, opponent_name=None):
@@ -176,6 +196,118 @@ class StatusMixin(DMCoreProtocol):
         del active_conditions[condition_name]
         self.event_bus.publish("log_info", f"{entity_name} loses condition '{condition_name}'.")
         return True
+
+    def get_condition_modifier(self, entity_name):
+        """!
+        @brief Sums the {dice, pips, bonus} roll modifier of every one of entity_name's own
+            active_conditions that has a matching entry in rules.toml's own [[condition]] table
+            (ex: "stunned"'s modifier = {dice = -1, pips = 0, bonus = 0}). An active condition
+            with no matching [[condition]] entry (ex: "locked"/"closed"/"hidden" -- presence
+            flags authored on non-creature entities, never meant to affect a roll) contributes
+            nothing. This is what makes the wound track's own conditions (see [[status]]) cost
+            real dice instead of just narrating -- resolve_action/resolve_opposed_action
+            (DM_Combat.py) fold this into every roll, for whichever entity is doing the rolling.
+        @param entity_name The name of the entity to sum modifiers for.
+        @return A {"dice", "pips", "bonus"} dict, each defaulting to 0 if nothing applies.
+        """
+        active_conditions = self.entities.get(entity_name, {}).get("active_conditions", {})
+        condition_defs = {c.get("name"): c.get("modifier", {}) for c in self.rules.get("condition", [])}
+        total = {"dice": 0, "pips": 0, "bonus": 0}
+        for condition_name in active_conditions:
+            modifier = condition_defs.get(condition_name)
+            if not modifier:
+                continue
+            total["dice"] += modifier.get("dice", 0)
+            total["pips"] += modifier.get("pips", 0)
+            total["bonus"] += modifier.get("bonus", 0)
+        return total
+
+    def get_condition_upkeep(self, entity_name):
+        """!
+        @brief Sums the per-round upkeep effect of every one of entity_name's own
+            active_conditions that has a matching [[condition]] entry with an
+            "upkeep_heal"/"upkeep_damage" field -- ex: "regenerating"'s
+            upkeep_heal = {dice = 2, pips = 0, bonus = 0}. A condition whose own
+            upkeep_blocked_by_tags overlaps entity_name's own "recent_damage_tags" (damage
+            tags it was hit with since the last time this ran -- see calculate_damage,
+            DM_Combat.py) is skipped entirely for this round -- ex: a troll's regeneration
+            not firing the round it took fire damage.
+        @param entity_name The name of the entity to sum upkeep for.
+        @return A {"heal": {"dice", "pips", "bonus"}, "damage": {"dice", "pips", "bonus"}}
+                dict, each defaulting to all-0 if nothing applies.
+        """
+        entity = self.entities.get(entity_name, {})
+        active_conditions = entity.get("active_conditions", {})
+        recent_damage_tags = entity.get("recent_damage_tags", set())
+        condition_defs = {c.get("name"): c for c in self.rules.get("condition", [])}
+        totals = {
+            "heal": {"dice": 0, "pips": 0, "bonus": 0},
+            "damage": {"dice": 0, "pips": 0, "bonus": 0},
+        }
+        for condition_name in active_conditions:
+            condition_def = condition_defs.get(condition_name)
+            if not condition_def:
+                continue
+            blocked_by = condition_def.get("upkeep_blocked_by_tags", [])
+            if blocked_by and any(tag in blocked_by for tag in recent_damage_tags):
+                continue
+            for key in ("heal", "damage"):
+                effect = condition_def.get(f"upkeep_{key}")
+                if not effect:
+                    continue
+                totals[key]["dice"] += effect.get("dice", 0)
+                totals[key]["pips"] += effect.get("pips", 0)
+                totals[key]["bonus"] += effect.get("bonus", 0)
+        return totals
+
+    def apply_round_upkeep(self, entity_name):
+        """!
+        @brief Applies one round's worth of upkeep to a single entity -- rolls and applies
+            get_condition_upkeep's own heal/damage totals (a regeneration/fast-healing-style
+            condition heals; a future bleed/poison-with-onset condition would damage the same
+            way), then clears "recent_damage_tags" so the next round starts fresh. The one
+            generic per-round hook every condition-driven periodic effect shares -- see
+            run_round_upkeep for the actual per-round entry point.
+        @param entity_name The name of the entity to apply upkeep to.
+        """
+        entity = self.entities.get(entity_name)
+        if entity is None:
+            return
+        upkeep = self.get_condition_upkeep(entity_name)
+        entity["recent_damage_tags"] = set()
+
+        heal_total = self.roll_dice(upkeep["heal"]["dice"], upkeep["heal"]["pips"]) + upkeep["heal"]["bonus"]
+        if heal_total > 0:
+            self.apply_healing(entity_name, heal_total)
+
+        damage_total = self.roll_dice(upkeep["damage"]["dice"], upkeep["damage"]["pips"]) + upkeep["damage"]["bonus"]
+        if damage_total > 0:
+            self.apply_damage(entity_name, damage_total)
+
+    def run_round_upkeep(self):
+        """!
+        @brief Applies one round's worth of upkeep (see apply_round_upkeep) to every living
+            entity currently in the scene -- the generic per-round hook
+            Rules/Fantasy/reference/pathfinder_conversion.md flagged as the shared
+            prerequisite for Bleed/Regeneration/Fast Healing/poison-with-onset. Called once
+            per round, after every actor's own turn has already resolved (see
+            _resolve_combat_round, DM_Core.py), so a condition's own upkeep_blocked_by_tags
+            can already see whatever damage tags landed this same round before deciding
+            whether to fire. A dead entity (hp <= 0) is skipped entirely -- upkeep never
+            revives anything on its own.
+
+            Also counts down any temporary summon's own "summon_expires_in"
+            (_expire_summon_if_due, DM_Summoning.py) -- unrelated to condition-driven upkeep,
+            just sharing the same "once per round, per living scene entity" cadence rather
+            than a second pass over the same list. Iterates a snapshot (list(...), not
+            self.scenario_entities directly), since a summon expiring this same call removes
+            itself from that live list mid-iteration.
+        """
+        for entity_name in list(self.scenario_entities):
+            if self.get_current_hp(entity_name) <= 0:
+                continue
+            self.apply_round_upkeep(entity_name)
+            self._expire_summon_if_due(entity_name)
 
     def is_locked(self, entity_name):
         """!

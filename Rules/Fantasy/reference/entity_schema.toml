@@ -189,6 +189,31 @@ difficulty = 10                             # UNUSED on a spell/technique today 
 targets = { number = 1, aoe = 0 }           # UNUSED today -- reserved for a future
                                             # multi-target/area-of-effect mechanic; nothing
                                             # currently reads "number" or "aoe".
+summon = { name = "spectral wolf", duration = 4 }
+                                            # A spell/technique/innate ability only -- opts a
+                                            # successful cast into conjuring a temporary ally
+                                            # (DM_Core.py's _apply_summon_if_hit, DM_Summoning.
+                                            # py's _summon_creature) instead of/alongside
+                                            # dealing damage. "name" (a real [[entity]], looked
+                                            # up in self.entities) or "template" (a real
+                                            # [[entity_template]], looked up in
+                                            # self.entity_templates -- goes through ordinary
+                                            # NPC-generation stat-fitting the same as any
+                                            # scenario's own {template = ...} entry) -- exactly
+                                            # one of the two, same mutually-exclusive shape a
+                                            # scenario/room's own "entities" list entries use.
+                                            # "duration" is whole combat rounds remaining,
+                                            # decremented once per round (run_round_upkeep,
+                                            # DM_Status.py) -- the summoned creature is removed
+                                            # from the scene entirely (not just a condition
+                                            # dismissed) the round this hits 0. No engine
+                                            # concept of "duration" outside a combat round, so a
+                                            # summon cast outside combat never starts counting
+                                            # down until a round actually happens. The summoned
+                                            # instance itself carries no fields of its own here
+                                            # -- it's a real, hand-authored creature template,
+                                            # unrelated to (and not gated by) the "abilities"
+                                            # this ability lives on.
 
 # ---------------------------------------------------------------------------------------------
 # Abilities -- a flat list on the ability-*having* entity (creature/character), not the ability
@@ -215,8 +240,24 @@ damage_value = { dice = 0, pips = 0, bonus = "user.strength_damage" }
 armor_value = { dice = 2, pips = 0 }        # Item-only: rolled reduction, added to the
                                             # wearer's own resistance_value roll.
 armor_tags = [ "physical", "piercing", "bludgeoning", "slashing" ]
+armor_bypass_tags = [ "magic" ]             # Item-only, optional. If any of an incoming hit's
+                                            # own damage_tags matches one of these, this item's
+                                            # armor_value/armor_tags reduction is skipped for
+                                            # that hit entirely, even though armor_tags would
+                                            # otherwise match (ex: ordinary chain mail resists
+                                            # "physical" normally, but a "magic"-tagged weapon
+                                            # cuts straight through it) -- the Pathfinder
+                                            # "hardness bypassed by a magic weapon" shape.
+                                            # Absent/empty means never bypassed (unchanged
+                                            # behavior for every item that doesn't author this).
 resistance_value = { dice = 2, pips = 0 }   # Rolled, partial reduction on a matching tag.
 resistance_tags = [ "physical" ]
+resistance_bypass_tags = [ "magic" ]        # Same shape as armor_bypass_tags, just for this
+                                            # entity's own innate resistance_value/
+                                            # resistance_tags instead of a worn item -- the
+                                            # Pathfinder "DR 10/magic" shape (a creature that
+                                            # shrugs off mundane weapons but not enchanted
+                                            # ones). See DM_Combat.py's get_damage_reduction.
 immunity_tags = [ "poison" ]                # Absolute -- zeroes net damage on a matching tag
                                             # regardless of any roll. Wins outright over
                                             # vulnerability if a single attack matches both.

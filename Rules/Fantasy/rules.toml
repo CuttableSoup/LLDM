@@ -98,6 +98,17 @@ modifier = { dice = 0, pips = 0, bonus = 0 }
 name = "jammed"
 modifier = { dice = 0, pips = 0, bonus = 0 }
 
+# A per-round upkeep effect, not a roll modifier -- run_round_upkeep (DM_Status.py) rolls
+# upkeep_heal once per combat round for every entity carrying this condition and heals it,
+# unless upkeep_blocked_by_tags overlaps whatever damage tags it was hit with this same round
+# (recorded by calculate_damage, DM_Combat.py -- see creatures.toml's "troll", which seeds this
+# permanently via its own [entity.conditions.regenerating]). The Pathfinder "Regeneration
+# 10 (fire)" shape: heals every round, except a round it's touched by fire at all.
+[[condition]]
+name = "regenerating"
+upkeep_heal = { dice = 2, pips = 0, bonus = 0 }
+upkeep_blocked_by_tags = [ "fire" ]
+
 [strength_damage]
 skill = "strength"
 divisor = 2

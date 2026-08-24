@@ -14,6 +14,7 @@ from DM_Persistence import PersistenceMixin
 from DM_Rules import RulesMixin, scenario_file_path
 from DM_Social import SocialMixin
 from DM_Status import StatusMixin
+from DM_Summoning import SummoningMixin
 
 # Multi-instance combat targeting (see DMCore._resolve_named_instance_ambiguity): NLPCore's own
 # map_to_target (NLP_Core.py) picks one specific live instance name by raw text similarity to
@@ -34,7 +35,7 @@ TARGET_HEALTHY_KEYWORDS = ("healthy", "unhurt", "uninjured", "unharmed")
 # "wounded" shouldn't silently redirect to whichever one merely has the least HP among equals.
 TARGET_WOUNDED_HP_CUTOFF = 0.40
 
-class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixin, RulesMixin, PersistenceMixin, CharacterCreationMixin, NpcGenerationMixin, DialogueMixin, HelpMixin, ImprovisationMixin, EncounterMixin):
+class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixin, RulesMixin, PersistenceMixin, CharacterCreationMixin, NpcGenerationMixin, DialogueMixin, HelpMixin, ImprovisationMixin, EncounterMixin, SummoningMixin):
     """!
     @brief Main class handling the core mechanics of the RPG system. The implementation is
         composed from domain mixins in sibling files -- DM_Rules.py (rules/scenario
@@ -51,9 +52,11 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         (resolving who's being directly addressed in free-form conversation), DM_Help.py
         (the reserved "ADaM" out-of-character help channel -- see its own module docstring),
         DM_Improvisation.py (ad hoc entity creation/removal via LLM function calling, see
-        its own module docstring and AdHoc_Generation.py), and DM_Encounters.py (resolving a
+        its own module docstring and AdHoc_Generation.py), DM_Encounters.py (resolving a
         location/room's own [[location.encounter]] weighted-choice table on entry -- see its
-        own module docstring) -- so that every
+        own module docstring), and DM_Summoning.py (a spell/ability's own "summon" field --
+        conjuring a real, hand-authored entity as a temporary ally, and expiring it after its
+        own duration in combat rounds -- see its own module docstring) -- so that every
         dm_core.<method>(...) call site throughout the codebase and
         test_all.py keeps working unchanged regardless of which file actually defines a given
         method (Python's MRO flattens every mixin method onto this one class). DM_Core.py
@@ -270,6 +273,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
 
             result, ability, via_test = self._resolve_roll(skill_name, named_ability, target_name, dice_penalty)
             self._apply_damage_if_hit(result, skill_name, named_ability, ability, target_name, via_test)
+            self._apply_summon_if_hit(result, named_ability)
             self._attach_defender_details(result, target_name)
             player_actions.append(result)
 
@@ -581,7 +585,11 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             target and wasn't a flat [entity.test] check -- a test-path success (ex: a
             lockpick) must never also roll bonus weapon damage even if skill_name happens to
             match an equipped weapon/ability (ex: a future finesse-based dagger matching the
-            chest's finesse-skill lock test).
+            chest's finesse-skill lock test). Also gated on the resolved ability actually
+            carrying a "damage_value" -- a named ability with none (ex: a summoning spell, see
+            _apply_summon_if_hit) is a real, matched ability but not an attack, and must not
+            get a spurious "damage": {"net_damage": 0, ...} entry just because it happened to
+            resolve against a target/current_target that was present at the time.
         @param result The roll result from _resolve_roll, mutated in place with "damage" if hit.
         @param skill_name The skill being used, already resolved from any named ability.
         @param named_ability The resolved ability entity (technique/spell), or None.
@@ -593,8 +601,32 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         if result["success"] and target_name and not via_test:
             if ability is None:
                 ability = named_ability or self.find_attack_ability(self.player_name, skill_name)
-            if ability:
+            if ability and "damage_value" in ability:
                 result["damage"] = self.calculate_damage(self.player_name, target_name, ability)
+
+    def _apply_summon_if_hit(self, result, named_ability):
+        """!
+        @brief Conjures a temporary ally (_summon_creature, DM_Summoning.py) if this turn's
+            named ability is a summoning spell/technique (its own "summon" field -- a
+            {"name"|"template", "duration"} table) and the roll succeeded -- mirrors
+            _apply_damage_if_hit's own "only on a successful roll" gate, just for a different
+            kind of on-hit effect. Checked regardless of target_name/via_test: a summon isn't
+            "against" anyone the way damage is, so it fires the same way whether this was a
+            flat auto-success resolve_action (no current_target at all) or a contested opposed
+            roll against a hostile current_target (the caster's own casting resisted by the
+            target's willpower/arcane, the same as any other opposed skill use).
+        @param result The roll result from _resolve_roll, mutated in place with "summoned"
+            (the new instance's own name) if a creature was actually conjured.
+        @param named_ability The resolved ability entity (technique/spell), or None.
+        """
+        if not result["success"] or not named_ability:
+            return
+        summon_spec = named_ability.get("summon")
+        if not summon_spec:
+            return
+        summoned_name = self._summon_creature(summon_spec)
+        if summoned_name:
+            result["summoned"] = summoned_name
 
     def _attach_defender_details(self, result, target_name):
         """!
@@ -623,7 +655,9 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             data, or none of its requirements currently hold, ex: it's already at 0 HP) simply
             doesn't act. Every actor's outcome is still resolved independently against the
             state at the start of the round -- initiative only orders how the round is
-            presented, it doesn't make an earlier actor's roll affect a later one's.
+            presented, it doesn't make an earlier actor's roll affect a later one's. Also
+            runs run_round_upkeep (StatusMixin) once, after every turn -- regeneration/
+            fast-healing/bleed-style condition effects.
         @param result The player's own roll result, mutated in place with "round",
             "initiative", and "turns".
         """
@@ -645,9 +679,15 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         if turns:
             turns.sort(key=lambda turn: turn["initiative"], reverse=True)
             result["turns"] = turns
+        # Regeneration/fast-healing/bleed-style condition effects (see run_round_upkeep,
+        # DM_Status.py) -- run after every actor's own turn (including the player's own
+        # damage, already resolved before _resolve_combat_round was even called this turn) so
+        # a condition's own upkeep_blocked_by_tags can already see this round's damage tags.
+        self.run_round_upkeep()
         # current_target only advances once, at the end of the round, if it died -- not
         # interrupted mid-round by an earlier actor's kill (ex: an ally finishing it off
-        # before the round is even done resolving).
+        # before the round is even done resolving, or upkeep damage finishing off a bleeding
+        # target that survived the round's own attacks).
         if self.current_target and self.get_current_hp(self.current_target) <= 0:
             self.current_target = self._choose_combat_target()
 

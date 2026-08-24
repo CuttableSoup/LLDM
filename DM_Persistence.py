@@ -59,18 +59,28 @@ class PersistenceMixin(DMCoreProtocol):
 
     def _collect_ad_hoc_entities(self):
         """!
-        @brief Every ad hoc entity (DM_Improvisation.py -- entity["ad_hoc"] = True) currently
-            *reachable* -- present in some ground list (across every location and, within a
+        @brief Every ad hoc entity (DM_Improvisation.py/DM_Summoning.py -- entity["ad_hoc"] =
+            True) currently *reachable* -- a live self.scenario_entities participant (a
+            conjured creature/container/trap, or a temporary summon -- see "Summoning" in
+            CLAUDE.md), present in some ground list (across every location and, within a
             room-based one, every room), or in some known instance's own inventory/equipped
             mapping -- for save_game to persist in full (there's no static TOML template to
             re-derive an ad hoc entity's fields from on reload, unlike every other instance's
             own diff-based state). Reachability, not a scan of self.entities, is deliberate:
             remove_entity_from_scene never deletes an entity outright, just unreferences it
-            everywhere, so an orphaned ad hoc entity naturally stops being collected here too --
-            no separate cleanup needed for it to fall out of future saves.
+            everywhere (including self.scenario_entities), so an orphaned ad hoc entity
+            naturally stops being collected here too -- no separate cleanup needed for it to
+            fall out of future saves.
+
+            Excludes "recent_damage_tags" (calculate_damage, DM_Combat.py) from the copied
+            dict -- a plain Python set, not JSON-serializable, and deliberately ephemeral
+            (cleared every round by run_round_upkeep) regardless; every other entity's own
+            save path already excludes it too (it's not part of _instance_state's own
+            whitelisted fields), this is just the one path that would otherwise carry it
+            through via a raw dict copy.
         @return {name: full_entity_dict, ...} for every reachable ad hoc entity.
         """
-        names = set()
+        names = set(self.scenario_entities)
         for location in self.locations.values():
             names.update(location.get("ground", []))
             for room in location.get("rooms", {}).values():
@@ -81,7 +91,7 @@ class PersistenceMixin(DMCoreProtocol):
             names.update(entity.get("equipped", {}).values())
 
         return {
-            name: dict(self.entities[name])
+            name: {k: v for k, v in self.entities[name].items() if k != "recent_damage_tags"}
             for name in names
             if self.entities.get(name, {}).get("ad_hoc")
         }
@@ -349,7 +359,14 @@ class PersistenceMixin(DMCoreProtocol):
             entity (there's no template to overlay onto), then "item_catalog_updated" is
             published once, as a batch, so NLPCore's own item_embeddings/item_indices catch up
             (a reload never republishes "rules_loaded", so nothing else would ever re-register
-            them -- see NLP_Core.py's own _on_item_catalog_updated).
+            them -- see NLP_Core.py's own _on_item_catalog_updated). Right after, every name in
+            the save's own "scenario_entities" that isn't already present (having just been
+            written into self.entities above, or restored to self.entities some other way) is
+            appended back onto the live self.scenario_entities -- load_scenario()/_enter_location/
+            enter_room only ever re-derive scenario_entities from *static* scenario/room data,
+            so without this, any ad hoc entity that was a live scene participant (a conjured
+            creature/container/trap, or a temporary summon) would vanish from the resumed scene
+            even though its own full dict was just restored into self.entities a moment ago.
 
             The load_rules call is not optional: self.entities holds both static templates
             and live instances under the same keys (a single-occurrence instance like
@@ -418,6 +435,22 @@ class PersistenceMixin(DMCoreProtocol):
                     for name, entity_dict in saved_ad_hoc_entities.items()
                 ],
             })
+
+        # Re-adds every entity the save's own "scenario_entities" remembered as a live scene
+        # participant that the fresh re-instancing above didn't already reproduce -- exactly
+        # the ad hoc ones (a conjured creature/container/trap, or a temporary summon; see
+        # "Summoning"/"Ad hoc entity creation and removal" in CLAUDE.md), since a hand-authored
+        # entity's own presence already re-derives correctly from the static scenario/room
+        # data load_scenario()/_enter_location/enter_room just walked above. Guarded on
+        # "name in self.entities" so a stale reference (ex: the scenario file changed between
+        # saves, or a name whose own ad_hoc_entities entry is missing/corrupt) is silently
+        # dropped rather than adding a dangling scenario_entities entry nothing can resolve.
+        # Appended in saved order, after whatever's already present -- exact position doesn't
+        # matter (nothing reads scenario_entities order as meaningful; initiative decides
+        # actual turn order every round regardless), only presence does.
+        for name in data.get("scenario_entities", []):
+            if name not in self.scenario_entities and name in self.entities:
+                self.scenario_entities.append(name)
 
         for location_key, saved_ground in data.get("ground", {}).items():
             location = self.locations.get(location_key)

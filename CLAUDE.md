@@ -165,8 +165,10 @@ compared the same way `[[status]]` requirements are). `turns` is sorted by initi
 `roll_initiative(entity_name)` pools every skill named in `rules.toml`'s `[[initiative]]` list,
 rolling once per round; an entity lacking a listed skill defaults to untrained. Initiative only
 orders narration — every actor resolves independently against state as of the start of the
-round, not sequentially. `current_target` only advances (to the next living hostile entity, or
-the first living non-player entity if none is hostile) once, at the end of the round, if it
+round, not sequentially. Once every turn has resolved, `run_round_upkeep` (see "Status and
+conditions") applies any regeneration/fast-healing/bleed-style condition effects for the round.
+`current_target` only advances (to the next living hostile entity, or the first living
+non-player entity if none is hostile) once, at the very end of the round (after upkeep), if it
 died.
 
 **Naming one of several identically-named live instances.** `map_to_target` (`NLP_Core.py`)
@@ -597,10 +599,21 @@ of simply arriving somewhere.
 
 `entity_matches_requirements`/`get_comparable_value` are the shared engine behind both
 `[[status]]`'s own requirements and `[[entity.behavior]]`'s; an optional `opponent_name` param
-resolves the one opponent-relative derived field, `"distance_to_target"` (the band gap to
+resolves the two opponent-relative derived fields, `"distance_to_target"` (the band gap to
 `opponent_name`) — used by a creature choosing *between* attack options by range, ex:
 `field.toml`'s `bandit` favors its `short bow` while `distance_to_target > 0`, falling to its
-`rusty shortsword` once that gap closes to 0.
+`rusty shortsword` once that gap closes to 0 — and `"opponent_has_condition:<name>"` (below).
+Two more derived fields read `active_conditions` directly rather than a numeric/positional
+value: `"has_condition:<name>"` (a boolean presence check against the checking entity's own
+`active_conditions`, ex: `{field = "has_condition:paralyzed", operator = "==", value = false}`
+to gate a behavior entry off entirely while paralyzed, rather than letting it "act" at 0 dice —
+see `get_condition_modifier`, which zeroes the roll but not the turn) and
+`"opponent_has_condition:<name>"` (the same check against `opponent_name`'s own
+`active_conditions` instead — lets a behavior react to its *target's* condition, ex: pressing an
+attack while they're stunned, or favoring a fleeing/frightened target). Both resolve to `None`
+(never matching) under the same conditions their positional cousins already do — a status's own
+requirements never pass an `opponent_name`, so `"opponent_has_condition:<name>"` is only ever
+meaningful inside `[[entity.behavior]]`.
 
 `evaluate_statuses` finds every status matching a trigger whose requirements the entity
 currently meets and calls `apply_condition`, storing it in `entity["active_conditions"]`.
@@ -612,6 +625,44 @@ healing back above a "wounded" tier's hp_per_remain range dismisses "wounded" in
 A condition is only eligible for this sweep if stored with a falsy `dismiss` — one stored with a
 named mechanism (ex: `"dead"`'s `dismiss = "resurrection"`) is left alone, so ordinary healing
 can't revive a dead entity through the same path that clears a wound tier.
+
+**A `[[condition]]` entry's own `modifier` (`{dice, pips, bonus}`) actually costs dice.**
+`get_condition_modifier(entity_name)` (`DM_Status.py`) sums the `modifier` of every one of an
+entity's `active_conditions` that has a matching `[[condition]]` entry — an active condition
+with no such entry (ex: `"locked"`/`"closed"`/`"hidden"`, presence flags on non-creature
+entities) contributes nothing. `resolve_action`/`resolve_opposed_action` (`DM_Combat.py`) fold
+this into every roll: `dice` is reduced (floored at 0, same floor `dice_penalty` already uses)
+by both `dice_penalty` *and* the acting entity's own condition dice penalty together, `pips` is
+adjusted directly, and `bonus` is added to the final roll total after dice are rolled. In an
+opposed roll, this applies independently to each side — the defender's own `active_conditions`
+reduce *their* roll the same way, even though `dice_penalty` itself (the multi-action cost)
+never touches the defender's side (see "Multiple actions"). This is what makes the wound
+track's own conditions (`stunned`/`wounded`/`severe`/`incapacitated`/`mortal`, each with a
+`[[condition]]` entry already authored in `rules.toml`) mechanically real rather than narration
+flavor — a wounded character is measurably worse at everything, not just described as hurt.
+
+**A `[[condition]]` entry can also carry a per-round `upkeep_heal`/`upkeep_damage`
+(`{dice, pips, bonus}`) instead of (or alongside) `modifier`** — a periodic effect rather than a
+roll modifier, ex: `rules.toml`'s `"regenerating"` (`upkeep_heal = {dice = 2, pips = 0, bonus =
+0}`). `run_round_upkeep()` (`DM_Status.py`) is the generic per-round hook: called once per
+round from `_resolve_combat_round` (`DM_Core.py`), after every actor's own turn (including the
+player's) has already resolved, it calls `apply_round_upkeep` for every living
+(`hp_per_remain > 0`) entity in `self.scenario_entities`. `apply_round_upkeep` sums
+`get_condition_upkeep`'s own heal/damage totals across every one of that entity's own
+`active_conditions` with a matching `[[condition]]` entry, rolls each once, and applies the
+result via the ordinary `apply_healing`/`apply_damage`. A condition's own
+`upkeep_blocked_by_tags` (ex: `"regenerating"`'s own `["fire"]`) suppresses *both* its
+heal and damage for that entity's tick entirely if the entity's own `"recent_damage_tags"` (a
+plain `set`, populated by `calculate_damage` whenever it runs at all — DM_Combat.py — and never
+persisted; not part of the whitelisted fields `DM_Persistence.py`'s `save_game` writes) overlaps
+it — the Pathfinder "Regeneration 10 (fire)" shape: heals every round except one it's touched by
+fire. `recent_damage_tags` is cleared at the end of every `apply_round_upkeep` call, so it only
+ever reflects damage taken since the *previous* tick. `creatures.toml`'s `troll` is the shipped
+example, seeding `"regenerating"` permanently via `[entity.conditions.regenerating]` (see
+"Scenarios, locations, and rooms" for how a template's own `conditions` table becomes a live
+instance's `active_conditions` at instancing time). This mechanism is scoped to actual combat
+rounds only — there's no equivalent "per turn" concept outside one, so a regenerating creature
+doesn't heal between scenes or during freeform (non-combat) play.
 
 ## Damage and healing
 
@@ -931,8 +982,18 @@ and triggers `_publish_party_status()`.
 
 **Persistence.** An ad hoc entity has no static TOML template to re-derive from on reload, so
 `DM_Persistence.py`'s `_collect_ad_hoc_entities` saves every *reachable* one's complete dict
-under `"ad_hoc_entities"`; `load_game` restores each with a full dict replacement alongside
-`"ground"`, then republishes `item_catalog_updated` once. `"removed_entities"` round-trips too,
+under `"ad_hoc_entities"` — reachable meaning a live `self.scenario_entities` participant (a
+conjured creature/container/trap, or a temporary summon — see "Summoning"), present in some
+ground list, or sitting in some known instance's own inventory/equipped mapping.
+`"recent_damage_tags"` (`calculate_damage`, `DM_Combat.py`) is stripped from the copied dict
+first — a plain Python `set`, not JSON-serializable, and deliberately ephemeral regardless (see
+"Status and conditions"'s own per-round upkeep note). `load_game` restores each entity with a
+full dict replacement alongside `"ground"`, republishes `item_catalog_updated` once, then
+re-appends every name the save's own `"scenario_entities"` remembered that a fresh
+scenario/room re-instancing didn't already reproduce (exactly the ad hoc ones — a hand-authored
+entity's own presence already re-derives correctly from static data) back onto the live
+`self.scenario_entities`, guarded on the name actually resolving to something in `self.entities`
+so a stale reference is dropped rather than left dangling. `"removed_entities"` round-trips too,
 restored *before* scenario/room loading runs so a removed entity can't respawn. An *edited*
 hand-authored entity still has a real template, so only `entity["edited"] = True` is needed to
 make `save_game` include `"description"` in its diff and `load_game` restore it.
@@ -945,10 +1006,70 @@ to the matcher's own `register_item`, encoding the `{name, description}` pair an
 the existing tensor/index list (`torch.cat`) rather than rebuilding from scratch. Every
 capability above that introduces a name or description change republishes this event.
 
+## Summoning
+
+A spell/technique/innate ability's own `summon = {"name"|"template", "duration"}` field
+(`entity_schema.toml`) opts a successful cast into conjuring a temporary ally, alongside (or
+instead of) dealing damage — `spells.toml`'s `summon spectral wolf` (`creatures.toml`'s own
+`spectral wolf`, on gladstone's `abilities` list) is the shipped example.
+`DM_Core.py`'s `_apply_summon_if_hit`, called from `_on_turn_detected` right after
+`_apply_damage_if_hit`, fires whenever the turn's own `named_ability` carries a `summon` table
+and the roll succeeded — regardless of `target_name`/`via_test`, since a summon isn't "against"
+anyone the way damage is: casting with no `current_target` at all resolves as an ordinary flat,
+automatic `resolve_action` (difficulty 0); casting against a live hostile `current_target`
+resolves as an ordinary opposed roll instead (the caster's own skill vs. whatever the target's
+best matching `opposes` skill is — no bespoke "resist a summon" mechanic, just the same opposed
+check any other ability already uses).
+
+Unlike `DM_Improvisation.py`'s own ad hoc creature conjuring, a summon never invents anything —
+`DM_Summoning.py`'s `_summon_creature` always instances a real, hand-authored `[[entity]]`/
+`[[entity_template]]`, via the exact same `_instance_entities` primitive (`DM_Rules.py`) every
+scenario/room's own static `entities` list is built on (reusing `_resolve_one_encounter`'s own
+precedent, `DM_Encounters.py` — not `DM_Improvisation.py`'s bespoke `_unique_entity_key`/
+`_place_new_entity` pairing, which exists specifically for an LLM-invented name with nothing
+real to disambiguate against `self.entity_occurrence_counts` the ordinary way). The new instance
+is placed at the caster's own current band, tagged `ad_hoc = True`, given a `summon_expires_in`
+(whole combat rounds remaining), and appended to `self.scenario_entities` — but never claims
+`self.current_target` (an ally never should, same as `_claim_current_target_if_free`'s own
+hostile-only rule). Whether the summon actually fights *for* the caster is entirely down to its
+own `[entity.attitudes]`/`[[entity.behavior]]` data, same as any other entity: `spectral wolf`'s
+own flat-positive `default` attitude is what keeps it from reading as hostile-by-default (no
+`[entity.attitudes]` table at all defaults to hostile — see "Combat"), and its own
+`[[entity.behavior]]` entry is what makes it actually attack `self.current_target` each round.
+
+`run_round_upkeep` (`DM_Status.py`) also counts down every living scene entity's own
+`summon_expires_in` each combat round (`_expire_summon_if_due`, `DM_Summoning.py`), sharing the
+same per-round cadence condition-driven upkeep already uses rather than a second pass over
+`scenario_entities` — iterated as a snapshot (`list(self.scenario_entities)`), since an expiring
+summon removes itself from that same live list mid-loop. A summon reaching 0 is removed from the
+scene entirely via `remove_entity_from_scene` (`DM_Improvisation.py`), not a condition dismissed
+— the creature itself is gone, not just one of its traits. There's no engine concept of a "round"
+outside combat, so a summon cast with no fight underway doesn't start counting down until an
+actual combat round happens.
+
+**Save/load.** A summoned creature (`ad_hoc = True`) now survives a save/load cycle like any
+other ad hoc entity — `_collect_ad_hoc_entities` treats live `scenario_entities` membership as
+its own reachability source, and `load_game` re-appends a restored ad hoc entity's name back
+onto `self.scenario_entities` (see "Saving and loading"'s own "Persistence" note) — including
+its own `summon_expires_in`, since the whole entity dict round-trips, not a whitelisted diff.
+This fixed the same underlying gap for `DM_Improvisation.py`'s own ADaM-conjured
+creatures/containers/traps too, not just summons.
+
+**`_apply_damage_if_hit`'s own gating.** A resolved ability now has to actually carry a
+`damage_value` field to get a `"damage"` entry in the result at all (`"damage_value" in
+ability`, not just a truthy `ability`) — without this, a named ability with no `damage_value`
+(a summon, or any future non-damaging spell) would still roll through `calculate_damage`'s own
+`{"dice": 0, "pips": 0, "bonus": 0}` default and attach a spurious `"damage": {"net_damage": 0,
+...}` entry just because it happened to resolve against a target that was present. Every
+currently-authored weapon/ability that matters here already carries `damage_value`, so this
+doesn't change any existing narration.
+
 ## Narration
 
 `LLMCore` subscribes to narration-relevant events, sharing outcome-text building
-(`_describe_outcome`) and background-fetch plumbing (`_queue_narration`/`_fetch_and_publish`):
+(`_describe_outcome` — also the one place that turns a successful summon's own `"summoned"` key
+into an actual narrated line, "Summoning" above) and background-fetch plumbing
+(`_queue_narration`/`_fetch_and_publish`):
 - `scenario_loaded` → `generate_scene_intro` — once, from `DMCore.__init__`.
 - `round_resolved` → `generate_round_response` — combat, once per round.
 - `action_resolved` → `generate_response` — non-combat, once per skill use.
@@ -1020,7 +1141,13 @@ Slot names are run through `os.path.basename` before use, so a slot can't escape
   `armor_tags`, `resistance_value`/`resistance_tags` (rolled, partial reduction via
   `get_damage_reduction`), `immunity_tags` (absolute — `is_immune_to` zeroes net damage
   regardless of roll), and `vulnerability_value`/`vulnerability_tags` (rolled, extra damage added
-  before reduction). Immunity wins outright over vulnerability if both match.
+  before reduction). Immunity wins outright over vulnerability if both match. `resistance_tags`/
+  `armor_tags` each have an optional bypass counterpart (`resistance_bypass_tags` on the
+  entity itself, `armor_bypass_tags` on an equipped item) — if any of an incoming hit's
+  `damage_tags` matches a bypass tag, that side's reduction is skipped for this hit entirely,
+  even if `resistance_tags`/`armor_tags` would otherwise have matched (Pathfinder's "DR
+  10/magic": mundane weapons reduced, magic weapons cut straight through). Absent/empty on
+  every entity that doesn't author it, so this never changes existing behavior on its own.
 - **Conditions** (`active_conditions`, `apply_condition`/`dismiss_condition`) are dynamic —
   gained/lost during play via triggers or tests. Use a condition for something that can plausibly
   change mid-scene; use a tag for something permanent to what the entity is.

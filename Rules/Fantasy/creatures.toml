@@ -3,9 +3,10 @@
 # scenarios -- each now lives solely as a local [[entity]] table in the one (or two) scenario
 # file(s) that actually use it (arena.toml/field.toml's own wolf, field.toml's own bandit,
 # crypt.toml's own giant spider/skeleton warrior/the bone warden; character_test.toml keeps its
-# own separate copy of wolf too, for the same reason). "fire elemental" stays here -- it isn't
-# owned by any scenario (referenced directly by test_unit.py's own damage-reduction tests
-# instead), so there's no scenario file for it to move into.
+# own separate copy of wolf too, for the same reason). "fire elemental", "wraith", "troll", and
+# "spectral wolf" all stay here -- none is owned by any scenario (all four referenced directly
+# by test_unit.py's own tests instead, "spectral wolf" also by spells.toml's own "summon
+# spectral wolf"), so there's no scenario file for any of them to move into.
 
 [[entity]]
 name = "fire elemental"
@@ -42,3 +43,138 @@ reflexes = { dice = 3, pips = 0 }
 dodge = { dice = 3, pips = 0 }
 strength = { dice = 4, pips = 0 }
 brawling = { dice = 4, pips = 0 }
+
+[[entity]]
+name = "wraith"
+supertype = "creature"
+subtype = "undead"
+description = "A robed, faceless shape of cold shadow, drifting a hand's breadth above the ground."
+
+max_hp = 24
+
+# Rolled reduction against ordinary weapons -- but a hit tagged "silver" bypasses it outright,
+# regardless of also carrying a matching resistance tag (Pathfinder's "DR 10/silver"; see
+# Rules/Fantasy/reference/pathfinder_conversion.md's #2 and DM_Combat.py's
+# get_damage_reduction). A silvered blade's own damage_tags would be
+# ["slashing", "silver"] -- the "slashing" tag alone still matches resistance_tags below on an
+# ordinary weapon, but "silver" short-circuits the reduction entirely once present.
+resistance_value = { dice = 3, pips = 0 }
+resistance_tags = [ "physical", "slashing", "piercing", "bludgeoning" ]
+resistance_bypass_tags = [ "silver" ]
+
+[entity.skills]
+brawling = { dice = 4, pips = 0 }
+dodge = { dice = 3, pips = 0 }
+willpower = { dice = 4, pips = 0 }
+fortitude = { dice = 3, pips = 0 }
+
+[[entity.abilities]]
+name = "chilling claw"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "cold" ]
+damage_value = { dice = 2, pips = 0, bonus = 0 }
+
+[[entity.abilities]]
+name = "life drain"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "negative" ]
+damage_value = { dice = 4, pips = 0, bonus = 0 }
+
+# Checked first (declaration order): favors draining an already-wounded target over its plain
+# claw -- opponent_has_condition reads the *target's* own active_conditions, not the wraith's,
+# so this only fires once the fight has already gone the wraith's way.
+[[entity.behavior]]
+requirements = [
+    { field = "has_condition:warded", operator = "==", value = false },
+    { field = "opponent_has_condition:wounded", operator = "==", value = true },
+]
+action = "life drain"
+
+# The ordinary fallback attack -- both entries share the same "warded" gate (below), so a
+# holy symbol's ward suppresses the wraith's turn entirely rather than just its preferred
+# attack, the same "no matching entry = no action" fallback an entity with no behavior list at
+# all already gets.
+[[entity.behavior]]
+requirements = [
+    { field = "has_condition:warded", operator = "==", value = false },
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "chilling claw"
+
+[[entity]]
+name = "troll"
+supertype = "creature"
+subtype = "monstrous humanoid"
+description = "A gangly, warty brute with a lantern jaw and long, ragged claws -- its wounds already knitting shut as it advances."
+
+max_hp = 40
+
+# Seeded permanently, not gained mid-fight -- a troll simply *is* a regenerator, the same way
+# [entity.conditions.locked]/.closed seed a chest's starting state (see DM_Rules.py's
+# _instance_entities: active_conditions is copied fresh from this per instance). See
+# rules.toml's own "regenerating" [[condition]] entry (upkeep_heal = 2D per round, suppressed
+# any round it's tagged "fire" -- the shipped generic-per-round-upkeep-hook example; run_round_
+# upkeep, DM_Status.py) and TestRoundUpkeep in test_unit.py for the fire-suppression case.
+[entity.conditions.regenerating]
+duration = "permanent"
+
+[entity.skills]
+strength = { dice = 5, pips = 0 }
+brawling = { dice = 4, pips = 0 }
+fortitude = { dice = 4, pips = 0 }
+dodge = { dice = 2, pips = 0 }
+
+[[entity.abilities]]
+name = "rend"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "slashing" ]
+damage_value = { dice = 3, pips = 0, bonus = "user.strength_damage" }
+
+[[entity.behavior]]
+requirements = [ { field = "hp_per_remain", operator = ">=", value = 0.01 } ]
+action = "rend"
+
+[[entity]]
+name = "spectral wolf"
+supertype = "creature"
+subtype = "elemental"
+description = "A translucent, silver-limned wolf conjured from raw magic -- here to fight, and gone once the spell fades."
+
+max_hp = 16
+
+# A non-hostile default is what actually makes this an *ally* rather than a monster: an entity
+# with no [entity.attitudes] table at all defaults to hostile unconditionally (see CLAUDE.md's
+# "Combat" -- the same reason arena.toml's wolf, with no attitudes table of its own, always
+# fights). is_hostile only reaches true hostility at disposition <= -100, so a flat positive
+# default here reads as a firm ally instead. spells.toml's "summon spectral wolf" is the only
+# thing that ever instances this template (via DM_Summoning.py's _summon_creature); nothing
+# else in the shipped data references it.
+[entity.attitudes]
+default = [ 100, 100, 100, 100, 100, 100 ]
+
+[entity.skills]
+brawling = { dice = 3, pips = 0 }
+dodge = { dice = 3, pips = 0 }
+fortitude = { dice = 2, pips = 0 }
+
+[[entity.abilities]]
+name = "spectral bite"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "cold" ]
+damage_value = { dice = 2, pips = 1, bonus = 0 }
+
+# An ally's own behavior attacks self.current_target, not the player -- see is_hostile's own
+# two branches (CLAUDE.md's "Combat"). No "retreat" entry: a conjured spell effect has nothing
+# to lose by fighting to the end, unlike arena.toml's wolf (which flees below 40% hp_per_remain
+# to value its own life).
+[[entity.behavior]]
+requirements = [ { field = "hp_per_remain", operator = ">=", value = 0.01 } ]
+action = "spectral bite"

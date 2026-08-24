@@ -102,6 +102,16 @@ class CombatMixin(DMCoreProtocol):
             items that resist the same tags. Both are static, tag-matched traits of the
             entity/item -- distinct from active_conditions, which represent temporary state
             gained/lost during play (see CLAUDE.md's tags-vs-conditions note).
+
+            Each side also has its own optional bypass list (resistance_bypass_tags on the
+            defender, armor_bypass_tags on the equipped item) -- if any of the incoming
+            damage_tags matches one of *those*, that side's reduction is skipped entirely for
+            this hit, regardless of whether resistance_tags/armor_tags would otherwise match
+            (ex: a creature with resistance_tags = ["physical"] but
+            resistance_bypass_tags = ["magic"] still resists an ordinary sword, but a
+            damage_tags = ["slashing", "magic"] hit bypasses that resistance outright -- the
+            Pathfinder "DR 10/magic" shape). Absent/empty on every entity that doesn't author
+            it, so this is purely additive over existing data.
         @param defender_name The name of the entity taking damage.
         @param damage_tags The damage tags of the incoming attack (ex: ["fire"]).
         @return The total damage reduction.
@@ -111,14 +121,16 @@ class CombatMixin(DMCoreProtocol):
 
         resistance_value = defender.get("resistance_value")
         resistance_tags = defender.get("resistance_tags", [])
-        if resistance_value and any(tag in resistance_tags for tag in damage_tags):
+        resistance_bypassed = any(tag in defender.get("resistance_bypass_tags", []) for tag in damage_tags)
+        if resistance_value and not resistance_bypassed and any(tag in resistance_tags for tag in damage_tags):
             reduction += self.roll_dice(resistance_value.get("dice", 0), resistance_value.get("pips", 0))
 
         for item_name in defender.get("equipped", {}).values():
             item = self.entities.get(item_name, {})
             armor_value = item.get("armor_value")
             armor_tags = item.get("armor_tags", [])
-            if armor_value and any(tag in armor_tags for tag in damage_tags):
+            armor_bypassed = any(tag in item.get("armor_bypass_tags", []) for tag in damage_tags)
+            if armor_value and not armor_bypassed and any(tag in armor_tags for tag in damage_tags):
                 reduction += self.roll_dice(armor_value.get("dice", 0), armor_value.get("pips", 0))
 
         return reduction
@@ -159,7 +171,17 @@ class CombatMixin(DMCoreProtocol):
     def calculate_damage(self, attacker_name, defender_name, ability):
         """!
         @brief Calculates and applies damage from an attacker's ability to a defender, including
-            immunity, resistance/armor reduction, and vulnerability.
+            immunity, resistance/armor reduction, and vulnerability. Also records
+            ability's own damage_tags onto defender_name's own "recent_damage_tags" (a plain
+            set, never persisted -- see DM_Persistence.py's own whitelisted save fields) --
+            consumed and cleared once per round by run_round_upkeep (DM_Status.py), so a
+            condition's own upkeep_blocked_by_tags can tell whether this entity was hit with a
+            matching damage type this round (ex: a troll's regeneration not firing the round
+            it took fire damage). Recorded whenever this function runs at all (any landed
+            hit), regardless of net_damage -- a fully-resisted-to-zero fire hit still counts
+            as "touched by fire" for this purpose, the same simplification real Pathfinder
+            regeneration makes (fire/acid suppress it outright, not just when damage gets
+            through).
         @param attacker_name The name of the entity dealing damage.
         @param defender_name The name of the entity taking damage.
         @param ability A table with damage_value {dice, pips, bonus} and damage_tags, such as a weapon, spell, or innate ability.
@@ -180,6 +202,10 @@ class CombatMixin(DMCoreProtocol):
             vulnerability_bonus = self.get_vulnerability_bonus(defender_name, damage_tags)
         net_damage = max(0, raw_damage + vulnerability_bonus - reduction)
         remaining_hp = self.apply_damage(defender_name, net_damage)
+
+        defender = self.entities.get(defender_name)
+        if defender is not None and damage_tags:
+            defender.setdefault("recent_damage_tags", set()).update(damage_tags)
 
         self.event_bus.publish(
             "log_info",
@@ -243,13 +269,18 @@ class CombatMixin(DMCoreProtocol):
             actions -1D per action beyond the first (see DM_Core.py's own multi-action
             docstring for where this is computed). 0 (the default) is every existing call
             site's behavior, unchanged -- movement/speech/item-interactions never pass this at
-            all, and a lone action always resolves at full dice.
+            all, and a lone action always resolves at full dice. Also folds in
+            get_condition_modifier(entity_name) (StatusMixin) -- ex: "stunned"'s -1D -- into
+            the same dice/pips pool, floored at 0 dice the same way dice_penalty is; its own
+            "bonus" is added straight to the final roll, after dice are rolled.
         @return A dict describing the roll and whether it succeeded.
         """
         entity = self.entities.get(entity_name, {})
         skill_stats = entity.get("skills", {}).get(skill_name, {"dice": 0, "pips": 0})
-        dice = max(0, skill_stats.get("dice", 0) - dice_penalty)
-        roll = self.roll_dice(dice, skill_stats.get("pips", 0))
+        condition_modifier = self.get_condition_modifier(entity_name)
+        dice = max(0, skill_stats.get("dice", 0) - dice_penalty + condition_modifier["dice"])
+        pips = skill_stats.get("pips", 0) + condition_modifier["pips"]
+        roll = self.roll_dice(dice, pips) + condition_modifier["bonus"]
         success = roll >= difficulty
         self.event_bus.publish(
             "log_info",
@@ -295,15 +326,20 @@ class CombatMixin(DMCoreProtocol):
         @param defender_name The name of the opposing entity.
         @param dice_penalty Forwarded to resolve_action for attacker_name's own roll only --
             the defender isn't the one splitting their attention across multiple actions this
-            turn, so defender_stats' own roll below is never penalized regardless of this
-            value (see resolve_action's own docstring for the West End Games rule this
-            implements).
+            turn, so defender_stats' own roll below is never penalized by dice_penalty
+            regardless of this value (see resolve_action's own docstring for the West End
+            Games rule this implements). The defender's own active_conditions still apply to
+            their roll, via get_condition_modifier (StatusMixin) -- ex: a stunned defender
+            still rolls their opposing skill at -1D, same as if they'd been the one acting.
         @return A dict describing the roll, the opposing skill used (if any), and the outcome.
         """
         opposing_skill = self.get_opposing_skill(skill_name, defender_name)
         if opposing_skill:
             defender_stats = self.entities[defender_name]["skills"][opposing_skill]
-            difficulty = self.roll_dice(defender_stats.get("dice", 0), defender_stats.get("pips", 0))
+            defender_modifier = self.get_condition_modifier(defender_name)
+            defender_dice = max(0, defender_stats.get("dice", 0) + defender_modifier["dice"])
+            defender_pips = defender_stats.get("pips", 0) + defender_modifier["pips"]
+            difficulty = self.roll_dice(defender_dice, defender_pips) + defender_modifier["bonus"]
         else:
             difficulty = 0
 

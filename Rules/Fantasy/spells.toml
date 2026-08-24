@@ -23,3 +23,23 @@ range = 5
 targets = { number = 1, aoe = 0 }
 damage_value = { dice = 4, pips = 0, bonus = 0 }
 damage_tags = [ "water" ]
+
+[[entity]]
+name = "summon spectral wolf"
+supertype = "spell"
+subtype = "conjuration"
+description = "Pull a translucent, silver-limned wolf out of raw magic to fight at your side for a short time."
+skill = "arcane"
+difficulty = 10
+# No damage_value/damage_tags at all -- this spell's whole effect is the summon (see "summon"
+# below), so _apply_damage_if_hit's own "damage_value" gate (DM_Core.py) correctly skips
+# rolling any bonus damage for it. Cast with no current_target at all (no hostile creature
+# present), this resolves as a flat, automatic difficulty-0 check (_resolve_roll's own
+# no-target branch) -- summoning before a fight starts is trivial. Cast against a live hostile
+# current_target, it's an ordinary opposed roll instead: the caster's own arcane vs. the
+# target's willpower/arcane, framed as the target's presence disrupting the working -- range is
+# set generously high (well past any real scene's own band count) purely so is_in_range never
+# blocks the cast on distance alone; a summon isn't "aimed" at the target the way a damaging
+# spell is.
+range = 10
+summon = { name = "spectral wolf", duration = 4 }
