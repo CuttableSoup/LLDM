@@ -31,7 +31,7 @@ from Character_Creation_GUI import CharacterCreationDialog
 from Challenge_Rating import calculate_challenge_rating, calculate_party_challenge_rating, skill_rating
 from DM_Core import DMCore
 from DM_Rules import list_available_scenarios
-from DM_Social import TALK_ATTITUDE_DRIFT_CAP
+from DM_Social import TALK_ATTITUDE_DRIFT_CAP, ACTION_ATTITUDE_DRIFT_CAP
 from Event_Bus import EventBus
 from GUI_Core import GUICore
 from Intent_Classification import (
@@ -891,6 +891,127 @@ class TestDamageCalculation(DMTestCase):
         # bypasses that reduction entirely, even though "slashing" still matches resistance_tags.
         self.assertEqual(self.dm_core.get_damage_reduction("wraith", ["slashing"]), 9)
         self.assertEqual(self.dm_core.get_damage_reduction("wraith", ["slashing", "silver"]), 0)
+
+
+    def test_landing_a_hit_nudges_the_defenders_combat_attitude(self):
+        # arena's wolf normally has no [entity.attitudes] table at all (unconditionally
+        # hostile -- see is_hostile), so it's given one here just for this test; the "combat_hit"
+        # nudge (DM_Social.py's nudge_attitude_from_event, wired from _apply_damage_if_hit) is
+        # scaled by net_damage / max_hp, not a flat per-swing amount.
+        self.dm_core.entities["wolf"]["attitudes"] = {"default": [0, 0, 0, 0, 0, 0]}
+        result = {"success": True}
+        ability = {"damage_value": {"dice": 0, "pips": 0, "bonus": 5}, "damage_tags": []}
+
+        self.dm_core._apply_damage_if_hit(result, "melee", None, ability, "wolf", via_test=False)
+
+        self.assertEqual(result["damage"]["net_damage"], 5)
+        magnitude = 5 / self.dm_core.entities["wolf"]["max_hp"]
+        disposition, confidence = (
+            self.dm_core.get_attitude("wolf", self.dm_core.player_name)[axis] for axis in (0, 2)
+        )
+        self.assertAlmostEqual(disposition, -20 * magnitude)
+        self.assertAlmostEqual(confidence, -15 * magnitude)
+
+    def test_landing_a_hit_bonds_other_entities_hostile_to_the_same_target(self):
+        # "Bonds made on the battlefield" (DM_Core.py's _nudge_shared_enemy_bonds) -- an
+        # onlooker who already considers "wolf" an enemy (a name-override disposition <= -100
+        # toward it specifically, not just a generic hostile-to-everyone default) warms up
+        # toward the player when the player hits it, scaled by the same magnitude as the
+        # target's own "combat_hit" nudge. thane is arena's real ally entity (is_party = true),
+        # already present in scenario_entities and alive.
+        self.dm_core.entities["thane"]["attitudes"] = {
+            "default": [0, 0, 0, 0, 0, 0],
+            "name": [{"wolf": [-100, 0, 0, 0, 0, 0]}],
+        }
+        result = {"success": True}
+        ability = {"damage_value": {"dice": 0, "pips": 0, "bonus": 5}, "damage_tags": []}
+
+        self.dm_core._apply_damage_if_hit(result, "melee", None, ability, "wolf", via_test=False)
+
+        magnitude = result["damage"]["net_damage"] / self.dm_core.entities["wolf"]["max_hp"]
+        disposition = self.dm_core.get_attitude("thane", self.dm_core.player_name)[0]
+        self.assertAlmostEqual(disposition, 5 * magnitude)
+
+    def test_shared_enemy_bond_skips_an_observer_thats_neutral_to_the_target(self):
+        # thane has real attitude data but no particular opinion of "wolf" specifically (falls
+        # back to its own all-neutral default) -- not hostile toward it, so no bond forms.
+        self.dm_core.entities["thane"]["attitudes"] = {"default": [0, 0, 0, 0, 0, 0]}
+        result = {"success": True}
+        ability = {"damage_value": {"dice": 0, "pips": 0, "bonus": 5}, "damage_tags": []}
+
+        self.dm_core._apply_damage_if_hit(result, "melee", None, ability, "wolf", via_test=False)
+
+        self.assertNotIn("action_attitude_deltas", self.dm_core.entities["thane"])
+
+
+class TestActionDrivenAttitudeDrift(DMTestCase):
+    """!
+    @brief DM_Social.py's nudge_attitude_from_event -- the [[attitude_event]] (rules.toml)
+        driven counterpart to nudge_attitude's own dialogue-sentiment drift, applied from a
+        resolved player action (combat/theft/favor) instead of the tone of something said. See
+        CLAUDE.md's "Extended goals" -- "Actions sway attitudes by varying degrees". Tracked in
+        its own "action_attitude_deltas" accumulator/cap (ACTION_ATTITUDE_DRIFT_CAP), independent
+        of nudge_attitude's own "attitude_deltas"/TALK_ATTITUDE_DRIFT_CAP -- combat hit wiring is
+        covered separately, in TestDamageCalculation, right where _apply_damage_if_hit lives.
+    """
+    scenario_name = "tavern"
+
+    def test_event_scales_every_axis_by_magnitude(self):
+        base = self.dm_core.entities["innkeeper"]["attitudes"]["default"]
+
+        self.dm_core.nudge_attitude_from_event("innkeeper", self.dm_core.player_name, "favor", 0.6)
+
+        after = self.dm_core.get_attitude("innkeeper", self.dm_core.player_name)
+        disposition, trust, confidence, respect, obligation, intimacy = (
+            value - starting for value, starting in zip(after, base)
+        )
+        self.assertAlmostEqual(disposition, 6.0)
+        self.assertAlmostEqual(trust, 4.8)
+        self.assertEqual(confidence, 0)
+        self.assertEqual(respect, 0)
+        self.assertAlmostEqual(obligation, 12.0)
+        self.assertAlmostEqual(intimacy, 3.6)
+
+    def test_action_drift_is_capped_independently_of_talk_drift(self):
+        # Push both accumulators toward the same axis (disposition) as far as they'll go --
+        # dialogue sentiment (TALK_ATTITUDE_DRIFT_CAP) and a run of "favor" events
+        # (ACTION_ATTITUDE_DRIFT_CAP) -- and confirm each caps on its own terms rather than
+        # sharing one ceiling between the two accumulators.
+        for _ in range(50):
+            self.dm_core.nudge_attitude("innkeeper", self.dm_core.player_name, "positive", 1.0)
+        for _ in range(50):
+            self.dm_core.nudge_attitude_from_event("innkeeper", self.dm_core.player_name, "favor", 1.0)
+
+        base_disposition = self.dm_core.entities["innkeeper"]["attitudes"]["default"][0]
+        disposition = self.dm_core.get_attitude("innkeeper", self.dm_core.player_name)[0]
+
+        self.assertEqual(disposition, base_disposition + TALK_ATTITUDE_DRIFT_CAP + ACTION_ATTITUDE_DRIFT_CAP)
+
+    def test_unknown_event_and_ungated_targets_are_no_ops(self):
+        before = list(self.dm_core.get_attitude("innkeeper", self.dm_core.player_name))
+        self.dm_core.nudge_attitude_from_event("innkeeper", self.dm_core.player_name, "not_a_real_event", 1.0)
+        self.assertEqual(self.dm_core.get_attitude("innkeeper", self.dm_core.player_name), before)
+
+        # An inanimate object has no feelings to nudge -- same precedent is_hostile already sets.
+        self.dm_core.entities["stone idol"] = {"name": "stone idol", "supertype": "object", "attitudes": {"default": [0] * 6}}
+        self.dm_core.nudge_attitude_from_event("stone idol", self.dm_core.player_name, "favor", 1.0)
+        self.assertNotIn("action_attitude_deltas", self.dm_core.entities["stone idol"])
+
+        # A tableless entity (ex: arena's own wolf) has nothing to nudge either.
+        self.dm_core.entities["test_tableless"] = {"name": "test_tableless", "max_hp": 10}
+        self.dm_core.nudge_attitude_from_event("test_tableless", self.dm_core.player_name, "favor", 1.0)
+        self.assertNotIn("action_attitude_deltas", self.dm_core.entities["test_tableless"])
+
+    def test_dead_entity_is_not_aware_of_anything_happening_to_it(self):
+        # A dead (or never-conscious) entity isn't aware of a theft, a gift, or anything else --
+        # same reasoning that makes a killing blow's own "combat_hit" nudge a no-op too, since
+        # the target's HP is already 0 by the time _apply_damage_if_hit gets around to it.
+        self.dm_core.apply_damage("innkeeper", 9999)
+        self.assertEqual(self.dm_core.get_current_hp("innkeeper"), 0)
+
+        self.dm_core.nudge_attitude_from_event("innkeeper", self.dm_core.player_name, "favor", 1.0)
+
+        self.assertNotIn("action_attitude_deltas", self.dm_core.entities["innkeeper"])
 
 
 class TestMultipleActions(DMTestCase):
@@ -3614,6 +3735,60 @@ class TestGiveAndTrade(DMTestCase):
         self.assertEqual(self.dm_core.entities["gladstone"]["inventory"].count("health potion"), 2)
 
 
+    def test_give_nudges_a_favor_attitude_toward_the_recipient(self):
+        # "favor" (DM_Social.py's nudge_attitude_from_event, wired from _resolve_transfer_intent)
+        # -- magnitude scaled by the gift's own TOML value (health potion = 15) against
+        # DM_Inventory.py's SIGNIFICANT_VALUE (25): 15/25 = 0.6.
+        base_obligation = self.dm_core.entities["innkeeper"]["attitudes"]["default"][4]
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "give", "item_name": "health potion", "input": "I give the innkeeper a health potion",
+        })
+
+        obligation = self.dm_core.get_attitude("innkeeper", self.dm_core.player_name)[4]
+        self.assertAlmostEqual(obligation, base_obligation + 20 * (15 / 25))
+
+    def test_taking_currency_from_a_living_entity_nudges_a_theft_attitude(self):
+        # "theft" (same wiring, currency branch) -- magnitude scaled by however much moved
+        # against SIGNIFICANT_VALUE, capped at 1.0 (the innkeeper's own 40 currency exceeds it).
+        base_trust = self.dm_core.entities["innkeeper"]["attitudes"]["default"][1]
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "take", "item_name": "currency", "input": "I take the innkeeper's coin purse",
+        })
+
+        trust = self.dm_core.get_attitude("innkeeper", self.dm_core.player_name)[1]
+        self.assertAlmostEqual(trust, base_trust - 25)  # -25 at magnitude 1.0 (theft's own full-strength trust delta)
+
+    def test_taking_an_item_from_a_living_entity_nudges_a_theft_attitude(self):
+        # "cursed dagger" (value 5), not "health potion" -- gladstone's own template already
+        # starts carrying health potions (see test_give's own assertion above), which would
+        # route this through the "already owned" self-transfer no-op path instead of real theft.
+        self.dm_core.entities["innkeeper"].setdefault("inventory", []).append("cursed dagger")
+        base_disposition = self.dm_core.entities["innkeeper"]["attitudes"]["default"][0]
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "take", "item_name": "cursed dagger", "input": "I take the innkeeper's cursed dagger",
+        })
+
+        disposition = self.dm_core.get_attitude("innkeeper", self.dm_core.player_name)[0]
+        self.assertAlmostEqual(disposition, base_disposition - 15 * (5 / 25))
+
+    def test_taking_from_an_incapacitated_victim_is_not_theft_they_were_aware_of(self):
+        # An unconscious/dead victim isn't aware of anything being taken from them -- the item
+        # still moves (transfer_item doesn't care about HP), but no attitude nudge registers,
+        # since nudge_attitude_from_event itself gates on the target actually being alive.
+        self.dm_core.entities["innkeeper"].setdefault("inventory", []).append("cursed dagger")
+        self.dm_core.apply_damage("innkeeper", 9999)
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "take", "item_name": "cursed dagger", "input": "I take the innkeeper's cursed dagger",
+        })
+
+        self.assertIn("cursed dagger", self.dm_core.entities["gladstone"]["inventory"])
+        self.assertNotIn("action_attitude_deltas", self.dm_core.entities["innkeeper"])
+
+
     def test_trade_charges_the_items_toml_value_and_moves_it_to_the_player(self):
         # dungeon.toml's chest holds "cursed dagger" (value = 5); tavern's innkeeper has
         # neither, so build an ad-hoc scenario reusing the chest as a "shop" for this test.
@@ -4158,7 +4333,10 @@ class TestSaveLoad(DMTestCase):
         gladstone_state = data["instances"]["gladstone"]
         self.assertEqual(
             set(gladstone_state.keys()),
-            {"hp", "active_conditions", "currency", "inventory", "equipped", "band", "attitude_deltas"},
+            {
+                "hp", "active_conditions", "currency", "inventory", "equipped", "band",
+                "attitude_deltas", "action_attitude_deltas",
+            },
         )
 
 

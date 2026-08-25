@@ -10,7 +10,7 @@ fantasy-specific — `DMCore(event_bus, scenario_name, setting="Fantasy")`'s own
 picks which one to boot from (`Rules/<setting>/scenarios/<scenario_name>.toml` and every
 sibling `Rules/<setting>/*.toml`), and it round-trips through a save file (`dm_state.json`'s
 own `"setting"` key) so a resumed save reloads from the same setting it was saved under.
-`Rules/Fantasy/` is the original, deep setting; `Rules/Zombie/` is a bare-bones second one (a
+`Rules/Fantasy/` is the deep, primary setting; `Rules/Zombie/` is a bare-bones second one (a
 Left 4 Dead-inspired survival shooter) that proves the engine is setting-agnostic — see
 `Rules/Zombie/scenarios/rooftop.toml` (`python LLDM.py rooftop --setting Zombie`). Every
 setting authors its own skills/rules/races from scratch — nothing is shared or inherited
@@ -52,7 +52,7 @@ the game" for when and how it's actually constructed.
   granular "mapped input to X" diagnostics, since encoding/scoring is where those facts become
   known. `NLPCore` itself owns no classification logic.
 - **`Intent_Classification.py`** — pure, EventBus-independent: `IntentClassifier.classify()`
-  is what used to be `NLPCore._on_user_input`, returning `(processed_text, events)` — a list of
+  returns `(processed_text, events)` — a list of
   one or more `{"event", "payload"}` dicts for the glue layer to publish, rather than publishing
   anything itself (`AdHoc_Generation.py`/`DM_Improvisation.py` is the same pure/glue split).
   Depends on one seam, `IntentMatcher` (embedding-based skill/item/target matching —
@@ -324,7 +324,7 @@ matching the app's "Ollama is best-effort, never blocks core gameplay" posture.
 not shared with `LLM_Core.py`'s async `fetch_from_llm` (`fetch_from_llm` must never raise; this
 one must raise cleanly so `generate_npc_stats`'s fallback triggers). Its hard 20s `timeout`
 matters because generation runs synchronously on whatever thread is instancing the scene
-(always the GUI/main thread in practice) — a known v1 limitation: a scene with entity_template
+(always the GUI/main thread in practice) — a known limitation: a scene with entity_template
 entries visibly pauses ~5s per generated NPC on a fresh load. A two-phase "placeholder now,
 patch later" redesign would fix this properly; out of scope for now.
 
@@ -462,9 +462,9 @@ since File → Load... is meaningful at any time: every load after the first is 
 flat `load_rules` scan (which only keeps the last `[scenario]` table it reads) overwriting one
 with another. Every scenario is `[scenario]` (just `name`/`description`/`start_location`) →
 one or more `[[location]]` tables → optionally, per location, one or more `[[location.room]]`
-tables — a location is a *superset* of a room, not a sister of it: `[[room]]`/`[[room.exit]]`
-still exist, just renamed `[[location.room]]`/`[[location.room.exit]]` and nested one level
-deeper, completely unchanged in shape and behavior. `Rules/Fantasy/reference/location_schema.toml`
+tables — a location is a *superset* of a room, not a sister of it: `[[location.room]]`/
+`[[location.room.exit]]` behave exactly like an ordinary room/exit, just nested one level
+deeper. `Rules/Fantasy/reference/location_schema.toml`
 is the field-by-field reference for the `[[location]]` shape.
 
 **A location may declare `entities` directly, `[[location.room]]`, or both.** On a location with
@@ -480,12 +480,12 @@ to room) — still positioned via ordinary room bands, not freeform. A room's ow
 never repeats them, only that room's local creatures/traps/chests.
 
 **Rooms never float free at the scenario's top level.** `self.rooms`/`self.current_room_key`/
-`self.visited_rooms` keep their exact pre-`[[location]]` meaning and every method that reads
-them (`_current_room`, `_populate_room`, `enter_room`, `_find_room_exit`,
-`_resolve_room_transition_intent`, `_clamp_band`, `_current_ground_items`, ...) is unchanged —
-they just get re-pointed at whichever location is currently active by `_enter_location`
-(`DM_Rules.py`), instead of being fixed once at scenario-load time. `self.rooms` is `{}` (and
-`_current_room()` returns `None`) whenever the active location is freeform.
+`self.visited_rooms` always describe whichever location is currently active — every method that
+reads them (`_current_room`, `_populate_room`, `enter_room`, `_find_room_exit`,
+`_resolve_room_transition_intent`, `_clamp_band`, `_current_ground_items`, ...) operates on
+that location, re-pointed by `_enter_location` (`DM_Rules.py`) every time the active location
+changes. `self.rooms` is `{}` (and `_current_room()` returns `None`) whenever the active
+location is freeform.
 
 **The player is referenced generically, and never needs to be named in any location's own
 `entities` at all.** A scenario/room's `entities` list may still name the player with the
@@ -528,8 +528,7 @@ would let the LLM hallucinate an opening scene with no real content), then `load
 named template into an independent instance, tags it with its starting `band`, disambiguates
 duplicates (`wolf`, `wolf_2`, ...), and gives each instance its own `entity_id`.
 
-`enter_room(room_key, arrival_band)` — the room-to-room move, entirely unchanged from before
-`[[location]]` existed — is gated on the current room declaring a matching exit at the player's
+`enter_room(room_key, arrival_band)` — the room-to-room move — is gated on the current room declaring a matching exit at the player's
 band and on no living hostile remaining. Moves only the player's band; HP/inventory/currency/
 conditions carry over. A room visited before is restored from `self.visited_rooms` rather than
 re-instanced, so a cleared trap or looted chest stays that way.
@@ -796,6 +795,53 @@ attaches a fresh `result["defender_details"]` per action.
 `self.player_name` is resolved once in `__init__` via `_resolve_player_name()`, which scans
 loaded templates for the one with `is_player = true` and raises `ValueError` if none is marked.
 
+**Action-driven attitude drift.** A resolved player action — landing a hit, stealing something,
+giving something away — nudges the target's own six-axis attitude toward the player, the same
+"a 0..1 confidence/severity signal scales a per-axis delta" shape dialogue sentiment already
+uses (below), just driven by what happened rather than tone of voice, and moving more than one
+axis at once. `rules.toml`'s `[[attitude_event]]` table holds each event's own *full-strength*
+per-axis deltas (`combat_hit`, `theft`, `favor`, `shared_enemy` today) — applied at
+`magnitude = 1.0` (ex: a killing blow, or the single most valuable item `items.toml` authors);
+an ordinary occurrence scales down from there. `DM_Social.py`'s `nudge_attitude_from_event(
+entity_name, toward_name, event_name, magnitude)` looks up the named event and writes the
+scaled deltas into their own `action_attitude_deltas` accumulator (`get_attitude` sums it
+elementwise alongside `attitude_deltas`, same as before) — a no-op for an unknown event, a
+falsy magnitude, an entity with no `[entity.attitudes]` table at all, an inanimate object
+(`supertype == "object"`), or an entity with no HP left (a dead entity isn't aware of anything
+happening to it or nearby anymore, whether that's the killing blow itself, a theft, a gift, or
+a battlefield bond forming), mirroring `is_hostile`'s own "nothing to nudge" precedent for a
+tableless creature.
+
+Four call sites, each computing its own 0..1 magnitude from context: `DM_Core.py`'s
+`_apply_damage_if_hit` fires `combat_hit` after a landed player hit, scaled by
+`net_damage / defender max_hp` — a graze barely registers, a near-kill measurably scares the
+defender (the `confidence` axis) even while `disposition` stays pinned at `is_hostile`'s own
+floor; only the player's own attacks trigger this (an entity's own combat-turn attack,
+`resolve_behavior_action`, never does — there's no player-side attitude to move). The same
+method's own `_nudge_shared_enemy_bonds` then fires `shared_enemy`, at that same magnitude,
+toward every *other* living scene entity that already considers the struck target a real enemy
+(`is_hostile(observer, target_name)`) — "bonds made on the battlefield," deliberately not
+restricted to allies/party members, so even a merely-wary bystander can start warming to the
+player for fighting something the bystander already hates. Safe to call unconditionally over
+every scene entity: a tableless creature's own `is_hostile` returns `True` regardless of
+`target_name` (see "Combat"), but `nudge_attitude_from_event`'s own "no `[entity.attitudes]`
+table" gate silently no-ops for exactly that case, so a mindless hostile creature never actually
+accumulates a bond it has no data to hold. `DM_Inventory.py`'s `_resolve_transfer_intent` fires
+`theft` (a `"take"` that actually moved something) or `favor` (a `"give"`) once a real transfer
+completes against a real, distinct, *conscious* target (the shared HP gate above is what makes
+`theft` specifically require the victim to actually be aware it's happening, rather than looting
+an unconscious or dead body counting as a felt violation) — for either an item (scaled by its
+own TOML `value`) or currency (scaled by the amount moved) — against `SIGNIFICANT_VALUE` (25), a
+reference scale keeping most shipped items in the 0..1 range without clipping. Deliberately
+excludes `"trade"` (a fair, paid exchange, not a violation or a gift) and never fires for the
+player's own "already owned" self-transfer no-op (see "Items and movement as intents").
+
+`action_attitude_deltas` is capped independently of `attitude_deltas` — `ACTION_ATTITUDE_DRIFT_CAP`
+(60) rather than `TALK_ATTITUDE_DRIFT_CAP` (40) — a real betrayal or a real act of generosity can
+move an axis further than words alone, and the two accumulators are tracked separately
+specifically so each can enforce its own ceiling rather than sharing one. Round-trips through
+save/load the same unconditional way `attitude_deltas` already does (`DM_Persistence.py`).
+
 ## Dialogue
 
 Directly addressing someone (`"talk to the innkeeper"`, `"ask the guard about the road"`) is a
@@ -842,7 +888,7 @@ phrasing. Still local, single-forward-pass inference — no network call — del
 LLM call: dialogue is the single most frequent player action, so adding LLM latency to every
 turn was rejected in favor of a fast, local, general-purpose classifier. `DM_Social.py`'s
 `nudge_attitude(entity_name, toward_name, sentiment, score)` applies a capped drift into
-`entity["attitude_deltas"][toward_name]` (disposition axis only for v1) whose *magnitude* is
+`entity["attitude_deltas"][toward_name]` (disposition axis only) whose *magnitude* is
 `score` itself — `classify_sentiment`'s own confidence, already 0..1 — times
 `SENTIMENT_INTENSITY_SCALE` (currently `1`, i.e. unscaled; a single tunable knob rather than a
 hand-tuned delta table), not a flat per-sentiment amount: a line the classifier read as more
@@ -857,8 +903,8 @@ all see the drifted value transparently, with no other call site changes. An ent
 regardless of drift, since `is_hostile` short-circuits on the table's absence before ever reading
 a disposition value. `attitude_deltas` is genuinely dynamic runtime state, so it round-trips
 through save/load in the ordinary per-instance diff (`DM_Persistence.py`) for *every* entity, not
-just generated/ad-hoc ones. Out of scope for v1: the other five attitude axes, and the sibling "Extended goals" item
-(resolved actions like combat/theft/favors swaying attitude) — see that section.
+just generated/ad-hoc ones. Scoped to the disposition axis only — see "Action-driven attitude
+drift" above for how a resolved action (rather than dialogue tone) moves the other five.
 
 **Room-level presence.** Every DM-published narration event carries `present_entities`: a
 snapshot of `self.scenario_entities` at publish time. `LLMCore` tags each `context_window`
@@ -1087,22 +1133,20 @@ scene entirely via `remove_entity_from_scene` (`DM_Improvisation.py`), not a con
 outside combat, so a summon cast with no fight underway doesn't start counting down until an
 actual combat round happens.
 
-**Save/load.** A summoned creature (`ad_hoc = True`) now survives a save/load cycle like any
+**Save/load.** A summoned creature (`ad_hoc = True`) round-trips through save/load like any
 other ad hoc entity — `_collect_ad_hoc_entities` treats live `scenario_entities` membership as
 its own reachability source, and `load_game` re-appends a restored ad hoc entity's name back
-onto `self.scenario_entities` (see "Saving and loading"'s own "Persistence" note) — including
-its own `summon_expires_in`, since the whole entity dict round-trips, not a whitelisted diff.
-This fixed the same underlying gap for `DM_Improvisation.py`'s own ADaM-conjured
-creatures/containers/traps too, not just summons.
+onto `self.scenario_entities` (see "Saving and loading"'s own "Persistence" note), including
+its own `summon_expires_in`, since the whole entity dict round-trips, not a whitelisted diff —
+the same mechanism covers `DM_Improvisation.py`'s own ADaM-conjured creatures/containers/traps
+too, not just summons.
 
-**`_apply_damage_if_hit`'s own gating.** A resolved ability now has to actually carry a
-`damage_value` field to get a `"damage"` entry in the result at all (`"damage_value" in
-ability`, not just a truthy `ability`) — without this, a named ability with no `damage_value`
-(a summon, or any future non-damaging spell) would still roll through `calculate_damage`'s own
-`{"dice": 0, "pips": 0, "bonus": 0}` default and attach a spurious `"damage": {"net_damage": 0,
-...}` entry just because it happened to resolve against a target that was present. Every
-currently-authored weapon/ability that matters here already carries `damage_value`, so this
-doesn't change any existing narration.
+**`_apply_damage_if_hit`'s own gating.** A resolved ability only attaches a `"damage"` entry to
+the result if it actually carries a `damage_value` field (`"damage_value" in ability`, not just
+a truthy `ability`) — a named ability with none (a summon, or any non-damaging spell) never
+rolls through `calculate_damage`'s own `{"dice": 0, "pips": 0, "bonus": 0}` default and picks up
+a spurious `"damage": {"net_damage": 0, ...}` entry just because it resolved against a target
+that was present.
 
 ## Narration
 
@@ -1218,7 +1262,7 @@ directly in input can resolve it via `map_to_action` before a bare skill would.
 ## LLM integration
 
 Endpoint is Ollama's OpenAI-compatible API (`http://127.0.0.1:11434/v1/chat/completions`,
-`ollama serve`'s default). Unlike LM Studio, Ollama can have several models pulled at once, so
+`ollama serve`'s default). Ollama can have several models pulled at once, so
 every request payload carries an explicit `"model"` field — `LLM_Client.py`'s own
 `DEFAULT_MODEL` ("gemma4") and `LLM_Core.py`'s own `self.model`, each independently, mirroring
 the same intentional non-sharing `_save_slot_dir`'s own module note documents. `/v1/models`
@@ -1285,23 +1329,20 @@ genuinely never gets pulled.
 two ways: `event_bus.publish("log_info", ...)` (`Logger.py`'s ordinary console mirror) and
 `GUICore.display_system_status` (a `"[System] ..."` line in the History pane, the same prefix
 convention `display_game_saved`/`display_game_loaded`/`display_game_load_failed` already use).
-The latter is why `GUICore` is constructed first among the three event-subscribing cores in
+`GUICore.display_system_status` is why it's constructed first among the three event-subscribing cores in
 `main()` (ahead of `NLPCore`/`LLMCore`) rather than last — the background bootstrap thread's own
 closure over `gui_core` needs it to already exist the moment the thread starts, and starting the
-thread this early is what lets the window reach `mainloop()` (see `gui_core.start()`) without
-waiting on `NLPCore`'s own ~15-20s model load either. `display_system_status` no longer needs to
-manually pump the Tk event loop the way it used to when this call was still made synchronously
-before `mainloop()` ever ran — the bootstrap thread now reports progress *while* `mainloop()` is
-already running, so the running loop picks up each history-pane update on its own, exactly the
-same way `LLM_Core.py`'s own background narration fetches already touch `GUICore` from a foreign
-thread. This is safe for the same reason it always was: none of `GUICore`'s own subscriptions
+thread this early lets the window reach `mainloop()` (see `gui_core.start()`) without
+waiting on `NLPCore`'s own ~15-20s model load either. The bootstrap thread reports progress
+while `mainloop()` is already running, so the running loop picks up each history-pane update on
+its own, the same way `LLM_Core.py`'s own background narration fetches touch `GUICore` from a
+foreign thread. This is safe because none of `GUICore`'s own subscriptions
 (`llm_response_ready`, `rules_loaded`, ...) can fire this early regardless of thread timing —
 nothing publishes them until `DMCore` exists, and `DMCore` isn't constructed until well after
-this point (see "Booting the game"). One consequence worth naming: the player can now open
+this point (see "Booting the game"). One consequence worth naming: the player can open
 Character → Create... and start a scenario while the Ollama bootstrap is still mid-download —
 narration during that window degrades to "Could not connect to the local LLM"
-(`LLM_Core.py`'s own existing best-effort path) until the bootstrap catches up, rather than the
-window being unusable until it finishes.
+(`LLM_Core.py`'s own existing best-effort path) until the bootstrap catches up.
 
 ## RAG / sourcebook grounding
 
@@ -1376,12 +1417,11 @@ subset only.
 Not yet started, except where noted:
 - Characters are language-dependent — an entity's own comprehension of the language it's
   addressed in should gate dialogue/narration, not just its attitude data.
-- ~~Dialogue sentiment sways attitudes~~ — **Done**: free-form dialogue's own tone (classified
-  locally, no LLM call) nudges the addressed entity's disposition toward the player, capped and
-  persistent — see CLAUDE.md's "Dialogue sentiment". Scoped to disposition only (not all six
-  axes) and to free-form dialogue only (not the two goals below, which remain unstarted).
-- Actions sway attitudes by varying degrees — a resolved action (combat, theft, a favor) should
-  nudge attitude axes proportionally, not just be gated by attitude that already exists.
+- There's no mechanism yet for an *NPC's* own action (ex: an ally's combat hit) to sway anyone's
+  attitude — only the player's own actions do (see "Action-driven attitude drift").
+- Dialogue sentiment (see "Dialogue sentiment") only moves the disposition axis, not all six —
+  a 3-way valence classifier has no basis to move trust/confidence/respect/obligation/intimacy
+  independently, unlike a resolved action's own per-axis `[[attitude_event]]` deltas.
 - Random encounters, enemy generator — procedurally populate a scene/room with creatures instead
   of every encounter being scenario-authored. **Partially started**: `[[location.encounter]]`
   (see "Random encounters") lets a location/room roll a weighted table of outcomes on entry —

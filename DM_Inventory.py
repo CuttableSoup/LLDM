@@ -1,5 +1,13 @@
 from DM_Types import DMCoreProtocol
 
+# Reference scale for nudge_attitude_from_event's own magnitude param (0..1) when a transferred
+# item/amount of currency drives a "theft"/"favor" attitude nudge -- items.toml's own authored
+# values top out around 15 today, so this leaves headroom before an ordinary item hits the 1.0
+# (full-strength) ceiling, while a genuinely valuable item or a sizeable currency gift/theft can
+# still reach it. A single tunable knob, same "one intensity knob" precedent DM_Social.py's own
+# SENTIMENT_INTENSITY_SCALE already sets.
+SIGNIFICANT_VALUE = 25
+
 
 class InventoryMixin(DMCoreProtocol):
     """!
@@ -491,6 +499,15 @@ class InventoryMixin(DMCoreProtocol):
                 resolved(True, description=f"{available} currency", container=target_name)
             else:
                 moved = self.transfer_currency(source_name, destination_name)
+                if target_name and source_name != destination_name:
+                    # "theft"/"favor" attitude drift (DM_Social.py's nudge_attitude_from_event)
+                    # -- only when currency actually moved between two distinct real entities,
+                    # same "container" gate the item branch below uses (excludes the
+                    # already_owned "moved from the player to themselves" case).
+                    event_name = "theft" if intent == "take" else "favor"
+                    self.nudge_attitude_from_event(
+                        target_name, self.player_name, event_name, min(1.0, moved / SIGNIFICANT_VALUE),
+                    )
                 resolved(True, container=target_name, amount=moved)
             return
 
@@ -522,4 +539,11 @@ class InventoryMixin(DMCoreProtocol):
         else:
             self.transfer_item(source_name, destination_name, item_name)
             container = target_name if source_name != destination_name else None
+            if container:
+                # "theft"/"favor" attitude drift (DM_Social.py's nudge_attitude_from_event) --
+                # scaled by the item's own TOML value against SIGNIFICANT_VALUE, so a trinket
+                # barely registers and a real heirloom actually moves trust/obligation.
+                event_name = "theft" if intent == "take" else "favor"
+                value = self.entities.get(item_name, {}).get("value", 0)
+                self.nudge_attitude_from_event(container, self.player_name, event_name, min(1.0, value / SIGNIFICANT_VALUE))
             resolved(True, container=container)

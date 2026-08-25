@@ -13,6 +13,15 @@ SENTIMENT_INTENSITY_SCALE = 1
 # still be pushed across it by sustained same-direction dialogue. Intentional: talking someone
 # into (or out of) a fight is a real tabletop outcome, not a bug -- see CLAUDE.md's "Dialogue".
 TALK_ATTITUDE_DRIFT_CAP = 40
+# The same kind of cap, for nudge_attitude_from_event's own "action_attitude_deltas"
+# accumulator -- deliberately a separate, wider ceiling from TALK_ATTITUDE_DRIFT_CAP rather than
+# sharing it: a real betrayal or a real act of generosity is a stronger tabletop outcome than
+# words alone, and the two accumulators are already tracked independently (see get_attitude) so
+# each can be capped on its own terms.
+ACTION_ATTITUDE_DRIFT_CAP = 60
+# get_attitude/nudge_attitude_from_event's shared axis order -- the same six values every
+# [entity.attitudes] array and [[attitude_tier]] entry (rules.toml) are declared in.
+ATTITUDE_AXES = ("disposition", "trust", "confidence", "respect", "obligation", "intimacy")
 
 
 class SocialMixin(DMCoreProtocol):
@@ -27,8 +36,12 @@ class SocialMixin(DMCoreProtocol):
         """!
         @brief Resolves entity_name's six-value attitude array toward toward_name: a specific
             name override, then a supertype override, then the entity's default -- plus
-            whatever runtime drift nudge_attitude has accumulated toward toward_name
-            specifically (entity["attitude_deltas"], added elementwise on top). The static
+            whatever runtime drift has accumulated toward toward_name specifically, from two
+            independent sources added elementwise on top: nudge_attitude's own dialogue-tone
+            drift (entity["attitude_deltas"]) and nudge_attitude_from_event's own resolved-
+            action drift (entity["action_attitude_deltas"]) -- tracked, and capped, separately
+            (see TALK_ATTITUDE_DRIFT_CAP/ACTION_ATTITUDE_DRIFT_CAP) since a single combined
+            accumulator couldn't enforce two different ceilings on the same axis. The static
             override/default array itself is never mutated -- for a hand-authored entity it's
             the literal TOML-sourced list object, shared across every call, so this always
             returns a fresh list rather than editing that one in place.
@@ -55,10 +68,38 @@ class SocialMixin(DMCoreProtocol):
         if base is None:
             base = attitudes.get("default", [0, 0, 0, 0, 0, 0])
 
-        deltas = entity.get("attitude_deltas", {}).get(toward_name)
-        if not deltas:
-            return list(base)
-        return [value + delta for value, delta in zip(base, deltas)]
+        result = list(base)
+        talk_deltas = entity.get("attitude_deltas", {}).get(toward_name)
+        if talk_deltas:
+            result = [value + delta for value, delta in zip(result, talk_deltas)]
+        action_deltas = entity.get("action_attitude_deltas", {}).get(toward_name)
+        if action_deltas:
+            result = [value + delta for value, delta in zip(result, action_deltas)]
+        return result
+
+    def _apply_capped_drift(self, entity_name, toward_name, deltas_key, axis_deltas, cap):
+        """!
+        @brief Shared accumulate-and-clamp primitive behind both nudge_attitude and
+            nudge_attitude_from_event -- adds axis_deltas elementwise onto
+            entity[deltas_key][toward_name] (creating either as needed), clamping each axis
+            independently to +/-cap. A no-op for a missing entity; an all-zero axis_deltas
+            entry is skipped per-axis rather than writing a no-op 0 (keeps a freshly-created
+            accumulator from picking up spurious zero-valued axes it was never actually
+            nudged on).
+        @param entity_name The entity whose attitude is drifting.
+        @param toward_name The entity it's drifting toward.
+        @param deltas_key "attitude_deltas" (talk) or "action_attitude_deltas" (action).
+        @param axis_deltas A six-value list, ordered like ATTITUDE_AXES, to add elementwise.
+        @param cap The max |value| this accumulator may hold on any one axis.
+        """
+        entity = self.entities.get(entity_name)
+        if entity is None:
+            return
+        deltas = entity.setdefault(deltas_key, {})
+        axis = deltas.setdefault(toward_name, [0, 0, 0, 0, 0, 0])
+        for index, delta in enumerate(axis_deltas):
+            if delta:
+                axis[index] = max(-cap, min(cap, axis[index] + delta))
 
     def nudge_attitude(self, entity_name, toward_name, sentiment, score):
         """!
@@ -80,14 +121,56 @@ class SocialMixin(DMCoreProtocol):
         """
         if sentiment not in ("negative", "positive") or not score:
             return
-        entity = self.entities.get(entity_name)
-        if entity is None:
-            return
-
         signed_delta = (score if sentiment == "positive" else -score) * SENTIMENT_INTENSITY_SCALE
-        deltas = entity.setdefault("attitude_deltas", {})
-        axis_deltas = deltas.setdefault(toward_name, [0, 0, 0, 0, 0, 0])
-        axis_deltas[0] = max(-TALK_ATTITUDE_DRIFT_CAP, min(TALK_ATTITUDE_DRIFT_CAP, axis_deltas[0] + signed_delta))
+        self._apply_capped_drift(
+            entity_name, toward_name, "attitude_deltas",
+            [signed_delta, 0, 0, 0, 0, 0], TALK_ATTITUDE_DRIFT_CAP,
+        )
+
+    def nudge_attitude_from_event(self, entity_name, toward_name, event_name, magnitude):
+        """!
+        @brief Applies a small, capped, persistent drift to entity_name's own six-axis
+            attitude toward toward_name, driven by a resolved action rather than dialogue tone
+            -- ex: DM_Core.py's _apply_damage_if_hit nudging a defender's disposition/
+            confidence down after a landed hit, or DM_Inventory.py's _resolve_transfer_intent
+            nudging a theft victim's trust down / a gift recipient's obligation up. Looks up
+            event_name's own full-strength per-axis deltas from rules.toml's
+            [[attitude_event]] table, scaling every axis by magnitude (0..1) -- the same
+            "a 0..1 confidence/severity signal scales a delta" shape nudge_attitude already
+            uses for dialogue sentiment, just fed a different signal (ex: net_damage / max_hp,
+            or an item's value against a reference scale) and, unlike nudge_attitude, moving
+            more than one axis at once. Written into its own "action_attitude_deltas"
+            accumulator -- capped independently of nudge_attitude's own "attitude_deltas" (see
+            ACTION_ATTITUDE_DRIFT_CAP) -- get_attitude sums both on top of the static base.
+            A no-op for a missing entity/event/magnitude, an entity with no
+            [entity.attitudes] table at all (the same "nothing to nudge" precedent is_hostile
+            already sets for a tableless creature -- see CLAUDE.md's "Combat"), an inanimate
+            object (supertype == "object"), or an entity with no HP left -- a dead (or
+            never-instanced) entity isn't aware of anything happening to it or around it
+            anymore, whether that's a killing blow landing, a theft, a gift, or a nearby
+            battlefield bond forming (see DM_Core.py's own "shared_enemy" loop).
+        @param entity_name The entity whose attitude is drifting.
+        @param toward_name The entity it's drifting toward (ex: self.player_name).
+        @param event_name An [[attitude_event]] entry's own "name" (ex: "combat_hit", "theft",
+            "favor", "shared_enemy").
+        @param magnitude How strongly this particular occurrence counts, 0..1 -- scales every
+            axis delta the matched event declares.
+        """
+        if not magnitude:
+            return
+        entity = self.entities.get(entity_name)
+        if entity is None or "attitudes" not in entity or entity.get("supertype") == "object":
+            return
+        if self.get_current_hp(entity_name) <= 0:
+            return
+        event = next(
+            (candidate for candidate in self.rules.get("attitude_event", []) if candidate.get("name") == event_name),
+            None,
+        )
+        if not event:
+            return
+        axis_deltas = [event.get(axis, 0) * magnitude for axis in ATTITUDE_AXES]
+        self._apply_capped_drift(entity_name, toward_name, "action_attitude_deltas", axis_deltas, ACTION_ATTITUDE_DRIFT_CAP)
 
     def is_hostile(self, entity_name, toward_name):
         """!
@@ -151,10 +234,9 @@ class SocialMixin(DMCoreProtocol):
         @return A prose fragment ("Attitude toward X: ..."), or "" if no attitude_tier data is
                 loaded (ex: a malformed rules.toml -- see load_rules' per-file try/except note).
         """
-        axes = ("disposition", "trust", "confidence", "respect", "obligation", "intimacy")
         values = self.get_attitude(entity_name, toward_name)
         phrases = []
-        for axis, value in zip(axes, values):
+        for axis, value in zip(ATTITUDE_AXES, values):
             tier = self.get_attitude_tier(value)
             if tier and tier.get(axis):
                 phrases.append(tier[axis])

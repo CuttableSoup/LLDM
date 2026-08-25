@@ -603,6 +603,43 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
                 ability = named_ability or self.find_attack_ability(self.player_name, skill_name)
             if ability and "damage_value" in ability:
                 result["damage"] = self.calculate_damage(self.player_name, target_name, ability)
+                # "combat_hit" attitude drift (DM_Social.py's nudge_attitude_from_event) -- how
+                # hard the hit landed relative to the defender's own max_hp, not a flat
+                # per-swing amount, so a graze barely registers and a near-kill genuinely
+                # scares them (the "confidence" axis) even while disposition stays pinned at
+                # is_hostile's own floor. Only the player ever triggers this -- this method is
+                # only ever called for the player's own turn (see _on_turn_detected); an
+                # entity's own combat-turn attacks (resolve_behavior_action, DM_Combat.py)
+                # don't nudge anything, since there's no player-side attitude to move.
+                max_hp = self.entities.get(target_name, {}).get("max_hp") or 1
+                magnitude = min(1.0, result["damage"].get("net_damage", 0) / max_hp)
+                self.nudge_attitude_from_event(target_name, self.player_name, "combat_hit", magnitude)
+                self._nudge_shared_enemy_bonds(target_name, magnitude)
+
+    def _nudge_shared_enemy_bonds(self, target_name, magnitude):
+        """!
+        @brief "Bonds made on the battlefield" -- every other living scene entity that already
+            considers target_name a real enemy (is_hostile(observer, target_name)) gets a
+            small "shared_enemy" attitude nudge toward the player, scaled by the same magnitude
+            the hit itself just earned (see _apply_damage_if_hit) -- a decisive blow against a
+            common enemy warms an onlooker up more than a graze. Deliberately not restricted to
+            allies/party members -- even a bystander merely wary of the player can start
+            softening if the player keeps fighting something that bystander already hates.
+            Safe to call for every observer in scenario_entities regardless of whether it has
+            real attitude data of its own: is_hostile(observer, target_name) returns True
+            unconditionally for a tableless creature (ex: another wolf -- see is_hostile's own
+            docstring), but nudge_attitude_from_event's own "attitudes" in entity gate silently
+            no-ops for exactly that case, so a mindless hostile creature never actually
+            accumulates a bond it has no data to hold.
+        @param target_name The entity that was just hit -- excluded from its own "observers".
+        @param magnitude The same 0..1 magnitude _apply_damage_if_hit already computed for this
+            hit's own "combat_hit" nudge.
+        """
+        for observer_name in self.scenario_entities:
+            if observer_name in (self.player_name, target_name):
+                continue
+            if self.is_hostile(observer_name, target_name):
+                self.nudge_attitude_from_event(observer_name, self.player_name, "shared_enemy", magnitude)
 
     def _apply_summon_if_hit(self, result, named_ability):
         """!

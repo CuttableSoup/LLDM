@@ -215,6 +215,53 @@ respect = "regards them with total reverence"
 obligation = "feels they owe them a debt that can never be repaid"
 intimacy = "is utterly infatuated with them"
 
+# Per-axis attitude deltas for a resolved player action (see DM_Social.py's own
+# nudge_attitude_from_event) -- distinct from [[attitude_tier]] above, which only ever renders
+# an already-resolved value into prose. Each entry's own axis values are the *full-strength*
+# delta, applied at magnitude = 1.0 (ex: combat_hit at a killing blow, or theft/favor against
+# items.toml's own single most valuable item) -- an ordinary occurrence scales down from there
+# (see nudge_attitude_from_event's own magnitude param, 0..1). A missing axis defaults to 0.
+[[attitude_event]]
+name = "combat_hit"
+disposition = -20
+trust = -8
+confidence = -15
+respect = 0
+obligation = 0
+intimacy = -10
+
+[[attitude_event]]
+name = "theft"
+disposition = -15
+trust = -25
+confidence = 0
+respect = -10
+obligation = 0
+intimacy = -12
+
+[[attitude_event]]
+name = "favor"
+disposition = 10
+trust = 8
+confidence = 0
+respect = 0
+obligation = 20
+intimacy = 6
+
+# "Bonds made on the battlefield" -- a small, deliberately modest counterpart to combat_hit
+# above, applied not to the entity being struck but to any *other* living entity that already
+# considers that same target an enemy (see DM_Core.py's own "shared_enemy" loop). Smaller than
+# favor's own deltas on purpose: watching someone fight your enemy is a lighter touch than being
+# on the receiving end of a real gift.
+[[attitude_event]]
+name = "shared_enemy"
+disposition = 5
+trust = 2
+confidence = 0
+respect = 3
+obligation = 0
+intimacy = 0
+
 # Which [entity.equipped] slot names are valid for a given kind of entity -- entity_schema.
 # toml's own [entity.equipped] comment notes slot names are freeform strings today (nothing in
 # DM_*.py validates them against anything); this table is reference data for that validation to
