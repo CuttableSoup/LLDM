@@ -51,19 +51,16 @@ rhand = "longsword"
 chest = "chain mail"
 
 [entity.attitudes]
-default = [ 0, 0, 0, 0, 0, 0 ]
+default = [ 0, 0, 0 ]
 # disposition   Hostile <-> Friendly
-# trust         Suspicious <-> Trusting
-# confidence    Fearful <-> Confident
-# respect       Disdainful <-> Admiring
-# obligation    Unfettered <-> Indebted
-# intimacy      Disgusted <-> Enamored
+# threat        Fearful <-> Confident
+# familiarity   Disgusted <-> Enamored
 
 [[entity.attitudes.supertype]]
-undead = [ -100, -100, 100, -100, -100, -100 ]
+undead = [ -100, 100, -100 ]
 
 [[entity.attitudes.name]]
-anne = [ 100, 100, 100, 100, 100, 100 ]
+anne = [ 100, 100, 100 ]
 
 [entity.qualities]
 body = "athletic"

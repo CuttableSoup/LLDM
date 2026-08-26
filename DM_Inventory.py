@@ -542,7 +542,7 @@ class InventoryMixin(DMCoreProtocol):
             if container:
                 # "theft"/"favor" attitude drift (DM_Social.py's nudge_attitude_from_event) --
                 # scaled by the item's own TOML value against SIGNIFICANT_VALUE, so a trinket
-                # barely registers and a real heirloom actually moves trust/obligation.
+                # barely registers and a real heirloom actually moves familiarity.
                 event_name = "theft" if intent == "take" else "favor"
                 value = self.entities.get(item_name, {}).get("value", 0)
                 self.nudge_attitude_from_event(container, self.player_name, event_name, min(1.0, value / SIGNIFICANT_VALUE))

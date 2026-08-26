@@ -86,7 +86,7 @@ follow_offset = 0
 max_hp = 24
 
 [entity.attitudes]
-default = [ 40, 40, 40, 40, 40, 40 ]
+default = [ 40, 40, 40 ]
 
 [entity.qualities]
 race = "human"

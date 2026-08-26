@@ -112,7 +112,7 @@ memories = [ "Has read the same three proclamations for a week straight" ]
 quotes = [ "Hear ye! The miller's prices are up again!", "No news from the capital today, sadly." ]
 
 [entity.attitudes]
-default = [ 20, 0, 10, 0, 0, 0 ]
+default = [ 20, 10, 0 ]
 
 [entity.qualities]
 body = "wiry"
@@ -146,7 +146,7 @@ memories = [ "Apprenticed under the previous smith for a decade", "Refuses to wo
 quotes = [ "Need something forged, or just looking?", "Careful, that edge is still hot." ]
 
 [entity.attitudes]
-default = [ 15, 10, 20, 0, 0, 0 ]
+default = [ 15, 20, 0 ]
 
 [entity.qualities]
 body = "broad"
@@ -278,11 +278,8 @@ currency = { min = 0, max = 3 }
 [entity_template.attitudes]
 default = [
     { min = 0, max = 30 },   # disposition -- neutral to warm; never hostile
-    0,                        # trust -- neutral
-    -20,                      # confidence -- a little downtrodden
-    0,                        # respect -- neutral
-    0,                        # obligation -- neutral
-    0,                        # intimacy -- neutral
+    -20,                      # threat -- a little downtrodden
+    0,                        # familiarity -- neutral
 ]
 
 [entity_template.qualities]

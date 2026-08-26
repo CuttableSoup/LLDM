@@ -42,13 +42,10 @@ memories = [ "Lost her husband to a bandit raid on the north road", "Waters down
 quotes = [ "Welcome to the Rusty Tankard, what'll it be?", "Careful with that road at night, bandits about." ]
 
 [entity.attitudes]
-default = [ 30, 0, 10, 0, 0, 0 ]
+default = [ 30, 10, 0 ]
 # disposition   Hostile <-> Friendly
-# trust         Suspicious <-> Trusting
-# confidence    Fearful <-> Confident
-# respect       Disdainful <-> Admiring
-# obligation    Unfettered <-> Indebted
-# intimacy      Disgusted <-> Enamored
+# threat        Fearful <-> Confident
+# familiarity   Disgusted <-> Enamored
 
 [entity.qualities]
 body = "stout"

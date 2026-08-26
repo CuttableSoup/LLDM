@@ -130,77 +130,56 @@ name = "hostile"
 minimum = -150
 maximum = -100
 disposition = "wants them gone, one way or another"
-trust = "treats them as an active threat"
-confidence = "is terrified of them, ready to flee or freeze"
-respect = "holds them in open contempt"
-obligation = "resents any suggestion that they owe them anything"
-intimacy = "is repulsed by them"
+threat = "is terrified of them, ready to flee or freeze"
+familiarity = "is repulsed by them"
 
 [[attitude_tier]]
 name = "unfriendly"
 minimum = -100
 maximum = -60
 disposition = "is openly unfriendly toward them"
-trust = "is deeply suspicious of their motives"
-confidence = "is visibly afraid around them"
-respect = "looks down on them"
-obligation = "feels entirely free of any obligation to them"
-intimacy = "finds them distasteful"
+threat = "is visibly afraid around them"
+familiarity = "finds them distasteful"
 
 [[attitude_tier]]
 name = "wary"
 minimum = -60
 maximum = -20
 disposition = "is cold and standoffish around them"
-trust = "is guarded and skeptical around them"
-confidence = "feels intimidated and uneasy around them"
-respect = "is privately unimpressed by them"
-obligation = "feels no debt to them"
-intimacy = "feels a mild aversion to them"
+threat = "feels intimidated and uneasy around them"
+familiarity = "feels a mild aversion to them"
 
 [[attitude_tier]]
 name = "neutral"
 minimum = -20
 maximum = 20
 disposition = "feels nothing in particular toward them"
-trust = "neither trusts nor distrusts them"
-confidence = "feels neither confident nor afraid around them"
-respect = "has no particular opinion of their worth"
-obligation = "feels no meaningful obligation either way"
-intimacy = "feels no particular closeness or distance"
+threat = "feels neither confident nor afraid around them"
+familiarity = "feels no particular closeness or distance"
 
 [[attitude_tier]]
 name = "warm"
 minimum = 20
 maximum = 60
 disposition = "is warm and well-disposed toward them"
-trust = "generally trusts them"
-confidence = "feels self-assured dealing with them"
-respect = "thinks well of them"
-obligation = "feels they owe them something"
-intimacy = "feels a real fondness for them"
+threat = "feels self-assured dealing with them"
+familiarity = "feels a real fondness for them"
 
 [[attitude_tier]]
 name = "friendly"
 minimum = 60
 maximum = 100
 disposition = "is genuinely friendly toward them"
-trust = "trusts them readily, taking them at their word"
-confidence = "feels bold and confident around them"
-respect = "genuinely admires them"
-obligation = "feels genuinely indebted to them"
-intimacy = "feels genuinely enamored with them"
+threat = "feels bold and confident around them"
+familiarity = "feels genuinely enamored with them"
 
 [[attitude_tier]]
 name = "devoted"
 minimum = 100
 maximum = 150
 disposition = "would put themselves between danger and them without a second thought"
-trust = "trusts them completely, without a shred of doubt"
-confidence = "feels utterly fearless around them"
-respect = "regards them with total reverence"
-obligation = "feels they owe them a debt that can never be repaid"
-intimacy = "is utterly devoted to them"
+threat = "feels utterly fearless around them"
+familiarity = "is utterly devoted to them"
 
 # A survivor carries a real loadout (primary/secondary/melee/throwable/medkit); an infected
 # carries nothing at all -- it fights with what it was turned with (see creatures.toml),

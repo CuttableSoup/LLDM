@@ -42,7 +42,7 @@ follow_offset = 0
 max_hp = 24
 
 [entity.attitudes]
-default = [ 40, 40, 40, 40, 40, 40 ]
+default = [ 40, 40, 40 ]
 
 [entity.qualities]
 race = "human"
@@ -112,10 +112,10 @@ max_hp = 18
 abilities = [ "splash flow" ]
 
 [entity.attitudes]
-default = [ 30, 30, 30, 30, 30, 30 ]
+default = [ 30, 30, 30 ]
 
 [[entity.attitudes.name]]
-gladstone = [ 100, 100, 100, 100, 100, 100 ]
+gladstone = [ 100, 100, 100 ]
 
 [entity.qualities]
 race = "elf"

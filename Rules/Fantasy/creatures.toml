@@ -156,7 +156,7 @@ max_hp = 16
 # thing that ever instances this template (via DM_Summoning.py's _summon_creature); nothing
 # else in the shipped data references it.
 [entity.attitudes]
-default = [ 100, 100, 100, 100, 100, 100 ]
+default = [ 100, 100, 100 ]
 
 [entity.skills]
 brawling = { dice = 3, pips = 0 }

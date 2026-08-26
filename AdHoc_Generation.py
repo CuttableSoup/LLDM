@@ -679,7 +679,7 @@ def generate_ad_hoc_creature(
         "subtype": "npc",
         "max_hp": max_hp,
         "skills": skills,
-        "attitudes": {"default": [DISPOSITION_VALUES[disposition], 0, 0, 0, 0, 0]},
+        "attitudes": {"default": [DISPOSITION_VALUES[disposition], 0, 0]},
         # Tags this as having no static TOML template to re-derive from on a reload -- see
         # DM_Persistence.py's save_game/load_game, which save/restore the full dict for any
         # entity carrying this flag rather than the ordinary hp/inventory/etc. diff.

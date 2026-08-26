@@ -50,7 +50,7 @@ variance = 0.15                             # Fractional random spread applied t
 # as a *varied* value instead of a fixed one: hint/cr_multiplier/currency above (currency is a
 # straight-copied entity field, see entity_schema.toml), and every leaf of
 # [entity_template.qualities]/[entity_template.attitudes] below -- each attitude axis
-# individually, not the six-value array as a whole, so a template can mix fixed and varied
+# individually, not the three-value array as a whole, so a template can mix fixed and varied
 # axes freely in the same array (see "default" below). Two shapes; a worked example of each
 # kind of field follows.
 #
@@ -94,16 +94,13 @@ age = { min = 18, max = 50 }
 # body = "stout"
 
 [entity_template.attitudes]
-# Each of the six axes -- disposition/trust/confidence/respect/obligation/intimacy -- is
-# resolved individually, so a template can mix fixed and varied axes freely in the very same
-# array, exactly like templates.toml's own generated_stranger does:
+# Each of the three axes -- disposition/threat/familiarity -- is resolved individually, so a
+# template can mix fixed and varied axes freely in the very same array, exactly like
+# templates.toml's own generated_stranger does:
 default = [
     { min = -40, max = 40 },   # disposition -- wary to warm
-    0,                          # trust -- always exactly neutral
-    0,                          # confidence -- always exactly neutral
-    10,                         # respect -- always slightly positive
-    -20,                        # obligation -- always slightly negative
-    { min = -40, max = 40 },   # intimacy -- wary to warm
+    0,                          # threat -- always exactly neutral
+    { min = -40, max = 40 },   # familiarity -- wary to warm
 ]
 # A specific override alongside "default" (same shape gladstone's own
 # [[entity.attitudes.name]] uses in characters.toml), targeting the literal token "player"
@@ -112,9 +109,9 @@ default = [
 # actually be called (see DM_CharacterCreation.py), so it authors toward this reserved
 # placeholder instead, the same way a scenario's own "entities" list uses DM_Rules.py's
 # PLAYER_PLACEHOLDER. Resolved to whichever entity is actually is_player = true, fresh at
-# instancing time. Its own six axes may be varied or fixed too, same as "default" above.
+# instancing time. Its own three axes may be varied or fixed too, same as "default" above.
 [[entity_template.attitudes.name]]
-player = [ 40, 0, 0, 0, 0, 0 ]
+player = [ 40, 0, 0 ]
 
 # ---------------------------------------------------------------------------------------------
 generated = false                           # Never authored by hand -- appears only on a

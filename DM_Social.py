@@ -19,9 +19,15 @@ TALK_ATTITUDE_DRIFT_CAP = 40
 # words alone, and the two accumulators are already tracked independently (see get_attitude) so
 # each can be capped on its own terms.
 ACTION_ATTITUDE_DRIFT_CAP = 60
-# get_attitude/nudge_attitude_from_event's shared axis order -- the same six values every
-# [entity.attitudes] array and [[attitude_tier]] entry (rules.toml) are declared in.
-ATTITUDE_AXES = ("disposition", "trust", "confidence", "respect", "obligation", "intimacy")
+# get_attitude/nudge_attitude_from_event's shared axis order -- the same three values every
+# [entity.attitudes] array and [[attitude_tier]] entry (rules.toml) are declared in. Collapsed
+# from an original six (disposition/trust/confidence/respect/obligation/intimacy) after NLI
+# zero-shot testing found only disposition, confidence (renamed threat), and intimacy (renamed
+# familiarity) reliably separate from each other when read off dialogue tone -- trust never
+# separated from disposition, respect collapsed back into disposition under testing, and
+# obligation is structurally event-driven rather than tone-driven (see CLAUDE.md's "Extended
+# goals" and "Social and attitudes").
+ATTITUDE_AXES = ("disposition", "threat", "familiarity")
 
 
 class SocialMixin(DMCoreProtocol):
@@ -34,7 +40,7 @@ class SocialMixin(DMCoreProtocol):
 
     def get_attitude(self, entity_name, toward_name):
         """!
-        @brief Resolves entity_name's six-value attitude array toward toward_name: a specific
+        @brief Resolves entity_name's three-value attitude array toward toward_name: a specific
             name override, then a supertype override, then the entity's default -- plus
             whatever runtime drift has accumulated toward toward_name specifically, from two
             independent sources added elementwise on top: nudge_attitude's own dialogue-tone
@@ -47,7 +53,7 @@ class SocialMixin(DMCoreProtocol):
             returns a fresh list rather than editing that one in place.
         @param entity_name The name of the entity whose attitude is being read.
         @param toward_name The name of the entity being regarded.
-        @return The [disposition, trust, confidence, respect, obligation, intimacy] attitude array.
+        @return The [disposition, threat, familiarity] attitude array.
         """
         entity = self.entities.get(entity_name, {})
         attitudes = entity.get("attitudes", {})
@@ -66,7 +72,7 @@ class SocialMixin(DMCoreProtocol):
                     break
 
         if base is None:
-            base = attitudes.get("default", [0, 0, 0, 0, 0, 0])
+            base = attitudes.get("default", [0, 0, 0])
 
         result = list(base)
         talk_deltas = entity.get("attitude_deltas", {}).get(toward_name)
@@ -89,51 +95,54 @@ class SocialMixin(DMCoreProtocol):
         @param entity_name The entity whose attitude is drifting.
         @param toward_name The entity it's drifting toward.
         @param deltas_key "attitude_deltas" (talk) or "action_attitude_deltas" (action).
-        @param axis_deltas A six-value list, ordered like ATTITUDE_AXES, to add elementwise.
+        @param axis_deltas A three-value list, ordered like ATTITUDE_AXES, to add elementwise.
         @param cap The max |value| this accumulator may hold on any one axis.
         """
         entity = self.entities.get(entity_name)
         if entity is None:
             return
         deltas = entity.setdefault(deltas_key, {})
-        axis = deltas.setdefault(toward_name, [0, 0, 0, 0, 0, 0])
+        axis = deltas.setdefault(toward_name, [0, 0, 0])
         for index, delta in enumerate(axis_deltas):
             if delta:
                 axis[index] = max(-cap, min(cap, axis[index] + delta))
 
-    def nudge_attitude(self, entity_name, toward_name, sentiment, score):
+    def nudge_attitude(self, entity_name, toward_name, sentiments):
         """!
-        @brief Applies a small, capped, persistent drift to entity_name's own disposition
-            toward toward_name, driven by the tone of something toward_name just said to it --
-            called from DM_Dialogue.py's _resolve_dialogue, right before persona/attitude are
-            read, so this turn's own reply already reflects the drift. The magnitude is score
-            itself (classify_sentiment's own confidence, already 0..1) times
-            SENTIMENT_INTENSITY_SCALE, not a flat per-sentiment amount -- a line the classifier
-            read as more intensely negative/positive moves disposition further than a mild one.
-            A no-op for None/unrecognized sentiment (there's no "neutral" case to scale -- see
-            NLP_Core.py's classify_sentiment, backed by a fine-tuned sentiment classifier), a
-            falsy score, or a missing entity.
+        @brief Applies a small, capped, persistent drift to entity_name's own attitude toward
+            toward_name, driven by the tone of something toward_name just said to it -- called
+            from DM_Dialogue.py's _resolve_dialogue, right before persona/attitude are read, so
+            this turn's own reply already reflects the drift. Moves all three axes at once
+            (disposition/threat/familiarity), each independently classified and independently
+            scored -- see NLP_Core.py's classify_sentiment/classify_threat/classify_familiarity,
+            all backed by the same NLI zero-shot classifier. Each axis's own magnitude is its own
+            score (already 0..1) times SENTIMENT_INTENSITY_SCALE, not a flat per-sentiment
+            amount -- a line the classifier read as more intensely negative/positive moves that
+            axis further than a mild one.
         @param entity_name The entity whose attitude is drifting.
         @param toward_name The entity it's drifting toward (ex: self.player_name).
-        @param sentiment "negative", "positive", or None/anything else (no-op).
-        @param score classify_sentiment's own confidence in sentiment (0..1) -- the raw
-            magnitude before SENTIMENT_INTENSITY_SCALE is applied.
+        @param sentiments {axis_name: (label, score)} for whichever of ATTITUDE_AXES were
+            classified this turn -- an axis missing from the dict, or with a falsy label/score
+            (None/unrecognized label, or a zero/None score, ex: classify_sentiment's own "no
+            strong tone either way" case), contributes 0 for that axis rather than being
+            treated as an error.
         """
-        if sentiment not in ("negative", "positive") or not score:
-            return
-        signed_delta = (score if sentiment == "positive" else -score) * SENTIMENT_INTENSITY_SCALE
-        self._apply_capped_drift(
-            entity_name, toward_name, "attitude_deltas",
-            [signed_delta, 0, 0, 0, 0, 0], TALK_ATTITUDE_DRIFT_CAP,
-        )
+        axis_deltas = []
+        for axis in ATTITUDE_AXES:
+            sentiment, score = sentiments.get(axis, (None, None))
+            if sentiment not in ("negative", "positive") or not score:
+                axis_deltas.append(0)
+                continue
+            axis_deltas.append((score if sentiment == "positive" else -score) * SENTIMENT_INTENSITY_SCALE)
+        self._apply_capped_drift(entity_name, toward_name, "attitude_deltas", axis_deltas, TALK_ATTITUDE_DRIFT_CAP)
 
     def nudge_attitude_from_event(self, entity_name, toward_name, event_name, magnitude):
         """!
-        @brief Applies a small, capped, persistent drift to entity_name's own six-axis
+        @brief Applies a small, capped, persistent drift to entity_name's own three-axis
             attitude toward toward_name, driven by a resolved action rather than dialogue tone
-            -- ex: DM_Core.py's _apply_damage_if_hit nudging a defender's disposition/
-            confidence down after a landed hit, or DM_Inventory.py's _resolve_transfer_intent
-            nudging a theft victim's trust down / a gift recipient's obligation up. Looks up
+            -- ex: DM_Core.py's _apply_damage_if_hit nudging a defender's disposition/threat
+            down after a landed hit, or DM_Inventory.py's _resolve_transfer_intent nudging a
+            theft victim's familiarity down / a gift recipient's familiarity up. Looks up
             event_name's own full-strength per-axis deltas from rules.toml's
             [[attitude_event]] table, scaling every axis by magnitude (0..1) -- the same
             "a 0..1 confidence/severity signal scales a delta" shape nudge_attitude already
@@ -224,7 +233,7 @@ class SocialMixin(DMCoreProtocol):
 
     def describe_attitude(self, entity_name, toward_name):
         """!
-        @brief Translates entity_name's six-value attitude array toward toward_name (from
+        @brief Translates entity_name's three-value attitude array toward toward_name (from
             get_attitude) into prose via [[attitude_tier]] -- one phrase per axis, banded by
             get_attitude_tier, rather than handing the LLM raw numbers it has no way to
             calibrate ("38 disposition" means nothing to a language model; "is warm and

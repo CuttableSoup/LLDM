@@ -257,7 +257,18 @@ class IntentMatcher:
         raise NotImplementedError
 
     def classify_sentiment(self, processed_text):
-        """!@brief Returns (sentiment_label, score); sentiment_label is None below confidence."""
+        """!@brief Returns (sentiment_label, score) for the disposition axis; label is None
+            below confidence."""
+        raise NotImplementedError
+
+    def classify_threat(self, processed_text):
+        """!@brief Returns (sentiment_label, score) for the threat axis; label is None below
+            confidence."""
+        raise NotImplementedError
+
+    def classify_familiarity(self, processed_text):
+        """!@brief Returns (sentiment_label, score) for the familiarity axis; label is None
+            below confidence."""
         raise NotImplementedError
 
 
@@ -518,17 +529,25 @@ class IntentClassifier:
         # at all (no item interaction, no exempt movement/formation clause) -- the same
         # priority the old single-clause code already gave item intents over dialogue.
         if not turn_clauses and not found_exempt and detect_dialogue_intent(processed):
-            # Classified here, not left to DMCore, since sentiment-of-an-utterance is exactly
-            # the same kind of embedding-based judgment call skill/item/target matching already
-            # is -- the matcher seam is what lets this stay a fast local classification (see
-            # SentenceTransformerMatcher.classify_sentiment) rather than an LLM round trip.
-            # sentiment_score (the classifier's own confidence) rides along too -- DM_Social.py's
-            # nudge_attitude scales the actual attitude nudge by it, rather than every dialogue
-            # line of the same sentiment moving disposition by an identical flat amount.
+            # Classified here, not left to DMCore, since sentiment-of-an-utterance is the same
+            # kind of fast local model judgment call skill/item/target matching already is --
+            # the matcher seam is what lets this stay local classification (see
+            # SentenceTransformerMatcher.classify_sentiment/classify_threat/classify_familiarity)
+            # rather than an LLM round trip. Three independent axis reads, not one -- each
+            # score (the classifier's own confidence) rides along too -- DM_Social.py's
+            # nudge_attitude scales each axis's actual nudge by its own score, rather than every
+            # dialogue line of the same sentiment moving that axis by an identical flat amount.
             sentiment, sentiment_score = self.matcher.classify_sentiment(processed)
+            threat_sentiment, threat_score = self.matcher.classify_threat(processed)
+            familiarity_sentiment, familiarity_score = self.matcher.classify_familiarity(processed)
             events.append({
                 "event": "dialogue_detected",
-                "payload": {"input": processed, "score": None, "sentiment": sentiment, "sentiment_score": sentiment_score},
+                "payload": {
+                    "input": processed, "score": None,
+                    "sentiment": sentiment, "sentiment_score": sentiment_score,
+                    "threat_sentiment": threat_sentiment, "threat_score": threat_score,
+                    "familiarity_sentiment": familiarity_sentiment, "familiarity_score": familiarity_score,
+                },
             })
             return processed, events
 

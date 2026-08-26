@@ -221,22 +221,28 @@ class TestGameBoot(unittest.TestCase):
         self.assertGreater(last_action["score"], 0.5)
         print(f"Integration Test Success: '{test_input}' -> {last_action['skill']} ({last_action['score']:.4f})")
 
-    def test_sentiment_classification_via_fine_tuned_transformer(self):
-        # classify_sentiment is backed by a separate fine-tuned sentiment pipeline
-        # (SENTIMENT_MODEL_NAME), not this class's own embedding model, so this needs no
-        # DMCore/rules load at all -- just NLPCore itself, constructed the same way every other
-        # real-model test here does rather than instantiating SentenceTransformerMatcher
-        # directly.
+    def test_sentiment_classification_via_nli_zero_shot_classifier(self):
+        # classify_sentiment is backed by a separate NLI (natural-language-inference) pipeline
+        # (NLI_MODEL_NAME, scored zero-shot against SENTIMENT_CANDIDATE_LABELS), not this class's
+        # own embedding model, so this needs no DMCore/rules load at all -- just NLPCore itself,
+        # constructed the same way every other real-model test here does rather than
+        # instantiating SentenceTransformerMatcher directly.
         nlp_core = NLPCore(EventBus())
 
         hostile_label, hostile_score = nlp_core.matcher.classify_sentiment("I hate you and never want to see you again")
         warm_label, warm_score = nlp_core.matcher.classify_sentiment("thank you so much, you have been wonderful and I am truly grateful")
         informational_label, _score = nlp_core.matcher.classify_sentiment("how far is it to the next town")
         # A lexicon-based analyzer (this project's earlier VADER-backed implementation) reads
-        # this as flat neutral -- no single word here is in its dictionary. A model trained on
-        # real labeled sentiment examples has to actually generalize compositionally to catch
-        # it, which is the whole reason this class was swapped in over VADER.
+        # this as flat neutral -- no single word here is in its dictionary. A model that actually
+        # understands language has to generalize compositionally to catch it, which is the whole
+        # reason this class was swapped in over VADER.
         curt_dismissal_label, _score = nlp_core.matcher.classify_sentiment("get out of my sight")
+        # The zero-shot pipeline's own bare-default labels/hypothesis template misread plain
+        # informational questions like this one as negative/positive -- SENTIMENT_CANDIDATE_LABELS/
+        # SENTIMENT_HYPOTHESIS_TEMPLATE were specifically tuned to fix this; this assertion is
+        # what actually guards the regression, not the "how far..." case above (which happened
+        # to pass even under the untuned default).
+        another_informational_label, _score = nlp_core.matcher.classify_sentiment("do you know where the blacksmith is")
 
         self.assertEqual(hostile_label, "negative")
         self.assertEqual(warm_label, "positive")
@@ -244,6 +250,7 @@ class TestGameBoot(unittest.TestCase):
         self.assertGreaterEqual(hostile_score, nlp_core.matcher.sentiment_confidence_threshold)
         self.assertGreaterEqual(warm_score, nlp_core.matcher.sentiment_confidence_threshold)
         self.assertIsNone(informational_label)
+        self.assertIsNone(another_informational_label)
 
 
 class TestNlpConfidenceThreshold(unittest.TestCase):
@@ -352,11 +359,13 @@ class FakeMatcher:
         one authored just in case.
     """
 
-    def __init__(self, actions=None, items=None, targets=None, sentiments=None):
+    def __init__(self, actions=None, items=None, targets=None, sentiments=None, threats=None, familiarities=None):
         self._actions = actions or {}
         self._items = items or {}
         self._targets = targets or {}
         self._sentiments = sentiments or {}
+        self._threats = threats or {}
+        self._familiarities = familiarities or {}
 
     def on_rules_loaded(self, data):
         pass
@@ -375,6 +384,12 @@ class FakeMatcher:
 
     def classify_sentiment(self, processed_text):
         return self._sentiments.get(processed_text, (None, 0.0))
+
+    def classify_threat(self, processed_text):
+        return self._threats.get(processed_text, (None, 0.0))
+
+    def classify_familiarity(self, processed_text):
+        return self._familiarities.get(processed_text, (None, 0.0))
 
 
 class TestIntentClassification(unittest.TestCase):
@@ -512,7 +527,11 @@ class TestIntentClassification(unittest.TestCase):
             events,
             [{
                 "event": "dialogue_detected",
-                "payload": {"input": "talk to the wolf", "score": None, "sentiment": None, "sentiment_score": 0.0},
+                "payload": {
+                    "input": "talk to the wolf", "score": None, "sentiment": None, "sentiment_score": 0.0,
+                    "threat_sentiment": None, "threat_score": 0.0,
+                    "familiarity_sentiment": None, "familiarity_score": 0.0,
+                },
             }],
         )
 
@@ -898,7 +917,7 @@ class TestDamageCalculation(DMTestCase):
         # hostile -- see is_hostile), so it's given one here just for this test; the "combat_hit"
         # nudge (DM_Social.py's nudge_attitude_from_event, wired from _apply_damage_if_hit) is
         # scaled by net_damage / max_hp, not a flat per-swing amount.
-        self.dm_core.entities["wolf"]["attitudes"] = {"default": [0, 0, 0, 0, 0, 0]}
+        self.dm_core.entities["wolf"]["attitudes"] = {"default": [0, 0, 0]}
         result = {"success": True}
         ability = {"damage_value": {"dice": 0, "pips": 0, "bonus": 5}, "damage_tags": []}
 
@@ -906,11 +925,11 @@ class TestDamageCalculation(DMTestCase):
 
         self.assertEqual(result["damage"]["net_damage"], 5)
         magnitude = 5 / self.dm_core.entities["wolf"]["max_hp"]
-        disposition, confidence = (
-            self.dm_core.get_attitude("wolf", self.dm_core.player_name)[axis] for axis in (0, 2)
+        disposition, threat = (
+            self.dm_core.get_attitude("wolf", self.dm_core.player_name)[axis] for axis in (0, 1)
         )
         self.assertAlmostEqual(disposition, -20 * magnitude)
-        self.assertAlmostEqual(confidence, -15 * magnitude)
+        self.assertAlmostEqual(threat, -15 * magnitude)
 
     def test_landing_a_hit_bonds_other_entities_hostile_to_the_same_target(self):
         # "Bonds made on the battlefield" (DM_Core.py's _nudge_shared_enemy_bonds) -- an
@@ -920,8 +939,8 @@ class TestDamageCalculation(DMTestCase):
         # target's own "combat_hit" nudge. thane is arena's real ally entity (is_party = true),
         # already present in scenario_entities and alive.
         self.dm_core.entities["thane"]["attitudes"] = {
-            "default": [0, 0, 0, 0, 0, 0],
-            "name": [{"wolf": [-100, 0, 0, 0, 0, 0]}],
+            "default": [0, 0, 0],
+            "name": [{"wolf": [-100, 0, 0]}],
         }
         result = {"success": True}
         ability = {"damage_value": {"dice": 0, "pips": 0, "bonus": 5}, "damage_tags": []}
@@ -935,7 +954,7 @@ class TestDamageCalculation(DMTestCase):
     def test_shared_enemy_bond_skips_an_observer_thats_neutral_to_the_target(self):
         # thane has real attitude data but no particular opinion of "wolf" specifically (falls
         # back to its own all-neutral default) -- not hostile toward it, so no bond forms.
-        self.dm_core.entities["thane"]["attitudes"] = {"default": [0, 0, 0, 0, 0, 0]}
+        self.dm_core.entities["thane"]["attitudes"] = {"default": [0, 0, 0]}
         result = {"success": True}
         ability = {"damage_value": {"dice": 0, "pips": 0, "bonus": 5}, "damage_tags": []}
 
@@ -962,15 +981,12 @@ class TestActionDrivenAttitudeDrift(DMTestCase):
         self.dm_core.nudge_attitude_from_event("innkeeper", self.dm_core.player_name, "favor", 0.6)
 
         after = self.dm_core.get_attitude("innkeeper", self.dm_core.player_name)
-        disposition, trust, confidence, respect, obligation, intimacy = (
+        disposition, threat, familiarity = (
             value - starting for value, starting in zip(after, base)
         )
         self.assertAlmostEqual(disposition, 6.0)
-        self.assertAlmostEqual(trust, 4.8)
-        self.assertEqual(confidence, 0)
-        self.assertEqual(respect, 0)
-        self.assertAlmostEqual(obligation, 12.0)
-        self.assertAlmostEqual(intimacy, 3.6)
+        self.assertEqual(threat, 0)
+        self.assertAlmostEqual(familiarity, 3.6)
 
     def test_action_drift_is_capped_independently_of_talk_drift(self):
         # Push both accumulators toward the same axis (disposition) as far as they'll go --
@@ -978,7 +994,7 @@ class TestActionDrivenAttitudeDrift(DMTestCase):
         # (ACTION_ATTITUDE_DRIFT_CAP) -- and confirm each caps on its own terms rather than
         # sharing one ceiling between the two accumulators.
         for _ in range(50):
-            self.dm_core.nudge_attitude("innkeeper", self.dm_core.player_name, "positive", 1.0)
+            self.dm_core.nudge_attitude("innkeeper", self.dm_core.player_name, {"disposition": ("positive", 1.0)})
         for _ in range(50):
             self.dm_core.nudge_attitude_from_event("innkeeper", self.dm_core.player_name, "favor", 1.0)
 
@@ -993,7 +1009,7 @@ class TestActionDrivenAttitudeDrift(DMTestCase):
         self.assertEqual(self.dm_core.get_attitude("innkeeper", self.dm_core.player_name), before)
 
         # An inanimate object has no feelings to nudge -- same precedent is_hostile already sets.
-        self.dm_core.entities["stone idol"] = {"name": "stone idol", "supertype": "object", "attitudes": {"default": [0] * 6}}
+        self.dm_core.entities["stone idol"] = {"name": "stone idol", "supertype": "object", "attitudes": {"default": [0] * 3}}
         self.dm_core.nudge_attitude_from_event("stone idol", self.dm_core.player_name, "favor", 1.0)
         self.assertNotIn("action_attitude_deltas", self.dm_core.entities["stone idol"])
 
@@ -2705,7 +2721,7 @@ class TestImprovisation(DMTestCase):
             "name": name, "description": "A mangy, oversized rat.",
             "supertype": "creature", "subtype": "npc", "max_hp": 9,
             "skills": {"brawling": {"dice": 2, "pips": 0}},
-            "attitudes": {"default": [-100, 0, 0, 0, 0, 0]},
+            "attitudes": {"default": [-100, 0, 0]},
             "abilities": [{
                 "name": f"{name} attack", "supertype": "innate", "subtype": "weapon",
                 "skill": "brawling", "damage_value": {"dice": 1, "pips": 0, "bonus": 0},
@@ -3045,13 +3061,10 @@ class TestNpcGenerationDMCoreIntegration(DMTestCase):
 
         default = entity["attitudes"]["default"]
         self.assertTrue(all(isinstance(axis, (int, float)) for axis in default))
-        disposition, trust, confidence, respect, obligation, intimacy = default
+        disposition, threat, familiarity = default
         self.assertTrue(-40 <= disposition <= 40)
-        self.assertEqual(trust, 0)
-        self.assertEqual(confidence, 0)
-        self.assertEqual(respect, 10)
-        self.assertEqual(obligation, -20)
-        self.assertTrue(-40 <= intimacy <= 40)
+        self.assertEqual(threat, 0)
+        self.assertTrue(-40 <= familiarity <= 40)
 
     def test_player_attitude_token_is_substituted_with_the_live_player_name(self):
         # npc_generation_test.toml's own generated_stranger authors this override toward the
@@ -3062,7 +3075,7 @@ class TestNpcGenerationDMCoreIntegration(DMTestCase):
         override = name_overrides[0]
         self.assertIn(self.dm_core.player_name, override)
         self.assertNotIn("player", override)
-        self.assertEqual(override[self.dm_core.player_name], [40, 0, 0, 0, 0, 0])
+        self.assertEqual(override[self.dm_core.player_name], [40, 0, 0])
 
     def test_generation_never_touches_abilities_equipped_or_inventory(self):
         # Combat/dialogue capability is decided separately, by whoever authors the
@@ -3738,27 +3751,31 @@ class TestGiveAndTrade(DMTestCase):
     def test_give_nudges_a_favor_attitude_toward_the_recipient(self):
         # "favor" (DM_Social.py's nudge_attitude_from_event, wired from _resolve_transfer_intent)
         # -- magnitude scaled by the gift's own TOML value (health potion = 15) against
-        # DM_Inventory.py's SIGNIFICANT_VALUE (25): 15/25 = 0.6.
-        base_obligation = self.dm_core.entities["innkeeper"]["attitudes"]["default"][4]
+        # DM_Inventory.py's SIGNIFICANT_VALUE (25): 15/25 = 0.6. A gift reads as increased
+        # closeness now, not a formal debt -- obligation was dropped as an axis entirely (see
+        # CLAUDE.md's "Social and attitudes").
+        base_familiarity = self.dm_core.entities["innkeeper"]["attitudes"]["default"][2]
 
         self.dm_core._on_item_interaction_detected({
             "intent": "give", "item_name": "health potion", "input": "I give the innkeeper a health potion",
         })
 
-        obligation = self.dm_core.get_attitude("innkeeper", self.dm_core.player_name)[4]
-        self.assertAlmostEqual(obligation, base_obligation + 20 * (15 / 25))
+        familiarity = self.dm_core.get_attitude("innkeeper", self.dm_core.player_name)[2]
+        self.assertAlmostEqual(familiarity, base_familiarity + 6 * (15 / 25))
 
     def test_taking_currency_from_a_living_entity_nudges_a_theft_attitude(self):
         # "theft" (same wiring, currency branch) -- magnitude scaled by however much moved
         # against SIGNIFICANT_VALUE, capped at 1.0 (the innkeeper's own 40 currency exceeds it).
-        base_trust = self.dm_core.entities["innkeeper"]["attitudes"]["default"][1]
+        # Stealing reads as reduced closeness now, not reduced trust -- trust was dropped as an
+        # axis entirely (see CLAUDE.md's "Social and attitudes").
+        base_familiarity = self.dm_core.entities["innkeeper"]["attitudes"]["default"][2]
 
         self.dm_core._on_item_interaction_detected({
             "intent": "take", "item_name": "currency", "input": "I take the innkeeper's coin purse",
         })
 
-        trust = self.dm_core.get_attitude("innkeeper", self.dm_core.player_name)[1]
-        self.assertAlmostEqual(trust, base_trust - 25)  # -25 at magnitude 1.0 (theft's own full-strength trust delta)
+        familiarity = self.dm_core.get_attitude("innkeeper", self.dm_core.player_name)[2]
+        self.assertAlmostEqual(familiarity, base_familiarity - 12)  # -12 at magnitude 1.0 (theft's own full-strength familiarity delta)
 
     def test_taking_an_item_from_a_living_entity_nudges_a_theft_attitude(self):
         # "cursed dagger" (value 5), not "health potion" -- gladstone's own template already
@@ -4128,11 +4145,11 @@ class TestFreeformDialogue(DMTestCase):
         # very confident about. Calls nudge_attitude directly (not through _talk/dialogue
         # resolution) against two different entities so the two magnitudes can be compared
         # without one call's own drift compounding onto the other's.
-        self.dm_core.nudge_attitude("innkeeper", self.dm_core.player_name, "positive", 0.55)
+        self.dm_core.nudge_attitude("innkeeper", self.dm_core.player_name, {"disposition": ("positive", 0.55)})
         mild_drift = self.dm_core.entities["innkeeper"]["attitude_deltas"][self.dm_core.player_name][0]
 
         self.dm_core.entities["test_entity_two"] = {"name": "test_entity_two"}
-        self.dm_core.nudge_attitude("test_entity_two", self.dm_core.player_name, "positive", 0.95)
+        self.dm_core.nudge_attitude("test_entity_two", self.dm_core.player_name, {"disposition": ("positive", 0.95)})
         strong_drift = self.dm_core.entities["test_entity_two"]["attitude_deltas"][self.dm_core.player_name][0]
 
         self.assertEqual(mild_drift, 0.55)
@@ -4140,7 +4157,7 @@ class TestFreeformDialogue(DMTestCase):
         self.assertLess(mild_drift, strong_drift)
 
     def test_sentiment_drift_is_capped_and_reflected_in_this_turn_own_reply(self):
-        base = self.dm_core.entities["innkeeper"].get("attitudes", {}).get("default", [0, 0, 0, 0, 0, 0])[0]
+        base = self.dm_core.entities["innkeeper"].get("attitudes", {}).get("default", [0, 0, 0])[0]
 
         for _ in range(50):
             result = self._talk("i talk to the innkeeper", sentiment="positive", score=1.0)
@@ -4247,17 +4264,16 @@ class TestAttitudePhrases(DMTestCase):
 
 
     def test_describe_attitude_mixes_tiers_per_axis(self):
-        # gladstone's undead override: disposition/trust/respect/obligation/intimacy = -100
-        # (hostile), confidence = 100 -- a genuine mix of extremes in one attitude array.
+        # gladstone's undead override: disposition/familiarity = -100 (hostile), threat = 100 --
+        # a genuine mix of extremes in one attitude array.
         self.dm_core.entities["zombie"] = {"name": "zombie", "supertype": "undead"}
 
         description = self.dm_core.describe_attitude("gladstone", "zombie")
 
         self.assertIn("Attitude toward zombie:", description)
         self.assertIn("wants them gone, one way or another", description)  # disposition: hostile
-        self.assertIn("treats them as an active threat", description)  # trust: hostile
-        self.assertIn("feels bold and confident around them", description)  # confidence: friendly (100 boundary)
-        self.assertIn("is repulsed by them", description)  # intimacy: hostile
+        self.assertIn("feels bold and confident around them", description)  # threat: friendly (100 boundary)
+        self.assertIn("is repulsed by them", description)  # familiarity: hostile
 
 
 class TestIsHostileThreshold(DMTestCase):
@@ -4275,17 +4291,17 @@ class TestIsHostileThreshold(DMTestCase):
 
     def test_declared_attitude_data_requires_true_hostility_not_just_a_negative_disposition(self):
         self.dm_core.entities["wary_npc"] = {
-            "supertype": "creature", "attitudes": {"default": [-40, 0, 0, 0, 0, 0]},
+            "supertype": "creature", "attitudes": {"default": [-40, 0, 0]},
         }
         self.dm_core.entities["hostile_npc"] = {
-            "supertype": "creature", "attitudes": {"default": [-100, 0, 0, 0, 0, 0]},
+            "supertype": "creature", "attitudes": {"default": [-100, 0, 0]},
         }
         self.assertFalse(self.dm_core.is_hostile("wary_npc", self.dm_core.player_name))
         self.assertTrue(self.dm_core.is_hostile("hostile_npc", self.dm_core.player_name))
 
     def test_object_supertype_is_never_hostile_regardless_of_attitude_data(self):
         self.dm_core.entities["angry_chest"] = {
-            "supertype": "object", "attitudes": {"default": [-100, 0, 0, 0, 0, 0]},
+            "supertype": "object", "attitudes": {"default": [-100, 0, 0]},
         }
         self.assertFalse(self.dm_core.is_hostile("angry_chest", self.dm_core.player_name))
 

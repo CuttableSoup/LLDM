@@ -47,14 +47,11 @@ max_bulk = 5
 [entity_template.attitudes]
 default = [
     {min = -40, max = 40}, # disposition varies from wary to warm
-    0, # trust remain zero
-    0, # confidence remain zero
-    10, # respect remain zero
-    -20, # obligation remains low for a stranger
-    {min = -40, max = 40} # intimacy varies from wary to warm
+    0, # threat remains zero
+    {min = -40, max = 40} # familiarity varies from wary to warm
 ]
 [[entity_template.attitudes.name]]
-player = [ 40, 0, 0, 0, 0, 0 ] # trusts the player for some reaseon
+player = [ 40, 0, 0 ] # trusts the player for some reaseon
 
 [entity_template.qualities]
 race = [

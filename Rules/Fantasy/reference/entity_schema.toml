@@ -322,22 +322,22 @@ age = 35
 # (0), which is enough on its own to make is_hostile true (disposition <= 0) -- an NPC with a
 # real default array is what opts *out* of default combat routing. Values are nominally
 # -100..100 (headroom to -150/150 for get_attitude_tier's clamp). Axes, in order: disposition
-# (Hostile<->Friendly), trust (Suspicious<->Trusting), confidence (Fearful<->Confident),
-# respect (Disdainful<->Admiring), obligation (Unfettered<->Indebted), intimacy
-# (Disgusted<->Enamored).
+# (Hostile<->Friendly), threat (Fearful<->Confident), familiarity (Disgusted<->Enamored) -- a
+# three-axis collapse of an original six; see CLAUDE.md's "Social and attitudes" for why
+# trust/respect/obligation were dropped.
 [entity.attitudes]
-default = [ 0, 0, 0, 0, 0, 0 ]
+default = [ 0, 0, 0 ]
 
 [[entity.attitudes.supertype]]
                                             # TOML parses this as a list of single-key tables --
                                             # get_attitude loops it checking `if toward_name in
                                             # override`. Matches by the *target's own* supertype.
-undead = [ -100, -100, 100, -100, -100, -100 ]
+undead = [ -100, 100, -100 ]
 
 [[entity.attitudes.name]]
                                             # Same shape, matched by the target's own literal
                                             # name -- checked before the supertype override.
-anne = [ 100, 100, 100, 100, 100, 100 ]
+anne = [ 100, 100, 100 ]
 
 # ---------------------------------------------------------------------------------------------
 # Starting conditions -- seeds active_conditions at instancing time (copied fresh per instance,

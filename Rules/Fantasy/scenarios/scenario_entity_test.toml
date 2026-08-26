@@ -54,4 +54,4 @@ target_cr = "player"
 race = "human"
 
 [entity_template.attitudes]
-default = [ -60, 0, 0, 0, 0, 0 ]
+default = [ -60, 0, 0 ]

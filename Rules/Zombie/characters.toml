@@ -32,19 +32,16 @@ melee = "crowbar"
 medkit = "first aid kit"
 
 [entity.attitudes]
-default = [ 0, 0, 0, 0, 0, 0 ]
+default = [ 0, 0, 0 ]
 # disposition   Hostile <-> Friendly
-# trust         Suspicious <-> Trusting
-# confidence    Fearful <-> Confident
-# respect       Disdainful <-> Admiring
-# obligation    Unfettered <-> Indebted
-# intimacy      Disgusted <-> Enamored
+# threat        Fearful <-> Confident
+# familiarity   Disgusted <-> Enamored
 
 [[entity.attitudes.supertype]]
-infected = [ -100, -100, -100, -100, -100, -100 ]
+infected = [ -100, -100, -100 ]
 
 [[entity.attitudes.name]]
-marcus = [ 60, 60, 60, 60, 60, 60 ]
+marcus = [ 60, 60, 60 ]
 
 [entity.qualities]
 body = "lean"
@@ -102,10 +99,10 @@ primary = "pump shotgun"
 # -- combined with having its own [[entity.behavior]], that's what makes it act as an ally
 # rather than an enemy once combat starts (see DMCore._on_action_detected).
 [entity.attitudes]
-default = [ 40, 40, 40, 40, 40, 40 ]
+default = [ 40, 40, 40 ]
 
 [[entity.attitudes.name]]
-riley = [ 60, 60, 60, 60, 60, 60 ]
+riley = [ 60, 60, 60 ]
 
 [entity.qualities]
 age = 41

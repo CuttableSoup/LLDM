@@ -295,8 +295,8 @@ call.
 choice instead of a fixed value — `NPC_Generation.py`'s `resolve_varied_value(value)` is the
 shared vocabulary: `{min, max}` (uniform random pick) or a list of single-key `{"choice" =
 weight}` tables (`random.choices` pick of the key). Applied per-leaf, so a template can mix
-fixed and varied entries freely (ex: `generated_stranger`'s `default` keeping trust/confidence
-flat while disposition/intimacy vary). `hint`/`cr_multiplier`/`qualities` resolve before the LLM
+fixed and varied entries freely (ex: `generated_stranger`'s `default` keeping `threat`
+flat while disposition/familiarity vary). `hint`/`cr_multiplier`/`qualities` resolve before the LLM
 call (they feed the prompt/target-CR math — gender/race/age have to be concrete before the LLM
 invents a name); `currency`/attitudes resolve independently, any time after. An
 `[[entity_template.attitudes.name]]` override can target the literal token `"player"` (same
@@ -779,12 +779,21 @@ Publishes `item_interaction_resolved` either way, with enough detail (`found`,
 
 ## Social and attitudes
 
-`get_attitude(entity, toward)` returns a six-value array (`disposition, trust, confidence,
-respect, obligation, intimacy`, nominally -100..100; a `name` override beats `supertype` beats
-`default`; no `[entity.attitudes]` table defaults to all-neutral). `get_attitude_tier(value)`
-clamps to `[-150, 150]` and returns the first of seven `[[attitude_tier]]` bands whose range
-contains it, in declaration order. `describe_attitude(entity, toward)` renders all six axes as
-one sentence using each tier's own phrase per axis.
+`get_attitude(entity, toward)` returns a three-value array (`disposition, threat, familiarity`,
+nominally -100..100; a `name` override beats `supertype` beats `default`; no
+`[entity.attitudes]` table defaults to all-neutral). Collapsed from an original six
+(`disposition, trust, confidence, respect, obligation, intimacy`) after NLI zero-shot testing
+(see "Dialogue sentiment") found only three axes reliably separate from each other when read off
+dialogue tone — `confidence`/`intimacy` were kept and renamed `threat`/`familiarity` (same
+sign/semantics: `threat` positive = safe/confident, negative = threatened/afraid; `familiarity`
+positive = close/fond, negative = distant/repulsed); `trust` never separated from disposition,
+`respect` collapsed back into disposition under testing, and `obligation` turned out to be
+structurally event-driven rather than tone-driven (a debt/favor is a fact about what happened,
+not a quality of how something was said) — see "Extended goals" for the fuller testing writeup.
+`get_attitude_tier(value)` clamps to `[-150, 150]` and returns the first of seven
+`[[attitude_tier]]` bands whose range contains it, in declaration order.
+`describe_attitude(entity, toward)` renders all three axes as one sentence using each tier's own
+phrase per axis.
 
 `describe_character(entity_name, toward_name=None)` builds a flavor-text roster line from purely
 descriptive TOML fields (`description`, `qualities`, `memories`, `quotes`) plus, when
@@ -796,26 +805,30 @@ attaches a fresh `result["defender_details"]` per action.
 loaded templates for the one with `is_player = true` and raises `ValueError` if none is marked.
 
 **Action-driven attitude drift.** A resolved player action — landing a hit, stealing something,
-giving something away — nudges the target's own six-axis attitude toward the player, the same
+giving something away — nudges the target's own three-axis attitude toward the player, the same
 "a 0..1 confidence/severity signal scales a per-axis delta" shape dialogue sentiment already
 uses (below), just driven by what happened rather than tone of voice, and moving more than one
 axis at once. `rules.toml`'s `[[attitude_event]]` table holds each event's own *full-strength*
 per-axis deltas (`combat_hit`, `theft`, `favor`, `shared_enemy` today) — applied at
 `magnitude = 1.0` (ex: a killing blow, or the single most valuable item `items.toml` authors);
-an ordinary occurrence scales down from there. `DM_Social.py`'s `nudge_attitude_from_event(
-entity_name, toward_name, event_name, magnitude)` looks up the named event and writes the
-scaled deltas into their own `action_attitude_deltas` accumulator (`get_attitude` sums it
-elementwise alongside `attitude_deltas`, same as before) — a no-op for an unknown event, a
-falsy magnitude, an entity with no `[entity.attitudes]` table at all, an inanimate object
-(`supertype == "object"`), or an entity with no HP left (a dead entity isn't aware of anything
-happening to it or nearby anymore, whether that's the killing blow itself, a theft, a gift, or
-a battlefield bond forming), mirroring `is_hostile`'s own "nothing to nudge" precedent for a
-tableless creature.
+an ordinary occurrence scales down from there. Each event authors only `disposition`/`threat`/
+`familiarity` deltas now — `shared_enemy` in particular lost its only two non-disposition deltas
+(`trust`/`respect`) when those axes were dropped, so it's disposition-only today; `favor` lost
+its single largest value (`obligation = 20`), leaving a comparatively modest `familiarity` bump
+in its place — an accepted consequence of the axis collapse, not rebalanced to compensate.
+`DM_Social.py`'s `nudge_attitude_from_event(entity_name, toward_name, event_name, magnitude)`
+looks up the named event and writes the scaled deltas into their own `action_attitude_deltas`
+accumulator (`get_attitude` sums it elementwise alongside `attitude_deltas`, same as before) — a
+no-op for an unknown event, a falsy magnitude, an entity with no `[entity.attitudes]` table at
+all, an inanimate object (`supertype == "object"`), or an entity with no HP left (a dead entity
+isn't aware of anything happening to it or nearby anymore, whether that's the killing blow
+itself, a theft, a gift, or a battlefield bond forming), mirroring `is_hostile`'s own "nothing to
+nudge" precedent for a tableless creature.
 
 Four call sites, each computing its own 0..1 magnitude from context: `DM_Core.py`'s
 `_apply_damage_if_hit` fires `combat_hit` after a landed player hit, scaled by
 `net_damage / defender max_hp` — a graze barely registers, a near-kill measurably scares the
-defender (the `confidence` axis) even while `disposition` stays pinned at `is_hostile`'s own
+defender (the `threat` axis) even while `disposition` stays pinned at `is_hostile`'s own
 floor; only the player's own attacks trigger this (an entity's own combat-turn attack,
 `resolve_behavior_action`, never does — there's no player-side attitude to move). The same
 method's own `_nudge_shared_enemy_bonds` then fires `shared_enemy`, at that same magnitude,
@@ -864,47 +877,65 @@ named. `_resolve_dialogue` gates on the target being present/alive (`reason: "no
 and not an inanimate `"object"` (`reason: "cant_talk"`) — but deliberately **not** on hostility:
 addressing a hostile entity is allowed (shouting mid-fight), and the model is free to read that
 as hostile/dismissive in character rather than being denied outright. A found target's
-disposition is nudged by `sentiment` (`nudge_attitude`, see below) before `persona`/`attitude`
-are attached for `LLMCore` to speak from — so the same turn's own reply already reflects it.
+attitude (all three axes) is nudged by the classified sentiments (`nudge_attitude`, see below)
+before `persona`/`attitude` are attached for `LLMCore` to speak from — so the same turn's own
+reply already reflects it.
 Publishes `dialogue_resolved {target, input, found, present_entities, persona?, attitude?,
 reason?}` — no `_publish_party_status()`, since dialogue never changes HP/equipment/inventory/
 conditions (attitude drift isn't surfaced on the Party tab either, so this still holds).
 
 **Dialogue sentiment.** The tone of what the player says nudges the addressed entity's own
-disposition toward them — classified locally (`NLP_Core.py`'s `SentenceTransformerMatcher.
-classify_sentiment`, backed by a separate fine-tuned transformer pipeline
-(`SENTIMENT_MODEL_NAME`, `cardiffnlp/twitter-roberta-base-sentiment-latest` — a 3-way negative/
-neutral/positive classifier trained on tweets, chosen over a movie-review-trained default for
-its closer register match to terse, informal, second-person dialogue) rather than this class's
-own embedding model or a lexicon-based analyzer: sentiment-of-an-utterance needs broad,
+attitude toward them — all three axes at once, each classified independently and independently
+scored. Classified locally (`NLP_Core.py`'s `SentenceTransformerMatcher.classify_sentiment`/
+`classify_threat`/`classify_familiarity`, one call per axis, all backed by the same separate NLI
+(natural-language-inference) model (`NLI_MODEL_NAME`, `facebook/bart-large-mnli`) rather than
+this class's own embedding model, a lexicon-based analyzer, or a purpose-trained sentiment
+classification head: reading tone/threat/closeness out of an utterance needs broad,
 compositional coverage across however a player might phrase something (ex: "get out of my
 sight" — clearly hostile, but with no single word a dictionary lookup would flag), which only a
-model trained on real labeled sentiment examples reliably provides. `classify_sentiment` returns
-`(label, score)` — the winning class's own softmax probability — gated at its own
-`sentiment_confidence_threshold` (0.5, "meaningfully more confident than the ~0.33 a 3-way
-coin-flip would give") and short-circuited to `(None, score)` whenever the model's own winning
-class is "neutral", covering purely informational dialogue as well as genuinely neutral
-phrasing. Still local, single-forward-pass inference — no network call — deliberately not an
-LLM call: dialogue is the single most frequent player action, so adding LLM latency to every
-turn was rejected in favor of a fast, local, general-purpose classifier. `DM_Social.py`'s
-`nudge_attitude(entity_name, toward_name, sentiment, score)` applies a capped drift into
-`entity["attitude_deltas"][toward_name]` (disposition axis only) whose *magnitude* is
-`score` itself — `classify_sentiment`'s own confidence, already 0..1 — times
-`SENTIMENT_INTENSITY_SCALE` (currently `1`, i.e. unscaled; a single tunable knob rather than a
-hand-tuned delta table), not a flat per-sentiment amount: a line the classifier read as more
-intensely negative/positive moves disposition further than a mildly-worded one. Clamped to
-`±TALK_ATTITUDE_DRIFT_CAP` (40) — a cap on *accumulated drift*, not on the resolved
-value, so sustained same-direction talk can still push a base value already close to
-`is_hostile`'s `-100` threshold across it (an intentional emergent outcome: insult someone long
-enough and they turn on you). `get_attitude` adds `attitude_deltas` elementwise on top of
-whichever name/supertype/default array it resolves, so `is_hostile`/`describe_attitude`/the GUI
-all see the drifted value transparently, with no other call site changes. An entity with no
-`[entity.attitudes]` table at all (ex: `arena.toml`'s wolf) stays hostile unconditionally
+model built for real language understanding reliably provides. Each is run via Hugging Face's
+`"zero-shot-classification"` pipeline: entailment is scored between the input and each axis's own
+three candidate labels (as a hypothesis built from that axis's own hypothesis template),
+normalized to a softmax over the three mutually-exclusive labels per axis. `classify_sentiment`
+uses `SENTIMENT_CANDIDATE_LABELS`/`SENTIMENT_HYPOTHESIS_TEMPLATE`;
+`classify_threat`/`classify_familiarity` share one `DIALOGUE_HYPOTHESIS_TEMPLATE` with their own
+`THREAT_CANDIDATE_LABELS`/`FAMILIARITY_CANDIDATE_LABELS`. None of these are the library's own
+bare defaults (`["negative", "neutral", "positive"]` + `"This example is {}."`) — the bare
+defaults misread plain informational dialogue (ex: "do you know where the blacksmith is") as
+negative/positive at `sentiment_confidence_threshold`'s own floor; the richer per-label phrasing
+(ex: `"negative in tone"`/`"neutral or informational"`/`"positive in tone"` for sentiment) plus a
+dialogue-framed hypothesis template were tuned against held-out sets spanning hostile/warm/
+informational/sarcastic/valence-crossed lines and resolved this without needing to raise the
+confidence threshold at all — `threat`/`familiarity` were validated less exhaustively than
+disposition (a smaller, though still adversarial, test battery), which is worth keeping in mind
+if either axis's real-play behavior looks off. Each `classify_*` method returns `(label, score)`
+— normalized back to plain `"negative"`/`"positive"`, and the winning label's own entailment
+probability — gated at the shared `sentiment_confidence_threshold` (0.5, "meaningfully more
+confident than the ~0.33 a 3-way coin-flip would give") and short-circuited to `(None, score)`
+whenever the model's own winning label is the neutral one, covering purely informational
+dialogue as well as genuinely neutral phrasing. Still local inference — no network call —
+deliberately not an LLM call: dialogue is the single most frequent player action, so adding LLM
+latency to every turn was rejected in favor of a fast, local classifier (in practice, ~0.2-0.5s
+per axis on CPU — roughly 3x that per dialogue turn now that three axes are classified instead
+of one, still well within budget). `DM_Social.py`'s `nudge_attitude(entity_name, toward_name,
+sentiments)` takes `sentiments`, a `{axis_name: (label, score)}` dict (an axis missing from the
+dict, or with a falsy label/score, contributes 0), and applies a capped drift into
+`entity["attitude_deltas"][toward_name]` across all three axes at once whose *magnitude* on each
+axis is that axis's own `score` — the classifier's own confidence, already 0..1 — times
+`SENTIMENT_INTENSITY_SCALE` (currently `1`, i.e. unscaled; a single tunable knob shared across all
+three axes rather than a hand-tuned delta table), not a flat per-sentiment amount: a line the
+classifier read as more intensely negative/positive moves that axis further than a mildly-worded
+one. Clamped to `±TALK_ATTITUDE_DRIFT_CAP` (40) per axis — a cap on *accumulated drift*, not on
+the resolved value, so sustained same-direction talk can still push a base value already close to
+`is_hostile`'s `-100` disposition threshold across it (an intentional emergent outcome: insult
+someone long enough and they turn on you). `get_attitude` adds `attitude_deltas` elementwise on
+top of whichever name/supertype/default array it resolves, so `is_hostile`/`describe_attitude`/
+the GUI all see the drifted value transparently, with no other call site changes. An entity with
+no `[entity.attitudes]` table at all (ex: `arena.toml`'s wolf) stays hostile unconditionally
 regardless of drift, since `is_hostile` short-circuits on the table's absence before ever reading
 a disposition value. `attitude_deltas` is genuinely dynamic runtime state, so it round-trips
 through save/load in the ordinary per-instance diff (`DM_Persistence.py`) for *every* entity, not
-just generated/ad-hoc ones. Scoped to the disposition axis only — see "Action-driven attitude
-drift" above for how a resolved action (rather than dialogue tone) moves the other five.
+just generated/ad-hoc ones.
 
 **Room-level presence.** Every DM-published narration event carries `present_entities`: a
 snapshot of `self.scenario_entities` at publish time. `LLMCore` tags each `context_window`
@@ -1419,9 +1450,30 @@ Not yet started, except where noted:
   addressed in should gate dialogue/narration, not just its attitude data.
 - There's no mechanism yet for an *NPC's* own action (ex: an ally's combat hit) to sway anyone's
   attitude — only the player's own actions do (see "Action-driven attitude drift").
-- Dialogue sentiment (see "Dialogue sentiment") only moves the disposition axis, not all six —
-  a 3-way valence classifier has no basis to move trust/confidence/respect/obligation/intimacy
-  independently, unlike a resolved action's own per-axis `[[attitude_event]]` deltas.
+- **Resolved.** Dialogue sentiment (see "Dialogue sentiment") originally only moved the
+  disposition axis — a 3-way valence classifier had no basis to move the other five axes
+  independently. Tested directly: even switching to a label-flexible NLI model and framing
+  axis-specific candidate labels/hypotheses per axis, every axis still just tracked overall
+  sentence valence rather than reading anything axis-specific (a line insulting competence
+  tanked trust/confidence/intimacy almost as hard as respect) — confirming the *limitation*
+  wasn't "only 3 labels," but that sentence-level classification isn't sensitive to which social
+  dimension a line is actually about. Re-tested with deliberately valence-*crossed* lines (ex:
+  "your skill with that blade is terrifying" — admiring tone, physically threatening content)
+  instead, which did separate cleanly for two axes (`confidence`→renamed `threat`,
+  `intimacy`→renamed `familiarity`) but not the other three (`trust` never separated from
+  disposition; `respect` collapsed back into disposition under a harder adversarial battery,
+  3/12 on crossed test lines vs. `familiarity`'s 12/12; `obligation` turned out to be
+  structurally event-driven, not tone-driven, at all). Acted on: the six-axis system is now
+  three (`disposition`/`threat`/`familiarity`), and `nudge_attitude` drives all three from
+  dialogue tone via three independent classifier calls (`classify_sentiment`/`classify_threat`/
+  `classify_familiarity`).
+- `classify_sentiment` has no reliable handling of sarcasm — a line's surface wording (ex: "wow,
+  real impressive, truly the hero we needed") reads as confidently positive regardless of the
+  hostile intent behind it, since neither the current NLI model nor the sentiment-head model it
+  replaced have any pragmatic/contextual signal to work from, only the sentence itself. Confirmed
+  via a direct side-by-side: both models score 0/5 identical high-confidence flips on the same
+  sarcastic test lines — a pre-existing limitation, not something the NLI swap introduced or
+  could plausibly fix without a fundamentally different (context-aware) approach.
 - Random encounters, enemy generator — procedurally populate a scene/room with creatures instead
   of every encounter being scenario-authored. **Partially started**: `[[location.encounter]]`
   (see "Random encounters") lets a location/room roll a weighted table of outcomes on entry —

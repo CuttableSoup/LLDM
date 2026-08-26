@@ -50,13 +50,10 @@ quotes = [ "Welcome, welcome! Take a look around.", "If I don't have it in stock
 inventory = [ "dagger" ]
 
 [entity.attitudes]
-default = [ 40, 20, 10, 0, 0, 0 ]
+default = [ 40, 10, 0 ]
 # disposition   Hostile <-> Friendly
-# trust         Suspicious <-> Trusting
-# confidence    Fearful <-> Confident
-# respect       Disdainful <-> Admiring
-# obligation    Unfettered <-> Indebted
-# intimacy      Disgusted <-> Enamored
+# threat        Fearful <-> Confident
+# familiarity   Disgusted <-> Enamored
 
 [entity.qualities]
 body = "round"

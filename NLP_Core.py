@@ -19,16 +19,45 @@ from transformers import pipeline
 
 from Intent_Classification import CURRENCY_SYNONYMS, IntentClassifier, IntentMatcher
 
-# classify_sentiment's own model -- a general-purpose 3-class (negative/neutral/positive)
-# sentiment classifier fine-tuned on tweets, not this class's own semantic-similarity embedding
-# model. Sentiment-of-an-utterance needs broad, compositional coverage across however a player
+# classify_sentiment's own model -- a general-purpose natural-language-inference model, not this
+# class's own semantic-similarity embedding model and not a purpose-trained sentiment head.
+# Applied via the "zero-shot-classification" pipeline: entailment is scored between the input
+# and each of SENTIMENT_CANDIDATE_LABELS (as a hypothesis built from
+# SENTIMENT_HYPOTHESIS_TEMPLATE), then normalized to a softmax over the three mutually-exclusive
+# labels. Sentiment-of-an-utterance needs broad, compositional coverage across however a player
 # might phrase something (ex: "get out of my sight" -- clearly hostile, but with no single word
-# a lexicon-based analyzer like VADER would flag), which only a model actually trained on
-# labeled sentiment examples provides; tweets are a much closer register match for terse,
-# informal, second-person dialogue than the movie-review data most "default" sentiment models
-# (ex: distilbert-sst2) are trained on. Named here, not inline in __init__, so it's easy to find/
-# swap without hunting through the constructor.
-SENTIMENT_MODEL_NAME = "cardiffnlp/twitter-roberta-base-sentiment-latest"
+# a lexicon-based analyzer like VADER would flag), which only a model built for real
+# language-understanding provides. Named here, not inline in __init__, so it's easy to find/swap
+# without hunting through the constructor.
+NLI_MODEL_NAME = "facebook/bart-large-mnli"
+
+# The library's own bare defaults (["negative", "neutral", "positive"] + "This example is {}.")
+# misread plain informational dialogue ("do you know where the blacksmith is") as
+# negative/positive at sentiment_confidence_threshold's own 0.5 floor -- exactly the "purely
+# informational dialogue" case classify_sentiment's own contract has to get right (see
+# CLAUDE.md's "Dialogue sentiment"). This richer label phrasing plus a hypothesis template framed
+# around dialogue (rather than the library's generic "this example is...") was tuned against a
+# 20-line held-out set spanning hostile/warm/informational/sarcastic dialogue and cleared it
+# without needing to raise the confidence threshold at all.
+SENTIMENT_CANDIDATE_LABELS = ["negative in tone", "neutral or informational", "positive in tone"]
+SENTIMENT_HYPOTHESIS_TEMPLATE = "The speaker's tone toward the listener is {}."
+
+# classify_threat/classify_familiarity's own candidate labels/template -- validated the same way
+# as SENTIMENT_CANDIDATE_LABELS above, against a battery of deliberately valence-crossed lines
+# (ex: "your skill with that blade is terrifying, truly the deadliest fighter I've ever seen" --
+# admiring in general tone but physically threatening) to confirm these two read something
+# genuinely different from disposition, not just a relabeled copy of it. Of the three axes this
+# was tried against beyond disposition (threat/esteem/familiarity), esteem never reliably
+# separated from disposition (see CLAUDE.md's "Extended goals") and was dropped; threat and
+# familiarity did. Both share one hypothesis template -- unlike disposition's own dialogue-tone
+# framing, "This statement leaves the listener feeling {}." tested equally well for both without
+# needing separate wording.
+THREAT_CANDIDATE_LABELS = ["physically threatened", "neither threatened nor safe", "physically safe"]
+FAMILIARITY_CANDIDATE_LABELS = [
+    "emotionally distant from the speaker", "neither close to nor distant from the speaker",
+    "emotionally close to the speaker",
+]
+DIALOGUE_HYPOTHESIS_TEMPLATE = "This statement leaves the listener feeling {}."
 
 # map_to_action's alternate-phrasing candidates: markers that introduce a topic clause rather
 # than describing the action itself (ex: "...about the road" in "have you heard anything about
@@ -70,14 +99,12 @@ class SentenceTransformerMatcher(IntentMatcher):
         # to clear this much lower floor, so a coincidental keyword collision on an otherwise
         # unrelated sentence doesn't get accepted on keyword evidence alone.
         self.keyword_fallback_floor = 0.2
-        # A separate pipeline, not self.model -- SENTIMENT_MODEL_NAME is a fine-tuned
-        # classification head (3-way softmax over negative/neutral/positive), not an embedding
-        # model, so there's no shared weights or shared encode() call to reuse here. Local, CPU
-        # inference (no device= override) -- consistent with everything else in this class,
-        # never a network call.
-        self.sentiment_pipeline = pipeline(
-            "sentiment-analysis", model=SENTIMENT_MODEL_NAME, tokenizer=SENTIMENT_MODEL_NAME,
-        )
+        # A separate pipeline, not self.model -- NLI_MODEL_NAME is an entailment model scored via
+        # zero-shot-classification against SENTIMENT_CANDIDATE_LABELS, not this class's own
+        # semantic-similarity embedding model, so there's no shared weights or shared encode()
+        # call to reuse here. Local, CPU inference (no device= override) -- consistent with
+        # everything else in this class, never a network call.
+        self.sentiment_pipeline = pipeline("zero-shot-classification", model=NLI_MODEL_NAME)
         # The winning class's own softmax probability has to clear this before classify_sentiment
         # commits to a label -- for a 3-way split, chance alone sits around 0.33, so this is
         # "meaningfully more confident than chance," not an arbitrary tone-strength cutoff the
@@ -399,33 +426,70 @@ class SentenceTransformerMatcher(IntentMatcher):
         self.event_bus.publish("log_info", f"Mapped input to item: {best_item} (Score: {best_score:.4f})")
         return best_item, best_score
 
-    def classify_sentiment(self, processed_text):
+    def _classify_polarity(self, processed_text, axis_name, candidate_labels, hypothesis_template):
         """!
-        @brief Classifies the tone of a dialogue line via sentiment_pipeline's own 3-way
-            (negative/neutral/positive) softmax -- only called from Intent_Classification.py's
-            own dialogue branch (see CLAUDE.md's "Dialogue"), never for skill/item/target
-            matching. Uses a fine-tuned classifier rather than this class's own embedding model
-            or a lexicon-based analyzer: sentiment-of-an-utterance needs broad, compositional
-            coverage across however a player might phrase something (ex: "get out of my sight"
-            -- clearly hostile, no single word a lexicon lookup would flag), which only a model
-            trained on real labeled sentiment examples reliably provides.
+        @brief Shared zero-shot entailment scorer behind classify_sentiment/classify_threat/
+            classify_familiarity -- each just supplies its own candidate_labels/
+            hypothesis_template (candidate_labels[0]/[1]/[2] always low/neutral/high pole, ex:
+            "negative in tone"/"neutral or informational"/"positive in tone" for sentiment).
+            Uses an NLI model rather than this class's own embedding model or a lexicon-based
+            analyzer: reading tone/threat/closeness out of an utterance needs broad,
+            compositional coverage across however a player might phrase something (ex: "get out
+            of my sight" -- clearly hostile, no single word a lexicon lookup would flag), which
+            only a model built for real language understanding reliably provides.
         @param processed_text The cleaned and processed player input.
-        @return A tuple of (sentiment_label, confidence_score); confidence_score is the winning
-                class's own softmax probability (0..1), keeping the same "always a non-negative
-                confidence" shape every other matcher method already returns. sentiment_label is
-                "negative"/"positive" once that probability clears sentiment_confidence_threshold
-                and the winning class isn't "neutral" -- None otherwise, the "no strong tone
+        @param axis_name A short label for the log_info line only (ex: "sentiment"/"threat"/
+            "familiarity") -- not read by anything downstream.
+        @param candidate_labels [low_pole, neutral_pole, high_pole] entailment hypotheses.
+        @param hypothesis_template The "{}"-templated sentence each candidate label is scored
+            as an entailment hypothesis against.
+        @return A tuple of (label, confidence_score); confidence_score is the winning label's
+                own entailment probability (0..1, softmax-normalized across the three mutually-
+                exclusive candidate labels), keeping the same "always a non-negative confidence"
+                shape every other matcher method already returns. label is "negative"/"positive"
+                (low/high pole) once that probability clears sentiment_confidence_threshold and
+                the winning label isn't the neutral pole -- None otherwise, the "no strong signal
                 either way" case, covering purely informational dialogue, genuinely neutral
                 phrasing, and a low-confidence call the model itself isn't sure about.
         """
-        result = self.sentiment_pipeline(processed_text)[0]
-        raw_label, score = result["label"].lower(), result["score"]
+        result = self.sentiment_pipeline(processed_text, candidate_labels, hypothesis_template=hypothesis_template)
+        raw_label, score = result["labels"][0], result["scores"][0]
 
-        if raw_label == "neutral" or score < self.sentiment_confidence_threshold:
+        if raw_label == candidate_labels[1] or score < self.sentiment_confidence_threshold:
             return None, score
 
-        self.event_bus.publish("log_info", f"Classified dialogue sentiment: {raw_label} (Score: {score:.4f})")
-        return raw_label, score
+        label = "negative" if raw_label == candidate_labels[0] else "positive"
+        self.event_bus.publish("log_info", f"Classified dialogue {axis_name}: {label} (Score: {score:.4f})")
+        return label, score
+
+    def classify_sentiment(self, processed_text):
+        """!
+        @brief Classifies a dialogue line's overall tone (drives the disposition axis) -- see
+            _classify_polarity for the shared mechanics. Only called from
+            Intent_Classification.py's own dialogue branch (see CLAUDE.md's "Dialogue"), never
+            for skill/item/target matching.
+        @param processed_text The cleaned and processed player input.
+        @return See _classify_polarity's own @return.
+        """
+        return self._classify_polarity(processed_text, "sentiment", SENTIMENT_CANDIDATE_LABELS, SENTIMENT_HYPOTHESIS_TEMPLATE)
+
+    def classify_threat(self, processed_text):
+        """!
+        @brief Classifies whether a dialogue line reads as physically threatening or reassuring
+            (drives the threat axis) -- see _classify_polarity for the shared mechanics.
+        @param processed_text The cleaned and processed player input.
+        @return See _classify_polarity's own @return.
+        """
+        return self._classify_polarity(processed_text, "threat", THREAT_CANDIDATE_LABELS, DIALOGUE_HYPOTHESIS_TEMPLATE)
+
+    def classify_familiarity(self, processed_text):
+        """!
+        @brief Classifies whether a dialogue line reads as emotionally close or distant (drives
+            the familiarity axis) -- see _classify_polarity for the shared mechanics.
+        @param processed_text The cleaned and processed player input.
+        @return See _classify_polarity's own @return.
+        """
+        return self._classify_polarity(processed_text, "familiarity", FAMILIARITY_CANDIDATE_LABELS, DIALOGUE_HYPOTHESIS_TEMPLATE)
 
     def map_to_target(self, processed_text):
         """!
