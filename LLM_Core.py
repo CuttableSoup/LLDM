@@ -573,7 +573,8 @@ class LLMCore:
             whatever the model produces is free to read as hostile/dismissive in character,
             but the attempt itself is never denied for it.
         @param data The "dialogue_resolved" payload ({target, input, found, present_entities,
-            persona?, attitude?, reason?}).
+            persona?, attitude?, reason?, language_barrier?, target_language?,
+            nonsense_phrase?}).
         """
         target = data.get("target")
         self.event_bus.publish("log_info", f"Generating NPC dialogue response ({target}).")
@@ -594,11 +595,54 @@ class LLMCore:
             )
             return
 
-        prompt = f"The player says: \"{data.get('input', '')}\""
+        if data.get("language_barrier"):
+            prompt = self._build_language_barrier_prompt(
+                data.get("input", ""), target, data.get("target_language"), data.get("nonsense_phrase"),
+            )
+        else:
+            prompt = f"The player says: \"{data.get('input', '')}\""
+
         self._queue_dialogue(
             target, data.get("persona", ""), data.get("attitude", ""), prompt,
             rag_query=data.get("input"), present_entities=data.get("present_entities"),
         )
+
+    @staticmethod
+    def _build_language_barrier_prompt(player_input, target, target_language, nonsense_phrase):
+        """!
+        @brief Builds the user-role prompt for a dialogue turn DM_Dialogue.py's
+            _detect_language_barrier flagged as sharing no language with the player -- target
+            still replies in character (persona/attitude still ground tone, via
+            _build_dialogue_system_message), but the actual words must be invented gibberish,
+            never a real answer to what was asked.
+        @param player_input The player's own raw words -- target can't understand them, but the
+            model still needs them to react to *something* being said at all.
+        @param target The addressed entity's name.
+        @param target_language The tongue target actually spoke (DM_Dialogue.py), or None if
+            somehow unresolved.
+        @param nonsense_phrase A races.toml-authored style example of what that tongue sounds
+            like, or None if no race claims it (ex: a scenario-authored language) -- the model
+            is told explicitly not to reuse it verbatim, just to match its phonetic flavor.
+        @return The complete prompt string.
+        """
+        language_name = target_language or "a language the player doesn't know"
+        prompt = (
+            f"The player says: \"{player_input}\"\n"
+            f"{target} does not understand this at all -- {target} only speaks {language_name}, "
+            "a language the player doesn't share. Reply only with a short, untranslatable-"
+            "sounding line of invented gibberish in that tongue -- no real words the player "
+            "could understand, and don't translate or explain it."
+        )
+        if nonsense_phrase:
+            prompt += (
+                f" For phonetic flavor only (don't reuse it verbatim, invent your own line in "
+                f"a similar style): \"{nonsense_phrase}\"."
+            )
+        prompt += (
+            " You may add a brief physical gesture or expression showing confusion at not "
+            "being understood either."
+        )
+        return prompt
 
     def _build_system_message(self, rag_query):
         """!

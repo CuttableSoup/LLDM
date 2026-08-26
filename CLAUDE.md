@@ -937,6 +937,34 @@ a disposition value. `attitude_deltas` is genuinely dynamic runtime state, so it
 through save/load in the ordinary per-instance diff (`DM_Persistence.py`) for *every* entity, not
 just generated/ad-hoc ones.
 
+**Language barriers.** Every entity's own `languages` list (an entity field,
+`entity_schema.toml`, absent entirely defaulting to `["common"]` — same as every entity shipped
+today) is what a `_resolve_dialogue` addressee actually understands. `DM_Dialogue.py`'s
+`_detect_language_barrier(target_name)` compares `set(player_languages)` against
+`target_name`'s own list; any overlap at all resolves as ordinary dialogue. No overlap resolves
+`{"found": True, "language_barrier": True, "target_language", "nonsense_phrase"}` instead of the
+ordinary persona/attitude reply — the target is still present and willing to react, just unable
+to understand the words, so `nudge_attitude` is deliberately skipped (a sentiment classifier
+reads the *meaning* of an utterance, which the target never received). `target_language` is the
+first of the target's own unshared languages; `nonsense_phrase` is looked up by matching that
+name against `races.toml`'s own `[[race]].language` field (`None` if no race claims it, ex: a
+scenario-authored language with no matching race entry). `LLMCore.generate_npc_dialogue`
+branches on `language_barrier` to `_build_language_barrier_prompt`, instructing the model to
+reply only with invented gibberish styled after `nonsense_phrase` (explicitly told not to reuse
+it verbatim) rather than answering what was actually asked — persona/attitude still ground *tone*
+(a hostile speaker's gibberish should still read as hostile), just never the content.
+
+Each race in `races.toml` authors its own `language` (`human` → `"common"`, `elf` → `"elvish"`,
+`dwarf` → `"dwarvish"`, `half-orc` → `"orcish"`, `halfling` → `"halfling"`) plus a
+`nonsense_phrase` example of what it sounds like (human has none — every shipped entity already
+defaults to knowing `"common"`, so a human-to-human barrier never arises with today's data).
+`DM_CharacterCreation.py`'s `apply_character_creation` appends the chosen race's own `language`
+onto the player template's existing `languages` list (deduped) alongside the point-buy skill
+override, so an elf player knows `["common", "elvish"]` while a human re-adding `"common"` is a
+no-op. This is opt-in for scenario/entity authors: nothing changes for existing data until an
+NPC's own `languages` list is deliberately narrowed (ex: `["elvish"]` alone, no `"common"`) or a
+player picks a race whose language that NPC doesn't share either.
+
 **Room-level presence.** Every DM-published narration event carries `present_entities`: a
 snapshot of `self.scenario_entities` at publish time. `LLMCore` tags each `context_window`
 entry with this snapshot and `generate_npc_dialogue` uses `_filter_present_history(target)` to
@@ -1447,33 +1475,15 @@ subset only.
 
 Not yet started, except where noted:
 - Characters are language-dependent — an entity's own comprehension of the language it's
-  addressed in should gate dialogue/narration, not just its attitude data.
+  addressed in should gate dialogue/narration, not just its attitude data. **Done for
+  dialogue**: see "Dialogue"'s own "Language barriers" — `_detect_language_barrier` gates
+  `_resolve_dialogue` on a shared `languages` entry, falling back to invented gibberish styled
+  by `races.toml`'s own `nonsense_phrase` when nothing overlaps. Not extended to the omniscient
+  third-person narrator voice, which by design still sees/relays everything regardless of what
+  any one character understands (see "Room-level presence"'s own "the player's point of view is
+  deliberately still everything").
 - There's no mechanism yet for an *NPC's* own action (ex: an ally's combat hit) to sway anyone's
   attitude — only the player's own actions do (see "Action-driven attitude drift").
-- **Resolved.** Dialogue sentiment (see "Dialogue sentiment") originally only moved the
-  disposition axis — a 3-way valence classifier had no basis to move the other five axes
-  independently. Tested directly: even switching to a label-flexible NLI model and framing
-  axis-specific candidate labels/hypotheses per axis, every axis still just tracked overall
-  sentence valence rather than reading anything axis-specific (a line insulting competence
-  tanked trust/confidence/intimacy almost as hard as respect) — confirming the *limitation*
-  wasn't "only 3 labels," but that sentence-level classification isn't sensitive to which social
-  dimension a line is actually about. Re-tested with deliberately valence-*crossed* lines (ex:
-  "your skill with that blade is terrifying" — admiring tone, physically threatening content)
-  instead, which did separate cleanly for two axes (`confidence`→renamed `threat`,
-  `intimacy`→renamed `familiarity`) but not the other three (`trust` never separated from
-  disposition; `respect` collapsed back into disposition under a harder adversarial battery,
-  3/12 on crossed test lines vs. `familiarity`'s 12/12; `obligation` turned out to be
-  structurally event-driven, not tone-driven, at all). Acted on: the six-axis system is now
-  three (`disposition`/`threat`/`familiarity`), and `nudge_attitude` drives all three from
-  dialogue tone via three independent classifier calls (`classify_sentiment`/`classify_threat`/
-  `classify_familiarity`).
-- `classify_sentiment` has no reliable handling of sarcasm — a line's surface wording (ex: "wow,
-  real impressive, truly the hero we needed") reads as confidently positive regardless of the
-  hostile intent behind it, since neither the current NLI model nor the sentiment-head model it
-  replaced have any pragmatic/contextual signal to work from, only the sentence itself. Confirmed
-  via a direct side-by-side: both models score 0/5 identical high-confidence flips on the same
-  sarcastic test lines — a pre-existing limitation, not something the NLI swap introduced or
-  could plausibly fix without a fundamentally different (context-aware) approach.
 - Random encounters, enemy generator — procedurally populate a scene/room with creatures instead
   of every encounter being scenario-authored. **Partially started**: `[[location.encounter]]`
   (see "Random encounters") lets a location/room roll a weighted table of outcomes on entry —

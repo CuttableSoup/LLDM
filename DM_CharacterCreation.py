@@ -19,7 +19,12 @@ class CharacterCreationMixin(DMCoreProtocol):
         """!
         @brief Overwrites the player template's own "skills" (and its "qualities.race" flavor
             field, if it has a qualities table) with a freshly-created character's race and
-            point-buy allocation, and -- if character carries a non-blank "name" different
+            point-buy allocation -- also appending the chosen race's own "language" (races.toml)
+            onto the player's own "languages" list if it isn't already there (ex: an elf adds
+            "elvish" onto the template's default ["common"]; a human re-adding "common" is a
+            no-op), which is what DM_Dialogue.py's language-barrier check reads to decide
+            whether the player shares a tongue with whoever they're addressing -- and -- if
+            character carries a non-blank "name" different
             from self.player_name -- renames the player entity itself, re-keying self.entities
             and updating self.player_name to match. Called from DMCore.__init__ right after
             _resolve_player_name() resolves self.player_name, and before
@@ -67,6 +72,13 @@ class CharacterCreationMixin(DMCoreProtocol):
             player["skills"] = build_character_skills(self.skills, race, allocation)
             if race_name and "qualities" in player:
                 player["qualities"]["race"] = race_name
+
+            race_language = (race or {}).get("language")
+            if race_language:
+                languages = list(player.get("languages") or ["common"])
+                if race_language not in languages:
+                    languages.append(race_language)
+                player["languages"] = languages
 
         new_name = (character.get("name") or "").strip()
         if new_name and new_name != self.player_name:

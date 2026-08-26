@@ -19,10 +19,24 @@
 # can be built *before* a DMCore/scenario exists at all. See DM_CharacterCreation.py's
 # apply_character_creation for how a finished character-creation result is later baked into
 # the player entity once DMCore does exist.
+#
+# "language" is this race's own native tongue -- apply_character_creation adds it onto the
+# player entity's own "languages" list (an entity field documented in
+# reference/entity_schema.toml) alongside whatever it already has, so an elf character knows
+# both "common" and "elvish" while a human only ever adds "common" onto "common" (a no-op).
+# DM_Dialogue.py's language-barrier check compares the player's own "languages" against
+# whoever they're addressing: no overlap at all means the target can't be understood.
+# "nonsense_phrase" is a short example of what that tongue sounds like -- not dialogue itself,
+# just a style reference LLM_Core.py's own language-barrier prompt hands the model so it
+# invents its own gibberish in a similar phonetic key, rather than reusing this phrase
+# verbatim. Human has no nonsense_phrase at all: "common" is the one language every shipped
+# entity defaults to knowing (see entity_schema.toml), so a human-to-human language barrier
+# never actually arises with today's data.
 
 [[race]]
 name = "human"
 description = "Adaptable and unremarkable -- no innate skill strengths or weaknesses."
+language = "common"
 
 [race.skill_dice]
 acrobatics = 2
@@ -65,6 +79,8 @@ willpower = 2
 [[race]]
 name = "elf"
 description = "Graceful and long-lived, favoring keen senses and subtle magic over raw force."
+language = "elvish"
+nonsense_phrase = "Sil'ai vethraen mio caelanthir"
 
 [race.skill_dice]
 # Raised to 3D
@@ -110,6 +126,8 @@ willpower = 2
 [[race]]
 name = "dwarf"
 description = "Stout and stubborn, at home underground and slow to trust outsiders' magic."
+language = "dwarvish"
+nonsense_phrase = "Grunthak dol bregnir uzdum"
 
 [race.skill_dice]
 # Raised to 3D
@@ -155,6 +173,8 @@ willpower = 2
 [[race]]
 name = "half-orc"
 description = "Powerfully built survivors, more comfortable with a blade than a spellbook."
+language = "orcish"
+nonsense_phrase = "Ugrak thok bazgul morn"
 
 [race.skill_dice]
 # Raised to 3D
@@ -200,6 +220,8 @@ willpower = 2
 [[race]]
 name = "halfling"
 description = "Small, quick, and quiet -- built for slipping past trouble, not through it."
+language = "halfling"
+nonsense_phrase = "Pip'wick tumbly noren fen"
 
 [race.skill_dice]
 # Raised to 3D

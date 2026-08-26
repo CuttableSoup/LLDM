@@ -67,12 +67,16 @@ class DialogueMixin(DMCoreProtocol):
             applied via nudge_attitude (SocialMixin, DM_Social.py) before persona/attitude are
             read, so a found target's own attitude description already reflects this turn's
             drift. Only ever applied on a found target -- there's nothing to nudge if no one's
-            actually listening.
+            actually listening. Never applied (and sentiments are simply ignored) when
+            _detect_language_barrier finds no shared tongue -- target never understood the
+            words well enough for their tone to register.
         @return {"target", "found"} plus, on success, {"persona", "attitude"} (see
-                describe_character/describe_attitude, SocialMixin) for LLMCore to speak from;
-                on failure, {"reason"} instead ("no_one_here" if nothing could be resolved at
-                all, "not_present" if the resolved name isn't currently here/alive/noticed,
-                "cant_talk" if it's an inanimate object).
+                describe_character/describe_attitude, SocialMixin) for LLMCore to speak from --
+                or, if _detect_language_barrier finds no language in common, also
+                {"language_barrier": True, "target_language", "nonsense_phrase"} instead of
+                applying sentiments at all; on failure, {"reason"} instead ("no_one_here" if
+                nothing could be resolved at all, "not_present" if the resolved name isn't
+                currently here/alive/noticed, "cant_talk" if it's an inanimate object).
         """
         target_name = self._resolve_dialogue_target(input_text)
         if not target_name:
@@ -88,6 +92,21 @@ class DialogueMixin(DMCoreProtocol):
         if self.entities.get(target_name, {}).get("supertype") == "object":
             return {"target": target_name, "found": False, "reason": "cant_talk"}
 
+        barrier_language, nonsense_phrase = self._detect_language_barrier(target_name)
+        if barrier_language:
+            # Deliberately skips nudge_attitude below: the sentiment classifiers read the
+            # *meaning* of what the player said, which target never actually understood --
+            # only persona/attitude (tone, not words) still ground this reply.
+            return {
+                "target": target_name,
+                "found": True,
+                "language_barrier": True,
+                "target_language": barrier_language,
+                "nonsense_phrase": nonsense_phrase,
+                "persona": self.describe_character(target_name),
+                "attitude": self.describe_attitude(target_name, self.player_name),
+            }
+
         self.nudge_attitude(target_name, self.player_name, sentiments or {})
 
         return {
@@ -96,3 +115,37 @@ class DialogueMixin(DMCoreProtocol):
             "persona": self.describe_character(target_name),
             "attitude": self.describe_attitude(target_name, self.player_name),
         }
+
+    def _detect_language_barrier(self, target_name):
+        """!
+        @brief Whether the player and target_name share no language at all -- both entities'
+            own "languages" list (an entity field, entity_schema.toml; absent entirely defaults
+            to ["common"], same as every entity shipped today, so this never fires against
+            existing data unless an author deliberately narrows an entity's own list, or the
+            player picks a race whose language that entity doesn't know either -- see
+            races.toml's own "language" field and DM_CharacterCreation.py's
+            apply_character_creation for how a chosen race's language lands on the player).
+        @param target_name The addressed entity, already confirmed present/alive/animate.
+        @return (None, None) if at least one language is shared. Otherwise
+                (target_language, nonsense_phrase): target_language is the first of target's
+                own unshared languages (what a narration prompt names as "the language it
+                spoke"), nonsense_phrase is whichever race in races.toml claims that language
+                as its own "language" field (see get_race), or None if no race does (ex: a
+                scenario-authored language with no matching race entry) -- LLM_Core.py's own
+                language-barrier prompt still works without one, just with no style example to
+                draw from.
+        """
+        player_languages = set(self.entities.get(self.player_name, {}).get("languages") or ["common"])
+        target_languages = self.entities.get(target_name, {}).get("languages") or ["common"]
+
+        if player_languages.intersection(target_languages):
+            return None, None
+
+        target_language = target_languages[0]
+        nonsense_phrase = None
+        for race in self.rules.get("race", []):
+            if race.get("language") == target_language:
+                nonsense_phrase = race.get("nonsense_phrase")
+                break
+
+        return target_language, nonsense_phrase

@@ -725,6 +725,34 @@ class TestFreeformDialogueNarration(LLMTestCase):
         prompt = self.llm_core.context_window[-1]["content"]
         self.assertIn("no one here to talk to", prompt)
 
+    def test_language_barrier_dialogue_queues_gibberish_prompt_not_the_players_words(self):
+        # DM_Dialogue.py's _detect_language_barrier still resolves "found": True (the target is
+        # present and willing to react) but flags language_barrier instead of a normal reply --
+        # the queued prompt must steer the model away from actually answering what was asked.
+        self.event_bus.publish("dialogue_resolved", {
+            "target": "innkeeper", "input": "where is the nearest blacksmith",
+            "found": True, "language_barrier": True, "target_language": "dwarvish",
+            "nonsense_phrase": "Grunthak dol bregnir uzdum",
+            "persona": "innkeeper - A weary tavern keeper.",
+            "attitude": "Attitude toward gladstone: is warm and well-disposed toward them.",
+            "present_entities": ["gladstone", "innkeeper"],
+        })
+
+        prompt = self.llm_core.context_window[-1]["content"]
+        self.assertIn("does not understand this at all", prompt)
+        self.assertIn("dwarvish", prompt)
+        self.assertIn("Grunthak dol bregnir uzdum", prompt)
+        # The player's own words are still relayed as context (so the model reacts to *something*
+        # being said), but the prompt must not read as an ordinary answerable dialogue turn.
+        self.assertIn("invented gibberish", prompt)
+
+    def test_language_barrier_prompt_omits_example_when_no_race_claims_the_language(self):
+        prompt = LLMCore._build_language_barrier_prompt(
+            "hello", "stranger", "goblin tongue", None,
+        )
+        self.assertIn("goblin tongue", prompt)
+        self.assertNotIn("For phonetic flavor", prompt)
+
     def test_filter_present_history_excludes_entries_the_entity_never_witnessed(self):
         self.llm_core.context_window = [
             {"role": "user", "content": "entrance room narration", "present": ["gladstone", "dart trap"]},
@@ -3185,6 +3213,22 @@ class TestCharacterCreationDMCoreIntegration(DMTestCase):
         self.assertEqual(dm.entities["gladstone"]["skills"]["blades"], {"dice": 2, "pips": 0})
         self.assertEqual(dm.entities["gladstone"]["qualities"]["race"], "elf")
 
+    def test_elf_character_gains_elvish_alongside_the_templates_own_common(self):
+        character = {
+            "race": "elf",
+            "allocation": {"arcane": 5, "stealth": 5, "observation": 5},
+        }
+        dm = DMCore(EventBus(), scenario_name="arena", character=character)
+        self.assertEqual(dm.entities["gladstone"]["languages"], ["common", "elvish"])
+
+    def test_human_character_gains_no_new_language_since_common_is_already_there(self):
+        character = {
+            "race": "human",
+            "allocation": {"arcane": 5, "stealth": 5, "observation": 5},
+        }
+        dm = DMCore(EventBus(), scenario_name="arena", character=character)
+        self.assertEqual(dm.entities["gladstone"]["languages"], ["common"])
+
 
 class TestCharacterCreationRename(unittest.TestCase):
     """!
@@ -4186,6 +4230,70 @@ class TestFreeformDialogue(DMTestCase):
         self.dm_core.load_game(slot_name)
 
         self.assertEqual(self.dm_core.get_attitude("innkeeper", self.dm_core.player_name)[0], drifted)
+
+
+class TestLanguageBarrier(DMTestCase):
+    """!
+    @brief DM_Dialogue.py's _detect_language_barrier -- both entities default to ["common"]
+        (entity_schema.toml) unless an author narrows one, so this only ever fires once a
+        scenario/entity deliberately restricts a "languages" list, or the player's own chosen
+        race (races.toml) doesn't cover it. scenario "tavern" for the same friendly-innkeeper
+        fixture TestFreeformDialogue already uses.
+    """
+    scenario_name = "tavern"
+
+    def setUp(self):
+        super().setUp()
+        self.dialogue_events = self._capture("dialogue_resolved")
+
+    def _talk(self, input_text):
+        self.dm_core._on_dialogue_detected({"input": input_text})
+        return self.dialogue_events[-1]
+
+    def test_no_shared_language_is_flagged_with_the_races_own_nonsense_phrase(self):
+        self.dm_core.entities["innkeeper"]["languages"] = ["dwarvish"]
+
+        result = self._talk("i talk to the innkeeper")
+
+        self.assertTrue(result["found"])
+        self.assertTrue(result["language_barrier"])
+        self.assertEqual(result["target_language"], "dwarvish")
+        self.assertEqual(result["nonsense_phrase"], "Grunthak dol bregnir uzdum")
+
+    def test_a_shared_language_never_triggers_the_barrier(self):
+        self.dm_core.entities["innkeeper"]["languages"] = ["dwarvish", "common"]
+
+        result = self._talk("i talk to the innkeeper")
+
+        self.assertNotIn("language_barrier", result)
+
+    def test_default_common_on_both_sides_never_triggers_the_barrier(self):
+        # Neither gladstone nor the innkeeper author "languages" explicitly here -- both fall
+        # back to ["common"] (entity_schema.toml's own default), so ordinary tavern dialogue is
+        # unaffected by this feature entirely.
+        result = self._talk("i talk to the innkeeper")
+        self.assertNotIn("language_barrier", result)
+
+    def test_language_barrier_skips_the_sentiment_nudge(self):
+        self.dm_core.entities["innkeeper"]["languages"] = ["dwarvish"]
+        before = self.dm_core.get_attitude("innkeeper", self.dm_core.player_name)[0]
+
+        self.dm_core._on_dialogue_detected({
+            "input": "i talk to the innkeeper", "sentiment": "positive", "sentiment_score": 1.0,
+        })
+
+        self.assertEqual(self.dm_core.get_attitude("innkeeper", self.dm_core.player_name)[0], before)
+
+    def test_an_elf_character_can_talk_to_a_dwarvish_only_speaker_if_also_fluent_in_common(self):
+        # A player who knows the target's language directly (elvish here, matching the target's
+        # own sole language) resolves normally even without a shared "common" -- the check is
+        # "any overlap at all", not specifically "common".
+        self.dm_core.entities[self.dm_core.player_name]["languages"] = ["common", "elvish"]
+        self.dm_core.entities["innkeeper"]["languages"] = ["elvish"]
+
+        result = self._talk("i talk to the innkeeper")
+
+        self.assertNotIn("language_barrier", result)
 
 
 class TestHelpChannel(DMTestCase):

@@ -295,9 +295,16 @@ replace_with = "glass vial"                 # Must name another loaded entity; a
 # Descriptive/flavor fields -- purely narrative, read by describe_character for the
 # scenario_loaded roster and every action's own "defender_details" (deliberately excludes
 # mechanical data like skills/dice, see CLAUDE.md's "Social and attitudes").
-languages = [ "common" ]                    # UNUSED today -- reserved for a future
-                                            # comprehension-gates-dialogue mechanic (see
-                                            # CLAUDE.md's "Extended goals").
+languages = [ "common" ]                    # Every language this entity understands. Absent
+                                            # entirely defaults to ["common"], same as every
+                                            # entity shipped today -- an author only needs to
+                                            # narrow this (ex: ["elvish"] alone, no "common")
+                                            # to actually gate dialogue with this entity. See
+                                            # DM_Dialogue.py's language-barrier check and
+                                            # races.toml's own "language"/"nonsense_phrase"
+                                            # fields (apply_character_creation adds the
+                                            # player's chosen race's language onto their own
+                                            # list at chargen time).
 memories = [ "A wife at home" ]
 quotes = [ "Hello, world" ]
 
