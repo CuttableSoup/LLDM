@@ -37,6 +37,7 @@ from GUI_Core import GUICore
 from Intent_Classification import (
     ADVANCE_KEYWORDS,
     CLOSE_KEYWORDS,
+    CRAFT_KEYWORDS,
     DIALOGUE_KEYWORDS,
     DROP_KEYWORDS,
     EQUIP_KEYWORDS,
@@ -508,6 +509,19 @@ class TestIntentClassification(unittest.TestCase):
             events[1]["payload"]["clauses"], [{"kind": "item", "intent": "take", "item_name": "longsword"}],
         )
 
+    def test_craft_keyword_resolves_to_an_item_kind_clause(self):
+        # Detected exactly like "give"/"take" (same map_to_item lookup, matching over every
+        # known object-supertype entity regardless of scene presence -- see NLP_Core.py's own
+        # item-catalog build) -- resolution (DM_Crafting.py) is what actually rolls dice for it.
+        classifier = IntentClassifier(FakeMatcher(items={"craft an iron dagger": ("iron dagger", 0.9)}))
+        _processed, events = classifier.classify("craft an iron dagger")
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["event"], "turn_detected")
+        self.assertEqual(
+            events[0]["payload"]["clauses"], [{"kind": "item", "intent": "craft", "item_name": "iron dagger"}],
+        )
+
     def test_item_verb_still_takes_priority_over_dialogue(self):
         # A genuine item verb naming an entity is never swallowed as dialogue, even though
         # "to thane" would otherwise read as conversational address.
@@ -630,6 +644,7 @@ class TestIntentClassification(unittest.TestCase):
             "UNEQUIP_KEYWORDS": UNEQUIP_KEYWORDS, "DROP_KEYWORDS": DROP_KEYWORDS,
             "TAKE_KEYWORDS": TAKE_KEYWORDS, "GIVE_KEYWORDS": GIVE_KEYWORDS,
             "TRADE_KEYWORDS": TRADE_KEYWORDS, "USE_KEYWORDS": USE_KEYWORDS,
+            "CRAFT_KEYWORDS": CRAFT_KEYWORDS,
             "OPEN_KEYWORDS": OPEN_KEYWORDS, "CLOSE_KEYWORDS": CLOSE_KEYWORDS,
             "ADVANCE_KEYWORDS": ADVANCE_KEYWORDS, "RETREAT_KEYWORDS": RETREAT_KEYWORDS,
             "FORMATION_BEHIND_KEYWORDS": FORMATION_BEHIND_KEYWORDS,
@@ -1362,6 +1377,67 @@ class TestMovementAndRange(DMTestCase):
         self.assertEqual(action["reason"], "out_of_range")
         self.assertIsNone(action["roll"])
         self.assertNotIn("damage", action)
+
+
+class TestSpellMaterials(DMTestCase):
+    # arena's own wolf is already a live, hostile current_target the moment DMCore loads (its
+    # own auto-claim at scenario load, same state every other TestCombatLoop test relies on),
+    # so casting at it resolves as combat ("round_resolved"), not the no-combat "action_resolved"
+    # path. "arc lance" (spells.toml) is on gladstone's own abilities list and needs 1x
+    # "iron filings", pre-seeded in his starting inventory (characters.toml). Gladstone's own
+    # arcane (2D) opposes the wolf's own willpower (2D, arcane's own opposing-skill match) --
+    # an even matchup, so (unlike TestCombatLoop's own blades-vs-dodge asymmetry) a fixed
+    # random.randint value alone doesn't guarantee a miss; test_failed_cast temporarily boosts
+    # the wolf's own willpower dice to force one instead.
+    def setUp(self):
+        super().setUp()
+        self.resolved = self._capture("round_resolved")
+
+    def _cast(self, extra_clauses=None):
+        clauses = [{"kind": "action", "skill": "arc lance"}]
+        clauses.extend(extra_clauses or [])
+        self.dm_core._on_turn_detected({"clauses": clauses, "input": "I cast arc lance at the wolf"})
+        return self.resolved[-1]["actions"][0]
+
+    def test_missing_material_fails_the_cast_without_rolling(self):
+        self.dm_core.entities["gladstone"]["inventory"].remove("iron filings")
+
+        result = self._cast()
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["reason"], "missing_spell_materials")
+        self.assertIsNone(result["roll"])
+
+    def test_successful_cast_consumes_the_material(self):
+        # An even 2D-vs-2D matchup at a fixed per-die value ties -- resolve_action's own
+        # "roll >= difficulty" counts a tie as a success, same as everywhere else in the engine.
+        with patch("random.randint", return_value=6):
+            result = self._cast()
+
+        self.assertTrue(result["success"])
+        self.assertIn("damage", result)
+        self.assertNotIn("iron filings", self.dm_core.entities["gladstone"]["inventory"])
+
+    def test_failed_cast_still_consumes_the_material(self):
+        # Temporarily out-trains gladstone's own 2D arcane with a 6D willpower, so a fixed
+        # per-die value still guarantees the wolf's own opposing roll wins -- the material is
+        # still spent, same as a botched craft attempt's own materials.
+        self.dm_core.entities["wolf"]["skills"]["willpower"] = {"dice": 6, "pips": 0}
+
+        with patch("random.randint", return_value=1):
+            result = self._cast()
+
+        self.assertFalse(result["success"])
+        self.assertNotIn("damage", result)
+        self.assertNotIn("iron filings", self.dm_core.entities["gladstone"]["inventory"])
+
+    def test_a_different_ability_never_touches_the_material(self):
+        # gladstone's own longsword (skill="blades") carries no "materials" field at all --
+        # _consume_spell_materials_if_rolled must be a complete no-op for it.
+        with patch("random.randint", return_value=6):
+            self.dm_core._on_turn_detected({"clauses": [{"kind": "action", "skill": "blades"}], "input": "I attack with my sword"})
+
+        self.assertIn("iron filings", self.dm_core.entities["gladstone"]["inventory"])
 
 
 class TestEntityBehavior(DMTestCase):
@@ -3987,6 +4063,112 @@ class TestUseItem(DMTestCase):
 
         self.assertEqual(result["poisoned"], 0)
         self.assertEqual(self.dm_core.get_current_hp("gladstone"), starting_hp)
+
+
+class TestCrafting(DMTestCase):
+    # items.toml's "iron dagger" ([entity.craft]: skill=["strength","finesse"], difficulty=10,
+    # requires_station="forge", materials=2x iron ingot + 1x leather strip) is globally loaded
+    # (items.toml, not scenario-local) regardless of scenario_name -- "arena" (DMTestCase's own
+    # default) is fine; only the "forge" station itself (town.toml-local) needs manually placing.
+    def setUp(self):
+        super().setUp()
+        self.action_events = self._capture("action_resolved")
+        self.round_events = self._capture("round_resolved")
+        self.dm_core.entities["gladstone"].setdefault("inventory", []).extend(
+            ["iron ingot", "iron ingot", "leather strip"],
+        )
+
+    def _place_forge(self):
+        self.dm_core.entities["forge"] = {
+            "name": "forge", "supertype": "object", "subtype": "prop", "provides_station": "forge",
+        }
+        self.dm_core.scenario_entities.append("forge")
+
+    def _craft(self, roll_result, item_name="iron dagger", extra_clauses=None):
+        self.dm_core.roll_dice = lambda dice, pips: roll_result
+        clauses = [{"kind": "item", "intent": "craft", "item_name": item_name}]
+        clauses.extend(extra_clauses or [])
+        self.dm_core._on_turn_detected({"clauses": clauses, "input": "I craft an iron dagger"})
+        return self.action_events[-1]["actions"][0]
+
+    def test_missing_station_fails_without_rolling_or_consuming_materials(self):
+        result = self._craft(roll_result=99)
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["reason"], "missing_station")
+        self.assertIsNone(result["roll"])
+        self.assertEqual(self.dm_core.entities["gladstone"]["inventory"].count("iron ingot"), 2)
+
+    def test_missing_materials_fails_without_rolling(self):
+        self._place_forge()
+        self.dm_core.entities["gladstone"]["inventory"] = []
+
+        result = self._craft(roll_result=99)
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["reason"], "missing_materials")
+        self.assertIsNone(result["roll"])
+
+    def test_not_craftable_item_fails_without_rolling(self):
+        # "health potion" has its own [entity.test] but no [entity.craft] block at all.
+        self._place_forge()
+
+        result = self._craft(roll_result=99, item_name="health potion")
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["reason"], "not_craftable")
+        self.assertIsNone(result["roll"])
+
+    def test_successful_craft_consumes_materials_and_places_the_item(self):
+        self._place_forge()
+
+        result = self._craft(roll_result=99)  # clears iron dagger's own difficulty (10)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["crafted"], "iron dagger")
+        self.assertIsNone(result["defender"])
+        self.assertIsNone(result["opposing_skill"])
+        inventory = self.dm_core.entities["gladstone"]["inventory"]
+        self.assertEqual(inventory.count("iron ingot"), 0)
+        self.assertEqual(inventory.count("leather strip"), 0)
+        self.assertIn("iron dagger", inventory)
+
+    def test_failed_craft_still_consumes_materials_but_grants_nothing(self):
+        self._place_forge()
+
+        result = self._craft(roll_result=0)  # never clears difficulty 10
+
+        self.assertFalse(result["success"])
+        self.assertNotIn("crafted", result)
+        inventory = self.dm_core.entities["gladstone"]["inventory"]
+        self.assertEqual(inventory.count("iron ingot"), 0)
+        self.assertEqual(inventory.count("leather strip"), 0)
+        self.assertNotIn("iron dagger", inventory)
+
+    def test_crafting_never_engages_combat(self):
+        self._place_forge()
+
+        self._craft(roll_result=99)
+
+        self.assertEqual(self.round_events, [])
+
+    def test_dice_penalty_from_a_multi_clause_turn_reaches_the_craft_roll(self):
+        self._place_forge()
+        seen_dice_penalties = []
+        original_resolve_action = self.dm_core.resolve_action
+
+        def spy_resolve_action(entity_name, skill_name, difficulty=0, dice_penalty=0):
+            seen_dice_penalties.append(dice_penalty)
+            return original_resolve_action(entity_name, skill_name, difficulty, dice_penalty=dice_penalty)
+
+        self.dm_core.resolve_action = spy_resolve_action
+
+        self._craft(
+            roll_result=99,
+            extra_clauses=[{"kind": "item", "intent": "examine", "item_name": "iron dagger"}],
+        )
+
+        self.assertEqual(seen_dice_penalties, [1])
 
 
 class TestEquipUnequipDrop(DMTestCase):

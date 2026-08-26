@@ -777,6 +777,73 @@ Publishes `item_interaction_resolved` either way, with enough detail (`found`,
 `reason`/`description`/`container`/`amount`/`price`/`contents`/`healed`/`charges_left`/
 `replaced_with`/`slot`/`replaced` as applicable) for narration to explain a miss or a success.
 
+## Crafting
+
+A third kind of item-adjacent check, alongside the diceless item interactions above and
+`[entity.test]`-driven item tests (lock-picking, above): crafting genuinely rolls dice against a
+real difficulty, so it's routed through the batched skill/ability side of `_on_turn_detected`'s
+clause loop (`player_actions`, `dice_penalty`) rather than the diceless
+`_on_item_interaction_detected` pipeline every other item verb uses — even though it's *detected*
+exactly like one (a `"craft"` intent, matched via `detect_item_intent`'s own keyword ladder plus
+the ordinary `map_to_item` lookup). Its "target" is the **crafted item's own name**, a pure
+catalog entry that need never have been instanced anywhere — `map_to_item` already matches over
+every `supertype == "object"` entity regardless of scene presence (see "Items and movement as
+intents"), so `"craft a torch"` resolves the same way `"examine a torch"` would.
+
+An item opts in via its own `[entity.craft]` block: `skill` (a list — like `[entity.test]`'s own,
+any one qualifies, but since `"craft"`/`"brew"`/`"forge"` carry no skill of their own the way a
+literal `"pick the lock with finesse"` does, the player's *best-trained* skill among the list is
+auto-selected via `select_ability_skill`, the same "best-rated candidate" helper a multi-skill
+ability like `cleave` already uses), `difficulty` (same `resolve_action` semantics as an item
+test's own), `materials` (a list of `{item, quantity}`, checked against the player's own
+inventory — duplicates represent quantity, same convention `transfer_item` already documents),
+and an optional `requires_station` (a string naming a station tag; if set, some live
+`self.scenario_entities` member's own top-level `provides_station` must match it, or the attempt
+fails as `"missing_station"` with no roll — the first "is a tagged entity present in the scene"
+check anywhere in this codebase; every existing `requires_condition`/`blocks_if_condition` gate
+instead checks a condition on the acting/target entity's own state, never a third party's
+presence). `provides_station` is deliberately its own field, not a repurposing of the existing
+`tags` field — `tags` is documented as narration-only, never matched against anything else, and
+overloading it here would break that invariant.
+
+`DM_Crafting.py`'s `CraftingMixin._try_craft_action(item_name, dice_penalty)` is the resolver:
+no `[entity.craft]` block at all fails as `"not_craftable"`; a missing station or missing
+materials each fail with their own reason, no roll attempted (mirroring `_resolve_roll`'s own
+`"out_of_range"` no-roll precedent) — none of these three gates cost anything. Past every gate,
+it calls `resolve_action(player_name, skill_name, difficulty, dice_penalty=dice_penalty)` (never
+`resolve_opposed_action` — nothing opposes a craft attempt), sets `defender`/`opposing_skill` to
+`None`, and **consumes every material unconditionally, success or failure alike** — a botched
+attempt still spends the materials, giving the difficulty number real stakes rather than a free
+retry. Only on success does it call `place_new_item(player_name, item_name)` and set
+`result["crafted"] = item_name`. The result dict is shaped like any other `player_actions` entry,
+so it flows through the ordinary `action_resolved`/`round_resolved` narration path unchanged;
+`LLM_Core.py`'s `_describe_outcome` gained one new optional fragment (`crafted`, mirroring
+`summoned`'s own) plus three no-roll reason branches (`not_craftable`/`missing_materials`/
+`missing_station`, mirroring the existing `"out_of_range"` branch) — no new narration trigger
+event was needed. A craft attempt deliberately never touches `self.current_target` and never sets
+`engaged_combat_target`, same as an item test's own roll.
+
+`Rules/Fantasy/scenarios/town.toml`'s `blacksmith` location (already narrated as having "the
+forge in the back") is the shipped worked example: a `forge` prop entity
+(`provides_station = "forge"`, in the same `subtype = "prop"` style as `town_square`'s own
+`market stall`) sits in its own `entities` list, and `items.toml`'s `iron dagger` is craftable
+there from `iron ingot`/`leather strip` materials via either `strength` or `finesse`.
+
+**Spell components reuse the same `materials` field and primitives.** A spell/technique/innate
+ability (`entity_schema.toml`'s "Ability/weapon/spell/technique fields") can carry its own
+`materials` (identical `{item, quantity}` shape to a craft recipe's), gating and consuming
+through `DM_Crafting.py`'s `_has_materials`/`_consume_materials` directly rather than a parallel
+mechanism. `DM_Core.py`'s `_resolve_roll` checks it first, ahead of the entity-test/opposed/
+untargeted split every other roll path picks between — missing even one named material at its
+required quantity fails the cast as `"missing_spell_materials"` with no roll attempted, the same
+"gate failures cost nothing" precedent `"out_of_range"` already follows for a too-far target
+(distinct reasons for the two, since a spell's own failure has no `item_name` to report the way a
+craft attempt's does). Once a roll actually happens, `_consume_spell_materials_if_rolled` spends
+every material unconditionally, success or failure alike — a fizzled cast still burns the
+reagent, mirroring a botched craft attempt's own cost. `spells.toml`'s `arc lance` (an
+`iron filings`-consuming lightning bolt on gladstone's own `abilities` list, `iron filings`
+pre-seeded in gladstone's starting inventory) is the shipped worked example.
+
 ## Social and attitudes
 
 `get_attitude(entity, toward)` returns a three-value array (`disposition, threat, familiarity`,

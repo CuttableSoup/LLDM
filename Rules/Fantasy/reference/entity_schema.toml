@@ -214,6 +214,23 @@ summon = { name = "spectral wolf", duration = 4 }
                                             # -- it's a real, hand-authored creature template,
                                             # unrelated to (and not gated by) the "abilities"
                                             # this ability lives on.
+materials = [
+    { item = "iron filings", quantity = 1 }, # A spell/technique/innate ability only -- same
+]                                           # {item, quantity} shape and same _has_materials/
+                                            # _consume_materials primitives (DM_Crafting.py) a
+                                            # craft recipe's own "materials" already uses,
+                                            # reused directly rather than a parallel mechanism.
+                                            # Gated *before* any of the three roll paths
+                                            # _resolve_roll picks between (entity test/opposed/
+                                            # untargeted) -- missing even one named item at its
+                                            # required quantity fails the cast outright as
+                                            # "missing_spell_materials", no roll attempted, same
+                                            # "gate failures cost nothing" precedent
+                                            # "out_of_range" already follows. Once a roll
+                                            # actually happens, every material is consumed
+                                            # unconditionally -- success or failure alike, same
+                                            # as a craft attempt's own materials (a fizzled cast
+                                            # still burns the reagent).
 
 # ---------------------------------------------------------------------------------------------
 # Abilities -- a flat list on the ability-*having* entity (creature/character), not the ability
@@ -472,3 +489,44 @@ damage_tags = [ "piercing" ]
 condition = "jammed"
 duration = "permanent"
 dismiss = ""
+
+# ---------------------------------------------------------------------------------------------
+# Craft -- gates DMCore._try_craft_action (DM_Crafting.py). Lives on the item *being* crafted,
+# named by whatever the player's "craft"/"brew"/"forge" phrase resolves to via map_to_item (the
+# same catalog-wide lookup examine/take/use already use -- this entity need not be instanced
+# anywhere yet; a pure recipe is fine). Unlike [entity.test], this is never opposed (there's
+# nothing to oppose it with) and never gated by the entity's own active_conditions -- it's
+# always available the moment its own requires_station/materials gates are met.
+[entity.craft]
+skill = [ "strength", "finesse" ]           # Which skill(s) can attempt this craft -- any one
+                                            # qualifies, same precedent as [entity.test]'s own
+                                            # skill list, except the player's *best-trained*
+                                            # skill among these is auto-picked (select_ability_
+                                            # skill, DM_Combat.py) rather than requiring the
+                                            # player to have named one in their own phrasing --
+                                            # "craft"/"brew"/"forge" carry no skill of their own
+                                            # the way "pick the lock with finesse" does.
+difficulty = 12                             # Same resolve_action semantics as [entity.test]'s
+                                            # own "difficulty".
+requires_station = "forge"                  # Optional. If set, some live scene entity's own
+                                            # top-level "provides_station" (see below) must
+                                            # match this value or the attempt fails as
+                                            # "missing_station" with no roll. Omitted entirely
+                                            # means craftable anywhere.
+materials = [
+    { item = "iron ingot", quantity = 2 }, # Every named item must be present in the player's
+    { item = "leather strip", quantity = 1 }, # own inventory in at least this quantity
+]                                           # (duplicates represent quantity, same convention
+                                            # transfer_item's own docstring already documents) or
+                                            # the attempt fails as "missing_materials" with no
+                                            # roll. Once a roll actually happens, every material
+                                            # is consumed unconditionally -- success or failure
+                                            # alike, a botched attempt still spends them.
+
+# ---------------------------------------------------------------------------------------------
+# Craft station -- a plain top-level field (not part of [entity.craft], which lives on the item
+# being crafted, not the station) marking a *different*, usually stationary entity (ex: a forge
+# prop) as satisfying some recipe's own "requires_station". Deliberately its own field rather
+# than reusing the freeform "tags" field above -- tags is documented as narration-only, never
+# matched against anything else, and overloading it here would break that invariant.
+provides_station = "forge"

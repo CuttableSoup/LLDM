@@ -44,6 +44,7 @@ description = "Heat rolls off the forge in the back; every surface is dark with 
 kind = "building"
 entities = [
     { name = "blacksmith" },
+    { name = "forge" },
 ]
 return_to = "town_square"
 
@@ -159,6 +160,13 @@ strength = { dice = 4, pips = 0 }
 appraise = { dice = 3, pips = 0 }
 streetwise = { dice = 2, pips = 0 }
 brawling = { dice = 3, pips = 0 }
+
+[[entity]]
+name = "forge"
+supertype = "object"
+subtype = "prop"
+description = "A soot-blackened stone forge, coals banked but still glowing."
+provides_station = "forge"
 
 [[entity]]
 name = "goblin"

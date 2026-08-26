@@ -25,6 +25,24 @@ damage_value = { dice = 4, pips = 0, bonus = 0 }
 damage_tags = [ "water" ]
 
 [[entity]]
+name = "arc lance"
+supertype = "spell"
+subtype = "evocation"
+description = "Channel a crackling lance of lightning through a pinch of iron filings."
+skill = "arcane"
+difficulty = 10
+range = 5
+targets = { number = 1, aoe = 0 }
+damage_value = { dice = 4, pips = 1, bonus = 0 }
+damage_tags = [ "lightning" ]
+# Same {item, quantity} shape a craft recipe's own "materials" uses (DM_Crafting.py's
+# _has_materials/_consume_materials, reused directly by _resolve_roll's own gate) -- gates the
+# cast outright if missing (no roll, "missing_spell_materials"), and is consumed from the
+# caster's inventory unconditionally once a real roll happens, success or failure alike, same
+# as a craft attempt's own materials.
+materials = [ { item = "iron filings", quantity = 1 } ]
+
+[[entity]]
 name = "summon spectral wolf"
 supertype = "spell"
 subtype = "conjuration"

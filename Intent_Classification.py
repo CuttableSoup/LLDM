@@ -65,6 +65,13 @@ TRADE_KEYWORDS = ("trade ", "buy ", "purchase ")
 # isn't included: it's far too generic a verb (could plausibly mean almost anything) to
 # safely route every "use ..." phrase into item-use handling the way these specific verbs can.
 USE_KEYWORDS = ("drink ", "quaff ", "drink it")
+# Attempting a recipe's own [entity.craft] check (DM_Crafting.py) against the named result
+# item -- map_to_item resolves item_name the same way it does for "use"/"take"/..., matching
+# over every supertype == "object" entity regardless of whether it's ever been instanced
+# anywhere (a pure recipe/catalog entry). Deliberately no bare "make " here -- same reasoning
+# CLOSE_KEYWORDS/a bare "use " already avoid: "make" is far too generic a verb to safely route
+# every "make ..." phrase into crafting.
+CRAFT_KEYWORDS = ("craft ", "craft a ", "craft an ", "craft the ", "brew ", "forge a ", "forge an ")
 OPEN_KEYWORDS = ("open the ", "open it")
 CLOSE_KEYWORDS = ("close the ", "close it", "shut the ", "shut it")
 # Movement/positioning (see DM_Movement.py) -- like open/close, these act on the whole scene
@@ -311,7 +318,7 @@ def detect_item_intent(processed_text):
     """!
     @brief Checks processed input for an item-interaction verb, ahead of skill matching.
     @param processed_text The cleaned and processed player input.
-    @return "examine", "equip", "unequip", "drop", "take", "give", "trade", "use",
+    @return "examine", "equip", "unequip", "drop", "take", "give", "trade", "use", "craft",
         "open", "close", "advance", "retreat", "formation_behind", "formation_abreast",
         or None.
     """
@@ -336,6 +343,8 @@ def detect_item_intent(processed_text):
         return "trade"
     if _keyword_gate(processed_text, USE_KEYWORDS):
         return "use"
+    if _keyword_gate(processed_text, CRAFT_KEYWORDS):
+        return "craft"
     if _keyword_gate(processed_text, OPEN_KEYWORDS):
         return "open"
     if _keyword_gate(processed_text, CLOSE_KEYWORDS):

@@ -453,3 +453,58 @@ subtype = "trinket"
 description = "An empty glass vial, its contents long since consumed."
 bulk = 0
 value = 1
+
+# Raw crafting material -- no [entity.test]/abilities of its own, just a plain, stackable
+# (duplicate-inventory-entries-represent-quantity) good.
+[[entity]]
+name = "iron ingot"
+supertype = "object"
+subtype = "material"
+description = "A rough-cast bar of iron, still faintly warm from the forge."
+bulk = 1
+value = 3
+
+[[entity]]
+name = "leather strip"
+supertype = "object"
+subtype = "material"
+description = "A length of cured leather, cut for binding a grip or hilt."
+bulk = 0
+value = 1
+
+# Worked example of [entity.craft] (see CLAUDE.md's "Crafting" and reference/entity_schema.toml)
+# -- craftable via either strength or finesse (whichever gladstone is better-trained in gets
+# auto-selected), needs the blacksmith's own forge (town.toml) nearby, and consumes its own
+# materials whether the roll succeeds or fails.
+[[entity]]
+name = "iron dagger"
+supertype = "object"
+subtype = "weapon"
+skill = "blades"
+description = "A plain iron dagger, hastily forged but serviceable."
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 6
+damage_value = { dice = 1, pips = 0, bonus = "strength_damage" }
+damage_tags = [ "slashing" ]
+bulk = 1
+value = 8
+
+[entity.craft]
+skill = [ "strength", "finesse" ]
+difficulty = 10
+requires_station = "forge"
+materials = [
+    { item = "iron ingot", quantity = 2 },
+    { item = "leather strip", quantity = 1 },
+]
+
+# Spell component -- same [entity.craft]-style "materials" shape, just consumed by a named
+# ability's own cast (DM_Core.py's _resolve_roll/_consume_spell_materials_if_rolled) instead of
+# a craft attempt. See spells.toml's "arc lance".
+[[entity]]
+name = "iron filings"
+supertype = "object"
+subtype = "material"
+description = "A small pouch of fine iron filings, faintly magnetic."
+bulk = 0
+value = 2

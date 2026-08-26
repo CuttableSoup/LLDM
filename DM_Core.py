@@ -3,6 +3,7 @@ import re
 
 from DM_CharacterCreation import CharacterCreationMixin
 from DM_Combat import CombatMixin
+from DM_Crafting import CraftingMixin
 from DM_Dialogue import DialogueMixin
 from DM_Encounters import EncounterMixin
 from DM_Help import HelpMixin
@@ -35,7 +36,7 @@ TARGET_HEALTHY_KEYWORDS = ("healthy", "unhurt", "uninjured", "unharmed")
 # "wounded" shouldn't silently redirect to whichever one merely has the least HP among equals.
 TARGET_WOUNDED_HP_CUTOFF = 0.40
 
-class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixin, RulesMixin, PersistenceMixin, CharacterCreationMixin, NpcGenerationMixin, DialogueMixin, HelpMixin, ImprovisationMixin, EncounterMixin, SummoningMixin):
+class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixin, RulesMixin, PersistenceMixin, CharacterCreationMixin, NpcGenerationMixin, DialogueMixin, HelpMixin, ImprovisationMixin, EncounterMixin, SummoningMixin, CraftingMixin):
     """!
     @brief Main class handling the core mechanics of the RPG system. The implementation is
         composed from domain mixins in sibling files -- DM_Rules.py (rules/scenario
@@ -210,7 +211,11 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             (give/take/equip/...), which is resolved via the existing, entirely unchanged
             _on_item_interaction_detected (its own resolution logic never rolled anything, so
             it needs no dice_penalty awareness at all -- it's simply called once per item-kind
-            clause here instead of being the sole top-level handler for a whole input).
+            clause here instead of being the sole top-level handler for a whole input). A craft
+            attempt (DM_Crafting.py) is a third case: item-*named* like an interaction (its
+            item_name is the recipe/result item map_to_item resolved), but dice-rolling and
+            dice_penalty-subject like an item test -- handled by its own explicit branch in the
+            loop below rather than either existing path.
         @param data The turn_detected payload from NLPCore ({clauses: [{kind: "item", intent,
             item_name} | {kind: "action", skill, score, target?}, ...], input}). Item-kind
             clauses resolve immediately, in clause order, via _on_item_interaction_detected
@@ -247,6 +252,19 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         engaged_combat_target = False
         for entry in clauses:
             if entry.get("kind") == "item":
+                if entry.get("intent") == "craft":
+                    # A craft attempt is item-*named* (map_to_item resolved the recipe/result
+                    # item, same as any other item-kind clause) but genuinely rolls dice
+                    # against a real difficulty (DM_Crafting.py) -- unlike every other item
+                    # interaction, which never rolls anything. It shares the turn's own
+                    # dice_penalty pool and narrates through the batched action_resolved/
+                    # round_resolved path below, same as an item test's own roll already does,
+                    # rather than through the diceless item_interaction_resolved path. It
+                    # deliberately never touches self.current_target, so it doesn't set
+                    # engaged_combat_target below -- same as an item test's own roll.
+                    craft_result = self._try_craft_action(entry.get("item_name"), dice_penalty)
+                    player_actions.append(craft_result)
+                    continue
                 # Resolved via the exact same, unchanged item-interaction pipeline a bare
                 # item_interaction_detected event already uses -- narrates immediately, in
                 # clause order, rather than joining player_actions below, which only ever
@@ -272,6 +290,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             engaged_combat_target = True
 
             result, ability, via_test = self._resolve_roll(skill_name, named_ability, target_name, dice_penalty)
+            self._consume_spell_materials_if_rolled(result, named_ability)
             self._apply_damage_if_hit(result, skill_name, named_ability, ability, target_name, via_test)
             self._apply_summon_if_hit(result, named_ability)
             self._attach_defender_details(result, target_name)
@@ -528,6 +547,22 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             roll, if any, needed again by _apply_damage_if_hit; via_test is True if this was a
             flat [entity.test] check, which must never also roll bonus weapon damage.
         """
+        # A spell/technique/innate ability's own "materials" (same {item, quantity} shape a
+        # craft recipe's own "materials" uses -- DM_Crafting.py's _has_materials, reused
+        # directly) gates every roll path below uniformly -- checked ahead of the entity-test/
+        # opposed/untargeted split, same "prerequisite before any roll" precedent
+        # "out_of_range" already follows for range. Consuming the materials (success or
+        # failure alike, once a roll actually happens) is _on_turn_detected's own job, right
+        # after this method returns -- this method only ever gates, never mutates inventory.
+        if named_ability and named_ability.get("materials") and not self._has_materials(
+            self.player_name, named_ability["materials"],
+        ):
+            return {
+                "entity": self.player_name, "skill": skill_name, "roll": None, "difficulty": None,
+                "success": False, "defender": target_name, "opposing_skill": None,
+                "reason": "missing_spell_materials",
+            }, named_ability, False
+
         test = self.entities.get(target_name, {}).get("test") if target_name else None
         via_test = False
         ability = None
@@ -664,6 +699,25 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         summoned_name = self._summon_creature(summon_spec)
         if summoned_name:
             result["summoned"] = summoned_name
+
+    def _consume_spell_materials_if_rolled(self, result, named_ability):
+        """!
+        @brief Consumes a named ability's own "materials" (DM_Crafting.py's _consume_materials,
+            reused directly -- same {item, quantity} shape and consumption primitive a craft
+            recipe's own materials already uses) once a real roll actually happened for it --
+            unconditionally, success or failure alike, same as a craft attempt's own materials
+            (a fizzled cast still burns the reagent). Never consumes anything for a no-roll
+            short-circuit (missing_spell_materials -- _resolve_roll's own gate already refused
+            the cast before getting here -- or out_of_range), since result["roll"] stays None
+            for both.
+        @param result The _resolve_roll result for this action.
+        @param named_ability The resolved ability entity (technique/spell), or None.
+        """
+        if not named_ability or not named_ability.get("materials"):
+            return
+        if result.get("roll") is None:
+            return
+        self._consume_materials(self.player_name, named_ability["materials"])
 
     def _attach_defender_details(self, result, target_name):
         """!

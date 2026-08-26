@@ -28,7 +28,8 @@ inventory = [
     "chain mail",
     "health potion",
     "health potion",
-    "health potion"
+    "health potion",
+    "iron filings"
 ]
 
 languages = [ "common" ]
@@ -41,6 +42,7 @@ quotes = [ "Hello, world" ]
 abilities = [
     "fireball",
     "splash flow",
+    "arc lance",
     "summon spectral wolf",
     "cleave",
     { name = "punch", supertype = "innate", subtype = "weapon", skill = "brawling", damage_tags = [ "bludgeoning" ], damage_value = { dice = 0, pips = 0, bonus = "user.strength_damage" } },

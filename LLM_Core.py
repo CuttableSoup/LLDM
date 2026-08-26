@@ -121,6 +121,49 @@ class LLMCore:
                 f"away to reach with this right now, so no roll is attempted."
             )
 
+        # Set only by DMCore._resolve_roll (DM_Core.py) when a named spell/technique/innate
+        # ability's own "materials" aren't fully present in the player's inventory -- no roll
+        # attempted, mirroring "out_of_range"'s own no-roll shape above. Distinct from a craft
+        # attempt's own "missing_materials" reason (below) since this one has no "item_name" to
+        # reference -- the thing missing is a component the cast needs, not a recipe result.
+        if action_result.get("reason") == "missing_spell_materials":
+            input_text = action_result.get("input")
+            attempt_line = f"{actor.capitalize()} attempts: \"{input_text}\"\n" if input_text else ""
+            return (
+                f"{attempt_line}"
+                f"Skill used: {action_result.get('skill')} -- {actor.capitalize()} lacks the "
+                f"material component this needs, so no roll is attempted."
+            )
+
+        # Set only by DMCore._try_craft_action (DM_Crafting.py) when a craft attempt fails one
+        # of its own gates before any dice are rolled -- mirrors the "out_of_range" no-roll
+        # shape above, just for crafting's own three gates (no recipe at all, a missing
+        # station, missing materials) instead of a range check.
+        if action_result.get("reason") == "not_craftable":
+            input_text = action_result.get("input")
+            attempt_line = f"{actor.capitalize()} attempts: \"{input_text}\"\n" if input_text else ""
+            return (
+                f"{attempt_line}"
+                f"{actor.capitalize()} tries to craft {action_result.get('item_name')}, but there's "
+                f"no known way to make that."
+            )
+        if action_result.get("reason") == "missing_station":
+            input_text = action_result.get("input")
+            attempt_line = f"{actor.capitalize()} attempts: \"{input_text}\"\n" if input_text else ""
+            return (
+                f"{attempt_line}"
+                f"Crafting {action_result.get('item_name')} needs a {action_result.get('station')} "
+                f"nearby, and none is here."
+            )
+        if action_result.get("reason") == "missing_materials":
+            input_text = action_result.get("input")
+            attempt_line = f"{actor.capitalize()} attempts: \"{input_text}\"\n" if input_text else ""
+            return (
+                f"{attempt_line}"
+                f"{actor.capitalize()} doesn't have the materials on hand to craft "
+                f"{action_result.get('item_name')}."
+            )
+
         outcome = "succeeds" if action_result.get("success") else "fails"
         defender = action_result.get("defender")
         opposing_skill = action_result.get("opposing_skill")
@@ -162,6 +205,14 @@ class LLMCore:
         summoned = action_result.get("summoned")
         summoned_text = f" {actor.capitalize()} summons {summoned} to fight at their side." if summoned else ""
 
+        # Set only by DMCore._try_craft_action (DM_Crafting.py) on a successful craft roll --
+        # materials_consumed is always set once a craft attempt actually rolled (success or
+        # failure alike, since materials are spent either way), but only worth a narration
+        # fragment paired with "crafted" itself; a failed attempt's lost materials are implied
+        # by the ordinary failure wording above rather than spelled out again here.
+        crafted = action_result.get("crafted")
+        crafted_text = f" {actor.capitalize()} finishes crafting {crafted}." if crafted else ""
+
         defender_details = action_result.get("defender_details")
         details_text = f"\n{defender_details}" if defender_details else ""
 
@@ -172,7 +223,8 @@ class LLMCore:
             f"{attempt_line}"
             f"Skill used: {action_result.get('skill')} "
             f"(rolled {action_result.get('roll')} vs difficulty {action_result.get('difficulty')}{opposition}) "
-            f"- the action {outcome}.{damage_text}{revealed_text}{loot_text}{summoned_text}{details_text}"
+            f"- the action {outcome}.{damage_text}{revealed_text}{loot_text}{summoned_text}"
+            f"{crafted_text}{details_text}"
         )
 
     def _describe_player_actions(self, action_result):
