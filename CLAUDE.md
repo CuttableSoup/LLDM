@@ -1268,8 +1268,9 @@ A spell/technique/innate ability's own `summon = {"name"|"template", "duration"}
 (`entity_schema.toml`) opts a successful cast into conjuring a temporary ally, alongside (or
 instead of) dealing damage — `spells.toml`'s `summon spectral wolf` (`creatures.toml`'s own
 `spectral wolf`, on gladstone's `abilities` list) is the shipped example.
-`DM_Core.py`'s `_apply_summon_if_hit`, called from `_on_turn_detected` right after
-`_apply_damage_if_hit`, fires whenever the turn's own `named_ability` carries a `summon` table
+`DM_Core.py`'s `_apply_summon_if_hit`, called from `_finish_rolled_outcome` (the single post-roll
+step `_on_turn_detected` calls once per action-kind clause) right after `_apply_damage_if_hit`,
+fires whenever the turn's own `named_ability` carries a `summon` table
 and the roll succeeded — regardless of `target_name`/`via_test`, since a summon isn't "against"
 anyone the way damage is: casting with no `current_target` at all resolves as an ordinary flat,
 automatic `resolve_action` (difficulty 0); casting against a live hostile `current_target`

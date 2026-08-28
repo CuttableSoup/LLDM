@@ -294,10 +294,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             engaged_combat_target = True
 
             result, ability, via_test = self._resolve_roll(skill_name, named_ability, target_name, dice_penalty)
-            self._consume_spell_materials_if_rolled(result, named_ability)
-            self._apply_damage_if_hit(result, skill_name, named_ability, ability, target_name, via_test)
-            self._apply_summon_if_hit(result, named_ability)
-            self._attach_defender_details(result, target_name)
+            self._finish_rolled_outcome(result, skill_name, named_ability, ability, target_name, via_test)
             player_actions.append(result)
 
         if not player_actions:
@@ -617,6 +614,35 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             result = rolled_outcome_from_roll(roll)
         return result, ability, via_test
 
+    def _finish_rolled_outcome(self, result, skill_name, named_ability, ability, target_name, via_test):
+        """!
+        @brief The single post-roll step for the player's own action: everything that might
+            apply once a roll has actually happened, in one call instead of the four separately
+            isinstance-gated ones this replaces. Guards the RolledOutcome type exactly once --
+            each of the four steps below then only checks its own distinct predicate (success,
+            target, via_test, ability, named_ability materials, hidden), since none of those
+            ever share the same gate (ex: material consumption and defender details fire on a
+            failed roll too, deliberately -- see their own docstrings). Order matters: materials
+            are spent before damage/summon effects are appended, mirroring a botched craft
+            attempt's own "consume regardless of outcome" precedent. Scoped to the player's own
+            _on_turn_detected pipeline only -- resolve_behavior_action (DM_Combat.py, a
+            creature's own turn) has no attitude to nudge and no spell materials/summons of its
+            own to resolve, so it keeps its own narrower, separate damage-only handling rather
+            than routing through this.
+        @param result The roll result from _resolve_roll, mutated in place.
+        @param skill_name The skill being used, already resolved from any named ability.
+        @param named_ability The resolved ability entity (technique/spell), or None.
+        @param ability The attack ability from _resolve_roll, if already resolved there.
+        @param target_name self.current_target, or None.
+        @param via_test True if the roll was a flat [entity.test] check.
+        """
+        if not isinstance(result, RolledOutcome):
+            return
+        self._consume_spell_materials_if_rolled(result, named_ability)
+        self._apply_damage_if_hit(result, skill_name, named_ability, ability, target_name, via_test)
+        self._apply_summon_if_hit(result, named_ability)
+        self._attach_defender_details(result, target_name)
+
     def _apply_damage_if_hit(self, result, skill_name, named_ability, ability, target_name, via_test):
         """!
         @brief Rolls and attaches bonus weapon/ability damage if the roll succeeded against a
@@ -636,7 +662,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         @param target_name self.current_target, or None.
         @param via_test True if the roll was a flat [entity.test] check.
         """
-        if isinstance(result, RolledOutcome) and result.success and target_name and not via_test:
+        if result.success and target_name and not via_test:
             if ability is None:
                 ability = named_ability or self.find_attack_ability(self.player_name, skill_name)
             if ability and "damage_value" in ability:
@@ -698,7 +724,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             (the new instance's own name) if a creature was actually conjured.
         @param named_ability The resolved ability entity (technique/spell), or None.
         """
-        if not isinstance(result, RolledOutcome) or not result.success or not named_ability:
+        if not result.success or not named_ability:
             return
         summon_spec = named_ability.get("summon")
         if not summon_spec:
@@ -713,16 +739,14 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             reused directly -- same {item, quantity} shape and consumption primitive a craft
             recipe's own materials already uses) once a real roll actually happened for it --
             unconditionally, success or failure alike, same as a craft attempt's own materials
-            (a fizzled cast still burns the reagent). Never consumes anything for a no-roll
-            short-circuit (missing_spell_materials -- _resolve_roll's own gate already refused
-            the cast before getting here -- or out_of_range), since result["roll"] stays None
-            for both.
+            (a fizzled cast still burns the reagent). Only ever called once _finish_rolled_outcome
+            has already confirmed result is a RolledOutcome, so a no-roll short-circuit
+            (missing_spell_materials -- _resolve_roll's own gate already refused the cast before
+            getting here -- or out_of_range) never reaches this method at all.
         @param result The _resolve_roll result for this action.
         @param named_ability The resolved ability entity (technique/spell), or None.
         """
         if not named_ability or not named_ability.get("materials"):
-            return
-        if not isinstance(result, RolledOutcome):
             return
         self._consume_materials(self.player_name, named_ability["materials"])
 
@@ -741,7 +765,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             anything for a RolledOutcome.
         @param target_name self.current_target, or None.
         """
-        if isinstance(result, RolledOutcome) and target_name and not self.is_hidden(target_name):
+        if target_name and not self.is_hidden(target_name):
             defender_details = self.describe_character(target_name, toward_name=self.player_name)
             if defender_details:
                 result.effects.append(DefenderDetailsEffect(text=defender_details))

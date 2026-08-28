@@ -8,6 +8,7 @@ import tkinter as tk
 import tomllib
 import unittest
 import zipfile
+from typing import get_args
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -31,9 +32,9 @@ from AdHoc_Generation import (
 from Character_Creation_GUI import CharacterCreationDialog
 from Challenge_Rating import calculate_challenge_rating, calculate_party_challenge_rating, skill_rating
 from DM_ActionOutcome import (
-    CraftEffect, DamageEffect, DefenderDetailsEffect, LootEffect, MissingMaterialsOutcome,
-    MissingSpellMaterialsOutcome, MissingStationOutcome, MovementOutcome, NotCraftableOutcome,
-    OutOfRangeOutcome, RevealEffect, RolledOutcome, SummonEffect,
+    ActionOutcome, CraftEffect, DamageEffect, DefenderDetailsEffect, LootEffect,
+    MissingMaterialsOutcome, MissingSpellMaterialsOutcome, MissingStationOutcome, MovementOutcome,
+    NotCraftableOutcome, OutOfRangeOutcome, RevealEffect, RolledOutcome, SummonEffect,
 )
 from DM_Core import DMCore
 from DM_Rules import list_available_scenarios
@@ -67,7 +68,7 @@ from Intent_Classification import (
     split_action_clauses,
 )
 import LLDM
-from LLM_Core import LLMCore
+from LLM_Core import LLMCore, _OUTCOME_FORMATTERS
 import Ollama_Launcher
 from Ollama_Launcher import ensure_ollama_running
 from LLM_Rag import RagIndex
@@ -728,6 +729,17 @@ class TestClarificationResponse(LLMTestCase):
         )
         description = self.llm_core._describe_outcome(result)
         self.assertIn("summons spectral wolf", description)
+
+    def test_outcome_formatters_cover_every_actionoutcome_variant(self):
+        # A future ActionOutcome variant with no matching _OUTCOME_FORMATTERS entry would only
+        # surface as a live KeyError mid-narration -- this catches it as a fast, obvious unit
+        # test instead, the same "one new variant per commit" pattern this table exists to keep
+        # up with. MovementOutcome is the one deliberate exception -- it has no "input" at all,
+        # so it never reaches _OUTCOME_FORMATTERS (see _describe_outcome's own early return).
+        for variant in get_args(ActionOutcome):
+            if variant is MovementOutcome:
+                continue
+            self.assertIn(variant, _OUTCOME_FORMATTERS)
 
 
 class TestFreeformDialogueNarration(LLMTestCase):

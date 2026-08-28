@@ -54,6 +54,76 @@ _EFFECT_FORMATTERS = {
 }
 _EFFECT_ORDER = [DamageEffect, RevealEffect, LootEffect, SummonEffect, CraftEffect, DefenderDetailsEffect]
 
+
+def _format_out_of_range_outcome(outcome, actor):
+    return (
+        f"Skill used: {outcome.skill} -- {outcome.defender or 'the target'} is too far "
+        f"away to reach with this right now, so no roll is attempted."
+    )
+
+
+def _format_missing_spell_materials_outcome(outcome, actor):
+    return (
+        f"Skill used: {outcome.skill} -- {actor.capitalize()} lacks the "
+        f"material component this needs, so no roll is attempted."
+    )
+
+
+def _format_not_craftable_outcome(outcome, actor):
+    return f"{actor.capitalize()} tries to craft {outcome.item_name}, but there's no known way to make that."
+
+
+def _format_missing_station_outcome(outcome, actor):
+    return f"Crafting {outcome.item_name} needs a {outcome.station} nearby, and none is here."
+
+
+def _format_missing_materials_outcome(outcome, actor):
+    return f"{actor.capitalize()} doesn't have the materials on hand to craft {outcome.item_name}."
+
+
+def _format_rolled_outcome(outcome, actor):
+    success_word = "succeeds" if outcome.success else "fails"
+    if outcome.opposing_skill:
+        opposition = f" opposed by {outcome.defender}'s {outcome.opposing_skill}"
+    elif outcome.defender:
+        opposition = f" against {outcome.defender} (no defense)"
+    else:
+        opposition = ""
+
+    # Dispatched by type rather than a fixed set of if-checks -- a new Effect subtype only
+    # ever needs a new _EFFECT_FORMATTERS entry, never a change here. _EFFECT_ORDER (not
+    # insertion order) fixes the narration order regardless of which producer appended which
+    # effect first.
+    effects_by_type = {}
+    for effect in outcome.effects:
+        effects_by_type.setdefault(type(effect), []).append(effect)
+    effects_text = "".join(
+        _EFFECT_FORMATTERS[effect_type](effect, actor)
+        for effect_type in _EFFECT_ORDER
+        for effect in effects_by_type.get(effect_type, [])
+    )
+
+    return (
+        f"Skill used: {outcome.skill} "
+        f"(rolled {outcome.roll} vs difficulty {outcome.difficulty}{opposition}) "
+        f"- the action {success_word}.{effects_text}"
+    )
+
+
+# _describe_outcome's own dispatch table for every ActionOutcome variant except
+# MovementOutcome (which has no "input"/attempt-line shape at all -- see _describe_outcome's
+# own early return for it). Mirrors _EFFECT_FORMATTERS' own (x, actor) -> str shape: a
+# formatter returns only its own body text, never the shared attempt_line prefix, which
+# _describe_outcome builds once and prepends regardless of which formatter ran.
+_OUTCOME_FORMATTERS = {
+    RolledOutcome: _format_rolled_outcome,
+    OutOfRangeOutcome: _format_out_of_range_outcome,
+    MissingSpellMaterialsOutcome: _format_missing_spell_materials_outcome,
+    NotCraftableOutcome: _format_not_craftable_outcome,
+    MissingStationOutcome: _format_missing_station_outcome,
+    MissingMaterialsOutcome: _format_missing_materials_outcome,
+}
+
 class LLMCore:
     """!
     @brief Main class for handling the local LLM.
@@ -135,8 +205,12 @@ class LLMCore:
     def _describe_outcome(self, outcome, actor="the player"):
         """!
         @brief Builds the shared roll/damage description used by every narration prompt --
-            dispatches on outcome's own type (DM_ActionOutcome.py's tagged union) rather than
-            probing an untyped dict for whichever optional keys happened to be set.
+            dispatches on outcome's own type (DM_ActionOutcome.py's tagged union) via
+            _OUTCOME_FORMATTERS rather than probing an untyped dict for whichever optional keys
+            happened to be set, or hand-copying a new isinstance branch per variant -- a new
+            ActionOutcome variant only ever needs one new _OUTCOME_FORMATTERS entry (see
+            test_unit.py's own completeness test), mirroring how a new Effect subtype only ever
+            needs a new _EFFECT_FORMATTERS entry.
         @param outcome One ActionOutcome variant (from an "action_resolved"/"round_resolved"
             payload's own "actions" list, or a "turns" entry's own "outcome").
         @param actor Who performed this action, for the leading "X attempts" line -- defaults
@@ -149,84 +223,16 @@ class LLMCore:
         # own fallback when the attack it chose couldn't currently reach its target. No roll
         # happens for a move, so this is worded as repositioning, not a missed attack --
         # mirrors the player's own "advance"/"retreat" wording in
-        # generate_item_interaction_response, just per-actor.
+        # generate_item_interaction_response, just per-actor. Excluded from _OUTCOME_FORMATTERS
+        # entirely -- unlike every other variant, it carries no "input" at all, so it has no
+        # attempt_line prefix to share in the dispatch below.
         if isinstance(outcome, MovementOutcome):
             verb = "advances toward" if outcome.direction == "advance" else "retreats from"
             opponent = outcome.opponent or "its target"
             return f"{actor.capitalize()} {verb} {opponent} ({outcome.before} -> {outcome.after} bands away)."
 
         attempt_line = f"{actor.capitalize()} attempts: \"{outcome.input}\"\n" if outcome.input else ""
-
-        # get_range_modifier (DM_Movement.py) said the target is too far away for this
-        # weapon/ability to reach at all -- no roll was attempted (unlike every other outcome
-        # this builds a line for), so this is worded as a distance problem, not a missed attack.
-        if isinstance(outcome, OutOfRangeOutcome):
-            return (
-                f"{attempt_line}"
-                f"Skill used: {outcome.skill} -- {outcome.defender or 'the target'} is too far "
-                f"away to reach with this right now, so no roll is attempted."
-            )
-
-        # A named spell/technique/innate ability's own "materials" aren't fully present in the
-        # player's inventory -- no roll attempted, mirroring OutOfRangeOutcome's own shape.
-        # Distinct from a craft attempt's own MissingMaterialsOutcome (below) since this one
-        # has no item_name to reference -- the thing missing is a component the cast needs,
-        # not a recipe result.
-        if isinstance(outcome, MissingSpellMaterialsOutcome):
-            return (
-                f"{attempt_line}"
-                f"Skill used: {outcome.skill} -- {actor.capitalize()} lacks the "
-                f"material component this needs, so no roll is attempted."
-            )
-
-        # A craft attempt failed one of its own gates before any dice are rolled -- mirrors
-        # OutOfRangeOutcome's own no-roll shape, just for crafting's own three gates (no
-        # recipe at all, a missing station, missing materials) instead of a range check.
-        if isinstance(outcome, NotCraftableOutcome):
-            return (
-                f"{attempt_line}"
-                f"{actor.capitalize()} tries to craft {outcome.item_name}, but there's "
-                f"no known way to make that."
-            )
-        if isinstance(outcome, MissingStationOutcome):
-            return (
-                f"{attempt_line}"
-                f"Crafting {outcome.item_name} needs a {outcome.station} nearby, and none is here."
-            )
-        if isinstance(outcome, MissingMaterialsOutcome):
-            return (
-                f"{attempt_line}"
-                f"{actor.capitalize()} doesn't have the materials on hand to craft {outcome.item_name}."
-            )
-
-        # RolledOutcome -- an ordinary roll actually happened, success or failure alike.
-        success_word = "succeeds" if outcome.success else "fails"
-        if outcome.opposing_skill:
-            opposition = f" opposed by {outcome.defender}'s {outcome.opposing_skill}"
-        elif outcome.defender:
-            opposition = f" against {outcome.defender} (no defense)"
-        else:
-            opposition = ""
-
-        # Dispatched by type rather than a fixed set of if-checks -- a new Effect subtype
-        # only ever needs a new _EFFECT_FORMATTERS entry, never a change here. _EFFECT_ORDER
-        # (not insertion order) fixes the narration order regardless of which producer
-        # appended which effect first.
-        effects_by_type = {}
-        for effect in outcome.effects:
-            effects_by_type.setdefault(type(effect), []).append(effect)
-        effects_text = "".join(
-            _EFFECT_FORMATTERS[effect_type](effect, actor)
-            for effect_type in _EFFECT_ORDER
-            for effect in effects_by_type.get(effect_type, [])
-        )
-
-        return (
-            f"{attempt_line}"
-            f"Skill used: {outcome.skill} "
-            f"(rolled {outcome.roll} vs difficulty {outcome.difficulty}{opposition}) "
-            f"- the action {success_word}.{effects_text}"
-        )
+        return attempt_line + _OUTCOME_FORMATTERS[type(outcome)](outcome, actor)
 
     def _describe_player_actions(self, action_result):
         """!
