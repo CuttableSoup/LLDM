@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 from sentence_transformers import SentenceTransformer
 
+import Combat_Resolution
 from Character_Creation import (
     build_character_skills,
     get_race,
@@ -29,6 +30,11 @@ from AdHoc_Generation import (
 )
 from Character_Creation_GUI import CharacterCreationDialog
 from Challenge_Rating import calculate_challenge_rating, calculate_party_challenge_rating, skill_rating
+from DM_ActionOutcome import (
+    CraftEffect, DamageEffect, DefenderDetailsEffect, LootEffect, MissingMaterialsOutcome,
+    MissingSpellMaterialsOutcome, MissingStationOutcome, MovementOutcome, NotCraftableOutcome,
+    OutOfRangeOutcome, RevealEffect, RolledOutcome, SummonEffect,
+)
 from DM_Core import DMCore
 from DM_Rules import list_available_scenarios
 from DM_Social import TALK_ATTITUDE_DRIFT_CAP, ACTION_ATTITUDE_DRIFT_CAP
@@ -149,6 +155,18 @@ class DMTestCase(unittest.TestCase):
     def setUp(self):
         self.event_bus = EventBus()
         self.dm_core = DMCore(self.event_bus, scenario_name=self.scenario_name)
+
+    def _stub_roll_dice(self, roll_result):
+        """Forces every dice roll anywhere in the resolution graph (Combat_Resolution.py) to
+        the same flat total, regardless of dice/pips -- the same convenience a bare
+        `self.dm_core.roll_dice = lambda ...` gave back when roll_dice was still a DMCore
+        method every call site reached through self. Patched at the module level since
+        Combat_Resolution.py's own internal callers (resolve_action, calculate_damage, ...)
+        now call the bare module function directly, not self.roll_dice -- restored via
+        addCleanup so it can't leak into a later test."""
+        original = Combat_Resolution.roll_dice
+        Combat_Resolution.roll_dice = lambda dice, pips: roll_result
+        self.addCleanup(setattr, Combat_Resolution, "roll_dice", original)
 
     def _load_ad_hoc_scenario(self, entities, bands=None, enclosed=True):
         """Swaps in a throwaway [[location]] (freeform if bands is None, else one
@@ -692,20 +710,22 @@ class TestClarificationResponse(LLMTestCase):
         # Without this, the LLM has no idea what was actually gained and will happily invent
         # contents that don't match the real game state (observed: it narrated a "silver key
         # and leather-bound journal" for a chest that actually just held currency).
-        result = {
-            "input": "I pick the lock", "skill": "finesse", "roll": 18, "difficulty": 12,
-            "success": True, "defender": "chest", "loot": {"currency": 20, "items": []},
-        }
+        result = RolledOutcome(
+            entity="gladstone", skill="finesse", roll=18, difficulty=12,
+            success=True, defender="chest", effects=[LootEffect(currency=20, items=[])],
+            input="I pick the lock",
+        )
         description = self.llm_core._describe_outcome(result)
         self.assertIn("20 currency", description)
 
     def test_describe_outcome_mentions_a_successful_summon(self):
         # Without this, a summoning spell's own roll outcome narrates exactly like an ordinary
         # no-damage opposed check -- nothing tells the LLM a creature actually appeared.
-        result = {
-            "input": "I summon a wolf", "skill": "arcane", "roll": 18, "difficulty": 12,
-            "success": True, "summoned": "spectral wolf",
-        }
+        result = RolledOutcome(
+            entity="gladstone", skill="arcane", roll=18, difficulty=12,
+            success=True, effects=[SummonEffect(name="spectral wolf")],
+            input="I summon a wolf",
+        )
         description = self.llm_core._describe_outcome(result)
         self.assertIn("summons spectral wolf", description)
 
@@ -806,15 +826,15 @@ class TestMultiActionNarration(LLMTestCase):
     """
 
     def test_single_action_has_no_penalty_line(self):
-        result = {"actions": [{"skill": "blades", "roll": 15, "difficulty": 10, "success": True}]}
+        result = {"actions": [RolledOutcome(entity="gladstone", skill="blades", roll=15, difficulty=10, success=True)]}
         description = self.llm_core._describe_player_actions(result)
         self.assertNotIn("splitting their attention", description)
         self.assertIn("Skill used: blades", description)
 
     def test_two_actions_name_the_shared_penalty_and_describe_both(self):
         result = {"actions": [
-            {"skill": "blades", "roll": 12, "difficulty": 10, "success": True},
-            {"skill": "finesse", "roll": 9, "difficulty": 12, "success": False},
+            RolledOutcome(entity="gladstone", skill="blades", roll=12, difficulty=10, success=True),
+            RolledOutcome(entity="gladstone", skill="finesse", roll=9, difficulty=12, success=False),
         ]}
         description = self.llm_core._describe_player_actions(result)
         self.assertIn("2 actions this turn", description)
@@ -824,9 +844,9 @@ class TestMultiActionNarration(LLMTestCase):
 
     def test_three_actions_name_minus_2d(self):
         result = {"actions": [
-            {"skill": "blades", "roll": 9, "difficulty": 10, "success": False},
-            {"skill": "finesse", "roll": 9, "difficulty": 12, "success": False},
-            {"skill": "charisma", "roll": 9, "difficulty": 10, "success": False},
+            RolledOutcome(entity="gladstone", skill="blades", roll=9, difficulty=10, success=False),
+            RolledOutcome(entity="gladstone", skill="finesse", roll=9, difficulty=12, success=False),
+            RolledOutcome(entity="gladstone", skill="charisma", roll=9, difficulty=10, success=False),
         ]}
         description = self.llm_core._describe_player_actions(result)
         self.assertIn("3 actions this turn", description)
@@ -961,12 +981,12 @@ class TestDamageCalculation(DMTestCase):
         # nudge (DM_Social.py's nudge_attitude_from_event, wired from _apply_damage_if_hit) is
         # scaled by net_damage / max_hp, not a flat per-swing amount.
         self.dm_core.entities["wolf"]["attitudes"] = {"default": [0, 0, 0]}
-        result = {"success": True}
+        result = RolledOutcome(entity="gladstone", skill="melee", roll=0, difficulty=0, success=True)
         ability = {"damage_value": {"dice": 0, "pips": 0, "bonus": 5}, "damage_tags": []}
 
         self.dm_core._apply_damage_if_hit(result, "melee", None, ability, "wolf", via_test=False)
 
-        self.assertEqual(result["damage"]["net_damage"], 5)
+        self.assertEqual(result.effects[0].net_damage, 5)
         magnitude = 5 / self.dm_core.entities["wolf"]["max_hp"]
         disposition, threat = (
             self.dm_core.get_attitude("wolf", self.dm_core.player_name)[axis] for axis in (0, 1)
@@ -985,12 +1005,12 @@ class TestDamageCalculation(DMTestCase):
             "default": [0, 0, 0],
             "name": [{"wolf": [-100, 0, 0]}],
         }
-        result = {"success": True}
+        result = RolledOutcome(entity="gladstone", skill="melee", roll=0, difficulty=0, success=True)
         ability = {"damage_value": {"dice": 0, "pips": 0, "bonus": 5}, "damage_tags": []}
 
         self.dm_core._apply_damage_if_hit(result, "melee", None, ability, "wolf", via_test=False)
 
-        magnitude = result["damage"]["net_damage"] / self.dm_core.entities["wolf"]["max_hp"]
+        magnitude = result.effects[0].net_damage / self.dm_core.entities["wolf"]["max_hp"]
         disposition = self.dm_core.get_attitude("thane", self.dm_core.player_name)[0]
         self.assertAlmostEqual(disposition, 5 * magnitude)
 
@@ -998,7 +1018,7 @@ class TestDamageCalculation(DMTestCase):
         # thane has real attitude data but no particular opinion of "wolf" specifically (falls
         # back to its own all-neutral default) -- not hostile toward it, so no bond forms.
         self.dm_core.entities["thane"]["attitudes"] = {"default": [0, 0, 0]}
-        result = {"success": True}
+        result = RolledOutcome(entity="gladstone", skill="melee", roll=0, difficulty=0, success=True)
         ability = {"damage_value": {"dice": 0, "pips": 0, "bonus": 5}, "damage_tags": []}
 
         self.dm_core._apply_damage_if_hit(result, "melee", None, ability, "wolf", via_test=False)
@@ -1133,8 +1153,8 @@ class TestMultipleActions(DMTestCase):
         actions = round_events[0]["actions"]
         self.assertEqual(len(actions), 2)
         # blades is 5D+0 -- at -1D (two actions this turn) each rolls 4D @ 3 = 12.
-        self.assertEqual(actions[0]["roll"], 12)
-        self.assertEqual(actions[1]["roll"], 12)
+        self.assertEqual(actions[0].roll, 12)
+        self.assertEqual(actions[1].roll, 12)
 
     def test_three_actions_apply_minus_2d(self):
         self.dm_core.entities["practice_dummy"] = {"name": "practice_dummy", "max_hp": 20, "skills": {}}
@@ -1152,7 +1172,7 @@ class TestMultipleActions(DMTestCase):
 
         # blades is 5D+0 -- at -2D (three actions this turn) each rolls 3D @ 3 = 9.
         for action in round_events[0]["actions"]:
-            self.assertEqual(action["roll"], 9)
+            self.assertEqual(action.roll, 9)
 
     def test_item_test_only_turn_never_triggers_a_round_even_if_current_target_is_hostile(self):
         # Regression: self.current_target ("wolf", hostile from scenario load) must not leak
@@ -1166,7 +1186,7 @@ class TestMultipleActions(DMTestCase):
         round_events = self._capture("round_resolved")
         self.assertTrue(self.dm_core.is_hostile(self.dm_core.current_target, self.dm_core.player_name))
 
-        self.dm_core.roll_dice = lambda dice, pips: 99
+        self._stub_roll_dice(99)
         self.dm_core._on_turn_detected({
             "clauses": [{"kind": "action", "skill": "appraise", "target": "health potion"}],
             "input": "I appraise the health potion",
@@ -1197,10 +1217,10 @@ class TestMultipleActions(DMTestCase):
         self.assertEqual(len(actions), 2)
         # appraise is 4D+0 -- at -1D (two actions this turn) rolls 3D @ 3 = 9, clearing the
         # health potion's own test difficulty (4).
-        self.assertEqual(actions[0]["roll"], 9)
-        self.assertTrue(actions[0]["success"])
+        self.assertEqual(actions[0].roll, 9)
+        self.assertTrue(actions[0].success)
         # blades is 5D+0 -- at -1D rolls 4D @ 3 = 12.
-        self.assertEqual(actions[1]["roll"], 12)
+        self.assertEqual(actions[1].roll, 12)
 
     def test_item_interaction_clause_shares_the_penalty_but_never_rolls_itself(self):
         # Drawing a weapon, picking something up, giving/opening/using an item all cost the
@@ -1232,7 +1252,7 @@ class TestMultipleActions(DMTestCase):
         # blades is 5D+0 -- at -1D (the drop counts as this turn's other action, even though
         # it never rolls) rolls 4D @ 3 = 12, not the unpenalized 5D @ 3 = 15 a lone attack
         # would get.
-        self.assertEqual(actions[0]["roll"], 12)
+        self.assertEqual(actions[0].roll, 12)
 
     def test_item_only_turn_publishes_via_item_interaction_resolved_not_action_resolved(self):
         action_events = self._capture("action_resolved")
@@ -1283,8 +1303,8 @@ class TestCombatLoop(DMTestCase):
 
         result = self.resolved[-1]
         action = result["actions"][0]
-        self.assertFalse(action["success"])
-        self.assertNotIn("damage", action)
+        self.assertFalse(action.success)
+        self.assertFalse(any(isinstance(effect, DamageEffect) for effect in action.effects))
         self.assertEqual(result["round"], 1)
         self.assertEqual(self.dm_core.get_current_hp("wolf"), 16)
 
@@ -1298,13 +1318,15 @@ class TestCombatLoop(DMTestCase):
 
         result = self.resolved[-1]
         action = result["actions"][0]
-        self.assertTrue(action["success"])
-        self.assertIn("damage", action)
-        self.assertEqual(action["damage"]["defender"], "practice_dummy")
-        self.assertGreater(action["damage"]["net_damage"], 0)
+        self.assertTrue(action.success)
+        damage_effects = [effect for effect in action.effects if isinstance(effect, DamageEffect)]
+        self.assertEqual(len(damage_effects), 1)
+        damage = damage_effects[0]
+        self.assertEqual(damage.defender, "practice_dummy")
+        self.assertGreater(damage.net_damage, 0)
         self.assertEqual(
             self.dm_core.get_current_hp("practice_dummy"),
-            20 - action["damage"]["net_damage"],
+            20 - damage.net_damage,
         )
 
 
@@ -1373,10 +1395,7 @@ class TestMovementAndRange(DMTestCase):
 
         result = self.resolved[-1]
         action = result["actions"][0]
-        self.assertFalse(action["success"])
-        self.assertEqual(action["reason"], "out_of_range")
-        self.assertIsNone(action["roll"])
-        self.assertNotIn("damage", action)
+        self.assertIsInstance(action, OutOfRangeOutcome)
 
 
 class TestSpellMaterials(DMTestCase):
@@ -1404,9 +1423,7 @@ class TestSpellMaterials(DMTestCase):
 
         result = self._cast()
 
-        self.assertFalse(result["success"])
-        self.assertEqual(result["reason"], "missing_spell_materials")
-        self.assertIsNone(result["roll"])
+        self.assertIsInstance(result, MissingSpellMaterialsOutcome)
 
     def test_successful_cast_consumes_the_material(self):
         # An even 2D-vs-2D matchup at a fixed per-die value ties -- resolve_action's own
@@ -1414,8 +1431,8 @@ class TestSpellMaterials(DMTestCase):
         with patch("random.randint", return_value=6):
             result = self._cast()
 
-        self.assertTrue(result["success"])
-        self.assertIn("damage", result)
+        self.assertTrue(result.success)
+        self.assertTrue(any(isinstance(effect, DamageEffect) for effect in result.effects))
         self.assertNotIn("iron filings", self.dm_core.entities["gladstone"]["inventory"])
 
     def test_failed_cast_still_consumes_the_material(self):
@@ -1427,8 +1444,8 @@ class TestSpellMaterials(DMTestCase):
         with patch("random.randint", return_value=1):
             result = self._cast()
 
-        self.assertFalse(result["success"])
-        self.assertNotIn("damage", result)
+        self.assertFalse(result.success)
+        self.assertFalse(any(isinstance(effect, DamageEffect) for effect in result.effects))
         self.assertNotIn("iron filings", self.dm_core.entities["gladstone"]["inventory"])
 
     def test_a_different_ability_never_touches_the_material(self):
@@ -1561,13 +1578,15 @@ class TestEntityBehavior(DMTestCase):
             result = self.dm_core.resolve_behavior_action("wolf", "target_dummy")
 
         assert result is not None
-        self.assertTrue(result["success"])
-        self.assertEqual(result["skill"], "brawling")
-        self.assertIn("damage", result)
-        self.assertGreater(result["damage"]["net_damage"], 0)
+        self.assertTrue(result.success)
+        self.assertEqual(result.skill, "brawling")
+        damage_effects = [effect for effect in result.effects if isinstance(effect, DamageEffect)]
+        self.assertEqual(len(damage_effects), 1)
+        damage = damage_effects[0]
+        self.assertGreater(damage.net_damage, 0)
         self.assertEqual(
             self.dm_core.get_current_hp("target_dummy"),
-            20 - result["damage"]["net_damage"],
+            20 - damage.net_damage,
         )
 
 
@@ -1733,8 +1752,9 @@ class TestSummoning(DMTestCase):
             })
 
         self.assertIn("spectral wolf", self.dm_core.scenario_entities)
-        self.assertEqual(resolved[-1]["actions"][0]["summoned"], "spectral wolf")
-        self.assertNotIn("damage", resolved[-1]["actions"][0])
+        action = resolved[-1]["actions"][0]
+        self.assertEqual([e.name for e in action.effects if isinstance(e, SummonEffect)], ["spectral wolf"])
+        self.assertFalse(any(isinstance(effect, DamageEffect) for effect in action.effects))
 
     def test_apply_summon_if_hit_against_a_hostile_target_ticks_this_rounds_upkeep_too(self):
         # arena.toml's own default scenario already has a hostile wolf as current_target --
@@ -1749,7 +1769,8 @@ class TestSummoning(DMTestCase):
             })
 
         self.assertIn("spectral wolf", self.dm_core.scenario_entities)
-        self.assertEqual(resolved[-1]["actions"][0]["summoned"], "spectral wolf")
+        action = resolved[-1]["actions"][0]
+        self.assertEqual([e.name for e in action.effects if isinstance(e, SummonEffect)], ["spectral wolf"])
         self.assertEqual(self.dm_core.entities["spectral wolf"]["summon_expires_in"], 3)  # 4 - 1
 
 
@@ -1774,8 +1795,8 @@ class TestBandit(DMTestCase):
         self.assertEqual(behavior["action"], "short bow")
 
         turn = self.dm_core.resolve_behavior_action("bandit", "gladstone")
-        self.assertEqual(turn["skill"], "missiles")
-        self.assertNotIn("movement", turn)
+        self.assertEqual(turn.skill, "missiles")
+        self.assertNotIsInstance(turn, MovementOutcome)
 
 
 class TestStatusEvaluation(DMTestCase):
@@ -2584,7 +2605,7 @@ class TestImprovisation(DMTestCase):
             "name": "unlabeled vial", "subtype": "potion", "usable": True,
             "skills": {"poison": {"dice": 2, "pips": 0}},
         })
-        self.dm_core.roll_dice = lambda dice, pips: 7
+        self._stub_roll_dice(7)
         starting_hp = self.dm_core.get_current_hp("gladstone")
 
         with patch("DM_Improvisation.generate_ad_hoc_item", return_value=entity):
@@ -2772,7 +2793,7 @@ class TestImprovisation(DMTestCase):
         self.assertTrue(self.dm_core.is_locked("old crate"))
         self.assertEqual(self.dm_core.current_target, "old crate")
 
-        self.dm_core.roll_dice = lambda dice, pips: 20  # guarantee the lock pick succeeds
+        self._stub_roll_dice(20)  # guarantee the lock pick succeeds
         self.dm_core._on_turn_detected({
             "clauses": [{"kind": "action", "skill": "finesse", "score": 1.0}],
             "input": "pick the lock",
@@ -3643,10 +3664,10 @@ class TestLockedChest(DMTestCase):
         self.assertTrue(self.dm_core.is_locked("chest"))
         self.assertEqual(self.round_events, [])
         result = self.action_events[-1]["actions"][0]
-        self.assertFalse(result["success"])
-        self.assertEqual(result["defender"], "chest")
-        self.assertIsNone(result["opposing_skill"])
-        self.assertEqual(result["difficulty"], 12)
+        self.assertFalse(result.success)
+        self.assertEqual(result.defender, "chest")
+        self.assertIsNone(result.opposing_skill)
+        self.assertEqual(result.difficulty, 12)
         # [entity.test.fail] applies the permanent "jammed" condition.
         self.assertIn("jammed", self.dm_core.entities["chest"]["active_conditions"])
 
@@ -3661,9 +3682,9 @@ class TestLockedChest(DMTestCase):
         self.assertFalse(self.dm_core.is_locked("chest"))
         self.assertNotIn("jammed", self.dm_core.entities["chest"]["active_conditions"])
         result = self.action_events[-1]["actions"][0]
-        self.assertTrue(result["success"])
-        self.assertEqual(result["defender"], "chest")
-        self.assertNotIn("loot", result)
+        self.assertTrue(result.success)
+        self.assertEqual(result.defender, "chest")
+        self.assertFalse(any(isinstance(effect, LootEffect) for effect in result.effects))
 
         self.assertEqual(self.dm_core.entities["chest"]["currency"], 20)
         self.assertEqual(self.dm_core.entities["gladstone"]["currency"], starting_currency)
@@ -3689,7 +3710,7 @@ class TestItemInteraction(DMTestCase):
         self.assertNotIn("cursed dagger", self.dm_core.entities["gladstone"]["inventory"])
 
     def _unlock_the_chest(self):
-        self.dm_core.roll_dice = lambda dice, pips: 99
+        self._stub_roll_dice(99)
         self.dm_core._on_turn_detected({"clauses": [{"kind": "action", "skill": "finesse"}], "input": "I pick the lock"})
 
     def _open_the_chest(self):
@@ -3797,7 +3818,7 @@ class TestItemTargetedSkillCheck(DMTestCase):
         self.dm_core.dismiss_condition("chest", "closed")
 
     def _check_the_dagger(self, roll_result):
-        self.dm_core.roll_dice = lambda dice, pips: roll_result
+        self._stub_roll_dice(roll_result)
         self.dm_core._on_turn_detected({
             "clauses": [{"kind": "action", "skill": "arcane", "target": "cursed dagger"}],
             "input": "I check the dagger for curses",
@@ -3814,10 +3835,12 @@ class TestItemTargetedSkillCheck(DMTestCase):
 
         self.assertEqual(self.round_events, [])  # inspecting an item is never combat
         result = self.action_events[-1]["actions"][0]
-        self.assertTrue(result["success"])
-        self.assertEqual(result["defender"], "cursed dagger")
-        self.assertIsNone(result["opposing_skill"])
-        self.assertEqual(result["revealed"], ["cursed"])
+        self.assertTrue(result.success)
+        self.assertEqual(result.defender, "cursed dagger")
+        self.assertIsNone(result.opposing_skill)
+        reveal_effects = [effect for effect in result.effects if isinstance(effect, RevealEffect)]
+        self.assertEqual(len(reveal_effects), 1)
+        self.assertEqual(reveal_effects[0].tags, ["cursed"])
         self.assertTrue(self.dm_core.is_identified("cursed dagger"))
 
 
@@ -3829,7 +3852,7 @@ class TestOpenClose(DMTestCase):
         self.resolved = self._capture("item_interaction_resolved")
 
     def _unlock_the_chest(self):
-        self.dm_core.roll_dice = lambda dice, pips: 99
+        self._stub_roll_dice(99)
         self.dm_core._on_turn_detected({"clauses": [{"kind": "action", "skill": "finesse"}], "input": "I pick the lock"})
 
     def _open(self):
@@ -3987,7 +4010,7 @@ class TestUseItem(DMTestCase):
         self.resolved = self._capture("item_interaction_resolved")
 
     def _use(self, item_name="health potion", roll_result=6):
-        self.dm_core.roll_dice = lambda dice, pips: roll_result
+        self._stub_roll_dice(roll_result)
         self.dm_core._on_item_interaction_detected({
             "intent": "use", "item_name": item_name, "input": "I drink the health potion",
         })
@@ -4085,7 +4108,7 @@ class TestCrafting(DMTestCase):
         self.dm_core.scenario_entities.append("forge")
 
     def _craft(self, roll_result, item_name="iron dagger", extra_clauses=None):
-        self.dm_core.roll_dice = lambda dice, pips: roll_result
+        self._stub_roll_dice(roll_result)
         clauses = [{"kind": "item", "intent": "craft", "item_name": item_name}]
         clauses.extend(extra_clauses or [])
         self.dm_core._on_turn_detected({"clauses": clauses, "input": "I craft an iron dagger"})
@@ -4094,9 +4117,7 @@ class TestCrafting(DMTestCase):
     def test_missing_station_fails_without_rolling_or_consuming_materials(self):
         result = self._craft(roll_result=99)
 
-        self.assertFalse(result["success"])
-        self.assertEqual(result["reason"], "missing_station")
-        self.assertIsNone(result["roll"])
+        self.assertIsInstance(result, MissingStationOutcome)
         self.assertEqual(self.dm_core.entities["gladstone"]["inventory"].count("iron ingot"), 2)
 
     def test_missing_materials_fails_without_rolling(self):
@@ -4105,9 +4126,7 @@ class TestCrafting(DMTestCase):
 
         result = self._craft(roll_result=99)
 
-        self.assertFalse(result["success"])
-        self.assertEqual(result["reason"], "missing_materials")
-        self.assertIsNone(result["roll"])
+        self.assertIsInstance(result, MissingMaterialsOutcome)
 
     def test_not_craftable_item_fails_without_rolling(self):
         # "health potion" has its own [entity.test] but no [entity.craft] block at all.
@@ -4115,19 +4134,18 @@ class TestCrafting(DMTestCase):
 
         result = self._craft(roll_result=99, item_name="health potion")
 
-        self.assertFalse(result["success"])
-        self.assertEqual(result["reason"], "not_craftable")
-        self.assertIsNone(result["roll"])
+        self.assertIsInstance(result, NotCraftableOutcome)
 
     def test_successful_craft_consumes_materials_and_places_the_item(self):
         self._place_forge()
 
         result = self._craft(roll_result=99)  # clears iron dagger's own difficulty (10)
 
-        self.assertTrue(result["success"])
-        self.assertEqual(result["crafted"], "iron dagger")
-        self.assertIsNone(result["defender"])
-        self.assertIsNone(result["opposing_skill"])
+        self.assertTrue(result.success)
+        craft_effects = [effect for effect in result.effects if isinstance(effect, CraftEffect)]
+        self.assertEqual([e.item_name for e in craft_effects], ["iron dagger"])
+        self.assertIsNone(result.defender)
+        self.assertIsNone(result.opposing_skill)
         inventory = self.dm_core.entities["gladstone"]["inventory"]
         self.assertEqual(inventory.count("iron ingot"), 0)
         self.assertEqual(inventory.count("leather strip"), 0)
@@ -4138,8 +4156,8 @@ class TestCrafting(DMTestCase):
 
         result = self._craft(roll_result=0)  # never clears difficulty 10
 
-        self.assertFalse(result["success"])
-        self.assertNotIn("crafted", result)
+        self.assertFalse(result.success)
+        self.assertFalse(any(isinstance(effect, CraftEffect) for effect in result.effects))
         inventory = self.dm_core.entities["gladstone"]["inventory"]
         self.assertEqual(inventory.count("iron ingot"), 0)
         self.assertEqual(inventory.count("leather strip"), 0)
@@ -4255,9 +4273,9 @@ class TestNpcDialogue(DMTestCase):
         self.assertEqual(len(self.action_events), 1)
         self.assertEqual(self.round_events, [])
         result = self.action_events[0]["actions"][0]
-        self.assertEqual(result["defender"], "innkeeper")
+        self.assertEqual(result.defender, "innkeeper")
         self.assertNotIn("round", self.action_events[0])
-        self.assertNotIn("damage", result)
+        self.assertFalse(any(isinstance(effect, DamageEffect) for effect in result.effects))
 
 
     def test_fighting_a_hostile_target_still_batches_into_round_resolved(self):
@@ -4860,11 +4878,13 @@ class TestMultiRoomDungeon(DMTestCase):
             self.dm_core._on_turn_detected({"clauses": [{"kind": "action", "skill": "finesse"}], "input": "I try to disarm the trap"})
 
         result = self.action_events[-1]["actions"][0]
-        self.assertFalse(result["success"])
+        self.assertFalse(result.success)
         # Trap's fail damage is 3d (patched to 1 each = 3 raw), reduced by chain mail's own
         # 2d "piercing" armor coverage (also patched to 1 each = 2) -- net 1, not 0, which is
         # exactly why the trap deals 3 dice and not 2 (see the items.toml comment).
-        self.assertEqual(result["damage"]["net_damage"], 1)
+        damage_effects = [effect for effect in result.effects if isinstance(effect, DamageEffect)]
+        self.assertEqual(len(damage_effects), 1)
+        self.assertEqual(damage_effects[0].net_damage, 1)
         self.assertEqual(self.dm_core.get_current_hp("gladstone"), starting_hp - 1)
         self.assertIn("triggered", self.dm_core.entities["dart trap"]["active_conditions"])
         self.assertIn("armed", self.dm_core.entities["dart trap"]["active_conditions"])  # fail never dismisses it
@@ -4874,7 +4894,7 @@ class TestMultiRoomDungeon(DMTestCase):
         hp_after_first_hit = self.dm_core.get_current_hp("gladstone")
         with patch("random.randint", return_value=6):
             self.dm_core._on_turn_detected({"clauses": [{"kind": "action", "skill": "finesse"}], "input": "I try again"})
-        self.assertEqual(self.action_events[-1]["actions"][0]["difficulty"], 0)
+        self.assertEqual(self.action_events[-1]["actions"][0].difficulty, 0)
         self.assertEqual(self.dm_core.get_current_hp("gladstone"), hp_after_first_hit)
 
 

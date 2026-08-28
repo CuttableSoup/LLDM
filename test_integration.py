@@ -19,6 +19,7 @@ import urllib.request
 
 import pytest
 
+from DM_ActionOutcome import DamageEffect, DefenderDetailsEffect, RevealEffect
 from DM_Core import DMCore
 from Event_Bus import EventBus
 from LLM_Core import LLMCore
@@ -135,8 +136,9 @@ class TestInnkeeperConversation(_LivePipelineTestCase):
         self.assertEqual(round_events, [])
         self.assertEqual(len(action_events), 1)
         action = action_events[0]["actions"][0]
-        self.assertEqual(action["defender"], "innkeeper")
-        self.assertIn("innkeeper", action["defender_details"])
+        self.assertEqual(action.defender, "innkeeper")
+        defender_details = next(e.text for e in action.effects if isinstance(e, DefenderDetailsEffect))
+        self.assertIn("innkeeper", defender_details)
 
         # Deliberately NOT asserting on exact narrative content past this point (ex: that the
         # husband question literally says "bandit"/"husband") -- a real run showed the LLM can
@@ -398,9 +400,9 @@ class TestChestSagaConversation(_LivePipelineTestCase):
 
         say("pick the lock")
         pick_result = action_events[-1]["actions"][0]
-        self.assertEqual(pick_result["skill"], "finesse")
+        self.assertEqual(pick_result.skill, "finesse")
         self.assertTrue(
-            pick_result["success"], "Seeded roll should have passed -- see the seed comment above."
+            pick_result.success, "Seeded roll should have passed -- see the seed comment above."
         )
         self.assertFalse(self.dm_core.is_locked("chest"))
 
@@ -427,10 +429,11 @@ class TestChestSagaConversation(_LivePipelineTestCase):
         say("I channel arcane mana into the dagger")
         self.assertEqual(round_events, [])  # inspecting an item is never combat
         check_result = action_events[-1]["actions"][0]
-        self.assertEqual(check_result["skill"], "arcane")
-        self.assertEqual(check_result["defender"], "cursed dagger")
-        self.assertTrue(check_result["success"], "Seeded roll should have passed -- see the seed comment above.")
-        self.assertEqual(check_result["revealed"], ["cursed"])
+        self.assertEqual(check_result.skill, "arcane")
+        self.assertEqual(check_result.defender, "cursed dagger")
+        self.assertTrue(check_result.success, "Seeded roll should have passed -- see the seed comment above.")
+        reveal_effects = [e for e in check_result.effects if isinstance(e, RevealEffect)]
+        self.assertEqual(reveal_effects[0].tags, ["cursed"])
         self.assertTrue(self.dm_core.is_identified("cursed dagger"))
 
         say("examine the cursed dagger")
@@ -557,8 +560,10 @@ class TestCryptDungeonConversation(_LivePipelineTestCase):
             return response
 
         say("I disarm the trap")
-        self.assertTrue(action_events[-1]["actions"][0]["success"])
-        self.assertNotIn("damage", action_events[-1]["actions"][0])  # a passed disarm never damages the player
+        disarm_result = action_events[-1]["actions"][0]
+        self.assertTrue(disarm_result.success)
+        # a passed disarm never damages the player
+        self.assertFalse(any(isinstance(e, DamageEffect) for e in disarm_result.effects))
 
         say("I advance")
         say("continue deeper")
@@ -583,7 +588,7 @@ class TestCryptDungeonConversation(_LivePipelineTestCase):
         self.assertEqual(self.dm_core.current_room_key, "hidden_alcove")
 
         say("I pick the lock")
-        self.assertTrue(action_events[-1]["actions"][0]["success"])
+        self.assertTrue(action_events[-1]["actions"][0].success)
         say("open the coffer")
         say("take the health potion")
         self.assertIn("health potion", self.dm_core.entities[player_name]["inventory"])
@@ -593,7 +598,7 @@ class TestCryptDungeonConversation(_LivePipelineTestCase):
         self.assertEqual(self.dm_core.current_room_key, "guard_chamber")
         say("I advance")
         say("I pick the lock")
-        self.assertTrue(action_events[-1]["actions"][0]["success"])
+        self.assertTrue(action_events[-1]["actions"][0].success)
         say("open the chest")
         say("take the health potion")
 
@@ -868,7 +873,7 @@ async def test_innkeeper_dialogue_through_textual():
         # just observed through the UI's own event subscriptions instead of a direct call.
         assert round_events == []
         assert len(action_events) == 1
-        assert action_events[0]["actions"][0]["defender"] == "innkeeper"
+        assert action_events[0]["actions"][0].defender == "innkeeper"
         assert len(responses) == len(turns) + 1
 
 

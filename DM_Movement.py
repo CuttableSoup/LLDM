@@ -1,5 +1,6 @@
 import re
 
+import Combat_Resolution
 from DM_Types import DMCoreProtocol
 
 
@@ -74,7 +75,7 @@ class MovementMixin(DMCoreProtocol):
                 scenario-authored starting band defaults to band 1, same as load_scenario
                 already seeds for anything that doesn't specify one).
         """
-        return self.entities.get(entity_name, {}).get("band", 1)
+        return Combat_Resolution.get_band(self.entities, entity_name)
 
     def get_distance_between(self, entity_a, entity_b):
         """!
@@ -86,7 +87,7 @@ class MovementMixin(DMCoreProtocol):
         @param entity_b The second entity's name.
         @return The absolute band gap between them (0 if they're in the same band).
         """
-        return abs(self.get_band(entity_a) - self.get_band(entity_b))
+        return Combat_Resolution.get_distance_between(self.entities, entity_a, entity_b)
 
     def _clamp_band(self, band):
         """!

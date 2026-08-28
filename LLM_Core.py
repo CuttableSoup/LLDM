@@ -3,7 +3,56 @@ import os
 import urllib.request
 import threading
 
+from DM_ActionOutcome import (
+    CraftEffect, DamageEffect, DefenderDetailsEffect, LootEffect, MissingMaterialsOutcome,
+    MissingSpellMaterialsOutcome, MissingStationOutcome, MovementOutcome, NotCraftableOutcome,
+    OutOfRangeOutcome, RevealEffect, RolledOutcome, SummonEffect,
+)
 from LLM_Rag import RagIndex
+
+def _format_damage_effect(effect, actor):
+    return f" {effect.defender} takes {effect.net_damage} damage ({effect.remaining_hp} HP remaining)."
+
+
+def _format_reveal_effect(effect, actor):
+    return f" The check reveals: {', '.join(effect.tags)}." if effect.tags else ""
+
+
+def _format_loot_effect(effect, actor):
+    gained = []
+    if effect.currency:
+        gained.append(f"{effect.currency} currency")
+    gained.extend(effect.items)
+    return f" The player gains: {', '.join(gained)}." if gained else ""
+
+
+def _format_summon_effect(effect, actor):
+    return f" {actor.capitalize()} summons {effect.name} to fight at their side."
+
+
+def _format_craft_effect(effect, actor):
+    return f" {actor.capitalize()} finishes crafting {effect.item_name}."
+
+
+def _format_defender_details_effect(effect, actor):
+    return f"\n{effect.text}"
+
+
+# _describe_outcome's own dispatch table for a RolledOutcome's Effect list -- each formatter
+# takes (effect, actor) and returns a narration fragment (leading with its own space/newline,
+# or "" if it has nothing to add), so a new Effect subtype only ever needs one new entry here,
+# never a change to _describe_outcome's own dispatch logic. Order matters -- narration reads
+# damage first, then what a check revealed, then what was gained/summoned/crafted, with any
+# defender flavor text trailing last.
+_EFFECT_FORMATTERS = {
+    DamageEffect: _format_damage_effect,
+    RevealEffect: _format_reveal_effect,
+    LootEffect: _format_loot_effect,
+    SummonEffect: _format_summon_effect,
+    CraftEffect: _format_craft_effect,
+    DefenderDetailsEffect: _format_defender_details_effect,
+}
+_EFFECT_ORDER = [DamageEffect, RevealEffect, LootEffect, SummonEffect, CraftEffect, DefenderDetailsEffect]
 
 class LLMCore:
     """!
@@ -83,148 +132,100 @@ class LLMCore:
         self.event_bus.publish("log_info", "Generating NPC response.")
         return ""
 
-    def _describe_outcome(self, action_result, actor="the player"):
+    def _describe_outcome(self, outcome, actor="the player"):
         """!
-        @brief Builds the shared roll/damage description used by every narration prompt.
-        @param action_result A resolved action dict (from "action_resolved" or "round_resolved",
-            or an "enemy_action" sub-result resolved via a creature's own behavior).
+        @brief Builds the shared roll/damage description used by every narration prompt --
+            dispatches on outcome's own type (DM_ActionOutcome.py's tagged union) rather than
+            probing an untyped dict for whichever optional keys happened to be set.
+        @param outcome One ActionOutcome variant (from an "action_resolved"/"round_resolved"
+            payload's own "actions" list, or a "turns" entry's own "outcome").
         @param actor Who performed this action, for the leading "X attempts" line -- defaults
             to the player, but a creature's own behavior-driven action (ex: a wolf's bite)
             passes its own name instead so the narration doesn't misattribute it.
         @return The outcome description as a string.
         """
-        # Set only by resolve_behavior_action (DM_Combat.py) when a creature/ally's own turn
-        # was a move rather than an attack -- either a deliberate `action = "advance"`/
-        # "retreat"` behavior entry (ex: fleeing once badly hurt) or its own fallback when the
-        # attack it chose couldn't currently reach its target. No roll happens for a move, so
-        # this is worded as repositioning, not a missed attack -- mirrors the player's own
-        # "advance"/"retreat" wording in generate_item_interaction_response, just per-actor.
-        if action_result.get("movement"):
-            verb = "advances toward" if action_result["movement"] == "advance" else "retreats from"
-            opponent = action_result.get("opponent") or "its target"
-            return (
-                f"{actor.capitalize()} {verb} {opponent} "
-                f"({action_result.get('before')} -> {action_result.get('after')} bands away)."
-            )
+        # A creature/ally's own turn was a move rather than an attack -- either a deliberate
+        # `action = "advance"`/"retreat"` behavior entry (ex: fleeing once badly hurt) or its
+        # own fallback when the attack it chose couldn't currently reach its target. No roll
+        # happens for a move, so this is worded as repositioning, not a missed attack --
+        # mirrors the player's own "advance"/"retreat" wording in
+        # generate_item_interaction_response, just per-actor.
+        if isinstance(outcome, MovementOutcome):
+            verb = "advances toward" if outcome.direction == "advance" else "retreats from"
+            opponent = outcome.opponent or "its target"
+            return f"{actor.capitalize()} {verb} {opponent} ({outcome.before} -> {outcome.after} bands away)."
 
-        # Set only by DMCore._on_turn_detected/resolve_behavior_action when get_range_modifier
-        # (DM_Movement.py) says the target is too far away for this weapon/ability to reach at
-        # all -- no roll was attempted (unlike every other outcome this builds a line for), so
-        # this is worded as a distance problem rather than a missed attack.
-        if action_result.get("reason") == "out_of_range":
-            defender = action_result.get("defender")
-            input_text = action_result.get("input")
-            attempt_line = f"{actor.capitalize()} attempts: \"{input_text}\"\n" if input_text else ""
+        attempt_line = f"{actor.capitalize()} attempts: \"{outcome.input}\"\n" if outcome.input else ""
+
+        # get_range_modifier (DM_Movement.py) said the target is too far away for this
+        # weapon/ability to reach at all -- no roll was attempted (unlike every other outcome
+        # this builds a line for), so this is worded as a distance problem, not a missed attack.
+        if isinstance(outcome, OutOfRangeOutcome):
             return (
                 f"{attempt_line}"
-                f"Skill used: {action_result.get('skill')} -- {defender or 'the target'} is too far "
+                f"Skill used: {outcome.skill} -- {outcome.defender or 'the target'} is too far "
                 f"away to reach with this right now, so no roll is attempted."
             )
 
-        # Set only by DMCore._resolve_roll (DM_Core.py) when a named spell/technique/innate
-        # ability's own "materials" aren't fully present in the player's inventory -- no roll
-        # attempted, mirroring "out_of_range"'s own no-roll shape above. Distinct from a craft
-        # attempt's own "missing_materials" reason (below) since this one has no "item_name" to
-        # reference -- the thing missing is a component the cast needs, not a recipe result.
-        if action_result.get("reason") == "missing_spell_materials":
-            input_text = action_result.get("input")
-            attempt_line = f"{actor.capitalize()} attempts: \"{input_text}\"\n" if input_text else ""
+        # A named spell/technique/innate ability's own "materials" aren't fully present in the
+        # player's inventory -- no roll attempted, mirroring OutOfRangeOutcome's own shape.
+        # Distinct from a craft attempt's own MissingMaterialsOutcome (below) since this one
+        # has no item_name to reference -- the thing missing is a component the cast needs,
+        # not a recipe result.
+        if isinstance(outcome, MissingSpellMaterialsOutcome):
             return (
                 f"{attempt_line}"
-                f"Skill used: {action_result.get('skill')} -- {actor.capitalize()} lacks the "
+                f"Skill used: {outcome.skill} -- {actor.capitalize()} lacks the "
                 f"material component this needs, so no roll is attempted."
             )
 
-        # Set only by DMCore._try_craft_action (DM_Crafting.py) when a craft attempt fails one
-        # of its own gates before any dice are rolled -- mirrors the "out_of_range" no-roll
-        # shape above, just for crafting's own three gates (no recipe at all, a missing
-        # station, missing materials) instead of a range check.
-        if action_result.get("reason") == "not_craftable":
-            input_text = action_result.get("input")
-            attempt_line = f"{actor.capitalize()} attempts: \"{input_text}\"\n" if input_text else ""
+        # A craft attempt failed one of its own gates before any dice are rolled -- mirrors
+        # OutOfRangeOutcome's own no-roll shape, just for crafting's own three gates (no
+        # recipe at all, a missing station, missing materials) instead of a range check.
+        if isinstance(outcome, NotCraftableOutcome):
             return (
                 f"{attempt_line}"
-                f"{actor.capitalize()} tries to craft {action_result.get('item_name')}, but there's "
+                f"{actor.capitalize()} tries to craft {outcome.item_name}, but there's "
                 f"no known way to make that."
             )
-        if action_result.get("reason") == "missing_station":
-            input_text = action_result.get("input")
-            attempt_line = f"{actor.capitalize()} attempts: \"{input_text}\"\n" if input_text else ""
+        if isinstance(outcome, MissingStationOutcome):
             return (
                 f"{attempt_line}"
-                f"Crafting {action_result.get('item_name')} needs a {action_result.get('station')} "
-                f"nearby, and none is here."
+                f"Crafting {outcome.item_name} needs a {outcome.station} nearby, and none is here."
             )
-        if action_result.get("reason") == "missing_materials":
-            input_text = action_result.get("input")
-            attempt_line = f"{actor.capitalize()} attempts: \"{input_text}\"\n" if input_text else ""
+        if isinstance(outcome, MissingMaterialsOutcome):
             return (
                 f"{attempt_line}"
-                f"{actor.capitalize()} doesn't have the materials on hand to craft "
-                f"{action_result.get('item_name')}."
+                f"{actor.capitalize()} doesn't have the materials on hand to craft {outcome.item_name}."
             )
 
-        outcome = "succeeds" if action_result.get("success") else "fails"
-        defender = action_result.get("defender")
-        opposing_skill = action_result.get("opposing_skill")
-        if opposing_skill:
-            opposition = f" opposed by {defender}'s {opposing_skill}"
-        elif defender:
-            opposition = f" against {defender} (no defense)"
+        # RolledOutcome -- an ordinary roll actually happened, success or failure alike.
+        success_word = "succeeds" if outcome.success else "fails"
+        if outcome.opposing_skill:
+            opposition = f" opposed by {outcome.defender}'s {outcome.opposing_skill}"
+        elif outcome.defender:
+            opposition = f" against {outcome.defender} (no defense)"
         else:
             opposition = ""
-        damage = action_result.get("damage")
-        if damage:
-            damage_text = (
-                f" {damage['defender']} takes {damage['net_damage']} damage"
-                f" ({damage['remaining_hp']} HP remaining)."
-            )
-        else:
-            damage_text = ""
 
-        # Set only by DMCore._resolve_item_test on a passed check whose outcome had a truthy
-        # "reveal" key (ex: the cursed dagger's arcane check) -- the item's own "tags", handed
-        # over only now that a real roll actually earned them, never before.
-        revealed = action_result.get("revealed")
-        revealed_text = f" The check reveals: {', '.join(revealed)}." if revealed else ""
-
-        loot = action_result.get("loot")
-        if loot:
-            gained = []
-            if loot.get("currency"):
-                gained.append(f"{loot['currency']} currency")
-            gained.extend(loot.get("items", []))
-            loot_text = f" The player gains: {', '.join(gained)}." if gained else ""
-        else:
-            loot_text = ""
-
-        # Set only by DMCore._apply_summon_if_hit on a successfully cast summoning spell/
-        # ability (its own "summon" field -- see DM_Summoning.py) -- without this, a summon's
-        # own roll outcome narrates exactly like an ordinary opposed check with no damage,
-        # never mentioning that a creature actually appeared.
-        summoned = action_result.get("summoned")
-        summoned_text = f" {actor.capitalize()} summons {summoned} to fight at their side." if summoned else ""
-
-        # Set only by DMCore._try_craft_action (DM_Crafting.py) on a successful craft roll --
-        # materials_consumed is always set once a craft attempt actually rolled (success or
-        # failure alike, since materials are spent either way), but only worth a narration
-        # fragment paired with "crafted" itself; a failed attempt's lost materials are implied
-        # by the ordinary failure wording above rather than spelled out again here.
-        crafted = action_result.get("crafted")
-        crafted_text = f" {actor.capitalize()} finishes crafting {crafted}." if crafted else ""
-
-        defender_details = action_result.get("defender_details")
-        details_text = f"\n{defender_details}" if defender_details else ""
-
-        input_text = action_result.get("input")
-        attempt_line = f"{actor.capitalize()} attempts: \"{input_text}\"\n" if input_text else ""
+        # Dispatched by type rather than a fixed set of if-checks -- a new Effect subtype
+        # only ever needs a new _EFFECT_FORMATTERS entry, never a change here. _EFFECT_ORDER
+        # (not insertion order) fixes the narration order regardless of which producer
+        # appended which effect first.
+        effects_by_type = {}
+        for effect in outcome.effects:
+            effects_by_type.setdefault(type(effect), []).append(effect)
+        effects_text = "".join(
+            _EFFECT_FORMATTERS[effect_type](effect, actor)
+            for effect_type in _EFFECT_ORDER
+            for effect in effects_by_type.get(effect_type, [])
+        )
 
         return (
             f"{attempt_line}"
-            f"Skill used: {action_result.get('skill')} "
-            f"(rolled {action_result.get('roll')} vs difficulty {action_result.get('difficulty')}{opposition}) "
-            f"- the action {outcome}.{damage_text}{revealed_text}{loot_text}{summoned_text}"
-            f"{crafted_text}{details_text}"
+            f"Skill used: {outcome.skill} "
+            f"(rolled {outcome.roll} vs difficulty {outcome.difficulty}{opposition}) "
+            f"- the action {success_word}.{effects_text}"
         )
 
     def _describe_player_actions(self, action_result):
@@ -283,13 +284,13 @@ class LLMCore:
         @brief Narrates the end of a combat round, instead of narrating every skill use mid-fight.
         @param action_result The "round_resolved" payload (an action_resolved dict plus "round"
             and, if anyone else acted this round, "turns" -- a list of every other
-            participant's resolved action, enemies and allies alike, each already tagged
-            with "actor" by DMCore._on_turn_detected).
+            participant's own {"actor", "initiative", "outcome"} wrapper, enemies and allies
+            alike, sorted by initiative by DMCore._resolve_combat_round).
         """
         self.event_bus.publish("log_info", f"Generating LLM response for combat round {action_result.get('round')}.")
 
         turns_text = "".join(
-            f"\n{self._describe_outcome(turn, actor=turn.get('actor', 'the creature'))}"
+            f"\n{self._describe_outcome(turn['outcome'], actor=turn.get('actor', 'the creature'))}"
             for turn in action_result.get("turns", [])
         )
         prompt = (

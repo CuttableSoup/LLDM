@@ -42,7 +42,13 @@ the game" for when and how it's actually constructed.
   addressed in free-form conversation), `DM_Help.py` (the reserved "ADaM" out-of-character help
   persona), and `DM_Improvisation.py` (ad hoc entity creation/removal via LLM function calling).
   Python's MRO flattens every mixin method onto one `DMCore` instance, so call sites don't care
-  which file defines a given method.
+  which file defines a given method. `DM_Combat.py`/`DM_Status.py`/`DM_Movement.py`'s own
+  dice/damage/condition methods (`resolve_action`, `calculate_damage`, `apply_condition`,
+  `get_band`, ...) are themselves thin wrappers over `Combat_Resolution.py` — a pure,
+  DMCore-independent module taking `entities`/`rules`/`skills`/`event_bus` explicitly instead
+  of reading `self`, mirroring `Challenge_Rating.py`'s own existing shape (see "Status and
+  conditions"). Every mixin method keeps its original signature, so this is invisible to every
+  other caller in the codebase.
 - **`NLP_Core.py`** — thin EventBus glue: subscribes to `user_input_submitted`/
   `rules_loaded`/`item_catalog_updated`, delegates to `Intent_Classification.py`'s
   `IntentClassifier`, and publishes whatever events come back. Also defines
@@ -110,7 +116,20 @@ item_name} | {kind: "action", skill, score, target?}, ...], input}` → `DMCore`
 entry in `clauses` → `round_resolved` (combat) or `action_resolved` (no combat) → `LLMCore`
 narrates → `llm_response_ready` → GUI/Textual display it. `clauses` is always a list, even for
 the common single-clause input, and always mixes item-interaction and skill/ability entries
-freely — see "Multiple actions" for how more than one entry changes resolution.
+freely — see "Multiple actions" for how more than one entry changes resolution. Each resolved
+action-kind entry is a typed `ActionOutcome` (`DM_ActionOutcome.py`) — a tagged union
+(`RolledOutcome`/`OutOfRangeOutcome`/`MissingSpellMaterialsOutcome`/`NotCraftableOutcome`/
+`MissingStationOutcome`/`MissingMaterialsOutcome`/`MovementOutcome`), not a loosely-shaped
+dict — populated into the `action_resolved`/`round_resolved` envelope's own `"actions"` list
+(the envelope itself stays a plain dict, like every other `EventBus` payload). A `RolledOutcome`
+carries a list of `Effect`s (`DamageEffect`/`LootEffect`/`SummonEffect`/`CraftEffect`/
+`RevealEffect`/`DefenderDetailsEffect`) instead of a fixed set of optional fields, so a new kind
+of on-hit consequence is a new `Effect` subtype, not a new field every outcome carries unused.
+`resolve_action`/`resolve_opposed_action` (`DM_Combat.py`) themselves keep returning a plain,
+untyped roll dict — `DM_Rules.py`'s hidden-notice auto-roll (`_auto_roll_notice`) uses that raw
+dict for an unrelated bool check with nothing to do with narration — so every narration-facing
+call site builds its own `ActionOutcome` one layer up (`DM_Core.py`'s `_resolve_roll` and
+friends, `DM_Crafting.py`'s `_try_craft_action`, `DM_Combat.py`'s `resolve_behavior_action`).
 `_on_turn_detected` and `_on_item_interaction_detected` both also call `_publish_party_status`,
 which re-publishes `party_status_changed {"entities": self.entities}` so `GUICore`'s Party tab
 redraws after anything that could have changed a party member's HP/equipment/inventory/
@@ -123,15 +142,16 @@ action-kind entry goes through:
    `resolve_named_ability`/`select_ability_skill` if the matched name is an ability, else
    `find_attack_ability` for a bare skill.
 2. If the ability has a range and the target is out of it (`is_in_range`), the action fails
-   immediately with `reason = "out_of_range"` — no roll happens.
+   immediately as an `OutOfRangeOutcome` — no roll happens.
 3. Otherwise resolves against `self.current_target` (see "Combat"), or against an item-level
    `[entity.test]` target one level deeper (a container's contents or something already in
    inventory — see "Entity tests"), or with no target at all (difficulty 0). Every dice roll
    here is reduced by this turn's own `dice_penalty` (see "Multiple actions").
 4. On a hit, `calculate_damage` rolls damage, resolves the `bonus` field (plain number or
    `"user.<rule>"` reference into `rules.toml`), applies armor/resistance reduction and
-   vulnerability bonus, and `apply_damage` applies net damage to HP. Damage itself is never
-   reduced by `dice_penalty` — only the skill/action roll that earned it.
+   vulnerability bonus, and `apply_damage` applies net damage to HP; the `RolledOutcome` gets
+   a `DamageEffect` appended to its own `effects` list. Damage itself is never reduced by
+   `dice_penalty` — only the skill/action roll that earned it.
 5. `apply_damage` also calls `evaluate_statuses(entity_name, "on_damage")` (see "Status and
    conditions").
 
@@ -157,10 +177,14 @@ If in combat, `round_number` increments and the round publishes as `round_resolv
 narration per round). Otherwise it publishes as `action_resolved` (one narration per skill use)
 — the path a dialogue check against a friendly NPC also takes.
 
-A `round_resolved` payload carries the player's resolved actions (`"actions"`, a list — see
-"Multiple actions") plus `"turns"`: every other living scene entity's resolved action via
-`resolve_behavior_action` (`DM_Combat.py`), driven by each entity's `[[entity.behavior]]` table
-— a declaration-order list of `{requirements, action}` entries, matched top-down (requirements
+A `round_resolved` payload carries the player's resolved actions (`"actions"`, a `list[
+ActionOutcome]` — see "Multiple actions") plus `"turns"`: every other living scene entity's own
+`{"actor", "initiative", "outcome"}` wrapper — `"outcome"` is that entity's own `ActionOutcome`
+from `resolve_behavior_action` (`DM_Combat.py`, a `RolledOutcome` on an attack or a
+`MovementOutcome` on a deliberate/fallback move), `"actor"`/`"initiative"` are this round's own
+bookkeeping around it, not part of what actually happened, so they wrap the typed outcome rather
+than living as fields on it. Driven by each entity's `[[entity.behavior]]` table — a
+declaration-order list of `{requirements, action}` entries, matched top-down (requirements
 compared the same way `[[status]]` requirements are). `turns` is sorted by initiative:
 `roll_initiative(entity_name)` pools every skill named in `rules.toml`'s `[[initiative]]` list,
 rolling once per round; an entity lacking a listed skill defaults to untrained. Initiative only
@@ -596,14 +620,26 @@ of simply arriving somewhere.
   `field` is either derived (`"hp_per_remain"`) or a direct entity attribute.
 - `apply` — `{condition, duration, dismiss}`, naming an entry in `[[condition]]`.
 
+The actual roll/condition computation below (`resolve_action`, `get_condition_modifier`,
+`apply_condition`, `evaluate_statuses`, ...) lives in `Combat_Resolution.py`, a pure module
+taking `entities`/`rules`/`event_bus` explicitly rather than reading `self` — `DM_Status.py`'s
+own methods are thin wrappers forwarding `self.entities`/`self.rules`/`self.event_bus`, kept
+for every existing caller's sake (see "Architecture"). `get_active_conditions(entity_name)`
+(a plain `{}`-defaulted dict) and `has_condition(entity_name, condition_name)` (a boolean
+membership check) are the shared read accessors every other `active_conditions` check below —
+`is_locked`/`is_closed`/`is_identified`/`is_hidden`/`is_test_available`'s own
+`requires_condition`/`blocks_if_condition` gates, and the two derived requirement fields just
+below — are built on, rather than each re-deriving
+`entities.get(name, {}).get("active_conditions", {})` independently.
+
 `entity_matches_requirements`/`get_comparable_value` are the shared engine behind both
 `[[status]]`'s own requirements and `[[entity.behavior]]`'s; an optional `opponent_name` param
 resolves the two opponent-relative derived fields, `"distance_to_target"` (the band gap to
 `opponent_name`) — used by a creature choosing *between* attack options by range, ex:
 `field.toml`'s `bandit` favors its `short bow` while `distance_to_target > 0`, falling to its
 `rusty shortsword` once that gap closes to 0 — and `"opponent_has_condition:<name>"` (below).
-Two more derived fields read `active_conditions` directly rather than a numeric/positional
-value: `"has_condition:<name>"` (a boolean presence check against the checking entity's own
+Two more derived fields resolve via `has_condition` rather than a numeric/positional value:
+`"has_condition:<name>"` (a boolean presence check against the checking entity's own
 `active_conditions`, ex: `{field = "has_condition:paralyzed", operator = "==", value = false}`
 to gate a behavior entry off entirely while paralyzed, rather than letting it "act" at 0 dice —
 see `get_condition_modifier`, which zeroes the roll but not the turn) and
@@ -615,7 +651,7 @@ requirements never pass an `opponent_name`, so `"opponent_has_condition:<name>"`
 meaningful inside `[[entity.behavior]]`.
 
 `evaluate_statuses` finds every status matching a trigger whose requirements the entity
-currently meets and calls `apply_condition`, storing it in `entity["active_conditions"]`.
+currently meets and calls `apply_condition`, storing it in the entity's own `active_conditions`.
 `dismiss_condition(entity_name, condition_name)` is the general-purpose removal primitive.
 
 `evaluate_statuses` also sweeps the *other* direction: after applying whatever matches now, it
@@ -807,21 +843,23 @@ presence). `provides_station` is deliberately its own field, not a repurposing o
 overloading it here would break that invariant.
 
 `DM_Crafting.py`'s `CraftingMixin._try_craft_action(item_name, dice_penalty)` is the resolver:
-no `[entity.craft]` block at all fails as `"not_craftable"`; a missing station or missing
-materials each fail with their own reason, no roll attempted (mirroring `_resolve_roll`'s own
-`"out_of_range"` no-roll precedent) — none of these three gates cost anything. Past every gate,
-it calls `resolve_action(player_name, skill_name, difficulty, dice_penalty=dice_penalty)` (never
-`resolve_opposed_action` — nothing opposes a craft attempt), sets `defender`/`opposing_skill` to
-`None`, and **consumes every material unconditionally, success or failure alike** — a botched
-attempt still spends the materials, giving the difficulty number real stakes rather than a free
-retry. Only on success does it call `place_new_item(player_name, item_name)` and set
-`result["crafted"] = item_name`. The result dict is shaped like any other `player_actions` entry,
-so it flows through the ordinary `action_resolved`/`round_resolved` narration path unchanged;
-`LLM_Core.py`'s `_describe_outcome` gained one new optional fragment (`crafted`, mirroring
-`summoned`'s own) plus three no-roll reason branches (`not_craftable`/`missing_materials`/
-`missing_station`, mirroring the existing `"out_of_range"` branch) — no new narration trigger
-event was needed. A craft attempt deliberately never touches `self.current_target` and never sets
-`engaged_combat_target`, same as an item test's own roll.
+no `[entity.craft]` block at all fails as a `NotCraftableOutcome`; a missing station or missing
+materials each fail as their own `ActionOutcome` variant (`MissingStationOutcome`/
+`MissingMaterialsOutcome`), no roll attempted (mirroring `OutOfRangeOutcome`'s own no-roll
+precedent) — none of these three gates cost anything. Past every gate, it calls
+`resolve_action(player_name, skill_name, difficulty, dice_penalty=dice_penalty)` (never
+`resolve_opposed_action` — nothing opposes a craft attempt) and **consumes every material
+unconditionally, success or failure alike** — a botched attempt still spends the materials,
+giving the difficulty number real stakes rather than a free retry. Only on success does it call
+`place_new_item(player_name, item_name)` and append a `CraftEffect` to the resulting
+`RolledOutcome`'s own `effects`. This is a plain `ActionOutcome` like any other, so it flows
+through the ordinary `action_resolved`/`round_resolved` narration path unchanged;
+`LLM_Core.py`'s `_describe_outcome` dispatches `CraftEffect` through its own formatter registry
+(mirroring `SummonEffect`'s own) and gained three no-roll `ActionOutcome` branches
+(`NotCraftableOutcome`/`MissingMaterialsOutcome`/`MissingStationOutcome`, mirroring the existing
+`OutOfRangeOutcome` branch) — no new narration trigger event was needed. A craft attempt
+deliberately never touches `self.current_target` and never sets `engaged_combat_target`, same
+as an item test's own roll.
 
 `Rules/Fantasy/scenarios/town.toml`'s `blacksmith` location (already narrated as having "the
 forge in the back") is the shipped worked example: a `forge` prop entity
@@ -835,10 +873,11 @@ ability (`entity_schema.toml`'s "Ability/weapon/spell/technique fields") can car
 through `DM_Crafting.py`'s `_has_materials`/`_consume_materials` directly rather than a parallel
 mechanism. `DM_Core.py`'s `_resolve_roll` checks it first, ahead of the entity-test/opposed/
 untargeted split every other roll path picks between — missing even one named material at its
-required quantity fails the cast as `"missing_spell_materials"` with no roll attempted, the same
-"gate failures cost nothing" precedent `"out_of_range"` already follows for a too-far target
-(distinct reasons for the two, since a spell's own failure has no `item_name` to report the way a
-craft attempt's does). Once a roll actually happens, `_consume_spell_materials_if_rolled` spends
+required quantity fails the cast as a `MissingSpellMaterialsOutcome` with no roll attempted, the
+same "gate failures cost nothing" precedent `OutOfRangeOutcome` already follows for a too-far
+target (a distinct variant from craft's own `MissingMaterialsOutcome`, since a spell's own
+failure has no `item_name` to report the way a craft attempt's does). Once a roll actually
+happens, `_consume_spell_materials_if_rolled` spends
 every material unconditionally, success or failure alike — a fizzled cast still burns the
 reagent, mirroring a botched craft attempt's own cost. `spells.toml`'s `arc lance` (an
 `iron filings`-consuming lightning bolt on gladstone's own `abilities` list, `iron filings`
@@ -866,7 +905,7 @@ phrase per axis.
 descriptive TOML fields (`description`, `qualities`, `memories`, `quotes`) plus, when
 `toward_name` is given, the attitude sentence above — deliberately excluding mechanical data.
 `DMCore.__init__` builds this roster into the `scenario_loaded` payload; `_on_turn_detected` also
-attaches a fresh `result["defender_details"]` per action.
+appends a fresh `DefenderDetailsEffect` to each `RolledOutcome`'s own `effects`.
 
 `self.player_name` is resolved once in `__init__` via `_resolve_player_name()`, which scans
 loaded templates for the one with `is_player = true` and raises `ValueError` if none is marked.
@@ -1122,11 +1161,16 @@ conjured because the player already found it. `_resolve_test_skill` falls back t
 container/trap can never land permanently unopenable/undisarmable.
 
 Unlike a plain item, a container/trap becomes a live, targetable scene participant
-(`SCENE_PLACED_SUBTYPES`) — inserted at the *front* of `self.scenario_entities` (so
+(`SCENE_PLACED_SUBTYPES`), via `_place_and_register_scene_entity(name, entity, insert_front=True,
+claim_target=True)` — inserted at the *front* of `self.scenario_entities` (so
 `_get_target_name()` picks it immediately) and claiming `self.current_target` via
 `_claim_current_target_if_free` (needed since scene-level `[entity.test]` checks resolve against
 `current_target`, not `_get_target_name()`), but never stealing the target from a fight already
-engaged.
+engaged. Hostile creature conjuring (below) calls the same helper with `insert_front=False,
+claim_target=is_hostile(name, player_name)` — the two ad hoc placement sites share this one
+place/register/maybe-claim sequence (on top of `_place_new_entity`, `DM_Rules.py`, the lower
+primitive both this and ordinary scenario/room instancing build on) rather than each
+hand-rolling it.
 
 An item can opt into `"use"` (`usable = true`, `healing`/`poison` `{dice, pips}`) via
 `is_healing`/`is_poisonous` flags — the tool schema explicitly tells the model a plausible
@@ -1238,8 +1282,9 @@ Unlike `DM_Improvisation.py`'s own ad hoc creature conjuring, a summon never inv
 `[[entity_template]]`, via the exact same `_instance_entities` primitive (`DM_Rules.py`) every
 scenario/room's own static `entities` list is built on (reusing `_resolve_one_encounter`'s own
 precedent, `DM_Encounters.py` — not `DM_Improvisation.py`'s bespoke `_unique_entity_key`/
-`_place_new_entity` pairing, which exists specifically for an LLM-invented name with nothing
-real to disambiguate against `self.entity_occurrence_counts` the ordinary way). The new instance
+`_place_and_register_scene_entity` pairing, which exists specifically for an LLM-invented name
+with nothing real to disambiguate against `self.entity_occurrence_counts` the ordinary way). The
+new instance
 is placed at the caster's own current band, tagged `ad_hoc = True`, given a `summon_expires_in`
 (whole combat rounds remaining), and appended to `self.scenario_entities` — but never claims
 `self.current_target` (an ally never should, same as `_claim_current_target_if_free`'s own
@@ -1267,17 +1312,17 @@ its own `summon_expires_in`, since the whole entity dict round-trips, not a whit
 the same mechanism covers `DM_Improvisation.py`'s own ADaM-conjured creatures/containers/traps
 too, not just summons.
 
-**`_apply_damage_if_hit`'s own gating.** A resolved ability only attaches a `"damage"` entry to
-the result if it actually carries a `damage_value` field (`"damage_value" in ability`, not just
-a truthy `ability`) — a named ability with none (a summon, or any non-damaging spell) never
-rolls through `calculate_damage`'s own `{"dice": 0, "pips": 0, "bonus": 0}` default and picks up
-a spurious `"damage": {"net_damage": 0, ...}` entry just because it resolved against a target
-that was present.
+**`_apply_damage_if_hit`'s own gating.** A resolved ability only appends a `DamageEffect` to the
+`RolledOutcome`'s own `effects` if it actually carries a `damage_value` field
+(`"damage_value" in ability`, not just a truthy `ability`) — a named ability with none (a
+summon, or any non-damaging spell) never rolls through `calculate_damage`'s own
+`{"dice": 0, "pips": 0, "bonus": 0}` default and picks up a spurious zero-damage `DamageEffect`
+just because it resolved against a target that was present.
 
 ## Narration
 
 `LLMCore` subscribes to narration-relevant events, sharing outcome-text building
-(`_describe_outcome` — also the one place that turns a successful summon's own `"summoned"` key
+(`_describe_outcome` — also the one place that turns a successful summon's own `SummonEffect`
 into an actual narrated line, "Summoning" above) and background-fetch plumbing
 (`_queue_narration`/`_fetch_and_publish`):
 - `scenario_loaded` → `generate_scene_intro` — once, from `DMCore.__init__`.

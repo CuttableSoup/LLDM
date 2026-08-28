@@ -4,6 +4,7 @@ import tkinter as tk
 from tkinter import ttk, simpledialog
 from collections import Counter
 
+import Combat_Resolution
 from Character_Creation import load_character_creation_data
 from Character_Creation_GUI import run_character_creation_dialog
 from DM_Rules import list_available_scenarios
@@ -503,7 +504,7 @@ class GUICore:
                 self.party_tree.insert(inventory_node, tk.END, text="(none)")
 
             conditions_node = self.party_tree.insert(member, tk.END, text="Conditions", open=False)
-            active_conditions = entity.get("active_conditions", {}) or {}
+            active_conditions = Combat_Resolution.get_active_conditions(entities, entity_key) or {}
             for condition_name in active_conditions:
                 self.party_tree.insert(conditions_node, tk.END, text=condition_name)
             if not active_conditions:

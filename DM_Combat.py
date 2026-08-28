@@ -1,6 +1,6 @@
-import random
-
+import Combat_Resolution
 from Challenge_Rating import calculate_challenge_rating, calculate_party_challenge_rating, skill_rating
+from DM_ActionOutcome import DamageEffect, MovementOutcome, rolled_outcome_from_roll
 from DM_Types import DMCoreProtocol
 
 # Reserved [[entity.behavior]] action names -- resolve_behavior_action routes these straight to
@@ -14,11 +14,14 @@ class CombatMixin(DMCoreProtocol):
     @brief Dice rolling, opposed skill checks, damage resolution, and ability/behavior lookup
         (DMCore mixin -- only ever composed into DMCore, never instantiated on its own;
         relies on self.entities/self.rules/self.skills/self.event_bus, set up by
-        DMCore.__init__). calculate_damage calls self.apply_damage (StatusMixin) to apply
-        the net damage and trigger on_damage statuses; choose_behavior calls
-        self.entity_matches_requirements (StatusMixin) to reuse the same
-        {field, operator, value} requirement engine [[status]] uses;
-        resolve_behavior_action calls self.move_toward_or_away (MovementMixin) for a
+        DMCore.__init__). The actual roll/damage computation lives in Combat_Resolution.py,
+        a pure module taking entities/rules/skills/event_bus explicitly (see its own module
+        docstring) -- every method below that used to hold that logic is now a thin wrapper
+        forwarding self.entities/self.rules/self.skills/self.event_bus, so no caller anywhere
+        else in the codebase needed to change. choose_behavior calls
+        self.entity_matches_requirements (StatusMixin, itself now a thin Combat_Resolution.py
+        wrapper too) to reuse the same {field, operator, value} requirement engine [[status]]
+        uses; resolve_behavior_action calls self.move_toward_or_away (MovementMixin) for a
         deliberate `action = "advance"`/`"retreat"` behavior entry, or as its own fallback
         when a chosen attack can't currently reach its target. Inherits DMCoreProtocol
         purely so type checkers can resolve these shared attributes/cross-mixin methods --
@@ -33,19 +36,7 @@ class CombatMixin(DMCoreProtocol):
         @param bonus The bonus field from a damage_value table.
         @return The resolved flat bonus amount.
         """
-        if isinstance(bonus, (int, float)):
-            return bonus
-        if not isinstance(bonus, str):
-            return 0
-
-        rule_name = bonus.split(".")[-1]
-        formula = self.rules.get(rule_name)
-        if not formula:
-            self.event_bus.publish("log_warning", f"Unknown damage bonus reference: {bonus}")
-            return 0
-
-        skill_stats = self.entities.get(attacker_name, {}).get("skills", {}).get(formula.get("skill"), {"dice": 0})
-        return skill_stats.get("dice", 0) // formula.get("divisor", 1)
+        return Combat_Resolution.resolve_bonus(self.entities, self.rules, self.event_bus, attacker_name, bonus)
 
     def resolve_damage_value(self, attacker_name, damage_value):
         """!
@@ -54,14 +45,7 @@ class CombatMixin(DMCoreProtocol):
         @param damage_value A {dice, pips, bonus} table from an ability, weapon, or spell.
         @return The total rolled damage before any reduction.
         """
-        dice = self.resolve_weapon_reference(attacker_name, damage_value.get("dice", 0), "dice")
-        pips = self.resolve_weapon_reference(attacker_name, damage_value.get("pips", 0), "pips")
-        if not isinstance(dice, (int, float)) or not isinstance(pips, (int, float)):
-            self.event_bus.publish("log_warning", f"Unsupported damage dice/pips reference: {damage_value}")
-            dice, pips = 0, 0
-
-        bonus = self.resolve_bonus(attacker_name, damage_value.get("bonus", 0))
-        return self.roll_dice(int(dice), int(pips)) + bonus
+        return Combat_Resolution.resolve_damage_value(self.entities, self.rules, self.event_bus, attacker_name, damage_value)
 
     def get_equipped_weapon(self, entity_name):
         """!
@@ -69,12 +53,7 @@ class CombatMixin(DMCoreProtocol):
         @param entity_name The name of the entity to check.
         @return The equipped weapon's entity table, or None if nothing equipped has a damage_value.
         """
-        entity = self.entities.get(entity_name, {})
-        for item_name in entity.get("equipped", {}).values():
-            item = self.entities.get(item_name)
-            if item and "damage_value" in item:
-                return item
-        return None
+        return Combat_Resolution.get_equipped_weapon(self.entities, entity_name)
 
     def resolve_weapon_reference(self, attacker_name, value, field):
         """!
@@ -87,12 +66,7 @@ class CombatMixin(DMCoreProtocol):
         @return value unchanged if it isn't that reference; otherwise the attacker's equipped
                 weapon's matching field, or 0 if the attacker has no equipped weapon.
         """
-        if value != f"user.weapon.{field}":
-            return value
-        weapon = self.get_equipped_weapon(attacker_name)
-        if weapon is None:
-            return 0
-        return weapon.get("damage_value", {}).get(field, 0)
+        return Combat_Resolution.resolve_weapon_reference(self.entities, attacker_name, value, field)
 
     def get_damage_reduction(self, defender_name, damage_tags):
         """!
@@ -116,24 +90,7 @@ class CombatMixin(DMCoreProtocol):
         @param damage_tags The damage tags of the incoming attack (ex: ["fire"]).
         @return The total damage reduction.
         """
-        defender = self.entities.get(defender_name, {})
-        reduction = 0
-
-        resistance_value = defender.get("resistance_value")
-        resistance_tags = defender.get("resistance_tags", [])
-        resistance_bypassed = any(tag in defender.get("resistance_bypass_tags", []) for tag in damage_tags)
-        if resistance_value and not resistance_bypassed and any(tag in resistance_tags for tag in damage_tags):
-            reduction += self.roll_dice(resistance_value.get("dice", 0), resistance_value.get("pips", 0))
-
-        for item_name in defender.get("equipped", {}).values():
-            item = self.entities.get(item_name, {})
-            armor_value = item.get("armor_value")
-            armor_tags = item.get("armor_tags", [])
-            armor_bypassed = any(tag in item.get("armor_bypass_tags", []) for tag in damage_tags)
-            if armor_value and not armor_bypassed and any(tag in armor_tags for tag in damage_tags):
-                reduction += self.roll_dice(armor_value.get("dice", 0), armor_value.get("pips", 0))
-
-        return reduction
+        return Combat_Resolution.get_damage_reduction(self.entities, defender_name, damage_tags)
 
     def get_vulnerability_bonus(self, defender_name, damage_tags):
         """!
@@ -148,12 +105,7 @@ class CombatMixin(DMCoreProtocol):
         @param damage_tags The damage tags of the incoming attack (ex: ["water"]).
         @return The rolled bonus damage, or 0 if no tag matches.
         """
-        defender = self.entities.get(defender_name, {})
-        vulnerability_value = defender.get("vulnerability_value")
-        vulnerability_tags = defender.get("vulnerability_tags", [])
-        if vulnerability_value and any(tag in vulnerability_tags for tag in damage_tags):
-            return self.roll_dice(vulnerability_value.get("dice", 0), vulnerability_value.get("pips", 0))
-        return 0
+        return Combat_Resolution.get_vulnerability_bonus(self.entities, defender_name, damage_tags)
 
     def is_immune_to(self, defender_name, damage_tags):
         """!
@@ -165,8 +117,7 @@ class CombatMixin(DMCoreProtocol):
         @param damage_tags The damage tags of the incoming attack (ex: ["fire"]).
         @return True if any damage tag matches the defender's immunity_tags.
         """
-        immunity_tags = self.entities.get(defender_name, {}).get("immunity_tags", [])
-        return any(tag in immunity_tags for tag in damage_tags)
+        return Combat_Resolution.is_immune_to(self.entities, defender_name, damage_tags)
 
     def calculate_damage(self, attacker_name, defender_name, ability):
         """!
@@ -187,41 +138,9 @@ class CombatMixin(DMCoreProtocol):
         @param ability A table with damage_value {dice, pips, bonus} and damage_tags, such as a weapon, spell, or innate ability.
         @return A dict describing the raw damage, reduction, vulnerability bonus, net damage, and the defender's remaining HP.
         """
-        damage_value = ability.get("damage_value", {"dice": 0, "pips": 0, "bonus": 0})
-        damage_tags = ability.get("damage_tags", [])
-
-        raw_damage = self.resolve_damage_value(attacker_name, damage_value)
-        if self.is_immune_to(defender_name, damage_tags):
-            # An absolute block -- a matching immunity negates the hit entirely, so
-            # vulnerability (which only matters once damage is actually getting through)
-            # never applies alongside it.
-            reduction = raw_damage
-            vulnerability_bonus = 0
-        else:
-            reduction = self.get_damage_reduction(defender_name, damage_tags)
-            vulnerability_bonus = self.get_vulnerability_bonus(defender_name, damage_tags)
-        net_damage = max(0, raw_damage + vulnerability_bonus - reduction)
-        remaining_hp = self.apply_damage(defender_name, net_damage)
-
-        defender = self.entities.get(defender_name)
-        if defender is not None and damage_tags:
-            defender.setdefault("recent_damage_tags", set()).update(damage_tags)
-
-        self.event_bus.publish(
-            "log_info",
-            f"{attacker_name} deals {raw_damage} raw damage to {defender_name}"
-            f"{f' (+{vulnerability_bonus} vulnerability)' if vulnerability_bonus else ''}"
-            f", reduced by {reduction} -> {net_damage} net damage."
+        return Combat_Resolution.calculate_damage(
+            self.entities, self.rules, self.event_bus, attacker_name, defender_name, ability,
         )
-        return {
-            "attacker": attacker_name,
-            "defender": defender_name,
-            "raw_damage": raw_damage,
-            "reduction": reduction,
-            "vulnerability_bonus": vulnerability_bonus,
-            "net_damage": net_damage,
-            "remaining_hp": remaining_hp,
-        }
 
     def roll_dice(self, dice, pips):
         """!
@@ -230,7 +149,7 @@ class CombatMixin(DMCoreProtocol):
         @param pips The flat bonus added to the dice total.
         @return The total of the roll.
         """
-        return sum(random.randint(1, 6) for _ in range(max(dice, 0))) + pips
+        return Combat_Resolution.roll_dice(dice, pips)
 
     def roll_initiative(self, entity_name):
         """!
@@ -275,24 +194,9 @@ class CombatMixin(DMCoreProtocol):
             "bonus" is added straight to the final roll, after dice are rolled.
         @return A dict describing the roll and whether it succeeded.
         """
-        entity = self.entities.get(entity_name, {})
-        skill_stats = entity.get("skills", {}).get(skill_name, {"dice": 0, "pips": 0})
-        condition_modifier = self.get_condition_modifier(entity_name)
-        dice = max(0, skill_stats.get("dice", 0) - dice_penalty + condition_modifier["dice"])
-        pips = skill_stats.get("pips", 0) + condition_modifier["pips"]
-        roll = self.roll_dice(dice, pips) + condition_modifier["bonus"]
-        success = roll >= difficulty
-        self.event_bus.publish(
-            "log_info",
-            f"Resolved action: {entity_name} used {skill_name}, rolled {roll} vs difficulty {difficulty} -> {'success' if success else 'failure'}."
+        return Combat_Resolution.resolve_action(
+            self.entities, self.rules, self.event_bus, entity_name, skill_name, difficulty, dice_penalty,
         )
-        return {
-            "entity": entity_name,
-            "skill": skill_name,
-            "roll": roll,
-            "difficulty": difficulty,
-            "success": success,
-        }
 
     def get_opposing_skill(self, skill_name, defender_name):
         """!
@@ -301,19 +205,7 @@ class CombatMixin(DMCoreProtocol):
         @param defender_name The name of the defending entity.
         @return The defender's highest-rated matching opposing skill name, or None if it has none of them.
         """
-        opposes = self.skills.get(skill_name, {}).get("opposes", [])
-        defender_skills = self.entities.get(defender_name, {}).get("skills", {})
-        best_skill = None
-        best_rating = None
-        for opposing_skill in opposes:
-            stats = defender_skills.get(opposing_skill)
-            if stats is None:
-                continue
-            rating = skill_rating(stats.get("dice", 0), stats.get("pips", 0))
-            if best_rating is None or rating > best_rating:
-                best_rating = rating
-                best_skill = opposing_skill
-        return best_skill
+        return Combat_Resolution.get_opposing_skill(self.entities, self.skills, skill_name, defender_name)
 
     def resolve_opposed_action(self, attacker_name, skill_name, defender_name, dice_penalty=0):
         """!
@@ -333,20 +225,10 @@ class CombatMixin(DMCoreProtocol):
             still rolls their opposing skill at -1D, same as if they'd been the one acting.
         @return A dict describing the roll, the opposing skill used (if any), and the outcome.
         """
-        opposing_skill = self.get_opposing_skill(skill_name, defender_name)
-        if opposing_skill:
-            defender_stats = self.entities[defender_name]["skills"][opposing_skill]
-            defender_modifier = self.get_condition_modifier(defender_name)
-            defender_dice = max(0, defender_stats.get("dice", 0) + defender_modifier["dice"])
-            defender_pips = defender_stats.get("pips", 0) + defender_modifier["pips"]
-            difficulty = self.roll_dice(defender_dice, defender_pips) + defender_modifier["bonus"]
-        else:
-            difficulty = 0
-
-        result = self.resolve_action(attacker_name, skill_name, difficulty, dice_penalty=dice_penalty)
-        result["defender"] = defender_name
-        result["opposing_skill"] = opposing_skill
-        return result
+        return Combat_Resolution.resolve_opposed_action(
+            self.entities, self.rules, self.skills, self.event_bus,
+            attacker_name, skill_name, defender_name, dice_penalty,
+        )
 
     def find_attack_ability(self, entity_name, skill_name):
         """!
@@ -511,13 +393,12 @@ class CombatMixin(DMCoreProtocol):
             their own life) there's no reason this needs to be opted into per entity.
         @param entity_name The name of the acting entity (ex: a wolf).
         @param target_name The name of the entity being acted against (ex: the player).
-        @return A movement dict ({"movement", "opponent", "before", "after"}) if the chosen
-            behavior was a deliberate move, or was an attack that had to close distance
-            instead; an opposed-action result dict (same shape as resolve_opposed_action's,
-            plus "damage" on a successful hit) on a normal attack; or None if no behavior
-            currently matches, its named action isn't actually one of the entity's own
-            abilities, or a move (deliberate or fallback) had nowhere valid to happen (ex:
-            target_name isn't a real entity).
+        @return A MovementOutcome if the chosen behavior was a deliberate move, or was an
+            attack that had to close distance instead; a RolledOutcome (with a DamageEffect
+            on a successful hit) on a normal attack; or None if no behavior currently
+            matches, its named action isn't actually one of the entity's own abilities, or a
+            move (deliberate or fallback) had nowhere valid to happen (ex: target_name isn't
+            a real entity).
         """
         behavior = self.choose_behavior(entity_name, target_name)
         if behavior is None:
@@ -527,7 +408,7 @@ class CombatMixin(DMCoreProtocol):
 
         if action_name in MOVEMENT_ACTIONS:
             movement = self.move_toward_or_away(entity_name, target_name, action_name)
-            return {"movement": action_name, **movement} if movement else None
+            return self._movement_outcome(entity_name, action_name, movement)
 
         ability = self.resolve_named_ability(entity_name, action_name)
         if ability is None:
@@ -538,15 +419,36 @@ class CombatMixin(DMCoreProtocol):
 
         if not self.is_in_range(entity_name, target_name, ability):
             movement = self.move_toward_or_away(entity_name, target_name, "advance")
-            return {"movement": "advance", **movement} if movement else None
+            return self._movement_outcome(entity_name, "advance", movement)
 
         skill_name = self.select_ability_skill(entity_name, ability)
-        result = self.resolve_opposed_action(entity_name, skill_name, target_name)
+        roll = self.resolve_opposed_action(entity_name, skill_name, target_name)
+        result = rolled_outcome_from_roll(roll)
 
-        if result["success"]:
-            result["damage"] = self.calculate_damage(entity_name, target_name, ability)
+        if result.success:
+            damage = self.calculate_damage(entity_name, target_name, ability)
+            result.effects.append(DamageEffect(
+                defender=damage["defender"], net_damage=damage["net_damage"],
+                remaining_hp=damage["remaining_hp"],
+            ))
 
         return result
+
+    def _movement_outcome(self, entity_name, direction, movement):
+        """!
+        @brief Wraps move_toward_or_away's own {"opponent", "before", "after"} return into a
+            typed MovementOutcome, or None if the move had nowhere valid to happen.
+        @param entity_name The entity that moved.
+        @param direction "advance" or "retreat".
+        @param movement move_toward_or_away's own return value.
+        @return A MovementOutcome, or None if movement was falsy.
+        """
+        if not movement:
+            return None
+        return MovementOutcome(
+            entity=entity_name, direction=direction,
+            opponent=movement.get("opponent"), before=movement.get("before"), after=movement.get("after"),
+        )
 
     def _best_damage_dice_pips(self, entity_name):
         """!

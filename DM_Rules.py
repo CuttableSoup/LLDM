@@ -544,7 +544,7 @@ class RulesMixin(DMCoreProtocol):
         """
         entity = self.entities.get(instance_name, {})
         notice = entity.get("notice")
-        if not notice or "hidden" not in entity.get("active_conditions", {}):
+        if not notice or not self.has_condition(instance_name, "hidden"):
             return
         result = self.resolve_action(self.player_name, notice.get("skill", ""), notice.get("difficulty", 0))
         if result["success"]:

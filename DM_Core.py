@@ -1,6 +1,10 @@
 import os
 import re
 
+from DM_ActionOutcome import (
+    DamageEffect, DefenderDetailsEffect, LootEffect, MissingSpellMaterialsOutcome,
+    OutOfRangeOutcome, RevealEffect, RolledOutcome, SummonEffect, rolled_outcome_from_roll,
+)
 from DM_CharacterCreation import CharacterCreationMixin
 from DM_Combat import CombatMixin
 from DM_Crafting import CraftingMixin
@@ -386,7 +390,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         if not item_test_target:
             return None
         result = self._resolve_item_test(item_test_target, skill_name, dice_penalty)
-        result["input"] = input_text
+        result.input = input_text
         return result
 
     def _rescue_item_test_skill(self, target_name, skill_name, input_text):
@@ -557,11 +561,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         if named_ability and named_ability.get("materials") and not self._has_materials(
             self.player_name, named_ability["materials"],
         ):
-            return {
-                "entity": self.player_name, "skill": skill_name, "roll": None, "difficulty": None,
-                "success": False, "defender": target_name, "opposing_skill": None,
-                "reason": "missing_spell_materials",
-            }, named_ability, False
+            return MissingSpellMaterialsOutcome(self.player_name, skill_name), named_ability, False
 
         test = self.entities.get(target_name, {}).get("test") if target_name else None
         via_test = False
@@ -575,23 +575,28 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             # *other* skill against this same target (ex: forcing the chest with "strength")
             # still falls through to the normal opposed-skill path below, e.g. resolved
             # against its "fortitude" if it has one.
-            result = self.resolve_action(
+            roll = self.resolve_action(
                 self.player_name, skill_name, test.get("difficulty", 0), dice_penalty=dice_penalty,
             )
-            result["defender"] = target_name
-            result["opposing_skill"] = None
-            outcome = test.get("pass") if result["success"] else test.get("fail")
-            effects = self.apply_test_outcome(target_name, outcome) or {}
-            loot = effects.get("loot")
+            outcome = test.get("pass") if roll["success"] else test.get("fail")
+            test_effects = self.apply_test_outcome(target_name, outcome) or {}
+            effects = []
+            loot = test_effects.get("loot")
             if loot and (loot["currency"] or loot["items"]):
-                result["loot"] = loot
-            damage = effects.get("damage")
+                effects.append(LootEffect(currency=loot["currency"], items=loot["items"]))
+            damage = test_effects.get("damage")
             if damage:
                 # A trap's failed disarm/dodge attempt (ex: dart trap, scythe trap) -- same
-                # "damage" key LLM_Core._describe_outcome already renders for a normal weapon
-                # hit, just sourced from the target's own [entity.test.fail] instead of an
-                # attack roll.
-                result["damage"] = damage
+                # DamageEffect a normal weapon hit already attaches (see
+                # _apply_damage_if_hit), just sourced from the target's own
+                # [entity.test.fail] instead of an attack roll.
+                effects.append(DamageEffect(
+                    defender=damage["defender"], net_damage=damage["net_damage"],
+                    remaining_hp=damage["remaining_hp"],
+                ))
+            result = rolled_outcome_from_roll(roll, effects=effects)
+            result.defender = target_name
+            result.opposing_skill = None
         elif target_name:
             # Looked up before rolling (not just for damage afterward, as before) so distance
             # can gate the attack roll itself -- is_in_range (DM_Movement.py) is a pure
@@ -601,17 +606,15 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             # reach of), so this never gates a non-combat opposed check.
             ability = named_ability or self.find_attack_ability(self.player_name, skill_name)
             if not self.is_in_range(self.player_name, target_name, ability):
-                result = {
-                    "entity": self.player_name, "skill": skill_name, "roll": None, "difficulty": None,
-                    "success": False, "defender": target_name, "opposing_skill": None,
-                    "reason": "out_of_range",
-                }
+                result = OutOfRangeOutcome(self.player_name, skill_name, target_name)
             else:
-                result = self.resolve_opposed_action(
+                roll = self.resolve_opposed_action(
                     self.player_name, skill_name, target_name, dice_penalty=dice_penalty,
                 )
+                result = rolled_outcome_from_roll(roll)
         else:
-            result = self.resolve_action(self.player_name, skill_name, dice_penalty=dice_penalty)
+            roll = self.resolve_action(self.player_name, skill_name, dice_penalty=dice_penalty)
+            result = rolled_outcome_from_roll(roll)
         return result, ability, via_test
 
     def _apply_damage_if_hit(self, result, skill_name, named_ability, ability, target_name, via_test):
@@ -633,11 +636,15 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         @param target_name self.current_target, or None.
         @param via_test True if the roll was a flat [entity.test] check.
         """
-        if result["success"] and target_name and not via_test:
+        if isinstance(result, RolledOutcome) and result.success and target_name and not via_test:
             if ability is None:
                 ability = named_ability or self.find_attack_ability(self.player_name, skill_name)
             if ability and "damage_value" in ability:
-                result["damage"] = self.calculate_damage(self.player_name, target_name, ability)
+                damage = self.calculate_damage(self.player_name, target_name, ability)
+                result.effects.append(DamageEffect(
+                    defender=damage["defender"], net_damage=damage["net_damage"],
+                    remaining_hp=damage["remaining_hp"],
+                ))
                 # "combat_hit" attitude drift (DM_Social.py's nudge_attitude_from_event) -- how
                 # hard the hit landed relative to the defender's own max_hp, not a flat
                 # per-swing amount, so a graze barely registers and a near-kill genuinely
@@ -647,7 +654,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
                 # entity's own combat-turn attacks (resolve_behavior_action, DM_Combat.py)
                 # don't nudge anything, since there's no player-side attitude to move.
                 max_hp = self.entities.get(target_name, {}).get("max_hp") or 1
-                magnitude = min(1.0, result["damage"].get("net_damage", 0) / max_hp)
+                magnitude = min(1.0, damage.get("net_damage", 0) / max_hp)
                 self.nudge_attitude_from_event(target_name, self.player_name, "combat_hit", magnitude)
                 self._nudge_shared_enemy_bonds(target_name, magnitude)
 
@@ -691,14 +698,14 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             (the new instance's own name) if a creature was actually conjured.
         @param named_ability The resolved ability entity (technique/spell), or None.
         """
-        if not result["success"] or not named_ability:
+        if not isinstance(result, RolledOutcome) or not result.success or not named_ability:
             return
         summon_spec = named_ability.get("summon")
         if not summon_spec:
             return
         summoned_name = self._summon_creature(summon_spec)
         if summoned_name:
-            result["summoned"] = summoned_name
+            result.effects.append(SummonEffect(name=summoned_name))
 
     def _consume_spell_materials_if_rolled(self, result, named_ability):
         """!
@@ -715,7 +722,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         """
         if not named_ability or not named_ability.get("materials"):
             return
-        if result.get("roll") is None:
+        if not isinstance(result, RolledOutcome):
             return
         self._consume_materials(self.player_name, named_ability["materials"])
 
@@ -727,14 +734,17 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             that current_target has fallen back to) for the same reason
             _describe_scenario_characters does: an action resolving against it must not leak
             its flavor text into narration before the player would actually have noticed it.
-        @param result The roll result, mutated in place with "defender_details" if
-            describe_character returns anything.
+        @param result The roll result, appended to with a DefenderDetailsEffect if
+            describe_character returns anything. A no-roll outcome (out_of_range,
+            missing_spell_materials, ...) has no "defender details" fragment in its own
+            narration at all (see LLM_Core.py's _describe_outcome), so this only ever does
+            anything for a RolledOutcome.
         @param target_name self.current_target, or None.
         """
-        if target_name and not self.is_hidden(target_name):
+        if isinstance(result, RolledOutcome) and target_name and not self.is_hidden(target_name):
             defender_details = self.describe_character(target_name, toward_name=self.player_name)
             if defender_details:
-                result["defender_details"] = defender_details
+                result.effects.append(DefenderDetailsEffect(text=defender_details))
 
     def _resolve_combat_round(self, result):
         """!
@@ -762,11 +772,17 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             opponent = self.player_name if self.is_hostile(entity_name, self.player_name) else self.current_target
             if not opponent:
                 continue
-            turn_result = self.resolve_behavior_action(entity_name, opponent)
-            if turn_result:
-                turn_result["actor"] = entity_name
-                turn_result["initiative"] = self.roll_initiative(entity_name)
-                turns.append(turn_result)
+            turn_outcome = self.resolve_behavior_action(entity_name, opponent)
+            if turn_outcome:
+                # The envelope stays a plain dict (see DM_ActionOutcome.py's own module
+                # docstring on scope) -- "actor"/"initiative" are this round's own bookkeeping
+                # around a turn, not part of what actually happened, so they wrap the typed
+                # outcome rather than living as fields on it.
+                turns.append({
+                    "actor": entity_name,
+                    "initiative": self.roll_initiative(entity_name),
+                    "outcome": turn_outcome,
+                })
         if turns:
             turns.sort(key=lambda turn: turn["initiative"], reverse=True)
             result["turns"] = turns
@@ -1002,15 +1018,17 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
                 list) if the check passed and its outcome had a truthy "reveal" key.
         """
         test = self.entities[item_name]["test"]
-        result = self.resolve_action(
+        roll = self.resolve_action(
             self.player_name, skill_name, test.get("difficulty", 0), dice_penalty=dice_penalty,
         )
-        result["defender"] = item_name
-        result["opposing_skill"] = None
-        outcome = test.get("pass") if result["success"] else test.get("fail")
+        outcome = test.get("pass") if roll["success"] else test.get("fail")
         self.apply_test_outcome(item_name, outcome)
+        effects = []
         if self.is_identified(item_name):
-            result["revealed"] = list(self.entities[item_name].get("tags", []))
+            effects.append(RevealEffect(tags=list(self.entities[item_name].get("tags", []))))
+        result = rolled_outcome_from_roll(roll, effects=effects)
+        result.defender = item_name
+        result.opposing_skill = None
         return result
 
     def _is_party_member(self, entity_name):

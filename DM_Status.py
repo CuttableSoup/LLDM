@@ -1,15 +1,5 @@
+import Combat_Resolution
 from DM_Types import DMCoreProtocol
-
-COMPARATORS = {
-    ">": lambda actual, value: actual > value,
-    "<": lambda actual, value: actual < value,
-    ">=": lambda actual, value: actual >= value,
-    "<=": lambda actual, value: actual <= value,
-    "==": lambda actual, value: actual == value,
-    "!=": lambda actual, value: actual != value,
-    "in": lambda actual, value: actual in value,
-    "not_in": lambda actual, value: actual not in value,
-}
 
 
 class StatusMixin(DMCoreProtocol):
@@ -17,11 +7,17 @@ class StatusMixin(DMCoreProtocol):
     @brief HP, the status/condition system, and entity tests (DMCore mixin -- only ever
         composed into DMCore, never instantiated on its own; relies on
         self.entities/self.rules/self.event_bus/self.player_name, set up by
-        DMCore.__init__). entity_matches_requirements is also relied on by CombatMixin's
-        choose_behavior, which reuses this same {field, operator, value} requirement engine
-        for [[entity.behavior]] rather than duplicating it. Inherits DMCoreProtocol purely
-        so type checkers can resolve these shared attributes/cross-mixin methods -- see
-        DM_Types.py.
+        DMCore.__init__). The actual roll/damage/condition computation lives in
+        Combat_Resolution.py, a pure module taking entities/rules/event_bus explicitly
+        (see its own module docstring) -- every method below that used to hold that logic is
+        now a thin wrapper forwarding self.entities/self.rules/self.event_bus, so no caller
+        anywhere else in the codebase needed to change. What stays here instead is
+        orchestration that reaches into a *different* mixin (apply_test_outcome's own
+        loot_entity/calculate_damage calls, run_round_upkeep's own _expire_summon_if_due) or
+        wasn't part of the extracted graph (get_condition_upkeep/apply_round_upkeep, the
+        is_locked/is_closed/is_identified/is_hidden/is_test_available presence checks).
+        Inherits DMCoreProtocol purely so type checkers can resolve these shared attributes/
+        cross-mixin methods -- see DM_Types.py.
     """
 
     def get_current_hp(self, entity_name):
@@ -30,10 +26,7 @@ class StatusMixin(DMCoreProtocol):
         @param entity_name The name of the entity.
         @return The entity's current HP.
         """
-        entity = self.entities.get(entity_name, {})
-        if "hp" not in entity:
-            entity["hp"] = entity.get("max_hp", 0)
-        return entity["hp"]
+        return Combat_Resolution.get_current_hp(self.entities, entity_name)
 
     def apply_damage(self, entity_name, amount):
         """!
@@ -42,14 +35,7 @@ class StatusMixin(DMCoreProtocol):
         @param amount The amount of damage to apply.
         @return The entity's remaining HP.
         """
-        entity = self.entities.get(entity_name)
-        if entity is None:
-            return 0
-        current_hp = self.get_current_hp(entity_name)
-        entity["hp"] = max(0, current_hp - amount)
-        self.event_bus.publish("log_info", f"{entity_name} takes {amount} damage ({current_hp} -> {entity['hp']} HP).")
-        self.evaluate_statuses(entity_name, "on_damage")
-        return entity["hp"]
+        return Combat_Resolution.apply_damage(self.entities, self.rules, self.event_bus, entity_name, amount)
 
     def apply_healing(self, entity_name, amount):
         """!
@@ -65,15 +51,24 @@ class StatusMixin(DMCoreProtocol):
         @param amount The amount of HP to restore.
         @return The entity's current HP after healing.
         """
-        entity = self.entities.get(entity_name)
-        if entity is None:
-            return 0
-        current_hp = self.get_current_hp(entity_name)
-        max_hp = entity.get("max_hp", current_hp)
-        entity["hp"] = min(max_hp, current_hp + amount)
-        self.event_bus.publish("log_info", f"{entity_name} heals {amount} HP ({current_hp} -> {entity['hp']} HP).")
-        self.evaluate_statuses(entity_name, "on_damage")
-        return entity["hp"]
+        return Combat_Resolution.apply_healing(self.entities, self.rules, self.event_bus, entity_name, amount)
+
+    def get_active_conditions(self, entity_name):
+        """!
+        @brief entity_name's own active_conditions dict.
+        @param entity_name The entity to check.
+        @return The entity's active_conditions dict ({} if it has none).
+        """
+        return Combat_Resolution.get_active_conditions(self.entities, entity_name)
+
+    def has_condition(self, entity_name, condition_name):
+        """!
+        @brief Whether entity_name currently has condition_name active.
+        @param entity_name The entity to check.
+        @param condition_name The condition name to look for.
+        @return True if condition_name is in the entity's active_conditions.
+        """
+        return Combat_Resolution.has_condition(self.entities, entity_name, condition_name)
 
     def get_comparable_value(self, entity_name, field, opponent_name=None):
         """!
@@ -89,43 +84,7 @@ class StatusMixin(DMCoreProtocol):
         @return The resolved value, or None if it can't be determined (ex:
                 "distance_to_target"/"opponent_has_condition:<name>" with no opponent_name given).
         """
-        if field == "hp_per_remain":
-            entity = self.entities.get(entity_name, {})
-            max_hp = entity.get("max_hp", 0)
-            if max_hp <= 0:
-                return None
-            return self.get_current_hp(entity_name) / max_hp
-        if field == "distance_to_target":
-            # Not used by any shipped [[entity.behavior]] yet (the implicit "advance when the
-            # chosen attack can't reach" fallback in resolve_behavior_action covers the common
-            # case without any TOML authorship) -- available for a creature that needs to
-            # *choose* between more than one attack option by range instead, ex: a creature
-            # with both a melee and a ranged attack picking the ranged one while the gap is
-            # still open, falling to melee once it closes. None with no opponent_name at all,
-            # same as a malformed/unresolvable requirement -- never accidentally matches.
-            if opponent_name is None:
-                return None
-            return self.get_distance_between(entity_name, opponent_name)
-        if field.startswith("has_condition:"):
-            # Boolean presence check against entity_name's own active_conditions -- pair with
-            # operator = "==", value = true (or false) in a requirement. Ex: a creature that
-            # should stand down entirely while paralyzed rather than roll 0 dice and "act"
-            # harmlessly (see get_condition_modifier, which only zeroes the roll, not the
-            # turn) can gate its attack behavior on { field = "has_condition:paralyzed",
-            # operator = "==", value = false }.
-            condition_name = field[len("has_condition:"):]
-            return condition_name in self.entities.get(entity_name, {}).get("active_conditions", {})
-        if field.startswith("opponent_has_condition:"):
-            # Same check, against opponent_name's own active_conditions instead -- lets a
-            # behavior react to what state its *target* is in (ex: pressing the attack while
-            # they're stunned, or favoring a fleeing/frightened target over a healthy one).
-            # None with no opponent_name given, same as distance_to_target above -- never
-            # accidentally matches a status requirement, which never passes one.
-            if opponent_name is None:
-                return None
-            condition_name = field[len("opponent_has_condition:"):]
-            return condition_name in self.entities.get(opponent_name, {}).get("active_conditions", {})
-        return self.entities.get(entity_name, {}).get(field)
+        return Combat_Resolution.get_comparable_value(self.entities, entity_name, field, opponent_name)
 
     def entity_matches_requirements(self, entity_name, requirements, opponent_name=None):
         """!
@@ -140,17 +99,9 @@ class StatusMixin(DMCoreProtocol):
             "distance_to_target".
         @return True if every comparison is satisfied.
         """
-        for comparison in requirements:
-            compare = COMPARATORS.get(comparison.get("operator"))
-            if compare is None:
-                self.event_bus.publish("log_warning", f"Unknown requirement operator: {comparison.get('operator')}")
-                return False
-
-            actual_value = self.get_comparable_value(entity_name, comparison.get("field"), opponent_name)
-            if actual_value is None or not compare(actual_value, comparison.get("value")):
-                return False
-
-        return True
+        return Combat_Resolution.entity_matches_requirements(
+            self.entities, self.event_bus, entity_name, requirements, opponent_name,
+        )
 
     def get_applicable_statuses(self, entity_name, trigger):
         """!
@@ -159,11 +110,7 @@ class StatusMixin(DMCoreProtocol):
         @param trigger The trigger name to filter statuses by (ex: "on_damage").
         @return A list of matching status definitions.
         """
-        return [
-            status for status in self.rules.get("status", [])
-            if status.get("trigger") == trigger
-            and self.entity_matches_requirements(entity_name, status.get("requirements", []))
-        ]
+        return Combat_Resolution.get_applicable_statuses(self.entities, self.rules, self.event_bus, entity_name, trigger)
 
     def apply_condition(self, entity_name, condition_name, duration=None, dismiss=None):
         """!
@@ -173,12 +120,7 @@ class StatusMixin(DMCoreProtocol):
         @param duration How long the condition lasts (ex: "fleeting", "scene", "permanent").
         @param dismiss What removes the condition (ex: "healing", "resurrection").
         """
-        entity = self.entities.get(entity_name)
-        if entity is None:
-            return
-        active_conditions = entity.setdefault("active_conditions", {})
-        active_conditions[condition_name] = {"duration": duration, "dismiss": dismiss}
-        self.event_bus.publish("log_info", f"{entity_name} gains condition '{condition_name}'.")
+        Combat_Resolution.apply_condition(self.entities, self.event_bus, entity_name, condition_name, duration, dismiss)
 
     def dismiss_condition(self, entity_name, condition_name):
         """!
@@ -190,12 +132,7 @@ class StatusMixin(DMCoreProtocol):
         @param condition_name The name of the condition to remove.
         @return True if the condition was present and removed, False otherwise.
         """
-        active_conditions = self.entities.get(entity_name, {}).get("active_conditions", {})
-        if condition_name not in active_conditions:
-            return False
-        del active_conditions[condition_name]
-        self.event_bus.publish("log_info", f"{entity_name} loses condition '{condition_name}'.")
-        return True
+        return Combat_Resolution.dismiss_condition(self.entities, self.event_bus, entity_name, condition_name)
 
     def get_condition_modifier(self, entity_name):
         """!
@@ -210,17 +147,7 @@ class StatusMixin(DMCoreProtocol):
         @param entity_name The name of the entity to sum modifiers for.
         @return A {"dice", "pips", "bonus"} dict, each defaulting to 0 if nothing applies.
         """
-        active_conditions = self.entities.get(entity_name, {}).get("active_conditions", {})
-        condition_defs = {c.get("name"): c.get("modifier", {}) for c in self.rules.get("condition", [])}
-        total = {"dice": 0, "pips": 0, "bonus": 0}
-        for condition_name in active_conditions:
-            modifier = condition_defs.get(condition_name)
-            if not modifier:
-                continue
-            total["dice"] += modifier.get("dice", 0)
-            total["pips"] += modifier.get("pips", 0)
-            total["bonus"] += modifier.get("bonus", 0)
-        return total
+        return Combat_Resolution.get_condition_modifier(self.entities, self.rules, entity_name)
 
     def get_condition_upkeep(self, entity_name):
         """!
@@ -237,7 +164,7 @@ class StatusMixin(DMCoreProtocol):
                 dict, each defaulting to all-0 if nothing applies.
         """
         entity = self.entities.get(entity_name, {})
-        active_conditions = entity.get("active_conditions", {})
+        active_conditions = self.get_active_conditions(entity_name)
         recent_damage_tags = entity.get("recent_damage_tags", set())
         condition_defs = {c.get("name"): c for c in self.rules.get("condition", [])}
         totals = {
@@ -315,7 +242,7 @@ class StatusMixin(DMCoreProtocol):
         @param entity_name The name of the entity to check.
         @return True if "locked" is in the entity's active_conditions.
         """
-        return "locked" in self.entities.get(entity_name, {}).get("active_conditions", {})
+        return self.has_condition(entity_name, "locked")
 
     def is_closed(self, entity_name):
         """!
@@ -326,7 +253,7 @@ class StatusMixin(DMCoreProtocol):
         @param entity_name The name of the entity to check.
         @return True if "closed" is in the entity's active_conditions.
         """
-        return "closed" in self.entities.get(entity_name, {}).get("active_conditions", {})
+        return self.has_condition(entity_name, "closed")
 
     def is_identified(self, entity_name):
         """!
@@ -336,7 +263,7 @@ class StatusMixin(DMCoreProtocol):
         @param entity_name The name of the entity to check.
         @return True if "identified" is in the entity's active_conditions.
         """
-        return "identified" in self.entities.get(entity_name, {}).get("active_conditions", {})
+        return self.has_condition(entity_name, "identified")
 
     def is_hidden(self, entity_name):
         """!
@@ -349,7 +276,7 @@ class StatusMixin(DMCoreProtocol):
         @param entity_name The name of the entity to check.
         @return True if "hidden" is in the entity's active_conditions.
         """
-        return "hidden" in self.entities.get(entity_name, {}).get("active_conditions", {})
+        return self.has_condition(entity_name, "hidden")
 
     def is_test_available(self, entity_name, test, skill_name):
         """!
@@ -368,12 +295,11 @@ class StatusMixin(DMCoreProtocol):
         """
         if skill_name not in test.get("skill", []):
             return False
-        active_conditions = self.entities.get(entity_name, {}).get("active_conditions", {})
         requires = test.get("requires_condition")
-        if requires and requires not in active_conditions:
+        if requires and not self.has_condition(entity_name, requires):
             return False
         blocks = test.get("blocks_if_condition")
-        if blocks and blocks in active_conditions:
+        if blocks and self.has_condition(entity_name, blocks):
             return False
         return True
 
@@ -440,29 +366,4 @@ class StatusMixin(DMCoreProtocol):
         @param trigger The trigger name to evaluate (ex: "on_damage").
         @return The list of status definitions that were applied.
         """
-        matched_statuses = self.get_applicable_statuses(entity_name, trigger)
-        matched_conditions = set()
-        for status in matched_statuses:
-            apply_block = status.get("apply")
-            if apply_block and apply_block.get("condition"):
-                self.apply_condition(
-                    entity_name,
-                    apply_block["condition"],
-                    duration=apply_block.get("duration"),
-                    dismiss=apply_block.get("dismiss"),
-                )
-                matched_conditions.add(apply_block["condition"])
-
-        active_conditions = self.entities.get(entity_name, {}).get("active_conditions", {})
-        for status in self.rules.get("status", []):
-            if status.get("trigger") != trigger:
-                continue
-            apply_block = status.get("apply")
-            condition_name = apply_block.get("condition") if apply_block else None
-            if not condition_name or condition_name in matched_conditions:
-                continue
-            active_entry = active_conditions.get(condition_name)
-            if active_entry is not None and not active_entry.get("dismiss"):
-                self.dismiss_condition(entity_name, condition_name)
-
-        return matched_statuses
+        return Combat_Resolution.evaluate_statuses(self.entities, self.rules, self.event_bus, entity_name, trigger)

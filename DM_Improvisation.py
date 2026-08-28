@@ -147,9 +147,7 @@ class ImprovisationMixin(DMCoreProtocol):
             # own already-authored locked/closed or armed state (AdHoc_Generation.py) rather than
             # the unconditional overwrite _instance_entities uses for a fresh hand-authored
             # template.
-            self._place_new_entity(name, entity, self.get_band(self.player_name))
-            self.scenario_entities.insert(0, name)
-            self._claim_current_target_if_free(name)
+            self._place_and_register_scene_entity(name, entity, insert_front=True, claim_target=True)
         elif intent in TARGET_CENTRIC_INTENTS:
             # "trade" checks the *current target's* own inventory as its source (buying means
             # the seller has to have it) -- the LLM's own "location" choice is meaningless here
@@ -288,6 +286,33 @@ class ImprovisationMixin(DMCoreProtocol):
         outcome["reason"] = decision.get("reason", "")
         return outcome
 
+    def _place_and_register_scene_entity(self, name, entity, insert_front, claim_target):
+        """!
+        @brief The shared 3-step shape both ad hoc scene-placement call sites in this file
+            follow on top of _place_new_entity (DM_Rules.py) -- container/trap placement and
+            hostile creature conjuring -- since each only differs in scenario_entities
+            ordering and whether target-claiming is unconditional or hostility-gated, not in
+            the mechanics themselves. Deliberately narrow: unlike _instance_entities, this has
+            no disambiguation/occurrence-counting concern of its own (the caller's own
+            _unique_entity_key already handled that) -- see this module's own docstring for
+            why ad hoc placement stays a separate primitive from hand-authored instancing.
+        @param name The entity's own self.entities key (already disambiguated by the caller).
+        @param entity The raw entity dict to place.
+        @param insert_front True to insert at the front of scenario_entities (a
+            container/trap, so _get_target_name() picks it immediately); False to append (a
+            conjured creature, which isn't automatically "the current focus").
+        @param claim_target True to claim self.current_target via _claim_current_target_if_free
+            unconditionally (a container/trap is never hostile); pass the caller's own
+            is_hostile(name, ...) check for a conjured creature instead.
+        """
+        self._place_new_entity(name, entity, self.get_band(self.player_name))
+        if insert_front:
+            self.scenario_entities.insert(0, name)
+        else:
+            self.scenario_entities.append(name)
+        if claim_target:
+            self._claim_current_target_if_free(name)
+
     def _claim_current_target_if_free(self, name):
         """!
         @brief Points self.current_target at name unless a fight is already genuinely engaged
@@ -343,14 +368,12 @@ class ImprovisationMixin(DMCoreProtocol):
 
         entity = result["entity"]
         name = self._unique_entity_key(entity["name"])
-        self._place_new_entity(name, entity, self.get_band(self.player_name))
-        self.scenario_entities.append(name)
+        self._place_and_register_scene_entity(
+            name, entity, insert_front=False, claim_target=self.is_hostile(name, self.player_name),
+        )
         self.event_bus.publish("item_catalog_updated", {
             "entities": [{"name": name, "description": entity.get("description", "")}],
         })
-
-        if self.is_hostile(name, self.player_name):
-            self._claim_current_target_if_free(name)
 
         return {"created_creature": True, "name": name}
 

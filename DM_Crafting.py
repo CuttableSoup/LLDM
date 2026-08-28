@@ -1,5 +1,6 @@
 from collections import Counter
 
+from DM_ActionOutcome import CraftEffect, MissingMaterialsOutcome, MissingStationOutcome, NotCraftableOutcome, rolled_outcome_from_roll
 from DM_Types import DMCoreProtocol
 
 
@@ -35,50 +36,34 @@ class CraftingMixin(DMCoreProtocol):
         @param item_name The name of the item to craft (already resolved by map_to_item).
         @param dice_penalty Forwarded to resolve_action -- a craft attempt shares the turn's
             own multi-action penalty pool exactly like an item test's own roll already does.
-        @return A result dict shaped like any other player_actions entry (entity, skill, roll,
-            difficulty, success, defender=None, opposing_skill=None), plus a "reason" when no
-            roll was attempted, or "crafted"/"materials_consumed" once one was.
+        @return A NotCraftableOutcome/MissingStationOutcome/MissingMaterialsOutcome if a gate
+            failed before any roll, else a RolledOutcome (with a CraftEffect on success).
         """
         craft = self.entities.get(item_name, {}).get("craft")
         if not craft:
-            return {
-                "entity": self.player_name, "skill": None, "roll": None, "difficulty": None,
-                "success": False, "defender": None, "opposing_skill": None,
-                "reason": "not_craftable", "item_name": item_name,
-            }
+            return NotCraftableOutcome(self.player_name, item_name)
 
         station = craft.get("requires_station")
         if station and not self._station_present(station):
-            return {
-                "entity": self.player_name, "skill": None, "roll": None, "difficulty": None,
-                "success": False, "defender": None, "opposing_skill": None,
-                "reason": "missing_station", "item_name": item_name, "station": station,
-            }
+            return MissingStationOutcome(self.player_name, item_name, station)
 
         materials = craft.get("materials", [])
         if not self._has_materials(self.player_name, materials):
-            return {
-                "entity": self.player_name, "skill": None, "roll": None, "difficulty": None,
-                "success": False, "defender": None, "opposing_skill": None,
-                "reason": "missing_materials", "item_name": item_name, "materials": materials,
-            }
+            return MissingMaterialsOutcome(self.player_name, item_name, materials)
 
         skill_name = self.select_ability_skill(self.player_name, {"skill": craft.get("skill", [])})
-        result = self.resolve_action(
+        roll = self.resolve_action(
             self.player_name, skill_name, craft.get("difficulty", 0), dice_penalty=dice_penalty,
         )
-        result["defender"] = None
-        result["opposing_skill"] = None
-        result["item_name"] = item_name
 
         self._consume_materials(self.player_name, materials)
-        result["materials_consumed"] = materials
 
-        if result["success"]:
+        effects = []
+        if roll["success"]:
             self.place_new_item(self.player_name, item_name)
-            result["crafted"] = item_name
+            effects.append(CraftEffect(item_name=item_name))
 
-        return result
+        return rolled_outcome_from_roll(roll, effects=effects)
 
     def _station_present(self, station_tag):
         """!
