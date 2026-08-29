@@ -232,25 +232,37 @@ class CombatMixin(DMCoreProtocol):
 
     def find_attack_ability(self, entity_name, skill_name):
         """!
-        @brief Finds the entity's equipped weapon or innate ability that uses the given skill and deals damage.
-            An equipped weapon matching skill_name always wins over an ability/technique that
-            also matches it (ex: gladstone's plain longsword swing over "cleave", both usable
-            via "blades") -- there's no player-facing way to choose a technique over a basic
-            attack on the same skill yet; see CLAUDE.md's cleave note.
+        @brief Finds the entity's equipped weapon or owned ability matching the given skill --
+            the shared "which specific thing is entity_name using" lookup for both an attack's
+            own damage roll (DM_Core.py's _apply_damage_if_hit, which separately re-checks
+            "damage_value" in ability before dealing damage) and its post-roll on_pass/on_fail
+            program lookup (see docs/design/skill_effect_language.md's "Universal (untrained)
+            abilities" -- the "merge the equipped-weapon/owned-ability lookup and the post-roll
+            on_pass/on_fail lookup into one method" note). Deliberately no "damage_value" gate
+            here anymore -- a purely non-damaging owned ability (ex: a trained, non-universal
+            maneuver with only an on_pass condition) has to be findable here too, not just a
+            weapon. An equipped weapon matching skill_name always wins over an ability/technique
+            that also matches it (ex: gladstone's plain longsword swing over "cleave", both
+            usable via "blades") -- there's no player-facing way to choose a technique over a
+            basic attack on the same skill yet; see CLAUDE.md's cleave note. Never scans
+            skill-listed *universal* abilities (ex: "trip") -- that ambiguity (several maneuvers,
+            one skill) is exactly what resolve_named_ability's own exact-name-match fallback
+            exists to avoid guessing at; a universal ability only ever becomes named_ability by
+            being matched by name.
         @param entity_name The name of the acting entity.
         @param skill_name The skill being used.
-        @return The matching weapon/ability table (with damage_value and damage_tags), or None.
+        @return The matching weapon/ability table, or None.
         """
         entity = self.entities.get(entity_name, {})
 
         for item_name in entity.get("equipped", {}).values():
             item = self.entities.get(item_name)
-            if item and self.ability_matches_skill(item, skill_name) and "damage_value" in item:
+            if item and self.ability_matches_skill(item, skill_name):
                 return item
 
         for ability in entity.get("abilities", []):
             ability = self.resolve_ability(ability)
-            if ability and self.ability_matches_skill(ability, skill_name) and "damage_value" in ability:
+            if ability and self.ability_matches_skill(ability, skill_name):
                 return ability
 
         return None
@@ -297,15 +309,29 @@ class CombatMixin(DMCoreProtocol):
             weapon). This is what lets a named technique/spell win over
             find_attack_ability's equipped-weapon-first priority -- the exact ability is
             already known here, rather than inferred from a skill name afterward.
+
+            Falls back to a *universal* ability (see docs/design/skill_effect_language.md's
+            "Universal (untrained) abilities") if entity_name doesn't own ability_name itself --
+            any name appearing in some [[skill]]'s own "abilities" field (self.universal_abilities,
+            built once at load time -- DM_Rules.py's load_rules) is usable by any entity, no
+            ownership check at all, the tabletop "you don't have to be trained to try a combat
+            maneuver" precedent. This only ever succeeds on an exact name match -- if NLP only
+            matched the bare skill name (too vague to name a specific maneuver), nothing here
+            fires and the roll proceeds as an ordinary skill check with no attached effect;
+            there's no principled way to guess which of several same-skill maneuvers a vague
+            phrase meant, so this deliberately never guesses.
         @param entity_name The name of the acting entity.
         @param ability_name The candidate ability name (ex: action_detected's "skill" field).
-        @return The resolved ability table if entity_name actually has it, else None.
+        @return The resolved ability table if entity_name owns it, or it's a universal ability,
+                else None.
         """
         entity = self.entities.get(entity_name, {})
         for ability in entity.get("abilities", []):
             resolved = self.resolve_ability(ability)
             if resolved and resolved.get("name") == ability_name:
                 return resolved
+        if ability_name in self.universal_abilities:
+            return self.entities.get(ability_name)
         return None
 
     def select_ability_skill(self, entity_name, ability):

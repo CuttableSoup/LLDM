@@ -156,18 +156,54 @@ class SentenceTransformerMatcher(IntentMatcher):
         all_phrases = []
         skill_indices = []
 
+        # Named abilities (techniques/spells/inline abilities like gladstone's "punch", plus
+        # skill-listed universal maneuvers like "trip"/"disarm"/"sunder" -- see
+        # docs/design/skill_effect_language.md's "Universal (untrained) abilities") are matched
+        # in this same embedding space, so a player naming one directly (ex: "I cleave through
+        # them") can resolve to that exact ability instead of only the skill it happens to share
+        # with a plain weapon -- see DMCore.resolve_named_ability, which gates an *owned* match
+        # on the acting entity actually owning that ability, and falls back to a *universal*
+        # match by exact name only, before treating the match as anything but a skill name.
+        # Deliberately never gated on supertype -- the old technique/spell-only filter also
+        # meant an inline ability with no shared catalog entity (ex: gladstone's own "punch")
+        # was never embedded at all, regardless of supertype. The replacement source is the
+        # union of two scans, both resolved without checking supertype:
+        #   1. Every name appearing in any entity's own "abilities" list (owned/trained) -- a
+        #      string entry resolves via entities_data, an inline table entry (no shared entity
+        #      to look up) is used directly.
+        #   2. Every name appearing in any skill's own "abilities" list (universal), resolved
+        #      via entities_data the same way a string-referenced owned ability is.
+        ability_catalog = {}
+        for entity in entities_data.values():
+            for ability_entry in entity.get("abilities", []):
+                if isinstance(ability_entry, str):
+                    resolved_ability = entities_data.get(ability_entry)
+                    if resolved_ability:
+                        ability_catalog[ability_entry] = resolved_ability
+                elif isinstance(ability_entry, dict):
+                    ability_name = ability_entry.get("name")
+                    if ability_name:
+                        ability_catalog[ability_name] = ability_entry
+        for skill in self.skills_data.values():
+            for ability_name in skill.get("abilities", []):
+                resolved_ability = entities_data.get(ability_name)
+                if resolved_ability:
+                    ability_catalog[ability_name] = resolved_ability
+
+        # Added *before* the skill phrases below -- map_to_action's own argmax breaks an exact
+        # tie by picking whichever phrase comes first in this list (see np.argmax's own
+        # first-occurrence convention). A named ability's own bare-name phrase and a skill's own
+        # literal keyword can be the identical string (ex: skills.toml's finesse lists "disarm"
+        # as a trap-disarming keyword, colliding with maneuvers.toml's own "disarm" weapon-
+        # disarming ability) -- ordering abilities first means that exact tie resolves toward
+        # the more specific named match rather than the generic skill, matching how a literal
+        # name match already wins elsewhere in this codebase (ex: resolve_named_ability's own
+        # ability-before-bare-skill precedence).
+        for name, data in ability_catalog.items():
+            self._add_phrases(all_phrases, skill_indices, name, data)
+
         for name, skill in self.skills_data.items():
             self._add_phrases(all_phrases, skill_indices, name, skill)
-
-        # Techniques/spells (ex: "cleave", "fireball") are matched in this same embedding
-        # space, so a player naming one directly (ex: "I cleave through them") can resolve
-        # to that exact ability instead of only the skill it happens to share with a plain
-        # weapon -- see DMCore.resolve_named_ability, which gates this on the acting entity
-        # actually owning that ability before treating the match as anything but a skill name.
-        for name, entity in entities_data.items():
-            if entity.get("supertype") not in ("technique", "spell"):
-                continue
-            self._add_phrases(all_phrases, skill_indices, name, entity)
 
         # Pre-calculate embeddings for all phrases
         self.all_embeddings = self.model.encode(all_phrases, convert_to_tensor=True)

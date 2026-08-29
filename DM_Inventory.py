@@ -1,3 +1,4 @@
+import Inventory_Resolution
 from DM_Types import DMCoreProtocol
 
 # Reference scale for nudge_attitude_from_event's own magnitude param (0..1) when a transferred
@@ -25,20 +26,7 @@ class InventoryMixin(DMCoreProtocol):
         @param amount How much to move; if None, moves all of from_name's currency.
         @return The amount actually transferred (0 if either entity is missing or there's none to move).
         """
-        source = self.entities.get(from_name)
-        destination = self.entities.get(to_name)
-        if source is None or destination is None:
-            return 0
-
-        available = source.get("currency", 0)
-        moved = available if amount is None else min(amount, available)
-        if moved <= 0:
-            return 0
-
-        source["currency"] = available - moved
-        destination["currency"] = destination.get("currency", 0) + moved
-        self.event_bus.publish("log_info", f"{moved} currency moved from {from_name} to {to_name}.")
-        return moved
+        return Inventory_Resolution.transfer_currency(self.entities, self.event_bus, from_name, to_name, amount)
 
     def transfer_item(self, from_name, to_name, item_name):
         """!
@@ -50,20 +38,7 @@ class InventoryMixin(DMCoreProtocol):
         @param item_name The name of the item to move.
         @return True if the item was present in from_name's inventory and moved, False otherwise.
         """
-        source = self.entities.get(from_name)
-        destination = self.entities.get(to_name)
-        if source is None or destination is None:
-            return False
-
-        source_inventory = source.get("inventory", [])
-        if item_name not in source_inventory:
-            return False
-
-        source_inventory.remove(item_name)
-        destination.setdefault("inventory", []).append(item_name)
-
-        self.event_bus.publish("log_info", f"{item_name} moved from {from_name} to {to_name}.")
-        return True
+        return Inventory_Resolution.transfer_item(self.entities, self.event_bus, from_name, to_name, item_name)
 
     def place_new_item(self, destination_name, item_name):
         """!
@@ -77,7 +52,7 @@ class InventoryMixin(DMCoreProtocol):
         @param destination_name The entity item_name should end up owned by.
         @param item_name The item entity's own name/entity_id.
         """
-        self.entities.setdefault(destination_name, {}).setdefault("inventory", []).append(item_name)
+        Inventory_Resolution.place_new_item(self.entities, destination_name, item_name)
 
     def resolve_equip_slot(self, entity_name, item_name):
         """!

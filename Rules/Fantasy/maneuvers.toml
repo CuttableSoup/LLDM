@@ -1,0 +1,223 @@
+# Universal (untrained) abilities -- standalone [[entity]] catalog entries any entity may
+# attempt via a skill's own "abilities" field (see skills.toml's "athletics"/"intimidation"
+# entries and docs/design/skill_effect_language.md's "Universal (untrained) abilities"), the
+# same catalog shape techniques.toml already uses for "cleave", just not referenced from any
+# particular entity's own "abilities" list. Each one's on_pass/on_fail program is what actually
+# closes the "22 dead skills" gap for the skill it's listed under -- a bare, unnamed use of the
+# skill still resolves as a plain effect-less roll (see resolve_named_ability's own exact-name-
+# match-only fallback); only naming the maneuver directly reaches these.
+
+[[entity]]
+name = "intimidate"
+supertype = "technique"
+subtype = "maneuver"
+description = "A hard stare and a raised voice, meant to frighten someone into backing down."
+keywords = [ "intimidate", "threaten", "menace", "scare them", "frighten them" ]
+skill = [ "intimidation" ]
+# No explicit "range" -- defaults to melee-only (is_in_range's own unconditional range = 0
+# default), the same as every other ability that doesn't say otherwise. A shouted threat from
+# across the room doesn't land the same way a face-to-face one does.
+#
+# on_fail has to be authored here, as a plain key on the entity's own base table, before the
+# first [[entity.on_pass]] array-of-tables header opens below -- TOML treats every bare
+# "key = value" line after an [[entity.on_pass]] header as belonging to *that* array entry, not
+# back to the entity itself, until another table header appears.
+on_fail = { do = "attitude", entity = "target", toward = "actor", event = "failed_intimidation", magnitude = 0.3 }
+
+[[entity.on_pass]]
+do = "attitude"
+entity = "target"
+toward = "actor"
+event = "intimidated"
+magnitude = "actor.roll_margin"
+
+[[entity.on_pass]]
+if = "target.threat < -50"
+then = { do = "condition", entity = "target", name = "shaken", duration = "scene" }
+
+[[entity]]
+name = "dirty trick"
+supertype = "technique"
+subtype = "maneuver"
+description = "Sand in the eyes, a low blow, anything to throw an opponent off their game."
+keywords = [ "dirty trick", "cheap shot", "throw sand in their eyes", "low blow" ]
+skill = [ "trickery" ]
+range = 0
+on_pass = { do = "condition", entity = "target", name = "dazzled", duration = "scene" }
+
+[[entity]]
+name = "feint"
+supertype = "technique"
+subtype = "maneuver"
+description = "A false opening meant to trick an opponent into dropping their guard."
+keywords = [ "feint", "fake them out", "fake an opening" ]
+skill = [ "trickery" ]
+range = 0
+on_pass = { do = "condition", entity = "target", name = "flat_footed", duration = "scene" }
+
+[[entity]]
+name = "trip"
+supertype = "technique"
+subtype = "maneuver"
+description = "A leg sweep that knocks an opponent off their feet."
+# "trip the creature" -- a fuller phrase, not just the bare word, alongside the shorter
+# keywords below: "trip" alone loses to spells.toml's own "summon spectral wolf" on a sentence
+# naming a live wolf target (ex: "I trip the wolf") purely because that spell's own name is
+# saturated with the literal word "wolf" -- the same lexical-magnetism risk blades' own
+# "attack the creature"/"attack the creature with my weapon" keywords (skills.toml) were added
+# to close, and the one docs/design/skill_effect_language.md's own "Open questions" anticipated.
+keywords = [ "trip", "sweep their legs", "knock them down", "leg sweep", "trip the creature" ]
+skill = [ "athletics" ]
+range = 0
+on_pass = { do = "condition", entity = "target", name = "prone", duration = "scene" }
+
+[[entity]]
+name = "disarm"
+supertype = "technique"
+subtype = "maneuver"
+description = "A grab and a twist meant to knock a weapon loose from an opponent's grip."
+keywords = [ "disarm", "knock their weapon", "wrench their weapon loose" ]
+skill = [ "athletics" ]
+range = 0
+on_pass = { do = "condition", entity = "target", name = "disarmed", duration = "scene" }
+
+[[entity]]
+name = "sunder"
+supertype = "technique"
+subtype = "maneuver"
+description = "A heavy blow aimed at an opponent's weapon -- or, against a lifeless object, simply smashing it to pieces."
+keywords = [
+    "sunder", "break their weapon", "shatter their blade", "smash it", "smash it to pieces",
+    "smash the door", "break down the door",
+]
+# Any melee weapon skill can attempt this -- Pathfinder's own Sunder is a CMB maneuver performed
+# as part of a weapon attack, unlike trip/disarm/bull rush/grapple's own athletics-only framing.
+# athletics stays too, for a bare-handed/improvised sunder attempt.
+skill = [ "athletics", "blades", "axes", "polearms", "brawling" ]
+range = 0
+# One ability, two outcomes, checked live against whatever "target" actually is: a creature's
+# weapon gets condition-disarmed exactly as before; an inanimate object (a door, a statue, a
+# market stall) instead takes real damage via calculate_damage -- there's no weapon to disarm
+# from something that was never wielding one. See is_hostile's own object == never-hostile gate
+# (CLAUDE.md's "Combat") -- sundering an object never risks accidentally starting a "fight" with it.
+on_pass = { if = 'target.supertype == "object"', then = { do = "damage", entity = "target", dice = 3, pips = 0, bonus = "user.strength_damage" }, else = { do = "condition", entity = "target", name = "sundered_weapon", duration = "permanent" } }
+
+# Pathfinder's own CMB (Combat Maneuver Bonus) maneuvers -- the same abstraction trip/disarm/
+# sunder above already borrow, all still rolled against athletics (this engine's one physical-
+# maneuver skill, standing in for Pathfinder's separate CMB/CMD pair).
+
+[[entity]]
+name = "bull rush"
+supertype = "technique"
+subtype = "maneuver"
+description = "A shoulder-first shove meant to knock an opponent off balance."
+keywords = [ "bull rush", "shove them", "shove them back", "barrel into them" ]
+skill = [ "athletics" ]
+range = 0
+on_pass = { do = "condition", entity = "target", name = "staggered", duration = "scene" }
+
+[[entity]]
+name = "grapple"
+supertype = "technique"
+subtype = "maneuver"
+description = "Seizing hold of an opponent to wrestle them down and restrict their movement."
+keywords = [ "grapple", "wrestle them down", "seize them", "hold them down" ]
+skill = [ "athletics" ]
+range = 0
+on_pass = { do = "condition", entity = "target", name = "grappled", duration = "scene" }
+
+# Pathfinder's own "pin" -- a follow-up maneuver only meaningful against an opponent "grapple"
+# (above) has already seized. entity = "actor" is deliberately never used here (pinning is
+# always done *to* the target, never the self) -- contrast "escape artist" below, which is the
+# one maneuver in this file whose whole effect lands on "actor" instead.
+[[entity]]
+name = "pin"
+supertype = "technique"
+subtype = "maneuver"
+description = "Bearing down on an already-grappled opponent to hold them fully immobile."
+keywords = [ "pin them", "pin them down", "hold them completely still" ]
+skill = [ "athletics" ]
+range = 0
+# Only actually lands if the target is already grappled -- the roll itself always happens
+# regardless (this engine has no mechanism to gate an ability *attempt* on the target's own
+# state, only its on_pass/on_fail effect -- see docs/design/skill_effect_language.md's own
+# "Choosing a mechanism"), so attempting to pin someone who isn't grappled just wastes the
+# action; no "else" branch means exactly that -- a quiet no-op, not a wasted roll.
+# "pinned" (rules.toml) is a hard dice penalty, the closest this engine's own condition system
+# (a flat roll modifier, never an action-preventing status -- see CLAUDE.md's "Status and
+# conditions") gets to Pathfinder's own true "helpless" pinned condition.
+on_pass = { if = "target.has_condition:grappled == true", then = { do = "condition", entity = "target", name = "pinned", duration = "scene" } }
+
+# Pathfinder's own "Escape Artist" -- the counter-maneuver to "grapple" above, rolled against
+# the escape skill (already the "breaking free of restraints or grapples" skill, per its own
+# skills.toml description) rather than athletics. The one maneuver in this file whose own
+# on_pass targets "actor", not "target" -- escaping a grapple is something you do to yourself,
+# not to whoever's holding you.
+[[entity]]
+name = "escape artist"
+supertype = "technique"
+subtype = "maneuver"
+description = "A practiced wriggle and twist, meant to slip free of a grapple."
+keywords = [ "escape the grapple", "break free", "wriggle free", "slip free" ]
+skill = [ "escape" ]
+range = 0
+on_pass = { do = "dismiss_condition", entity = "actor", name = "grappled" }
+
+# Pathfinder's own "Sleight of Hand" (already a literal finesse keyword, skills.toml) -- the
+# first authored program to actually need the transfer_currency op (see
+# Inventory_Resolution.py/Program_Interpreter.py, and the design doc's own "no op ahead of a
+# caller" rule this was deferred behind until now). Steals whatever currency the target is
+# currently carrying (transfer_currency's own "amount omitted -> everything" convention,
+# matching how loot_entity already sweeps a defeated container) -- there's no way for a
+# universal ability's own static TOML to name one specific *item* to lift from an unknown
+# target's inventory, so this is scoped to currency specifically, the same "pick a pocket"
+# read Pathfinder's own skill carries. Also nudges the target's own attitude via the existing
+# "theft" [[attitude_event]] (rules.toml), the same event DM_Inventory.py's own "take" intent
+# already fires for an ordinary theft.
+[[entity]]
+name = "sleight of hand"
+supertype = "technique"
+subtype = "maneuver"
+description = "A light touch and a quick hand, meant to lift a coin purse unnoticed."
+keywords = [ "pick their pocket", "lift their purse", "steal their coin" ]
+skill = [ "finesse" ]
+range = 0
+
+[[entity.on_pass]]
+do = "transfer_currency"
+from = "target"
+to = "actor"
+
+[[entity.on_pass]]
+do = "attitude"
+entity = "target"
+toward = "actor"
+event = "theft"
+magnitude = 0.5
+
+# Pathfinder's own "Treat Deadly Wounds"/first aid -- medicine's own signature effect, closing
+# the "22 dead skills" gap for a skill that, until now, had no mechanical effect of its own at
+# all (see CLAUDE.md's "Problem").
+[[entity]]
+name = "treat wounds"
+supertype = "technique"
+subtype = "maneuver"
+description = "Bandages, salves, and a steady hand, tending to someone's injuries."
+keywords = [ "treat their wounds", "bandage them", "bandage him up", "tend to their wounds", "patch them up" ]
+skill = [ "medicine" ]
+range = 0
+on_pass = { do = "heal", entity = "target", dice = 3, pips = 0, bonus = 0 }
+
+# The positive mirror of "intimidate" above -- charisma's own signature effect, and (unlike
+# intimidate's own on_pass) a real, working attitude nudge: both magnitudes here are flat
+# literals, not "actor.roll_margin" (intimidate's own still-open normalization question -- see
+# docs/design/skill_effect_language.md's "Open questions" -- deliberately not repeated here).
+[[entity]]
+name = "charm"
+supertype = "technique"
+subtype = "maneuver"
+description = "Warm words and genuine charisma, meant to win someone over."
+keywords = [ "charm them", "win them over", "sweet talk them" ]
+skill = [ "charisma" ]
+on_pass = { do = "attitude", entity = "target", toward = "actor", event = "charmed", magnitude = 0.6 }
+on_fail = { do = "attitude", entity = "target", toward = "actor", event = "failed_charm", magnitude = 0.2 }

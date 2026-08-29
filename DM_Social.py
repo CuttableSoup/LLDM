@@ -1,4 +1,6 @@
+import Social_Resolution
 from DM_Types import DMCoreProtocol
+from Social_Resolution import ACTION_ATTITUDE_DRIFT_CAP, ATTITUDE_AXES, TALK_ATTITUDE_DRIFT_CAP
 
 # nudge_attitude's own scaling factor -- the disposition delta for one dialogue turn is
 # classify_sentiment's own confidence score (already a 0..1 measure of how strongly the model
@@ -7,27 +9,10 @@ from DM_Types import DMCoreProtocol
 # at 1 for now (no rescaling at all) rather than tuned against real play yet. See CLAUDE.md's
 # "Dialogue sentiment" for the fuller rationale.
 SENTIMENT_INTENSITY_SCALE = 1
-# The max |value| pure talk can accumulate on one axis toward one entity, independent of
-# whatever that axis's own hand-authored base value already is. This is a real cap on drift, not
-# a cap on the resolved value -- a base already close to a threshold (ex: is_hostile's -100) can
-# still be pushed across it by sustained same-direction dialogue. Intentional: talking someone
-# into (or out of) a fight is a real tabletop outcome, not a bug -- see CLAUDE.md's "Dialogue".
-TALK_ATTITUDE_DRIFT_CAP = 40
-# The same kind of cap, for nudge_attitude_from_event's own "action_attitude_deltas"
-# accumulator -- deliberately a separate, wider ceiling from TALK_ATTITUDE_DRIFT_CAP rather than
-# sharing it: a real betrayal or a real act of generosity is a stronger tabletop outcome than
-# words alone, and the two accumulators are already tracked independently (see get_attitude) so
-# each can be capped on its own terms.
-ACTION_ATTITUDE_DRIFT_CAP = 60
-# get_attitude/nudge_attitude_from_event's shared axis order -- the same three values every
-# [entity.attitudes] array and [[attitude_tier]] entry (rules.toml) are declared in. Collapsed
-# from an original six (disposition/trust/confidence/respect/obligation/intimacy) after NLI
-# zero-shot testing found only disposition, confidence (renamed threat), and intimacy (renamed
-# familiarity) reliably separate from each other when read off dialogue tone -- trust never
-# separated from disposition, respect collapsed back into disposition under testing, and
-# obligation is structurally event-driven rather than tone-driven (see CLAUDE.md's "Extended
-# goals" and "Social and attitudes").
-ATTITUDE_AXES = ("disposition", "threat", "familiarity")
+# TALK_ATTITUDE_DRIFT_CAP/ACTION_ATTITUDE_DRIFT_CAP/ATTITUDE_AXES now live in Social_Resolution.py
+# (imported above) -- the pure module Program_Interpreter.py's own "attitude" op reaches into
+# with no DMCore instance in hand (see that module's own docstring). Re-exported here unchanged
+# so every existing `from DM_Social import ...` caller (ex: test_unit.py) keeps resolving.
 
 
 class SocialMixin(DMCoreProtocol):
@@ -55,33 +40,7 @@ class SocialMixin(DMCoreProtocol):
         @param toward_name The name of the entity being regarded.
         @return The [disposition, threat, familiarity] attitude array.
         """
-        entity = self.entities.get(entity_name, {})
-        attitudes = entity.get("attitudes", {})
-
-        base = None
-        for override in attitudes.get("name", []):
-            if toward_name in override:
-                base = override[toward_name]
-                break
-
-        if base is None:
-            toward_supertype = self.entities.get(toward_name, {}).get("supertype")
-            for override in attitudes.get("supertype", []):
-                if toward_supertype in override:
-                    base = override[toward_supertype]
-                    break
-
-        if base is None:
-            base = attitudes.get("default", [0, 0, 0])
-
-        result = list(base)
-        talk_deltas = entity.get("attitude_deltas", {}).get(toward_name)
-        if talk_deltas:
-            result = [value + delta for value, delta in zip(result, talk_deltas)]
-        action_deltas = entity.get("action_attitude_deltas", {}).get(toward_name)
-        if action_deltas:
-            result = [value + delta for value, delta in zip(result, action_deltas)]
-        return result
+        return Social_Resolution.get_attitude(self.entities, entity_name, toward_name)
 
     def _apply_capped_drift(self, entity_name, toward_name, deltas_key, axis_deltas, cap):
         """!
@@ -98,14 +57,7 @@ class SocialMixin(DMCoreProtocol):
         @param axis_deltas A three-value list, ordered like ATTITUDE_AXES, to add elementwise.
         @param cap The max |value| this accumulator may hold on any one axis.
         """
-        entity = self.entities.get(entity_name)
-        if entity is None:
-            return
-        deltas = entity.setdefault(deltas_key, {})
-        axis = deltas.setdefault(toward_name, [0, 0, 0])
-        for index, delta in enumerate(axis_deltas):
-            if delta:
-                axis[index] = max(-cap, min(cap, axis[index] + delta))
+        Social_Resolution.apply_capped_drift(self.entities, entity_name, toward_name, deltas_key, axis_deltas, cap)
 
     def nudge_attitude(self, entity_name, toward_name, sentiments):
         """!
@@ -165,21 +117,7 @@ class SocialMixin(DMCoreProtocol):
         @param magnitude How strongly this particular occurrence counts, 0..1 -- scales every
             axis delta the matched event declares.
         """
-        if not magnitude:
-            return
-        entity = self.entities.get(entity_name)
-        if entity is None or "attitudes" not in entity or entity.get("supertype") == "object":
-            return
-        if self.get_current_hp(entity_name) <= 0:
-            return
-        event = next(
-            (candidate for candidate in self.rules.get("attitude_event", []) if candidate.get("name") == event_name),
-            None,
-        )
-        if not event:
-            return
-        axis_deltas = [event.get(axis, 0) * magnitude for axis in ATTITUDE_AXES]
-        self._apply_capped_drift(entity_name, toward_name, "action_attitude_deltas", axis_deltas, ACTION_ATTITUDE_DRIFT_CAP)
+        Social_Resolution.nudge_attitude_from_event(self.entities, self.rules, entity_name, toward_name, event_name, magnitude)
 
     def is_hostile(self, entity_name, toward_name):
         """!

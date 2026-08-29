@@ -38,7 +38,7 @@ skills = ["stealth", "trickery", "escape", "finesse"]
 [[npc_keyword]]
 name = "trickster"
 description = "Cunning, deceptive, hard to pin down."
-skills = ["deception", "disguise", "trickery", "charisma"]
+skills = ["streetwise", "disguise", "trickery", "charisma"]
 
 [[npc_keyword]]
 name = "infiltrator"
@@ -63,12 +63,12 @@ skills = ["arcane", "miracles", "psionics", "willpower"]
 [[npc_keyword]]
 name = "diplomat"
 description = "Silver-tongued, well-connected, prefers words to blows."
-skills = ["charisma", "deception", "linguistics", "streetwise"]
+skills = ["charisma", "willpower", "linguistics", "streetwise"]
 
 [[npc_keyword]]
 name = "performer"
 description = "Draws a crowd, thrives on attention."
-skills = ["artistry", "charisma", "deception", "acrobatics"]
+skills = ["artistry", "charisma", "trickery", "acrobatics"]
 
 [[npc_keyword]]
 name = "survivalist"

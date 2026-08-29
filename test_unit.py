@@ -16,6 +16,8 @@ import pytest
 from sentence_transformers import SentenceTransformer
 
 import Combat_Resolution
+import Social_Resolution
+from Program_Interpreter import evaluate_condition, run_program
 from Character_Creation import (
     build_character_skills,
     get_race,
@@ -1685,6 +1687,605 @@ class TestRoundUpkeep(DMTestCase):
         self.dm_core.entities["troll"]["recent_damage_tags"] = {"fire"}
         self.dm_core._resolve_combat_round({"actions": []})
         self.assertEqual(self.dm_core.get_current_hp("troll"), 26)  # suppressed this round
+
+
+class TestProgramInterpreter(unittest.TestCase):
+    """!
+    @brief Program_Interpreter.py's own pure do/if engine -- direct, bare-dict tests, no
+        EventBus/DMCore needed (see docs/design/skill_effect_language.md's own "Module shape").
+    """
+
+    def setUp(self):
+        self.event_bus = EventBus()
+        self.rules = {"attitude_event": [
+            {"name": "intimidated", "disposition": -10, "threat": -25, "familiarity": -5},
+        ]}
+        self.entities = {
+            "hero": {"name": "hero", "max_hp": 20, "hp": 20},
+            "victim": {"name": "victim", "max_hp": 20, "hp": 20, "attitudes": {"default": [0, 0, 0]}},
+        }
+
+    def test_condition_op_applies_a_condition_to_the_resolved_role(self):
+        run_program(
+            {"do": "condition", "entity": "target", "name": "prone", "duration": "scene"},
+            {"actor": "hero", "target": "victim"}, self.entities, self.rules, self.event_bus,
+        )
+        self.assertIn("prone", self.entities["victim"]["active_conditions"])
+
+    def test_dismiss_condition_op_removes_an_active_condition(self):
+        self.entities["victim"]["active_conditions"] = {"prone": {"duration": "scene", "dismiss": None}}
+        run_program(
+            {"do": "dismiss_condition", "entity": "target", "name": "prone"},
+            {"actor": "hero", "target": "victim"}, self.entities, self.rules, self.event_bus,
+        )
+        self.assertNotIn("prone", self.entities["victim"]["active_conditions"])
+
+    def test_attitude_op_nudges_every_axis_by_the_resolved_event(self):
+        run_program(
+            {"do": "attitude", "entity": "target", "toward": "actor", "event": "intimidated", "magnitude": 1.0},
+            {"actor": "hero", "target": "victim"}, self.entities, self.rules, self.event_bus,
+        )
+        self.assertEqual(self.entities["victim"]["action_attitude_deltas"]["hero"], [-10, -25, -5])
+
+    def test_a_step_list_runs_every_step_in_order(self):
+        program = [
+            {"do": "condition", "entity": "target", "name": "prone", "duration": "scene"},
+            {"do": "condition", "entity": "target", "name": "shaken", "duration": "scene"},
+        ]
+        run_program(program, {"actor": "hero", "target": "victim"}, self.entities, self.rules, self.event_bus)
+        self.assertIn("prone", self.entities["victim"]["active_conditions"])
+        self.assertIn("shaken", self.entities["victim"]["active_conditions"])
+
+    def test_if_then_only_runs_when_the_condition_holds(self):
+        self.entities["victim"]["hp"] = 5  # 25% of max_hp -- < 0.5
+        run_program(
+            {
+                "if": "target.hp_per_remain < 0.5",
+                "then": {"do": "condition", "entity": "target", "name": "prone", "duration": "scene"},
+            },
+            {"actor": "hero", "target": "victim"}, self.entities, self.rules, self.event_bus,
+        )
+        self.assertIn("prone", self.entities["victim"]["active_conditions"])
+
+    def test_if_else_runs_when_the_condition_fails(self):
+        run_program(
+            {
+                "if": "target.hp_per_remain < 0.5",  # false -- full hp
+                "then": {"do": "condition", "entity": "target", "name": "prone", "duration": "scene"},
+                "else": {"do": "condition", "entity": "target", "name": "shaken", "duration": "scene"},
+            },
+            {"actor": "hero", "target": "victim"}, self.entities, self.rules, self.event_bus,
+        )
+        self.assertNotIn("prone", self.entities["victim"].get("active_conditions", {}))
+        self.assertIn("shaken", self.entities["victim"]["active_conditions"])
+
+    def test_all_requires_every_sub_condition(self):
+        condition = {"all": ["target.hp_per_remain <= 1.0", "target.has_condition:prone == false"]}
+        self.assertTrue(evaluate_condition(condition, {"actor": "hero", "target": "victim"}, self.entities))
+        self.entities["victim"]["active_conditions"] = {"prone": {}}
+        self.assertFalse(evaluate_condition(condition, {"actor": "hero", "target": "victim"}, self.entities))
+
+    def test_any_matches_on_a_single_sub_condition(self):
+        condition = {"any": ["target.has_condition:prone == true", "target.hp_per_remain <= 1.0"]}
+        self.assertTrue(evaluate_condition(condition, {"actor": "hero", "target": "victim"}, self.entities))
+
+    def test_none_matches_when_no_sub_condition_holds(self):
+        condition = {"none": ["target.has_condition:prone == true"]}
+        self.assertTrue(evaluate_condition(condition, {"actor": "hero", "target": "victim"}, self.entities))
+
+    def test_missing_role_in_ctx_is_a_quiet_no_op_not_an_error(self):
+        run_program(
+            {"do": "condition", "entity": "target", "name": "prone", "duration": "scene"},
+            {"actor": "hero"}, self.entities, self.rules, self.event_bus,
+        )  # no "target" in ctx -- must not raise, and must change nothing
+
+    def test_unknown_op_raises(self):
+        with self.assertRaises(ValueError):
+            run_program(
+                {"do": "not_a_real_op"}, {"actor": "hero", "target": "victim"},
+                self.entities, self.rules, self.event_bus,
+            )
+
+    def test_step_missing_a_required_arg_raises(self):
+        with self.assertRaises(ValueError):
+            run_program(
+                {"do": "condition", "entity": "target"}, {"actor": "hero", "target": "victim"},
+                self.entities, self.rules, self.event_bus,
+            )
+
+    def test_a_literal_entity_name_instead_of_a_role_token_raises(self):
+        with self.assertRaises(ValueError):
+            run_program(
+                {"do": "condition", "entity": "victim", "name": "prone"}, {"actor": "hero", "target": "victim"},
+                self.entities, self.rules, self.event_bus,
+            )
+
+    def test_malformed_condition_string_raises(self):
+        with self.assertRaises(ValueError):
+            run_program(
+                {"if": "not a real expression", "then": {"do": "dismiss_condition", "entity": "target", "name": "prone"}},
+                {"actor": "hero", "target": "victim"}, self.entities, self.rules, self.event_bus,
+            )
+
+    def test_damage_op_deals_real_damage_through_calculate_damage(self):
+        with patch("random.randint", return_value=3):
+            run_program(
+                {"do": "damage", "entity": "target", "dice": 2, "pips": 0, "bonus": 0, "tags": ["fire"]},
+                {"actor": "hero", "target": "victim"}, self.entities, self.rules, self.event_bus,
+            )
+        self.assertEqual(self.entities["victim"]["hp"], 14)  # 20 - (2 * 3)
+
+    def test_heal_op_restores_hp(self):
+        self.entities["victim"]["hp"] = 10
+        with patch("random.randint", return_value=3):
+            run_program(
+                {"do": "heal", "entity": "target", "dice": 2, "pips": 0, "bonus": 0},
+                {"actor": "hero", "target": "victim"}, self.entities, self.rules, self.event_bus,
+            )
+        self.assertEqual(self.entities["victim"]["hp"], 16)  # 10 + (2 * 3)
+
+
+class TestSocialResolutionPure(unittest.TestCase):
+    """!
+    @brief Social_Resolution.py's own pure nudge_attitude_from_event/apply_capped_drift --
+        direct, bare-dict tests (see docs/design/skill_effect_language.md's own "Prerequisite:
+        pure cores for attitude and transfer"). DM_Social.py's own thin-wrapper behavior is
+        already covered indirectly by every existing attitude-drift test in this file (ex:
+        TestCombatLoop's combat_hit/shared_enemy assertions), which never changed shape.
+    """
+
+    def setUp(self):
+        self.rules = {"attitude_event": [
+            {"name": "combat_hit", "disposition": -20, "threat": -15, "familiarity": -10},
+        ]}
+
+    def test_nudges_all_three_axes_scaled_by_magnitude(self):
+        entities = {"victim": {"max_hp": 20, "hp": 20, "attitudes": {"default": [0, 0, 0]}}}
+        Social_Resolution.nudge_attitude_from_event(entities, self.rules, "victim", "hero", "combat_hit", 0.5)
+        self.assertEqual(entities["victim"]["action_attitude_deltas"]["hero"], [-10.0, -7.5, -5.0])
+
+    def test_no_op_without_an_attitudes_table_at_all(self):
+        entities = {"victim": {"max_hp": 20, "hp": 20}}
+        Social_Resolution.nudge_attitude_from_event(entities, self.rules, "victim", "hero", "combat_hit", 1.0)
+        self.assertNotIn("action_attitude_deltas", entities["victim"])
+
+    def test_no_op_for_a_dead_entity(self):
+        entities = {"victim": {"max_hp": 20, "hp": 0, "attitudes": {"default": [0, 0, 0]}}}
+        Social_Resolution.nudge_attitude_from_event(entities, self.rules, "victim", "hero", "combat_hit", 1.0)
+        self.assertNotIn("action_attitude_deltas", entities["victim"])
+
+    def test_no_op_for_an_object_supertype(self):
+        entities = {"chest": {"max_hp": 20, "hp": 20, "supertype": "object", "attitudes": {"default": [0, 0, 0]}}}
+        Social_Resolution.nudge_attitude_from_event(entities, self.rules, "chest", "hero", "combat_hit", 1.0)
+        self.assertNotIn("action_attitude_deltas", entities["chest"])
+
+    def test_no_op_for_an_unknown_event_name(self):
+        entities = {"victim": {"max_hp": 20, "hp": 20, "attitudes": {"default": [0, 0, 0]}}}
+        Social_Resolution.nudge_attitude_from_event(entities, self.rules, "victim", "hero", "not_a_real_event", 1.0)
+        self.assertNotIn("action_attitude_deltas", entities["victim"])
+
+    def test_accumulated_drift_is_capped(self):
+        entities = {"victim": {"max_hp": 20, "hp": 20, "attitudes": {"default": [0, 0, 0]}}}
+        for _ in range(20):
+            Social_Resolution.nudge_attitude_from_event(entities, self.rules, "victim", "hero", "combat_hit", 1.0)
+        self.assertEqual(
+            entities["victim"]["action_attitude_deltas"]["hero"][0], -Social_Resolution.ACTION_ATTITUDE_DRIFT_CAP,
+        )
+
+
+class TestUniversalAbilities(DMTestCase):
+    """!
+    @brief Universal (untrained) abilities -- maneuvers.toml's trip/disarm/sunder (listed under
+        athletics' own "abilities" field) and intimidate (under intimidation's), plus
+        resolve_named_ability's own skill-list fallback (DM_Combat.py) -- see
+        docs/design/skill_effect_language.md's "Universal (untrained) abilities".
+    """
+
+    def test_athletics_lists_its_own_cmb_style_maneuvers(self):
+        self.assertEqual(
+            set(self.dm_core.skills["athletics"]["abilities"]),
+            {"trip", "disarm", "sunder", "bull rush", "grapple", "pin"},
+        )
+
+    def test_trickery_lists_its_own_maneuvers(self):
+        self.assertEqual(set(self.dm_core.skills["trickery"]["abilities"]), {"dirty trick", "feint"})
+
+    def test_sunder_is_reachable_from_every_melee_weapon_skill(self):
+        for skill_name in ("athletics", "blades", "axes", "polearms", "brawling"):
+            self.assertIn("sunder", self.dm_core.skills[skill_name].get("abilities", []))
+
+    def test_universal_abilities_set_is_built_at_load_time(self):
+        self.assertEqual(
+            self.dm_core.universal_abilities,
+            {
+                "trip", "disarm", "sunder", "bull rush", "grapple", "pin", "intimidate",
+                "dirty trick", "feint", "escape artist", "sleight of hand", "treat wounds", "charm",
+            },
+        )
+
+    def test_resolve_named_ability_finds_a_universal_ability_gladstone_doesnt_own(self):
+        owned_names = {
+            a if isinstance(a, str) else a.get("name") for a in self.dm_core.entities["gladstone"].get("abilities", [])
+        }
+        self.assertNotIn("trip", owned_names)
+
+        ability = self.dm_core.resolve_named_ability("gladstone", "trip")
+
+        self.assertIsNotNone(ability)
+        self.assertEqual(ability["name"], "trip")
+
+    def test_resolve_named_ability_still_prefers_an_owned_ability_over_a_universal_one(self):
+        # gladstone's own "punch" is an owned innate ability -- not universal at all -- confirms
+        # the ownership check still runs first (unaffected by the universal fallback).
+        ability = self.dm_core.resolve_named_ability("gladstone", "punch")
+        self.assertIsNotNone(ability)
+
+    def test_resolve_named_ability_returns_none_for_a_name_matching_nothing(self):
+        self.assertIsNone(self.dm_core.resolve_named_ability("gladstone", "not_a_real_ability_name"))
+
+    def test_a_universal_ability_defaults_to_melee_range(self):
+        # trip/disarm/sunder each write range = 0 explicitly; is_in_range's own unconditional
+        # default is unchanged either way.
+        for name in ("trip", "disarm", "sunder"):
+            self.assertEqual(self.dm_core.entities[name].get("range", 0), 0)
+
+
+class TestAbilityOutcomeProgram(DMTestCase):
+    """!
+    @brief DM_Core.py's own _run_ability_outcome_program -- the attachment point that runs a
+        resolved ability's own on_pass/on_fail once a real roll happens (see
+        docs/design/skill_effect_language.md's "Attachment points"). Exercised directly against
+        a constructed RolledOutcome rather than a full _on_turn_detected pass, so these stay
+        deterministic without depending on wolf's own (nonexistent) opposing skill/dice rolls.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.dm_core.entities["target_dummy"] = {
+            "name": "target_dummy", "max_hp": 20, "hp": 20, "attitudes": {"default": [0, 0, 0]},
+        }
+
+    def test_trip_on_pass_applies_prone_to_the_target(self):
+        trip = self.dm_core.entities["trip"]
+        result = RolledOutcome(entity="gladstone", skill="athletics", roll=15, difficulty=5, success=True)
+
+        self.dm_core._run_ability_outcome_program(result, "athletics", None, trip, "target_dummy", via_test=False)
+
+        self.assertIn("prone", self.dm_core.entities["target_dummy"]["active_conditions"])
+
+    def test_trip_on_fail_does_nothing_since_no_on_fail_is_authored(self):
+        trip = self.dm_core.entities["trip"]
+        result = RolledOutcome(entity="gladstone", skill="athletics", roll=1, difficulty=15, success=False)
+
+        self.dm_core._run_ability_outcome_program(result, "athletics", None, trip, "target_dummy", via_test=False)
+
+        self.assertNotIn("prone", self.dm_core.entities["target_dummy"].get("active_conditions", {}))
+
+    def test_intimidate_on_pass_applies_shaken_once_threat_is_already_past_the_threshold(self):
+        # intimidate's own step 2 ("if target.threat < -50") reads target_dummy's live attitude
+        # -- set low enough here on its own template default that the conditional fires
+        # regardless of step 1's own nudge (see the next test for why step 1 doesn't move it).
+        self.dm_core.entities["target_dummy"]["attitudes"]["default"] = [0, -60, 0]
+        intimidate = self.dm_core.entities["intimidate"]
+        result = RolledOutcome(entity="gladstone", skill="intimidation", roll=15, difficulty=5, success=True)
+
+        self.dm_core._run_ability_outcome_program(result, "intimidation", None, intimidate, "target_dummy", via_test=False)
+
+        self.assertIn("shaken", self.dm_core.entities["target_dummy"]["active_conditions"])
+
+    def test_intimidate_on_pass_step_one_is_a_no_op_since_roll_margin_is_not_yet_a_real_field(self):
+        # Step 1's own magnitude ("actor.roll_margin") is exactly the design doc's own
+        # acknowledged open question (docs/design/skill_effect_language.md's "Open questions") --
+        # "roll_margin" resolves to None (no such field on any entity), so nudge_attitude_from_event's
+        # own falsy-magnitude no-op applies. Documented here as current, honest behavior rather
+        # than silently assumed to work.
+        self.dm_core.entities["target_dummy"]["attitudes"]["default"] = [0, -60, 0]
+        intimidate = self.dm_core.entities["intimidate"]
+        result = RolledOutcome(entity="gladstone", skill="intimidation", roll=15, difficulty=5, success=True)
+
+        self.dm_core._run_ability_outcome_program(result, "intimidation", None, intimidate, "target_dummy", via_test=False)
+
+        self.assertNotIn("action_attitude_deltas", self.dm_core.entities["target_dummy"])
+
+    def test_intimidate_on_pass_skips_shaken_when_still_above_the_threshold(self):
+        intimidate = self.dm_core.entities["intimidate"]
+        result = RolledOutcome(entity="gladstone", skill="intimidation", roll=15, difficulty=5, success=True)
+
+        self.dm_core._run_ability_outcome_program(result, "intimidation", None, intimidate, "target_dummy", via_test=False)
+
+        self.assertNotIn("shaken", self.dm_core.entities["target_dummy"].get("active_conditions", {}))
+
+    def test_intimidate_on_fail_nudges_attitude_via_failed_intimidation(self):
+        intimidate = self.dm_core.entities["intimidate"]
+        result = RolledOutcome(entity="gladstone", skill="intimidation", roll=2, difficulty=15, success=False)
+
+        self.dm_core._run_ability_outcome_program(result, "intimidation", None, intimidate, "target_dummy", via_test=False)
+
+        deltas = self.dm_core.entities["target_dummy"]["action_attitude_deltas"]["gladstone"]
+        self.assertEqual(deltas, [-1.5, 3.0, -1.5])  # failed_intimidation's own deltas @ magnitude 0.3
+
+    def test_never_fires_for_a_via_test_roll(self):
+        trip = self.dm_core.entities["trip"]
+        result = RolledOutcome(entity="gladstone", skill="athletics", roll=15, difficulty=5, success=True)
+
+        self.dm_core._run_ability_outcome_program(result, "athletics", None, trip, "target_dummy", via_test=True)
+
+        self.assertNotIn("prone", self.dm_core.entities["target_dummy"].get("active_conditions", {}))
+
+    def test_bull_rush_on_pass_applies_staggered(self):
+        bull_rush = self.dm_core.entities["bull rush"]
+        result = RolledOutcome(entity="gladstone", skill="athletics", roll=15, difficulty=5, success=True)
+
+        self.dm_core._run_ability_outcome_program(result, "athletics", None, bull_rush, "target_dummy", via_test=False)
+
+        self.assertIn("staggered", self.dm_core.entities["target_dummy"]["active_conditions"])
+
+    def test_grapple_on_pass_applies_grappled(self):
+        grapple = self.dm_core.entities["grapple"]
+        result = RolledOutcome(entity="gladstone", skill="athletics", roll=15, difficulty=5, success=True)
+
+        self.dm_core._run_ability_outcome_program(result, "athletics", None, grapple, "target_dummy", via_test=False)
+
+        self.assertIn("grappled", self.dm_core.entities["target_dummy"]["active_conditions"])
+
+    def test_dirty_trick_on_pass_applies_dazzled(self):
+        dirty_trick = self.dm_core.entities["dirty trick"]
+        result = RolledOutcome(entity="gladstone", skill="trickery", roll=15, difficulty=5, success=True)
+
+        self.dm_core._run_ability_outcome_program(result, "trickery", None, dirty_trick, "target_dummy", via_test=False)
+
+        self.assertIn("dazzled", self.dm_core.entities["target_dummy"]["active_conditions"])
+
+    def test_feint_on_pass_applies_flat_footed(self):
+        feint = self.dm_core.entities["feint"]
+        result = RolledOutcome(entity="gladstone", skill="trickery", roll=15, difficulty=5, success=True)
+
+        self.dm_core._run_ability_outcome_program(result, "trickery", None, feint, "target_dummy", via_test=False)
+
+        self.assertIn("flat_footed", self.dm_core.entities["target_dummy"]["active_conditions"])
+
+    def test_none_of_the_new_maneuvers_fire_on_a_failed_roll(self):
+        for name, skill_name, condition_name in (
+            ("bull rush", "athletics", "staggered"), ("grapple", "athletics", "grappled"),
+            ("dirty trick", "trickery", "dazzled"), ("feint", "trickery", "flat_footed"),
+        ):
+            ability = self.dm_core.entities[name]
+            result = RolledOutcome(entity="gladstone", skill=skill_name, roll=1, difficulty=15, success=False)
+
+            self.dm_core._run_ability_outcome_program(result, skill_name, None, ability, "target_dummy", via_test=False)
+
+            self.assertNotIn(condition_name, self.dm_core.entities["target_dummy"].get("active_conditions", {}))
+
+
+class TestMorePathfinderManeuvers(DMTestCase):
+    """!
+    @brief The second wave of Pathfinder-inspired universal abilities: sunder's own object-vs-
+        creature branch, pin (grapple-gated), escape artist (self-targeting), sleight of hand
+        (the first real transfer_currency op caller -- Inventory_Resolution.py), treat wounds,
+        and charm (the positive mirror of intimidate, with real, non-"roll_margin" magnitudes).
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.dm_core.entities["target_dummy"] = {
+            "name": "target_dummy", "max_hp": 20, "hp": 20, "attitudes": {"default": [0, 0, 0]},
+            "supertype": "creature", "currency": 40,
+        }
+        self.dm_core.entities["crate"] = {"name": "crate", "max_hp": 10, "hp": 10, "supertype": "object"}
+
+    def _run(self, ability_name, skill_name, target_name, success=True, actor="gladstone"):
+        ability = self.dm_core.entities[ability_name]
+        result = RolledOutcome(
+            entity=actor, skill=skill_name, roll=15 if success else 1, difficulty=5 if success else 15,
+            success=success,
+        )
+        self.dm_core._run_ability_outcome_program(result, skill_name, None, ability, target_name, via_test=False)
+        return result
+
+    def test_sunder_condition_disarms_a_creatures_weapon(self):
+        self._run("sunder", "blades", "target_dummy")
+        self.assertIn("sundered_weapon", self.dm_core.entities["target_dummy"]["active_conditions"])
+
+    def test_sunder_deals_real_damage_to_an_object(self):
+        with patch("random.randint", return_value=3):
+            self._run("sunder", "blades", "crate")
+        self.assertLess(self.dm_core.entities["crate"]["hp"], 10)
+
+    def test_sunder_is_rollable_via_any_melee_weapon_skill(self):
+        for skill_name in ("athletics", "blades", "axes", "polearms", "brawling"):
+            self.dm_core.entities["target_dummy"]["active_conditions"] = {}
+            self._run("sunder", skill_name, "target_dummy")
+            self.assertIn("sundered_weapon", self.dm_core.entities["target_dummy"]["active_conditions"])
+
+    def test_pin_only_lands_on_an_already_grappled_target(self):
+        self.dm_core.entities["target_dummy"]["active_conditions"] = {"grappled": {"duration": "scene", "dismiss": None}}
+        self._run("pin", "athletics", "target_dummy")
+        self.assertIn("pinned", self.dm_core.entities["target_dummy"]["active_conditions"])
+
+    def test_pin_is_a_no_op_without_grappled_first(self):
+        self._run("pin", "athletics", "target_dummy")
+        self.assertNotIn("pinned", self.dm_core.entities["target_dummy"].get("active_conditions", {}))
+
+    def test_escape_artist_dismisses_the_actors_own_grappled_condition(self):
+        self.dm_core.entities["gladstone"].setdefault("active_conditions", {})["grappled"] = {
+            "duration": "scene", "dismiss": None,
+        }
+        self._run("escape artist", "escape", "target_dummy")
+        self.assertNotIn("grappled", self.dm_core.entities["gladstone"]["active_conditions"])
+
+    def test_sleight_of_hand_steals_all_the_targets_currency(self):
+        self.dm_core.entities["gladstone"]["currency"] = 0
+        self._run("sleight of hand", "finesse", "target_dummy")
+        self.assertEqual(self.dm_core.entities["target_dummy"]["currency"], 0)
+        self.assertEqual(self.dm_core.entities["gladstone"]["currency"], 40)
+
+    def test_sleight_of_hand_nudges_the_victims_attitude_via_theft(self):
+        self._run("sleight of hand", "finesse", "target_dummy")
+        deltas = self.dm_core.entities["target_dummy"]["action_attitude_deltas"]["gladstone"]
+        self.assertEqual(deltas, [-7.5, 0, -6.0])  # theft {-15, 0, -12} @ magnitude 0.5
+
+    def test_treat_wounds_heals_the_target(self):
+        self.dm_core.entities["target_dummy"]["hp"] = 5
+        with patch("random.randint", return_value=3):
+            self._run("treat wounds", "medicine", "target_dummy")
+        self.assertEqual(self.dm_core.entities["target_dummy"]["hp"], 14)  # 5 + (3 * 3)
+
+    def test_charm_on_pass_nudges_attitude_positively(self):
+        self._run("charm", "charisma", "target_dummy", success=True)
+        deltas = self.dm_core.entities["target_dummy"]["action_attitude_deltas"]["gladstone"]
+        self.assertEqual(deltas, [9.0, 3.0, 6.0])  # charmed {15, 5, 10} @ magnitude 0.6
+
+    def test_charm_on_fail_only_mildly_dents_attitude(self):
+        self._run("charm", "charisma", "target_dummy", success=False)
+        deltas = self.dm_core.entities["target_dummy"]["action_attitude_deltas"]["gladstone"]
+        self.assertAlmostEqual(deltas[0], -0.6)  # failed_charm disposition -3 @ magnitude 0.2
+
+
+class TestEntityTestOutcomeProgram(DMTestCase):
+    """!
+    @brief DM_Core.py's own _run_test_outcome_program -- [entity.test]'s own on_pass/on_fail,
+        sibling to its existing flat pass/fail tables (see
+        docs/design/skill_effect_language.md's "Attachment points"). No shipped [entity.test]
+        authors on_pass/on_fail yet, so this exercises the wiring directly against a synthetic
+        test table.
+    """
+
+    def test_on_pass_runs_when_the_test_succeeds(self):
+        self.dm_core.entities["chest_dummy"] = {"name": "chest_dummy", "max_hp": 1, "hp": 1}
+        test = {
+            "difficulty": 5, "skill": ["finesse"],
+            "on_pass": {"do": "condition", "entity": "actor", "name": "shaken", "duration": "scene"},
+        }
+
+        self.dm_core._run_test_outcome_program(test, True, "chest_dummy")
+
+        self.assertIn("shaken", self.dm_core.entities["gladstone"]["active_conditions"])
+
+    def test_on_fail_runs_when_the_test_fails_and_on_pass_does_not(self):
+        self.dm_core.entities["chest_dummy"] = {"name": "chest_dummy", "max_hp": 1, "hp": 1}
+        test = {
+            "difficulty": 5, "skill": ["finesse"],
+            "on_pass": {"do": "condition", "entity": "actor", "name": "shaken", "duration": "scene"},
+            "on_fail": {"do": "condition", "entity": "actor", "name": "prone", "duration": "scene"},
+        }
+
+        self.dm_core._run_test_outcome_program(test, False, "chest_dummy")
+
+        self.assertNotIn("shaken", self.dm_core.entities["gladstone"].get("active_conditions", {}))
+        self.assertIn("prone", self.dm_core.entities["gladstone"]["active_conditions"])
+
+
+class TestOnInteractProgram(DMTestCase):
+    """!
+    @brief The cursed dagger's own [entity.on_interact.equip] -- items.toml's shipped worked
+        example for docs/design/skill_effect_language.md's "The cursed dagger, actually cursed".
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.dm_core.entities["gladstone"]["inventory"].append("cursed dagger")
+
+    def test_equipping_an_unidentified_cursed_dagger_curses_the_wearer(self):
+        resolved = self._capture("item_interaction_resolved")
+
+        self.dm_core._on_item_interaction_detected({"intent": "equip", "item_name": "cursed dagger", "input": "I equip the cursed dagger"})
+
+        self.assertTrue(resolved[-1]["found"])
+        self.assertIn("cursed", self.dm_core.entities["gladstone"]["active_conditions"])
+
+    def test_equipping_an_already_identified_cursed_dagger_does_not_curse_the_wearer(self):
+        self.dm_core.apply_condition("cursed dagger", "identified", duration="permanent", dismiss="")
+
+        self.dm_core._on_item_interaction_detected({"intent": "equip", "item_name": "cursed dagger", "input": "I equip the cursed dagger"})
+
+        self.assertNotIn("cursed", self.dm_core.entities["gladstone"]["active_conditions"])
+
+    def test_a_denied_interaction_never_runs_the_program(self):
+        # Not actually in inventory -- _resolve_equip_intent denies this as "not_present" before
+        # resolved(True, ...) is ever reached, so on_interact must never fire either.
+        self.dm_core.entities["gladstone"]["inventory"].remove("cursed dagger")
+
+        self.dm_core._on_item_interaction_detected({"intent": "equip", "item_name": "cursed dagger", "input": "I equip the cursed dagger"})
+
+        self.assertNotIn("cursed", self.dm_core.entities["gladstone"]["active_conditions"])
+
+
+class TestOnDamageProgram(DMTestCase):
+    """!
+    @brief The troll's own [entity.on_damage] -- creatures.toml's shipped worked example for
+        docs/design/skill_effect_language.md's "A troll's temper".
+    """
+
+    def setUp(self):
+        super().setUp()
+        self._load_ad_hoc_scenario(
+            [{"name": "gladstone", "band": 1}, {"name": "troll", "band": 1}], bands=4, enclosed=True,
+        )
+
+    def test_dropping_below_half_hp_enrages_the_troll(self):
+        self.dm_core.apply_damage("troll", 21, actor_name="gladstone")  # 40 -> 19, 47.5%
+
+        self.assertIn("enraged", self.dm_core.entities["troll"]["active_conditions"])
+
+    def test_staying_above_half_hp_does_not_enrage_the_troll(self):
+        self.dm_core.apply_damage("troll", 5, actor_name="gladstone")  # 40 -> 35
+
+        self.assertNotIn("enraged", self.dm_core.entities["troll"].get("active_conditions", {}))
+
+    def test_enraged_is_not_re_applied_once_already_active(self):
+        self.dm_core.apply_damage("troll", 21, actor_name="gladstone")
+        self.dm_core.entities["troll"]["active_conditions"]["enraged"]["duration"] = "marker"
+
+        self.dm_core.apply_damage("troll", 1, actor_name="gladstone")
+
+        # Still the same marker -- apply_condition would have overwritten it with a fresh
+        # {"duration": "scene", ...} entry if the condition step had fired again.
+        self.assertEqual(self.dm_core.entities["troll"]["active_conditions"]["enraged"]["duration"], "marker")
+
+
+class TestOnRoundUpkeepProgram(DMTestCase):
+    """!@brief The generic [entity.on_round_upkeep] attachment point (DM_Status.py's own
+        run_round_upkeep wrapper) -- no shipped entity authors this yet, so this exercises the
+        wiring directly against a synthetic entity."""
+
+    def test_runs_alongside_the_ordinary_per_round_upkeep_loop(self):
+        self.dm_core.entities["ticking_dummy"] = {
+            "name": "ticking_dummy", "max_hp": 10, "hp": 10,
+            "on_round_upkeep": {"do": "condition", "entity": "target", "name": "shaken", "duration": "scene"},
+        }
+        self.dm_core.scenario_entities.append("ticking_dummy")
+
+        self.dm_core.run_round_upkeep()
+
+        self.assertIn("shaken", self.dm_core.entities["ticking_dummy"]["active_conditions"])
+
+    def test_never_runs_for_a_dead_entity(self):
+        self.dm_core.entities["dead_dummy"] = {
+            "name": "dead_dummy", "max_hp": 10, "hp": 0,
+            "on_round_upkeep": {"do": "condition", "entity": "target", "name": "shaken", "duration": "scene"},
+        }
+        self.dm_core.scenario_entities.append("dead_dummy")
+
+        self.dm_core.run_round_upkeep()
+
+        self.assertNotIn("shaken", self.dm_core.entities["dead_dummy"].get("active_conditions", {}))
+
+
+class TestOnEnterProgram(DMTestCase):
+    """!@brief The generic [entity.on_enter] attachment point (DM_Rules.py's own
+        _enter_location) -- no shipped entity authors this yet, so this exercises the wiring
+        directly against a synthetic entity."""
+
+    def test_runs_once_the_entity_is_present_in_a_freshly_entered_location(self):
+        self.dm_core.entity_templates["altar"] = {
+            "name": "altar", "supertype": "object", "max_hp": 1,
+            "on_enter": {"do": "condition", "entity": "target", "name": "identified", "duration": "permanent"},
+        }
+        self.dm_core.entities["altar"] = dict(self.dm_core.entity_templates["altar"])
+
+        self._load_ad_hoc_scenario([{"name": "gladstone", "band": 1}, {"name": "altar", "band": 1}])
+
+        self.assertIn("identified", self.dm_core.entities["altar"]["active_conditions"])
 
 
 class TestSummoning(DMTestCase):

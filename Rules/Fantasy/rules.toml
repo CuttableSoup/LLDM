@@ -109,6 +109,67 @@ name = "regenerating"
 upkeep_heal = { dice = 2, pips = 0, bonus = 0 }
 upkeep_blocked_by_tags = [ "fire" ]
 
+# The conditions maneuvers.toml's universal abilities (see docs/design/skill_effect_language.md)
+# apply via their own on_pass programs -- what gives "shaken"/"prone"/"disarmed"/
+# "sundered_weapon" real mechanical teeth rather than narrated-only flavor, the same way
+# "stunned"/"wounded" already work.
+[[condition]]
+name = "shaken"
+modifier = { dice = -1, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "prone"
+modifier = { dice = -1, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "disarmed"
+modifier = { dice = -2, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "sundered_weapon"
+modifier = { dice = -1, pips = 0, bonus = 0 }
+
+# maneuvers.toml's own "bull rush"/"grapple"/"dirty trick"/"feint" -- Pathfinder's own CMB
+# maneuvers, each applying its own real dice penalty via its on_pass program the same way
+# trip/disarm/sunder already do.
+[[condition]]
+name = "staggered"
+modifier = { dice = -1, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "grappled"
+modifier = { dice = -2, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "dazzled"
+modifier = { dice = -1, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "flat_footed"
+modifier = { dice = -1, pips = 0, bonus = 0 }
+
+# maneuvers.toml's own "pin" -- only ever applied to an already-"grappled" target. The closest
+# this engine's own flat-roll-modifier condition system (see CLAUDE.md's "Status and
+# conditions") gets to Pathfinder's real "helpless" pinned condition, which actually prevents
+# acting -- no mechanism here stops an entity from taking its turn regardless of condition.
+[[condition]]
+name = "pinned"
+modifier = { dice = -4, pips = 0, bonus = 0 }
+
+# A presence flag only, same "no modifier at all" shape "locked"/"jammed" already use -- being
+# cursed (items.toml's cursed dagger, via its own on_interact.equip) is a narrative/mechanical
+# fact read elsewhere (a future curse-specific check), not itself a dice penalty.
+[[condition]]
+name = "cursed"
+modifier = { dice = 0, pips = 0, bonus = 0 }
+
+# creatures.toml's troll applies this to itself via its own on_damage program once it drops
+# below half HP without having been burned first -- see docs/design/skill_effect_language.md's
+# "A troll's temper" worked example.
+[[condition]]
+name = "enraged"
+modifier = { dice = 1, pips = 0, bonus = 0 }
+
 [strength_damage]
 skill = "strength"
 divisor = 2
@@ -228,6 +289,39 @@ name = "shared_enemy"
 disposition = 5
 threat = 0
 familiarity = 0
+
+# Fired by maneuvers.toml's own "intimidate" universal ability (see
+# docs/design/skill_effect_language.md's "attitude" op) -- a successful intimidation scares the
+# target (threat drops hard) without necessarily earning outright hatred; a failed attempt barely
+# dents disposition and, if anything, leaves the target slightly more confident (threat up) for
+# having stood their ground.
+[[attitude_event]]
+name = "intimidated"
+disposition = -10
+threat = -25
+familiarity = -5
+
+[[attitude_event]]
+name = "failed_intimidation"
+disposition = -5
+threat = 10
+familiarity = -5
+
+# Fired by maneuvers.toml's own "charm" universal ability -- the positive mirror of intimidate's
+# own pair above. A successful charm attempt genuinely warms someone up (disposition/familiarity
+# both rise, and threat rises too -- charm reads as safe, not threatening); a failed attempt
+# reads as a bit awkward, a mild, mostly-harmless dent rather than real offense.
+[[attitude_event]]
+name = "charmed"
+disposition = 15
+threat = 5
+familiarity = 10
+
+[[attitude_event]]
+name = "failed_charm"
+disposition = -3
+threat = 0
+familiarity = -2
 
 # Which [entity.equipped] slot names are valid for a given kind of entity -- entity_schema.
 # toml's own [entity.equipped] comment notes slot names are freeform strings today (nothing in

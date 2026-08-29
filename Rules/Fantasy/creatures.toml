@@ -122,6 +122,14 @@ max_hp = 40
 [entity.conditions.regenerating]
 duration = "permanent"
 
+# A troll's temper -- see docs/design/skill_effect_language.md's own "A troll's temper" worked
+# example. Dropping under half HP without having been burned first (recent_damage_tags, the
+# same set "regenerating"'s own upkeep_blocked_by_tags already reads) makes it lash out harder;
+# "enraged" (rules.toml) is what actually gives that real teeth (a +1D bonus), not just flavor.
+[entity.on_damage]
+if = { all = [ "target.hp_per_remain < 0.5", "target.has_condition:enraged == false" ] }
+then = { do = "condition", entity = "target", name = "enraged", duration = "scene" }
+
 [entity.skills]
 strength = { dice = 5, pips = 0 }
 brawling = { dice = 4, pips = 0 }

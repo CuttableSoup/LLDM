@@ -23,6 +23,8 @@
 
 import random
 
+import Program_Interpreter
+import Social_Resolution
 from Challenge_Rating import skill_rating
 
 COMPARATORS = {
@@ -168,8 +170,8 @@ def get_comparable_value(entities, entity_name, field, opponent_name=None):
     @param entities The live entities dict.
     @param entity_name The name of the entity to check.
     @param field The field name, either a derived value (ex: "hp_per_remain",
-        "distance_to_target", "has_condition:<name>", "opponent_has_condition:<name>") or
-        an entity attribute (ex: "supertype").
+        "distance_to_target", "has_condition:<name>", "opponent_has_condition:<name>",
+        "disposition"/"threat"/"familiarity") or an entity attribute (ex: "supertype").
     @param opponent_name The entity being acted against, if any.
     @return The resolved value, or None if it can't be determined.
     """
@@ -191,6 +193,17 @@ def get_comparable_value(entities, entity_name, field, opponent_name=None):
             return None
         condition_name = field[len("opponent_has_condition:"):]
         return has_condition(entities, opponent_name, condition_name)
+    if field in Social_Resolution.ATTITUDE_AXES:
+        # entity_name's own attitude *toward* opponent_name -- ex:
+        # docs/design/skill_effect_language.md's own "target.threat < -50" reads how the
+        # checked entity feels about whoever it's being checked against, re-derived live (not
+        # cached) so an earlier step's own "attitude" op in the same program is already
+        # reflected here. None with no opponent_name -- there's no one for this entity to have
+        # an attitude toward in that case.
+        if opponent_name is None:
+            return None
+        axis_index = Social_Resolution.ATTITUDE_AXES.index(field)
+        return Social_Resolution.get_attitude(entities, entity_name, opponent_name)[axis_index]
     return entities.get(entity_name, {}).get(field)
 
 
@@ -276,15 +289,19 @@ def evaluate_statuses(entities, rules, event_bus, entity_name, trigger):
     return matched_statuses
 
 
-def apply_damage(entities, rules, event_bus, entity_name, amount):
+def apply_damage(entities, rules, event_bus, entity_name, amount, actor_name=None):
     """!
-    @brief Subtracts damage from an entity's current HP, floored at 0, and evaluates
-        on_damage statuses.
+    @brief Subtracts damage from an entity's current HP, floored at 0, evaluates on_damage
+        statuses, and runs entity_name's own [entity.on_damage] program (see
+        docs/design/skill_effect_language.md's "Attachment points") -- pure-to-pure, right
+        alongside evaluate_statuses, never lifted up to a DMCore wrapper.
     @param entities The live entities dict.
     @param rules The loaded rules dict.
     @param event_bus The EventBus to publish a log_info line to.
     @param entity_name The name of the entity taking damage.
     @param amount The amount of damage to apply.
+    @param actor_name The entity that dealt the damage, if known (ctx's own "actor" for
+        on_damage) -- absent for damage with no real attacker (ex: a trap, per-round upkeep).
     @return The entity's remaining HP.
     """
     entity = entities.get(entity_name)
@@ -294,17 +311,22 @@ def apply_damage(entities, rules, event_bus, entity_name, amount):
     entity["hp"] = max(0, current_hp - amount)
     event_bus.publish("log_info", f"{entity_name} takes {amount} damage ({current_hp} -> {entity['hp']} HP).")
     evaluate_statuses(entities, rules, event_bus, entity_name, "on_damage")
+    Program_Interpreter.run_program(
+        entity.get("on_damage"), {"actor": actor_name, "target": entity_name}, entities, rules, event_bus,
+    )
     return entity["hp"]
 
 
-def apply_healing(entities, rules, event_bus, entity_name, amount):
+def apply_healing(entities, rules, event_bus, entity_name, amount, actor_name=None):
     """!
-    @brief Adds HP to an entity, clamped at their own max_hp.
+    @brief Adds HP to an entity, clamped at their own max_hp, and runs entity_name's own
+        [entity.on_heal] program -- the symmetric counterpart to apply_damage's own on_damage.
     @param entities The live entities dict.
     @param rules The loaded rules dict.
     @param event_bus The EventBus to publish a log_info line to.
     @param entity_name The name of the entity being healed.
     @param amount The amount of HP to restore.
+    @param actor_name The entity that healed this one, if known (ctx's own "actor" for on_heal).
     @return The entity's current HP after healing.
     """
     entity = entities.get(entity_name)
@@ -315,6 +337,9 @@ def apply_healing(entities, rules, event_bus, entity_name, amount):
     entity["hp"] = min(max_hp, current_hp + amount)
     event_bus.publish("log_info", f"{entity_name} heals {amount} HP ({current_hp} -> {entity['hp']} HP).")
     evaluate_statuses(entities, rules, event_bus, entity_name, "on_damage")
+    Program_Interpreter.run_program(
+        entity.get("on_heal"), {"actor": actor_name, "target": entity_name}, entities, rules, event_bus,
+    )
     return entity["hp"]
 
 
@@ -482,7 +507,7 @@ def calculate_damage(entities, rules, event_bus, attacker_name, defender_name, a
         reduction = get_damage_reduction(entities, defender_name, damage_tags)
         vulnerability_bonus = get_vulnerability_bonus(entities, defender_name, damage_tags)
     net_damage = max(0, raw_damage + vulnerability_bonus - reduction)
-    remaining_hp = apply_damage(entities, rules, event_bus, defender_name, net_damage)
+    remaining_hp = apply_damage(entities, rules, event_bus, defender_name, net_damage, actor_name=attacker_name)
 
     defender = entities.get(defender_name)
     if defender is not None and damage_tags:

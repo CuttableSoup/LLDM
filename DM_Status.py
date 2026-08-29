@@ -1,5 +1,6 @@
 import Combat_Resolution
 from DM_Types import DMCoreProtocol
+from Program_Interpreter import run_program
 
 
 class StatusMixin(DMCoreProtocol):
@@ -28,16 +29,20 @@ class StatusMixin(DMCoreProtocol):
         """
         return Combat_Resolution.get_current_hp(self.entities, entity_name)
 
-    def apply_damage(self, entity_name, amount):
+    def apply_damage(self, entity_name, amount, actor_name=None):
         """!
-        @brief Subtracts damage from an entity's current HP, floored at 0, and evaluates on_damage statuses.
+        @brief Subtracts damage from an entity's current HP, floored at 0, evaluates
+            on_damage statuses, and runs the entity's own [entity.on_damage] program (see
+            docs/design/skill_effect_language.md).
         @param entity_name The name of the entity taking damage.
         @param amount The amount of damage to apply.
+        @param actor_name The entity that dealt the damage, if known -- ctx's own "actor" for
+            on_damage; absent for damage with no real attacker.
         @return The entity's remaining HP.
         """
-        return Combat_Resolution.apply_damage(self.entities, self.rules, self.event_bus, entity_name, amount)
+        return Combat_Resolution.apply_damage(self.entities, self.rules, self.event_bus, entity_name, amount, actor_name)
 
-    def apply_healing(self, entity_name, amount):
+    def apply_healing(self, entity_name, amount, actor_name=None):
         """!
         @brief Adds HP to an entity, clamped at their own max_hp -- the inverse of
             apply_damage, but deliberately its own method rather than apply_damage called
@@ -47,11 +52,14 @@ class StatusMixin(DMCoreProtocol):
             injury (healing only ever raises hp_per_remain, so no worse tier can newly match),
             but so a wound tier's condition that no longer holds (ex: "wounded" once healed
             back above 0.59) gets dismissed via evaluate_statuses' own stale-condition sweep.
+            Also runs the entity's own [entity.on_heal] program.
         @param entity_name The name of the entity being healed.
         @param amount The amount of HP to restore.
+        @param actor_name The entity that healed this one, if known -- ctx's own "actor" for
+            on_heal.
         @return The entity's current HP after healing.
         """
-        return Combat_Resolution.apply_healing(self.entities, self.rules, self.event_bus, entity_name, amount)
+        return Combat_Resolution.apply_healing(self.entities, self.rules, self.event_bus, entity_name, amount, actor_name)
 
     def get_active_conditions(self, entity_name):
         """!
@@ -234,7 +242,20 @@ class StatusMixin(DMCoreProtocol):
             if self.get_current_hp(entity_name) <= 0:
                 continue
             self.apply_round_upkeep(entity_name)
+            self._run_round_upkeep_program(entity_name)
             self._expire_summon_if_due(entity_name)
+
+    def _run_round_upkeep_program(self, entity_name):
+        """!
+        @brief Runs entity_name's own [entity.on_round_upkeep] program (see
+            docs/design/skill_effect_language.md's "Attachment points"), alongside the ordinary
+            per-condition upkeep loop above -- no "actor" role for this trigger, same as
+            on_enter, since a per-round tick isn't "done by" anyone.
+        @param entity_name The entity ticking over this round.
+        """
+        program = self.entities.get(entity_name, {}).get("on_round_upkeep")
+        if program:
+            run_program(program, {"actor": None, "target": entity_name}, self.entities, self.rules, self.event_bus)
 
     def is_locked(self, entity_name):
         """!

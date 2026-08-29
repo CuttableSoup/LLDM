@@ -3,6 +3,7 @@ import os
 import tomllib
 
 from DM_Types import DMCoreProtocol
+from Program_Interpreter import run_program
 
 # Reserved sentinel a scenario/room "entities" entry can use in place of a literal character
 # name to mean "whichever entity is currently the player" (self.player_name) -- resolved in
@@ -163,6 +164,16 @@ class RulesMixin(DMCoreProtocol):
                             self.rules[key] = value
                 except Exception as e:
                     self.event_bus.publish("log_error", f"Error loading {filename}: {e}")
+
+        # A flat set of every ability name appearing in any [[skill]]'s own "abilities" field --
+        # a skill-listed ability is usable by any entity, no ownership check at all (see
+        # docs/design/skill_effect_language.md's "Universal (untrained) abilities"). Built once
+        # here, alongside self.skills itself, so resolve_named_ability's own skill-list fallback
+        # (DM_Combat.py) stays a cheap membership check rather than a per-turn scan over every
+        # loaded skill.
+        self.universal_abilities = {
+            ability_name for skill in self.skills.values() for ability_name in skill.get("abilities", [])
+        }
 
         self._validate_equipped_slots()
 
@@ -703,6 +714,22 @@ class RulesMixin(DMCoreProtocol):
         self.current_target = self._choose_combat_target()
 
         self._resolve_location_encounter(self._current_room() or location)
+        self._run_on_enter_programs()
+
+    def _run_on_enter_programs(self):
+        """!
+        @brief Runs every present scene entity's own [entity.on_enter] program (see
+            docs/design/skill_effect_language.md's "Attachment points") -- an entity opts in on
+            its own template; nothing fires for one that doesn't declare it. No "actor" role for
+            this trigger (same as on_round_upkeep) -- there's no single entity this is "done by",
+            it's a passive reaction to the scene itself being entered. Called once per
+            _enter_location, after this location/room's own [[location.encounter]] roll.
+        """
+        for entity_name in list(self.scenario_entities):
+            entity = self.entities.get(entity_name, {})
+            program = entity.get("on_enter")
+            if program:
+                run_program(program, {"actor": None, "target": entity_name}, self.entities, self.rules, self.event_bus)
 
     def enter_room(self, room_key, arrival_band=1, skip_llm_generation=False):
         """!

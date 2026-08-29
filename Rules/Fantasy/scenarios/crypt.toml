@@ -57,7 +57,6 @@ axes = { dice = 2, pips = 0 }
 blades = { dice = 4, pips = 0 }
 brawling = { dice = 4, pips = 0 }
 charisma = { dice = 2, pips = 0 }
-deception = { dice = 2, pips = 0 }
 disguise = { dice = 2, pips = 0 }
 dodge = { dice = 3, pips = 0 }
 escape = { dice = 2, pips = 0 }
@@ -130,7 +129,6 @@ axes = { dice = 2, pips = 0 }
 blades = { dice = 2, pips = 0 }
 brawling = { dice = 1, pips = 0 }
 charisma = { dice = 4, pips = 0 }
-deception = { dice = 2, pips = 0 }
 disguise = { dice = 2, pips = 0 }
 dodge = { dice = 2, pips = 1 }
 escape = { dice = 2, pips = 0 }

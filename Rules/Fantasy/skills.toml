@@ -3,249 +3,243 @@ name = "athletics"
 description = "Physical movement and sports activities."
 keywords = ["movement", "exertion", "physical", "climb", "jump", "swim", "run", "sprint"]
 opposes = ["athletics", "observation"]
-specializations = ["climbing", "jumping", "swimming"]
+# Combat maneuvers any entity may attempt via athletics, no training implied -- see
+# maneuvers.toml and docs/design/skill_effect_language.md's "Universal (untrained) abilities".
+abilities = [ "trip", "disarm", "sunder", "bull rush", "grapple", "pin" ]
 
 [[skill]]
 name = "blades"
 description = "Using swords and knives in close combat."
-keywords = ["combat", "melee", "armed", "sword", "dagger", "knife", "blade", "stab", "slash", "cut", "attack"]
+# "attack the creature"/"attack the creature with my weapon" -- deliberately fuller phrases,
+# not bare words, alongside the single-word keywords below: a plain "attack"/"sword" already
+# loses to spells.toml's own "summon spectral wolf" on a sentence naming a live wolf target
+# (ex: "I attack the wolf with my sword") purely because that spell's own name/description are
+# saturated with the literal word "wolf" -- the same lexical-magnetism risk
+# docs/design/skill_effect_language.md's own "Open questions" already flags for any ability
+# whose name happens to share a word with the scene. A fuller, sentence-shaped phrase mirroring
+# real attack-a-creature input structure closes that gap without renaming/thinning the spell's
+# own established identity.
+keywords = [
+    "combat", "melee", "armed", "sword", "dagger", "knife", "blade", "stab", "slash", "cut", "attack",
+    "attack the creature", "attack the creature with my weapon",
+]
 opposes = ["dodge", "blades", "brawling", "axes", "polearms"]
-specializations = ["longsword", "dagger", "greatsword"]
+# See maneuvers.toml's own "sunder" -- accessible via any melee weapon skill, not just
+# athletics (Pathfinder's own Sunder is a CMB maneuver performed as part of a weapon attack).
+abilities = [ "sunder" ]
 
 [[skill]]
 name = "throwing"
 description = "Hurling weapons or objects at a target."
 keywords = ["combat", "ranged", "projectile", "throw", "hurl", "toss"]
 opposes = ["dodge", "reflexes"]
-specializations = ["throwing knives", "axes", "rocks"]
 
 [[skill]]
 name = "fortitude"
 description = "Resisting fatigue, disease, or poison."
 keywords = ["defense", "resistance", "passive", "endure", "survive", "toughness"]
 opposes = []
-specializations = ["poison resistance", "disease resistance", "endurance"]
 
 [[skill]]
 name = "strength"
 description = "Feats of raw physical power and lifting."
 keywords = ["exertion", "lifting", "force", "power", "push", "pull", "break", "smash"]
 opposes = ["strength", "brawling", "fortitude"]
-specializations = ["lifting", "breaking doors", "carrying"]
 
 [[skill]]
 name = "axes"
 description = "Wielding axes in melee combat."
 keywords = ["combat", "melee", "armed", "axe", "hatchet", "cleave", "chop"]
 opposes = ["dodge", "blades", "axes", "polearms"]
-specializations = ["battleaxe", "hand axe", "greataxe"]
+abilities = [ "sunder" ]
 
 [[skill]]
 name = "polearms"
 description = "Wielding long hafted weapons in combat."
 keywords = ["combat", "melee", "reach", "spear", "halberd", "pike", "lance", "thrust"]
 opposes = ["dodge", "blades", "axes", "polearms"]
-specializations = ["pike", "glaive", "halberd"]
+abilities = [ "sunder" ]
 
 [[skill]]
 name = "brawling"
 description = "Unarmed melee combat."
-keywords = ["combat", "melee", "unarmed", "punch", "kick", "unarmed strike", "grapple", "wrestle", "fight"]
+keywords = ["combat", "melee", "unarmed", "punch", "kick", "unarmed strike", "fight"]
 opposes = ["dodge", "brawling", "blades", "axes", "polearms"]
-specializations = ["boxing", "wrestling", "martial arts"]
+abilities = [ "sunder" ]
 
 [[skill]]
 name = "acrobatics"
 description = "Tumbling, balancing, and executing flips."
 keywords = ["movement", "agility", "balance", "flip", "tumble", "roll", "dodge", "evade"]
 opposes = ["observation", "reflexes"]
-specializations = ["tumbling", "tightrope walking", "falling safely"]
 
 [[skill]]
 name = "finesse"
 description = "Delicate physical manipulation of objects."
 keywords = ["manipulation", "precision", "covert", "pick", "lock", "steal", "dexterity", "disarm", "trap"]
 opposes = ["observation", "reflexes"]
-specializations = ["sleight of hand", "lockpicking", "pickpocketing"]
+# See maneuvers.toml's own "sleight of hand" -- any entity may attempt to pick a pocket.
+abilities = [ "sleight of hand" ]
 
 [[skill]]
 name = "escape"
 description = "Breaking free from restraints or grapples."
 keywords = ["movement", "evasion", "struggle", "free", "break", "slip", "untie"]
 opposes = ["strength", "finesse", "brawling"]
-specializations = ["slipping bonds", "breaking grapples", "contortion"]
+# See maneuvers.toml's own "escape artist" -- the counter-maneuver to athletics' own "grapple".
+abilities = [ "escape artist" ]
 
 [[skill]]
 name = "fly"
 description = "Maneuvering and traveling while airborne."
 keywords = ["movement", "aerial", "travel", "wings", "soar", "glide"]
 opposes = ["fly", "observation"]
-specializations = ["soaring", "hovering", "aerial combat"]
 
 [[skill]]
 name = "trickery"
 description = "Deceptive physical actions or misdirection."
-keywords = ["deception", "misdirection", "sleight of hand", "distract", "feint", "fake", "bluff"]
+keywords = ["misdirection", "sleight of hand", "distract", "feint", "fake", "bluff"]
 opposes = ["observation", "willpower"]
-specializations = ["distraction", "palming objects", "stage magic"]
+# Combat maneuvers any entity may attempt via trickery, no training implied -- see
+# maneuvers.toml and docs/design/skill_effect_language.md's "Universal (untrained) abilities".
+abilities = [ "dirty trick", "feint" ]
 
 [[skill]]
 name = "stealth"
 description = "Moving silently and remaining hidden."
 keywords = ["movement", "concealment", "covert", "hide", "sneak", "silent", "shadows"]
 opposes = ["observation", "reflexes"]
-specializations = ["sneaking", "hiding in shadows", "camouflage"]
 
 [[skill]]
 name = "dodge"
 description = "Avoiding physical and ranged attacks."
 keywords = ["defense", "evasion", "reaction", "avoid", "duck", "sidestep", "jump away"]
 opposes = ["blades", "axes", "polearms", "brawling", "missiles", "throwing"]
-specializations = ["ranged attacks", "melee attacks", "traps"]
 
 [[skill]]
 name = "reflexes"
 description = "Quick physical reactions to sudden events."
 keywords = ["defense", "reaction", "speed", "quick", "fast", "react", "catch"]
 opposes = ["stealth", "acrobatics", "finesse", "trickery"]
-specializations = ["catching objects", "reacting to hazards", "initiative"]
 
 [[skill]]
 name = "missiles"
 description = "Using bows, crossbows, and slings."
 keywords = ["combat", "ranged", "projectile", "bow", "arrow", "shoot", "aim", "fire"]
 opposes = ["dodge", "reflexes"]
-specializations = ["longbow", "crossbow", "sling"]
 
 [[skill]]
 name = "appraise"
 description = "Determining the financial or historical value of items."
 keywords = ["evaluation", "commerce", "investigation", "value", "price", "worth", "cost", "identify", "appraise"]
-opposes = ["forgery", "deception"]
-specializations = ["jewelry", "weapons", "antiques"]
+opposes = ["forgery"]
 
 [[skill]]
 name = "linguistics"
 description = "Speaking, reading, and writing various languages."
 keywords = ["communication", "translation", "social", "language", "write", "read", "speak", "translate"]
 opposes = ["forgery"]
-specializations = ["elven", "dwarven", "ancient scripts"]
 
 [[skill]]
 name = "arcane"
 description = "Knowledge and practical use of magic."
 keywords = ["magic", "spellcasting", "supernatural", "wizard", "sorcery", "spell", "cast", "mana", "ritual", "curse", "cursed", "identify"]
 opposes = ["willpower", "arcane"]
-specializations = ["conjuration", "evocation", "divination", "transmutation", "enchantment", "abjuration", "illusion", "necromancy"]
 
 [[skill]]
 name = "navigation"
 description = "Finding paths overland or at sea."
 keywords = ["travel", "exploration", "survival", "map", "path", "direction", "compass", "orient"]
 opposes = []
-specializations = ["sea navigation", "orienteering", "astronomy"]
 
 [[skill]]
 name = "medicine"
 description = "Healing injuries, illnesses, and poisons."
 keywords = ["healing", "recovery", "treatment", "heal", "doctor", "wound", "bandage", "cure"]
 opposes = ["fortitude"]
-specializations = ["first aid", "surgery", "herbalism"]
+# See maneuvers.toml's own "treat wounds" -- any entity may attempt basic first aid.
+abilities = [ "treat wounds" ]
 
 [[skill]]
 name = "survival"
 description = "Staying alive in hostile wilderness environments."
 keywords = ["wilderness", "exploration", "foraging", "camp", "nature", "track", "outdoor"]
 opposes = ["survival"]
-specializations = ["tracking", "foraging", "shelter building"]
 
 [[skill]]
 name = "willpower"
 description = "Resisting mental influence, fear, or coercion."
 keywords = ["defense", "resistance", "mental", "focus", "concentration", "resolve", "determination"]
-opposes = ["arcane", "miracles", "psionics", "charisma", "intimidation", "deception"]
-specializations = ["resisting spells", "resisting intimidation", "focus"]
+opposes = ["arcane", "miracles", "psionics", "charisma", "intimidation"]
 
 [[skill]]
 name = "miracles"
 description = "Invoking divine magic from deities."
 keywords = ["magic", "divine", "spellcasting", "priest", "holy", "prayer", "blessing", "god", "faith"]
 opposes = ["willpower", "miracles"]
-specializations = ["conjuration", "evocation", "divination", "transmutation", "enchantment", "abjuration", "illusion", "necromancy"]
 
 [[skill]]
 name = "artistry"
 description = "Creating fine art or performing for an audience."
 keywords = ["performance", "creation", "expression", "art", "music", "sing", "paint", "draw", "dance"]
 opposes = ["observation"]
-specializations = ["painting", "singing", "instrumental music"]
 
 [[skill]]
 name = "forgery"
 description = "Faking official documents or valuable items."
-keywords = ["creation", "deception", "clandestine", "fake", "copy", "counterfeit"]
+keywords = ["creation", "clandestine", "fake", "copy", "counterfeit"]
 opposes = ["appraise", "observation", "linguistics"]
-specializations = ["official papers", "coinage", "artwork"]
 
 [[skill]]
 name = "gambling"
 description = "Playing games of chance for profit."
 keywords = ["commerce", "recreation", "social", "bet", "cards", "dice", "luck", "game"]
-opposes = ["gambling", "observation", "deception"]
-specializations = ["cards", "dice", "sports betting"]
+opposes = ["gambling", "observation"]
 
 [[skill]]
 name = "streetwise"
 description = "Knowledge of criminal networks and urban environments."
 keywords = ["investigation", "social", "urban", "city", "contacts", "rumors", "underworld", "black market"]
 opposes = ["streetwise"]
-specializations = ["finding black markets", "gathering rumors", "fencing goods"]
 
 [[skill]]
 name = "observation"
 description = "Spotting hidden things or noticing fine details."
 keywords = ["perception", "investigation", "awareness", "search", "spot", "look", "notice", "see", "hear", "listen", "find"]
-opposes = ["stealth", "disguise", "trickery", "finesse", "forgery", "deception"]
-specializations = ["searching", "eavesdropping", "tracking"]
+opposes = ["stealth", "disguise", "trickery", "finesse", "forgery"]
 
 [[skill]]
 name = "charisma"
 description = "Influencing others through sheer presence and personality."
 keywords = ["social", "persuasion", "influence", "persuade", "talk", "negotiate", "charm", "convince"]
 opposes = ["willpower", "charisma"]
-specializations = ["leadership", "charm", "persuasion"]
+# See maneuvers.toml's own "charm" -- any entity may attempt to win someone over.
+abilities = [ "charm" ]
 
-[[skill]]
-name = "deception"
-description = "Lying or misleading others convincingly."
-keywords = ["social", "manipulation", "lying", "lie", "bluff", "con", "mislead"]
-opposes = ["willpower", "observation", "appraise"]
-specializations = ["bluffing", "conning", "feinting"]
 
 [[skill]]
 name = "disguise"
 description = "Altering physical appearance to hide identity."
-keywords = ["concealment", "deception", "impersonation", "mask", "costume", "makeup", "blend in"]
+keywords = ["concealment", "impersonation", "mask", "costume", "makeup", "blend in"]
 opposes = ["observation"]
-specializations = ["impersonation", "blending in", "makeup"]
 
 [[skill]]
 name = "husbandry"
 description = "Caring for, handling, and training animals."
 keywords = ["animal handling", "care", "training", "beast", "pet", "ride", "tame"]
 opposes = ["husbandry"]
-specializations = ["riding", "animal training", "veterinary care"]
 
 [[skill]]
 name = "intimidation"
 description = "Frightening others to gain compliance."
 keywords = ["social", "coercion", "threat", "scare", "frighten", "bully", "menace", "force", "threaten", "intimidation", "scaring"]
 opposes = ["willpower", "intimidation"]
-specializations = ["interrogation", "staring down", "physical threats"]
+# See maneuvers.toml's own "intimidate" and docs/design/skill_effect_language.md's "Universal
+# (untrained) abilities" -- any entity may attempt this, no training implied.
+abilities = [ "intimidate" ]
 
 [[skill]]
 name = "psionics"
 description = "Utilizing mental powers to affect the world."
 keywords = ["magic", "mental", "supernatural", "psychic", "mind", "thought", "telepathy", "telekinesis"]
 opposes = ["willpower", "psionics"]
-specializations = ["clairsentience", "psychokinetic", "psychometabolic", "psychoportative", "telepathy"]

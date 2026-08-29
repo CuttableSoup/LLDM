@@ -20,6 +20,7 @@ from DM_Rules import RulesMixin, scenario_file_path
 from DM_Social import SocialMixin
 from DM_Status import StatusMixin
 from DM_Summoning import SummoningMixin
+from Program_Interpreter import run_program
 
 # Multi-instance combat targeting (see DMCore._resolve_named_instance_ambiguity): NLPCore's own
 # map_to_target (NLP_Core.py) picks one specific live instance name by raw text similarity to
@@ -577,6 +578,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             )
             outcome = test.get("pass") if roll["success"] else test.get("fail")
             test_effects = self.apply_test_outcome(target_name, outcome) or {}
+            self._run_test_outcome_program(test, roll["success"], target_name)
             effects = []
             loot = test_effects.get("loot")
             if loot and (loot["currency"] or loot["items"]):
@@ -641,7 +643,56 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         self._consume_spell_materials_if_rolled(result, named_ability)
         self._apply_damage_if_hit(result, skill_name, named_ability, ability, target_name, via_test)
         self._apply_summon_if_hit(result, named_ability)
+        self._run_ability_outcome_program(result, skill_name, named_ability, ability, target_name, via_test)
         self._attach_defender_details(result, target_name)
+
+    def _run_ability_outcome_program(self, result, skill_name, named_ability, ability, target_name, via_test):
+        """!
+        @brief Runs the resolved ability's own on_pass/on_fail program (see
+            docs/design/skill_effect_language.md's "Universal (untrained) abilities" and
+            "Attachment points") once a real ability-based roll has resolved -- closes the "22
+            dead skills" gap: a skill whose only mechanical effect is a condition/attitude nudge
+            (ex: intimidate, trip/disarm/sunder) now actually does something on a pass/fail,
+            without a new Python branch per skill. Never fires for a flat [entity.test] check
+            (that has its own, separate on_pass/on_fail attachment point -- see
+            _run_test_outcome_program) or for a roll with no resolvable ability at all (ex: a
+            bare skill check with nothing named/equipped matching it).
+        @param result The roll result from _resolve_roll, already confirmed to be a RolledOutcome.
+        @param skill_name The skill being used, already resolved from any named ability.
+        @param named_ability The resolved ability entity (technique/spell), or None.
+        @param ability The attack ability _resolve_roll already resolved, if any -- only the
+            test/no-target branches leave it None, in which case it's re-derived here exactly
+            like _apply_damage_if_hit's own fallback does.
+        @param target_name self.current_target, or None.
+        @param via_test True if the roll was a flat [entity.test] check.
+        """
+        if via_test:
+            return
+        if ability is None:
+            ability = named_ability or self.find_attack_ability(self.player_name, skill_name)
+        if not ability:
+            return
+        program = ability.get("on_pass" if result.success else "on_fail")
+        if not program:
+            return
+        run_program(program, {"actor": self.player_name, "target": target_name}, self.entities, self.rules, self.event_bus)
+
+    def _run_test_outcome_program(self, test, success, entity_name):
+        """!
+        @brief Runs an [entity.test]'s own on_pass/on_fail program (see
+            docs/design/skill_effect_language.md's "Attachment points") -- sibling to the
+            test's existing flat "pass"/"fail" outcome tables, for a consequence that needs a
+            conditional the flat table can't express. actor is the checking entity (always the
+            player today -- entity tests are player-initiated); target is the entity the test
+            itself lives on (a scene target, or an item one level deeper -- see
+            _resolve_item_test_target).
+        @param test The entity's own [entity.test] table.
+        @param success Whether the roll passed.
+        @param entity_name The entity carrying the test.
+        """
+        program = test.get("on_pass" if success else "on_fail")
+        if program:
+            run_program(program, {"actor": self.player_name, "target": entity_name}, self.entities, self.rules, self.event_bus)
 
     def _apply_damage_if_hit(self, result, skill_name, named_ability, ability, target_name, via_test):
         """!
@@ -881,6 +932,8 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         already_owned = intent in ("examine", "take") and item_name in self.entities.get(self.player_name, {}).get("inventory", [])
 
         def resolved(found, **extra):
+            if found:
+                self._run_interact_program(intent, item_name, target_name)
             self.event_bus.publish("item_interaction_resolved", {
                 "intent": intent, "item_name": item_name, "input": input_text, "found": found,
                 # Room-level presence snapshot -- see scenario_loaded's own publish for why
@@ -955,6 +1008,36 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             return
 
         self._resolve_transfer_intent(intent, item_name, target_name, resolved)
+
+    def _run_interact_program(self, intent, item_name, target_name):
+        """!
+        @brief Runs the interacted-with entity's own [entity.on_interact.<intent>] program (see
+            docs/design/skill_effect_language.md's "Attachment points" -- the cursed dagger's
+            own on_interact.equip is the shipped worked example) -- the single shared funnel
+            every intent already resolves through (resolved(), above), right before its one
+            item_interaction_resolved publish, so this only ever fires once per intent
+            regardless of which branch resolved it. Only on success (found -- resolved()'s own
+            caller already gates this) -- a program that denies an interaction outright is out
+            of scope for now. target is whichever entity the interaction actually named: the
+            item itself for an item-named intent (equip/unequip/drop/examine/take/give/trade/
+            use), or the scene target itself for "open"/"close" (which never resolve an
+            item_name at all -- see NO_ITEM_LOOKUP_INTENTS). Deliberately never fires for
+            move/travel/advance/retreat/formation -- none of those name an entity being
+            interacted with in this sense.
+        @param intent The resolved item-interaction intent.
+        @param item_name The item entity named by this intent, or None.
+        @param target_name The current scene target's name, or None.
+        """
+        interact_entity_name = item_name if item_name else (target_name if intent in ("open", "close") else None)
+        if not interact_entity_name:
+            return
+        program = self.entities.get(interact_entity_name, {}).get("on_interact", {}).get(intent)
+        if not program:
+            return
+        run_program(
+            program, {"actor": self.player_name, "target": interact_entity_name},
+            self.entities, self.rules, self.event_bus,
+        )
 
     def _on_dialogue_detected(self, data):
         """!
@@ -1047,6 +1130,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         )
         outcome = test.get("pass") if roll["success"] else test.get("fail")
         self.apply_test_outcome(item_name, outcome)
+        self._run_test_outcome_program(test, roll["success"], item_name)
         effects = []
         if self.is_identified(item_name):
             effects.append(RevealEffect(tags=list(self.entities[item_name].get("tags", []))))
