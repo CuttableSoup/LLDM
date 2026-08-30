@@ -7,11 +7,11 @@ import threading
 
 from Event_Bus import EventBus
 from Logger import Logger
-from LLM_Core import LLMCore
-from DM_Core import DMCore, scenario_file_path
-from GUI_Core import GUICore
-from NLP_Core import NLPCore
-from Ollama_Launcher import ensure_ollama_running
+from llm.LLM_Core import LLMCore
+from dm.DM_Core import DMCore, scenario_file_path
+from gui.GUI_Core import GUICore
+from nlp.NLP_Core import NLPCore
+from llm.Ollama_Launcher import ensure_ollama_running
 
 DEFAULT_SCENARIO = "arena"
 

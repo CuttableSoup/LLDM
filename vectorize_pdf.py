@@ -22,7 +22,7 @@ import sys
 import time
 
 from Event_Bus import EventBus
-from LLM_Rag import RagIndex
+from llm.LLM_Rag import RagIndex
 
 
 def _make_logging_event_bus():

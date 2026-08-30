@@ -26,9 +26,13 @@ subscriber immediately, over a snapshot of that event's subscriber list taken at
 the call — so a handler that subscribes a new callback for the event it's currently handling
 doesn't have that callback invoked in the same `publish`, only the next one). `LLDM.py` boots
 `NLPCore`, `LLMCore`, `GUICore` in that order at startup, but **not** `DMCore` — see "Booting
-the game" for when and how it's actually constructed.
+the game" for when and how it's actually constructed. The modules below live under `dm/`, `nlp/`,
+`llm/`, `gui/`, and `resolution/` (the pure, DMCore-independent layer `DM_Combat.py`/`DM_Status.py`/
+`DM_Movement.py` wrap — see their own bullet, below) — only `LLDM.py`, `paths.py`, `Event_Bus.py`,
+and `Logger.py` stay at the repo root. Elsewhere in this doc a module is still referred to by its
+bare filename; grep/glob for it rather than assuming a particular path.
 
-- **`DM_Core.py`** — `DMCore`'s `__init__` plus its three event handlers
+- **`DM_Core.py`** (`dm/`) — `DMCore`'s `__init__` plus its three event handlers
   (`_on_turn_detected`, `_on_item_interaction_detected`, `_on_dialogue_detected`) and their
   direct helpers. `_on_turn_detected` also calls `_on_item_interaction_detected` directly, once
   per item-kind clause in a mixed turn — see "Multiple actions". Composed from sibling mixin
@@ -49,7 +53,7 @@ the game" for when and how it's actually constructed.
   of reading `self`, mirroring `Challenge_Rating.py`'s own existing shape (see "Status and
   conditions"). Every mixin method keeps its original signature, so this is invisible to every
   other caller in the codebase.
-- **`NLP_Core.py`** — thin EventBus glue: subscribes to `user_input_submitted`/
+- **`NLP_Core.py`** (`nlp/`) — thin EventBus glue: subscribes to `user_input_submitted`/
   `rules_loaded`/`item_catalog_updated`, delegates to `Intent_Classification.py`'s
   `IntentClassifier`, and publishes whatever events come back. Also defines
   `SentenceTransformerMatcher`, the production `IntentMatcher` adapter — owns the loaded
@@ -57,7 +61,7 @@ the game" for when and how it's actually constructed.
   embedding tensor, and is the one place in this file that still touches the EventBus for
   granular "mapped input to X" diagnostics, since encoding/scoring is where those facts become
   known. `NLPCore` itself owns no classification logic.
-- **`Intent_Classification.py`** — pure, EventBus-independent: `IntentClassifier.classify()`
+- **`Intent_Classification.py`** (`nlp/`) — pure, EventBus-independent: `IntentClassifier.classify()`
   returns `(processed_text, events)` — a list of
   one or more `{"event", "payload"}` dicts for the glue layer to publish, rather than publishing
   anything itself (`AdHoc_Generation.py`/`DM_Improvisation.py` is the same pure/glue split).
@@ -78,10 +82,10 @@ the game" for when and how it's actually constructed.
   publishes `action_not_understood` instead. `IntentMatcher.register_item` incrementally
   re-registers a newly-created/reload-restored ad hoc entity's name/description on
   `item_catalog_updated`, the one event here that isn't input-driven.
-- **`LLM_Core.py`** — posts to Ollama's OpenAI-compatible `/v1/chat/completions` on a
+- **`LLM_Core.py`** (`llm/`) — posts to Ollama's OpenAI-compatible `/v1/chat/completions` on a
   background thread, with a rolling 100-message context window. Subscribes to nine narration
   triggers (see "Narration").
-- **`GUI_Core.py`** — Tkinter window: history pane + tabbed Party/Notes/Map/Debug panels, plus
+- **`GUI_Core.py`** (`gui/`) — Tkinter window: history pane + tabbed Party/Notes/Map/Debug panels, plus
   three menus: Character (Create... only), File (Save.../Load...), Scenario (Load... only).
   Character → Create... opens the race/point-buy dialog (`Character_Creation_GUI.py`), publishes
   `character_created`, then (if a game hasn't already started) stashes the result as
@@ -104,7 +108,7 @@ the game" for when and how it's actually constructed.
   filters the same way (see "Challenge rating"). Notes is a free-typed scratchpad with its own
   save/load slice; Map is a free-form drawing canvas the engine never reads; Debug overwrites
   (not appends) the most recent LLM request/response on every `llm_debug_updated`.
-- **`Textual_Core.py`** — a parallel, headless-testable mirror of `GUI_Core`'s output, driven
+- **`Textual_Core.py`** (`gui/`) — a parallel, headless-testable mirror of `GUI_Core`'s output, driven
   the same way via `user_input_submitted`. Not part of `LLDM.py`'s boot sequence; run standalone.
   Used by `test_unit.py` for pilot-driven UI tests.
 - **`Logger.py`** — subscribes to `log_info`/`log_error`, prints with timestamps.
@@ -1560,7 +1564,7 @@ Practical constraints when touching this file:
 
 ## Testing
 
-- **`test_unit.py`** — offline `unittest.TestCase` classes: one representative test per
+- **`test_unit.py`** (`tests/`) — offline `unittest.TestCase` classes: one representative test per
   genuinely distinct mechanism/branch, not one per edge case or flavor variant of an
   already-covered code path. `TestGameBoot` and `TestNlpConfidenceThreshold` load the real
   `sentence-transformers` model via `setUpClass`, narrowed to what actually needs it
@@ -1570,9 +1574,16 @@ Practical constraints when touching this file:
   double defined alongside it), no model load, EventBus, or DMCore needed. Most other classes
   share fixture setup via `DMTestCase` (`scenario_name` class attribute, plus
   `_capture`/`_capture_any` helpers) and `LLMTestCase`.
-- **`test_integration.py`** — every test needing a real, running Ollama, gated on
+- **`test_integration.py`** (`tests/`) — every test needing a real, running Ollama, gated on
   `_ollama_reachable()` so they skip together when nothing's listening on `127.0.0.1:11434`.
-  `_LivePipelineTestCase`'s own optional `character` class attribute is forwarded straight into
+  Nothing has to already be running, though: importing this module calls
+  `Ollama_Launcher.ensure_ollama_running()` once, synchronously, before any skip gate evaluates
+  (module-level code, not a fixture, since the gates themselves are `@unittest.skipUnless`/
+  `@pytest.mark.skipif` decorators evaluated at import time) — the same bootstrap `LLDM.py`'s own
+  `main()` runs, just blocking here instead of backgrounded so the gates see a live server by the
+  time they check, and torn back down at process exit via the same "only ever terminate the
+  process this call itself started" `atexit` precedent `main()` uses. `_LivePipelineTestCase`'s
+  own optional `character` class attribute is forwarded straight into
   `DMCore`'s `character` param. `TestNpcGenerationLive` is a plain `unittest.TestCase` (no
   NLPCore/LLMCore) since NPC generation runs synchronously during `DMCore`'s own construction —
   a real tool-calling round trip. The pure fitting math and DMCore-side wiring both live in
@@ -1581,8 +1592,8 @@ Practical constraints when touching this file:
   the "does the configured model actually return a valid tool call" question needs a live
   Ollama.
 
-`python -m pytest -q` runs both files; `python -m pytest -q test_unit.py` runs the fast, offline
-subset only.
+`python -m pytest -q` runs both files; `python -m pytest -q tests/test_unit.py` runs the fast,
+offline subset only.
 
 ## Extended goals
 
