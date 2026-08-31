@@ -64,6 +64,25 @@ def list_available_scenarios(setting="Fantasy"):
     return results
 
 
+def list_available_settings():
+    """!
+    @brief Every self-contained data pack under Rules/ (ex: "Fantasy", "Zombie") -- for a UI
+        to offer as a choice before any DMCore exists, the same "pure, DMCore-independent,
+        re-scan the directory directly" precedent list_available_scenarios/
+        load_character_creation_data already set, since GUICore needs this list before it can
+        know whether a DMCore -- let alone which setting it'll load -- will ever exist.
+    @return A sorted list of setting names (each a Rules/<name>/ subdirectory), or [] if
+        Rules/ itself is missing.
+    """
+    rules_dir = os.path.join(PROJECT_ROOT, "Rules")
+    if not os.path.isdir(rules_dir):
+        return []
+    return sorted(
+        name for name in os.listdir(rules_dir)
+        if os.path.isdir(os.path.join(rules_dir, name))
+    )
+
+
 class RulesMixin(DMCoreProtocol):
     """!
     @brief TOML rules/entity loading and scenario instancing (DMCore mixin -- only ever

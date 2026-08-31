@@ -1,5 +1,7 @@
 import json
 import os
+import queue
+import threading
 import tkinter as tk
 from tkinter import ttk, simpledialog
 from collections import Counter
@@ -7,8 +9,10 @@ from collections import Counter
 import resolution.Combat_Resolution as Combat_Resolution
 from resolution.Character_Creation import load_character_creation_data
 from gui.Character_Creation_GUI import run_character_creation_dialog
-from dm.DM_Rules import list_available_scenarios
+from dm.DM_Rules import list_available_scenarios, list_available_settings
 from paths import PROJECT_ROOT
+
+DEFAULT_SETTING = "Fantasy"
 
 SAVES_DIR = "Saves"
 
@@ -17,7 +21,7 @@ class GUICore:
     @brief Main class handling the display and user interaction.
     """
 
-    def __init__(self, event_bus, master=None):
+    def __init__(self, event_bus, master=None, default_setting=DEFAULT_SETTING):
         """!
         @brief Initializes the GUI components.
         @param event_bus The central event bus instance.
@@ -31,8 +35,25 @@ class GUICore:
             own fully independent Toplevel/widget tree (mainloop/winfo_children/destroy all
             behave the same on a Toplevel as on Tk, so nothing else about this class needs to
             know or care which one self.root actually is).
+        @param default_setting Which Rules/<setting> the Ruleset menu (below) starts on --
+            LLDM.py's own main() passes its own --setting CLI argument through here so a
+            quick-boot's setting and the GUI's own starting selection never disagree. Purely
+            a starting point, not a lock: request_character_creation/request_scenario_load
+            both read whatever the Ruleset menu is set to at the moment they're used, not
+            this constructor argument.
         """
         self.event_bus = event_bus
+        # Marshals every Tk-widget-touching call onto this thread -- Tkinter may only be
+        # touched from here, but several event handlers below can fire from a background
+        # thread (LLDM.py's own Ollama-bootstrap status via display_system_status, LLMCore's
+        # background narration fetches via "llm_response_ready" et al.). Queuing instead of
+        # calling straight through is what keeps a foreign-thread call from ever touching a
+        # widget directly -- the crash this specifically fixes ("main thread is not in main
+        # loop") happened when such a call landed *before* mainloop() (below, in start())
+        # had even begun pumping events, but a straight cross-thread widget call is unsafe
+        # regardless of timing, so this is unconditional, not just a pre-mainloop guard.
+        self._main_thread = threading.main_thread()
+        self._call_queue = queue.Queue()
 
         self.root = tk.Toplevel(master) if master is not None else tk.Tk()
         self.root.title("LLDM Interface")
@@ -71,6 +92,28 @@ class GUICore:
             label="Load...", command=self.request_scenario_load, state=tk.DISABLED,
         )
         self.menu_bar.add_cascade(label="Scenario", menu=self.scenario_menu)
+
+        # Ruleset picks which Rules/<setting> (and, by extension, Settings/<setting> for RAG
+        # sourcebooks) everything below reads from -- Character -> Create...'s own
+        # load_character_creation_data, Scenario -> Load...'s own list_available_scenarios,
+        # and (via the "setting" carried on "scenario_selected"/"load_requested") LLDM.py's
+        # own start_game/LLMCore.set_setting. A radiobutton per Rules/ subdirectory
+        # (list_available_settings(), DM_Rules.py) rather than a popup dialog, since there's
+        # always a valid selection (self.setting_var) even if the player never opens this
+        # menu at all -- default_setting seeds it. Locked shut (see _set_ruleset_menu_enabled)
+        # the moment a character exists/a game has started, the same "can't retarget mid-game"
+        # rule Scenario -> Load... enforces on itself once past its own one valid window.
+        self.ruleset_menu = tk.Menu(self.menu_bar, tearoff=0)
+        available_settings = list_available_settings()
+        if default_setting not in available_settings:
+            available_settings = [default_setting] + available_settings
+        self.setting_var = tk.StringVar(value=default_setting)
+        for setting_name in available_settings:
+            self.ruleset_menu.add_radiobutton(
+                label=setting_name, variable=self.setting_var, value=setting_name,
+            )
+        self.menu_bar.add_cascade(label="Ruleset", menu=self.ruleset_menu)
+
         self.root.config(menu=self.menu_bar)
 
         self.main_paned = tk.PanedWindow(self.root, orient=tk.HORIZONTAL)
@@ -153,23 +196,74 @@ class GUICore:
 
         self.user_input = ""
         self.event_bus.publish("log_info", "GUICore initialized.")
-        self.event_bus.subscribe("llm_response_ready", self.display_llm_response)
-        self.event_bus.subscribe("llm_debug_updated", self.display_llm_debug)
-        self.event_bus.subscribe("rules_loaded", self.display_party_status)
-        self.event_bus.subscribe("rules_loaded", self._on_game_started)
+        # Every one of these is wrapped in self._marshal -- the publishing thread is whatever
+        # thread called event_bus.publish, which for several of these events is a background
+        # one (see __init__'s own docstring above), not necessarily this window's own main
+        # thread.
+        self.event_bus.subscribe("llm_response_ready", self._marshal(self.display_llm_response))
+        self.event_bus.subscribe("llm_debug_updated", self._marshal(self.display_llm_debug))
+        self.event_bus.subscribe("rules_loaded", self._marshal(self.display_party_status))
+        self.event_bus.subscribe("rules_loaded", self._marshal(self._on_game_started))
         # "party_status_changed" is DMCore's cheap re-publish after anything that can change
         # a party member's HP/equipment/inventory/conditions (see DM_Core.py's
         # _publish_party_status) -- distinct from "rules_loaded", which NLPCore also rebuilds
         # its embeddings from and so only fires once at boot/new game.
-        self.event_bus.subscribe("party_status_changed", self.display_party_status)
-        self.event_bus.subscribe("game_saved", self.display_game_saved)
-        self.event_bus.subscribe("game_loaded", self.display_game_loaded)
-        self.event_bus.subscribe("game_load_failed", self.display_game_load_failed)
+        self.event_bus.subscribe("party_status_changed", self._marshal(self.display_party_status))
+        self.event_bus.subscribe("game_saved", self._marshal(self.display_game_saved))
+        self.event_bus.subscribe("game_loaded", self._marshal(self.display_game_loaded))
+        self.event_bus.subscribe("game_load_failed", self._marshal(self.display_game_load_failed))
         # GUICore owns and persists its own save-slot slice (Saves/<slot>/gui_state.json),
         # the same pattern DMCore/LLMCore each follow for their own state -- see CLAUDE.md's
         # "Saving and loading". Currently just the Notes tab's free text.
-        self.event_bus.subscribe("save_requested", self._on_save_requested)
-        self.event_bus.subscribe("load_requested", self._on_load_requested)
+        self.event_bus.subscribe("save_requested", self._marshal(self._on_save_requested))
+        self.event_bus.subscribe("load_requested", self._marshal(self._on_load_requested))
+
+        # Kicked off here (main thread, at construction) and reschedules itself from within
+        # itself thereafter -- so it only ever runs as part of mainloop()'s own event pump,
+        # never invoked from a foreign thread. See _marshal/_run_on_main_thread just below.
+        self.root.after(50, self._poll_call_queue)
+
+    def _run_on_main_thread(self, fn, *args):
+        """!
+        @brief Runs fn(*args) immediately if already on the Tk main thread (every existing
+            synchronous call site -- tests included -- keeps behaving exactly as before);
+            otherwise queues it for _poll_call_queue to run on the next mainloop tick, rather
+            than letting a foreign thread touch a widget itself. queue.Queue.put is plain,
+            thread-safe Python -- unlike Tk's own after()/widget calls, it carries no risk of
+            the "main thread is not in main loop" RuntimeError a direct cross-thread widget
+            call can raise (worst of all before mainloop() has even started, since nothing is
+            pumping events yet to make that call "safe by luck").
+        @param fn The handler to run (ex: self.append_to_history).
+        @param args Positional arguments to call it with.
+        """
+        if threading.current_thread() is self._main_thread:
+            fn(*args)
+        else:
+            self._call_queue.put((fn, args))
+
+    def _marshal(self, fn):
+        """!
+        @brief Wraps fn as a same-signature callable safe to hand to event_bus.subscribe --
+            every subscriber here may be invoked from whichever thread published the event
+            (see __init__'s own docstring). Delegates to _run_on_main_thread per call.
+        @param fn The handler to protect (ex: self.display_llm_response).
+        @return A wrapper calling fn(*args) via _run_on_main_thread.
+        """
+        return lambda *args: self._run_on_main_thread(fn, *args)
+
+    def _poll_call_queue(self):
+        """!
+        @brief Drains _call_queue and reschedules itself -- the only code path that actually
+            invokes a queued handler, since (per __init__) this only ever runs as part of
+            mainloop()'s own event pump, i.e. always on the main thread.
+        """
+        try:
+            while True:
+                fn, args = self._call_queue.get_nowait()
+                fn(*args)
+        except queue.Empty:
+            pass
+        self.root.after(50, self._poll_call_queue)
 
     def start(self):
         self.root.mainloop()
@@ -200,12 +294,12 @@ class GUICore:
             way display_game_saved/display_game_loaded/display_game_load_failed already are --
             for out-of-band status that isn't narration but the player still needs to see (ex:
             Ollama_Launcher.py's own download-progress/startup messages, relayed by LLDM.py's
-            main() from a background thread while mainloop() is already running -- the running
-            mainloop pumps this on its own, so no manual root.update() is needed here, unlike
-            when this call used to happen before mainloop() had even started.
+            main() from a background thread -- possibly before mainloop() has even started,
+            since the bootstrap thread races it -- see _run_on_main_thread for why this is
+            safe regardless of when it's called or from which thread).
         @param message Plain text, no trailing newline needed.
         """
-        self.append_to_history(f"[System] {message}\n")
+        self._run_on_main_thread(self.append_to_history, f"[System] {message}\n")
 
     def display_llm_debug(self, data):
         """!
@@ -244,7 +338,9 @@ class GUICore:
             always landing in whatever LLDM.py's own default happens to be. No-ops (past
             publishing the event) if a game is already active -- see _on_game_started.
         """
-        skills, races, character_creation = load_character_creation_data()
+        skills, races, character_creation = load_character_creation_data(
+            os.path.join("Rules", self.setting_var.get())
+        )
         character = run_character_creation_dialog(self.root, skills, races, character_creation)
         if character is None:
             return
@@ -253,6 +349,7 @@ class GUICore:
             return
         self._pending_character = character
         self._set_scenario_menu_enabled(True)
+        self._set_ruleset_menu_enabled(False)
 
     def _set_scenario_menu_enabled(self, enabled):
         """!
@@ -260,6 +357,21 @@ class GUICore:
         @param enabled True to unlock (a character is pending and no game has started yet).
         """
         self.scenario_menu.entryconfig(0, state=tk.NORMAL if enabled else tk.DISABLED)
+
+    def _set_ruleset_menu_enabled(self, enabled):
+        """!
+        @brief Locks/unlocks every radiobutton in the Ruleset menu -- a character is built
+            from a specific Rules/<setting> (request_character_creation), so the setting can't
+            be changed out from under it once one exists; see request_character_creation/
+            _on_game_started for the two points this actually gets locked at.
+        @param enabled True to unlock (no character/game exists yet).
+        """
+        state = tk.NORMAL if enabled else tk.DISABLED
+        last_index = self.ruleset_menu.index("end")
+        if last_index is None:
+            return  # no settings found under Rules/ at all -- nothing to lock/unlock
+        for index in range(last_index + 1):
+            self.ruleset_menu.entryconfig(index, state=state)
 
     def request_scenario_load(self):
         """!
@@ -269,10 +381,13 @@ class GUICore:
             which is also what unlocks this menu entry in the first place). Mirrors
             request_load's own save-slot picker Toplevel almost exactly, just listing
             scenarios instead of save slots. Publishes "scenario_selected" {"scenario_name",
-            "character"} for the chosen scenario -- LLDM.py's own on_scenario_selected is what
-            actually constructs DMCore with them, since GUICore never does that itself --
-            then locks this menu entry shut again, since Create... (and, downstream of it,
-            this picker) only ever starts the first game a session has.
+            "character", "setting"} for the chosen scenario -- "setting" is whatever the
+            Ruleset menu was set to at Create... time (self.setting_var, now locked -- see
+            _set_ruleset_menu_enabled), so the scenario listed/loaded actually matches the
+            Rules/<setting> the character itself was built from. LLDM.py's own
+            on_scenario_selected is what actually constructs DMCore with them, since GUICore
+            never does that itself -- then locks this menu entry shut again, since Create...
+            (and, downstream of it, this picker) only ever starts the first game a session has.
         """
         if self._pending_character is None:
             return
@@ -282,7 +397,7 @@ class GUICore:
         picker.transient(self.root)
         picker.grab_set()
 
-        scenarios = list_available_scenarios()
+        scenarios = list_available_scenarios(self.setting_var.get())
         if not scenarios:
             tk.Label(picker, text="No scenarios found.").pack(padx=10, pady=10)
             tk.Button(picker, text="Close", command=picker.destroy).pack(pady=(0, 10))
@@ -305,7 +420,12 @@ class GUICore:
             self._pending_character = None
             self._set_scenario_menu_enabled(False)
             self.event_bus.publish(
-                "scenario_selected", {"scenario_name": scenario_name, "character": character},
+                "scenario_selected",
+                {
+                    "scenario_name": scenario_name,
+                    "character": character,
+                    "setting": self.setting_var.get(),
+                },
             )
 
         listbox.bind("<Double-Button-1>", load_selected)
@@ -328,6 +448,7 @@ class GUICore:
         self._game_started = True
         self._pending_character = None
         self._set_scenario_menu_enabled(False)
+        self._set_ruleset_menu_enabled(False)
 
     def request_save(self):
         """!

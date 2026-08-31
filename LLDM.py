@@ -92,25 +92,26 @@ def main():
     # already exists for the Ollama bootstrap (next) to report progress into -- none of its own
     # subscriptions (llm_response_ready, rules_loaded, ...) can fire this early regardless of
     # construction order, since nothing publishes them until DMCore exists.
-    gui_core = GUICore(event_bus)
+    gui_core = GUICore(event_bus, default_setting=args.setting)
 
     # 1.6. Best-effort local Ollama bootstrap -- installs a local copy if nothing's found
     # anywhere (one-time; see Ollama_Launcher.py's own module note) and makes sure the
     # configured model is pulled, then spawns the server fire-and-forget, not waiting on it
     # becoming ready. Run on a background thread rather than blocking here: a fresh machine has
     # to download the ~1.5GB Ollama binary plus, by default, a ~9.6GB model pull before this
-    # call would otherwise return, which would freeze the window for however long that takes --
-    # nothing but display_system_status's own manual root.update() pumps events before
-    # mainloop() starts, so no menu is clickable until it finishes. Backgrounding it instead
-    # lets gui_core.start() reach mainloop() immediately: the player can open Character ->
-    # Create... and start a scenario right away, and narration simply degrades to "Could not
-    # connect to the local LLM" (LLM_Core.py's own existing best-effort path) until the
-    # bootstrap catches up -- the same posture this app already takes toward Ollama being
-    # unavailable for any other reason. Status is relayed both to the console (Logger.py, via
-    # log_info) and into the GUI's own History pane (display_system_status) exactly the way
-    # LLM_Core.py's own background narration fetches already touch GUICore from a foreign
-    # thread -- this isn't a new cross-thread risk, just the same existing one at another call
-    # site.
+    # call would otherwise return, which would freeze the window for however long that takes.
+    # Backgrounding it instead lets gui_core.start() reach mainloop() immediately: the player
+    # can open Character -> Create... and start a scenario right away, and narration simply
+    # degrades to "Could not connect to the local LLM" (LLM_Core.py's own existing best-effort
+    # path) until the bootstrap catches up -- the same posture this app already takes toward
+    # Ollama being unavailable for any other reason. Status is relayed both to the console
+    # (Logger.py, via log_info) and into the GUI's own History pane (display_system_status) --
+    # this thread routinely calls display_system_status *before* gui_core.start() has reached
+    # mainloop() (installing/pulling can take minutes; this thread starts immediately), so
+    # display_system_status has to be safe to call from a foreign thread at any point, not just
+    # once the window is up and pumping events. See GUI_Core.py's own _run_on_main_thread/
+    # _marshal for how it (and every other cross-thread-reachable handler, ex: LLM_Core.py's
+    # own background narration fetches) queues rather than touches a widget directly.
     def _report_ollama_status(message):
         event_bus.publish("log_info", message)
         gui_core.display_system_status(message)
@@ -157,6 +158,12 @@ def main():
         nonlocal dm_core
         if dm_core is not None:
             return
+        # Repoints LLMCore's own RAG index at Settings/<setting>/ before DMCore exists to
+        # publish anything -- DMCore's own __init__ (next) fires "scenario_loaded" as part of
+        # constructing it, which LLMCore.generate_scene_intro reacts to immediately, so the
+        # index has to already be pointed at the right setting's sourcebooks by then, not
+        # whatever LLMCore happened to default to at boot (before any setting was chosen).
+        llm_core.set_setting(setting)
         # 3. Constructed last, as it publishes 'rules_loaded' in its __init__ and needs to
         # hear 'turn_detected' from NLPCore -- both already subscribed above regardless of
         # when this actually fires.
@@ -178,7 +185,10 @@ def main():
     def on_scenario_selected(data):
         if dm_core is not None:
             return
-        start_game(data.get("scenario_name"), data.get("character"))
+        start_game(
+            data.get("scenario_name"), data.get("character"),
+            setting=data.get("setting", args.setting),
+        )
 
     def on_load_requested(data):
         if dm_core is not None:

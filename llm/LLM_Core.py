@@ -167,6 +167,28 @@ class LLMCore:
         self.event_bus.subscribe("load_requested", self._on_load_requested)
         self.event_bus.subscribe("game_load_failed", self.generate_load_failed_response)
 
+    def set_setting(self, setting):
+        """!
+        @brief Repoints the RAG index at Settings/<setting>/ -- called by LLDM.py's own
+            start_game right before constructing DMCore, so narration is grounded in the
+            sourcebooks for whichever setting the player actually picked (GUICore's Ruleset
+            menu, CLI --setting, or a loaded save's own "setting"), not whatever
+            self.rag_index happened to default to at LLMCore construction time (before any
+            setting was known). A no-op if the resolved source_dir hasn't actually changed
+            (ex: the player picked "Fantasy", already this instance's own default, or is
+            resuming a second game in the same setting) -- RagIndex._build can take minutes
+            the first time, so this must never restart it needlessly.
+        @param setting Which Rules/<setting> sibling under Settings/ to index (ex: "Fantasy",
+            "Zombie") -- a setting with no matching Settings/<setting>/ directory (no PDFs
+            authored yet, ex: "Zombie" today) just yields an empty index, the same
+            "no sourcebook, no RAG context" fallback RagIndex._build already applies to a
+            missing/empty source_dir.
+        """
+        source_dir = os.path.join(PROJECT_ROOT, "Settings", setting)
+        if source_dir == self.rag_index.source_dir:
+            return
+        self.rag_index = RagIndex(self.event_bus, source_dir=source_dir)
+
     def perform_rag(self, query):
         """!
         @brief Retrieves the sourcebook passages most relevant to query, formatted for

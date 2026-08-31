@@ -7,6 +7,8 @@
     the live entity, the same split DM_CharacterCreation.py is to Character_Creation.py.
 """
 
+import os
+
 from resolution.Challenge_Rating import calculate_party_challenge_rating
 from dm.DM_Types import DMCoreProtocol
 from resolution.NPC_Generation import generate_npc_stats, load_npc_keywords, resolve_varied_value
@@ -93,7 +95,7 @@ class NpcGenerationMixin(DMCoreProtocol):
         target_cr = self._resolve_npc_target_cr(
             entity.get("target_cr"), party_pool, instance_names_so_far,
         )
-        npc_keywords = load_npc_keywords()
+        npc_keywords = load_npc_keywords(os.path.join("Rules", self.setting))
 
         # hint/cr_multiplier/qualities all feed generation itself, so they're resolved first --
         # qualities specifically has to be concrete (gender/race/age already picked, not a

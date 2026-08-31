@@ -6239,6 +6239,7 @@ class TestGUICore(unittest.TestCase):
         self.assertEqual(events, [{
             "scenario_name": "crypt",
             "character": {"race": "elf", "allocation": {"arcane": 5}, "name": "Aria"},
+            "setting": "Fantasy",
         }])
         self.assertIsNone(self.gui._pending_character)
         self.assertEqual(str(self.gui.scenario_menu.entrycget(0, "state")), tk.DISABLED)
