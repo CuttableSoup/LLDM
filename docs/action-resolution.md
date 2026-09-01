@@ -39,10 +39,16 @@ action-kind entry goes through:
    `language_dependent` ability/skill (`_ability_requires_language`, see "Combat"'s own "Tags vs.
    conditions") against a target the player's own current language isn't shared with fails
    immediately as a `LanguageBarrierOutcome` — also no roll.
-3. Otherwise resolves against `self.current_target` (see "Combat"), or against an item-level
-   `[entity.test]` target one level deeper (a container's contents or something already in
-   inventory — see "Entity tests"), or with no target at all (difficulty 0). Every dice roll
-   here is reduced by this turn's own `dice_penalty` (see "Multiple actions").
+3. Otherwise resolves against `self.current_target` (see "Combat") — as a flat check against the
+   target's own `[entity.test]` if one matches (ex: a chest's lock), else a flat check against
+   the ability's own authored `difficulty` if it has one (ex: `spells.toml`'s `suggestion`/
+   `fireball` — the number the caster needs to roll on the ability's own skill to pull it off at
+   all, independent of the target; a target that actually wants to resist authors its own
+   `[entity.test]` instead, which always wins when it matches), else the ordinary opposed roll
+   against the defender's own best matching skill — or against an item-level `[entity.test]`
+   target one level deeper (a container's contents or something already in inventory — see
+   "Entity tests"), or with no target at all (difficulty 0). Every dice roll here is reduced by
+   this turn's own `dice_penalty` (see "Multiple actions").
 4. On a hit, `calculate_damage` rolls damage, resolves the `bonus` field (plain number or
    `"user.<rule>"` reference into `rules.toml`), applies armor/resistance reduction and
    vulnerability bonus, and `apply_damage` applies net damage to HP; the `RolledOutcome` gets

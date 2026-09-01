@@ -8,22 +8,6 @@ Not yet started, except where noted. Each below was worked through as an actual 
 just restated — several correct or extend what's currently shipped rather than describing a clean
 gap.
 
-**NPC-action-driven attitude drift** generalizes `combat_hit`/`shared_enemy` — the two
-`[[attitude_event]]` entries an attack can plausibly fire — from "the player's own attacks only"
-to any entity's resolved attack, via `resolve_behavior_action`'s own hit resolution, the same call
-site shape `_apply_damage_if_hit` already establishes for the player. `theft`/`favor` stay
-player-only for now: both fire off `_resolve_transfer_intent`, which only ever runs from the
-player's own `take`/`give` intents today — there's no `[[entity.behavior]]` action type for an NPC
-to autonomously steal or gift something, so extending those two waits on that separate, unscoped
-feature rather than being designed blind here. The existing bystander bond-forming ripple
-(`_nudge_shared_enemy_bonds`) needs no changes at all — it already loops "every other living scene
-entity" generically, so generalizing the trigger doesn't touch the helper itself. Stays
-one-directional, exactly as today: only the victim's attitude toward the attacker moves. An
-attacker's own feelings toward its target are already fully authored via
-`[[entity.behavior]]`/`[entity.attitudes]` — that data is what decided it's attacking in the first
-place — so an automatic reciprocal nudge on the attacker's own side would be redundant with
-something already hand-authored, not a gap worth filling.
-
 **Random encounters, enemy generator** — procedurally populate a scene/room with creatures
 instead of every encounter being scenario-authored. **Partially started**: `[[location.encounter]]`
 (see "Random encounters") already rolls a weighted table of outcomes on entry, but the table

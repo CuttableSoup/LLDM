@@ -1458,11 +1458,11 @@ class TestSpellMaterials(DMTestCase):
     # own auto-claim at scenario load, same state every other TestCombatLoop test relies on),
     # so casting at it resolves as combat ("round_resolved"), not the no-combat "action_resolved"
     # path. "arc lance" (spells.toml) is on gladstone's own abilities list and needs 1x
-    # "iron filings", pre-seeded in his starting inventory (characters.toml). Gladstone's own
-    # arcane (2D) opposes the wolf's own willpower (2D, arcane's own opposing-skill match) --
-    # an even matchup, so (unlike TestCombatLoop's own blades-vs-dodge asymmetry) a fixed
-    # random.randint value alone doesn't guarantee a miss; test_failed_cast temporarily boosts
-    # the wolf's own willpower dice to force one instead.
+    # "iron filings", pre-seeded in his starting inventory (characters.toml). Casting resolves as
+    # a flat check against arc lance's own authored "difficulty" (10) -- gladstone's own 2D
+    # arcane vs. that fixed number, not an opposed roll against the wolf at all (see
+    # _resolve_roll's own "ability.get('difficulty')" branch, DM_Core.py) -- so a fixed
+    # random.randint value alone is enough to force either outcome.
     def setUp(self):
         super().setUp()
         self.resolved = self._capture("round_resolved")
@@ -1481,8 +1481,8 @@ class TestSpellMaterials(DMTestCase):
         self.assertIsInstance(result, MissingSpellMaterialsOutcome)
 
     def test_successful_cast_consumes_the_material(self):
-        # An even 2D-vs-2D matchup at a fixed per-die value ties -- resolve_action's own
-        # "roll >= difficulty" counts a tie as a success, same as everywhere else in the engine.
+        # gladstone's 2D arcane at a fixed per-die value of 6 rolls 12, clearing arc lance's own
+        # difficulty of 10.
         with patch("random.randint", return_value=6):
             result = self._cast()
 
@@ -1491,17 +1491,31 @@ class TestSpellMaterials(DMTestCase):
         self.assertNotIn("iron filings", self.dm_core.entities["gladstone"]["inventory"])
 
     def test_failed_cast_still_consumes_the_material(self):
-        # Temporarily out-trains gladstone's own 2D arcane with a 6D willpower, so a fixed
-        # per-die value still guarantees the wolf's own opposing roll wins -- the material is
-        # still spent, same as a botched craft attempt's own materials.
-        self.dm_core.entities["wolf"]["skills"]["willpower"] = {"dice": 6, "pips": 0}
-
+        # gladstone's 2D arcane at a fixed per-die value of 1 rolls 2, well under arc lance's own
+        # difficulty of 10 -- the material is still spent, same as a botched craft attempt's own
+        # materials.
         with patch("random.randint", return_value=1):
             result = self._cast()
 
         self.assertFalse(result.success)
         self.assertFalse(any(isinstance(effect, DamageEffect) for effect in result.effects))
         self.assertNotIn("iron filings", self.dm_core.entities["gladstone"]["inventory"])
+
+    def test_entity_test_on_the_target_overrides_the_abilitys_own_difficulty(self):
+        # A target that authors its own [entity.test] for the ability's skill is the actual
+        # "specify the skill to resist" mechanism a spell is expected to lean on -- it's checked
+        # ahead of ability.get("difficulty") in _resolve_roll (DM_Core.py) and wins outright when
+        # it matches, overriding the ability's own flat difficulty fallback entirely.
+        self.dm_core.entities["wolf"]["test"] = {"skill": ["arcane"], "difficulty": 20}
+
+        with patch("random.randint", return_value=6):
+            result = self._cast()
+
+        # gladstone's 2D arcane at a fixed per-die value of 6 rolls 12 -- clears arc lance's own
+        # difficulty (10) but not the wolf's own authored resistance (20), and a via_test roll
+        # never rolls the ability's own bonus weapon damage.
+        self.assertFalse(result.success)
+        self.assertFalse(any(isinstance(effect, DamageEffect) for effect in result.effects))
 
     def test_a_different_ability_never_touches_the_material(self):
         # gladstone's own longsword (skill="blades") carries no "materials" field at all --
@@ -1643,6 +1657,58 @@ class TestEntityBehavior(DMTestCase):
             self.dm_core.get_current_hp("target_dummy"),
             20 - damage.net_damage,
         )
+
+
+    def test_resolve_behavior_action_nudges_the_defenders_attitude_toward_the_attacker(self):
+        # NPC-action-driven attitude drift: resolve_behavior_action shares
+        # _apply_damage_if_hit's own call-site shape (DM_Core.py's _nudge_combat_hit_attitude)
+        # -- the "combat_hit" nudge lands on target_dummy's attitude toward "wolf", the entity
+        # that actually swung, never toward the player, who wasn't involved in this turn at all.
+        self.dm_core.entities["target_dummy"] = {
+            "name": "target_dummy", "max_hp": 20, "skills": {},
+            "attitudes": {"default": [0, 0, 0]},
+        }
+
+        with patch("random.randint", return_value=4):
+            result = self.dm_core.resolve_behavior_action("wolf", "target_dummy")
+
+        assert result is not None
+        self.assertTrue(result.success)
+        damage_effects = [effect for effect in result.effects if isinstance(effect, DamageEffect)]
+        magnitude = damage_effects[0].net_damage / 20
+        disposition, threat = (
+            self.dm_core.get_attitude("target_dummy", "wolf")[axis] for axis in (0, 1)
+        )
+        self.assertAlmostEqual(disposition, -20 * magnitude)
+        self.assertAlmostEqual(threat, -15 * magnitude)
+        self.assertEqual(
+            self.dm_core.get_attitude("target_dummy", self.dm_core.player_name), [0, 0, 0],
+        )
+
+
+    def test_resolve_behavior_action_bonds_bystanders_toward_the_attacker(self):
+        # "Bonds made on the battlefield" generalizes the same way -- thane already hates
+        # target_dummy specifically (a name-override disposition <= -100 toward it), so it
+        # should warm toward "wolf", who just hit it, not toward the player, who never acted
+        # this turn.
+        self.dm_core.entities["target_dummy"] = {"name": "target_dummy", "max_hp": 20, "skills": {}}
+        self.dm_core.scenario_entities.append("target_dummy")
+        self.dm_core.entities["thane"]["attitudes"] = {
+            "default": [40, 40, 40],
+            "name": [{"target_dummy": [-100, 0, 0]}],
+        }
+
+        with patch("random.randint", return_value=4):
+            result = self.dm_core.resolve_behavior_action("wolf", "target_dummy")
+
+        assert result is not None
+        damage_effects = [effect for effect in result.effects if isinstance(effect, DamageEffect)]
+        magnitude = damage_effects[0].net_damage / 20
+        # thane has no name-override toward "wolf" specifically, so its own "default" [40, 40,
+        # 40] base is what the shared_enemy drift stacks on top of.
+        disposition = self.dm_core.get_attitude("thane", "wolf")[0]
+        self.assertAlmostEqual(disposition, 40 + 5 * magnitude)
+        self.assertEqual(self.dm_core.get_attitude("thane", self.dm_core.player_name), [40, 40, 40])
 
 
     def test_roll_initiative_pools_dodge_and_untrained_observation(self):
@@ -2537,12 +2603,14 @@ class TestSummoning(DMTestCase):
 
     def test_apply_summon_if_hit_against_a_hostile_target_ticks_this_rounds_upkeep_too(self):
         # arena.toml's own default scenario already has a hostile wolf as current_target --
-        # this exercises the opposed-roll cast path, and confirms _resolve_combat_round's own
-        # run_round_upkeep (which fires later in the same turn) already counts this round
-        # against the freshly-summoned wolf's own duration.
+        # this exercises the targeted cast path (a flat check against the spell's own authored
+        # difficulty of 10; gladstone's 2D arcane at a fixed per-die value of 5 rolls exactly
+        # 10), and confirms _resolve_combat_round's own run_round_upkeep (which fires later in
+        # the same turn) already counts this round against the freshly-summoned wolf's own
+        # duration.
         resolved = self._capture("round_resolved")
 
-        with patch("random.randint", return_value=4):
+        with patch("random.randint", return_value=5):
             self.dm_core._on_turn_detected({
                 "clauses": [{"kind": "action", "skill": "summon spectral wolf"}], "input": "I summon a wolf",
             })

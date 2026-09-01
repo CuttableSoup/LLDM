@@ -447,7 +447,10 @@ class CombatMixin(DMCoreProtocol):
             on a successful hit) on a normal attack; or None if no behavior currently
             matches, its named action isn't actually one of the entity's own abilities, or a
             move (deliberate or fallback) had nowhere valid to happen (ex: target_name isn't
-            a real entity).
+            a real entity). A successful hit also nudges target_name's own attitude toward
+            entity_name (DM_Core.py's _nudge_combat_hit_attitude -- see docs/social-dialogue.md's
+            "Action-driven attitude drift"), the same "combat_hit"/"shared_enemy" shape the
+            player's own attacks already trigger.
         """
         behavior = self.choose_behavior(entity_name, target_name)
         if behavior is None:
@@ -480,6 +483,11 @@ class CombatMixin(DMCoreProtocol):
                 defender=damage["defender"], net_damage=damage["net_damage"],
                 remaining_hp=damage["remaining_hp"],
             ))
+            # "combat_hit"/"shared_enemy" attitude drift (DM_Core.py's own
+            # _nudge_combat_hit_attitude) -- the same call-site shape _apply_damage_if_hit
+            # already uses for the player's own attacks, generalized to any entity's resolved
+            # attack (ex: an ally striking a shared foe, or a monster hitting the player).
+            self._nudge_combat_hit_attitude(target_name, entity_name, damage.get("net_damage", 0))
 
         return result
 

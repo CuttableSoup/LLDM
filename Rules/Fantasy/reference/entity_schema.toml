@@ -197,12 +197,19 @@ language_dependent = true                   # Opt-in precondition, not a damage 
                                             # "persuade the guard"), _ability_requires_language
                                             # (DM_Combat.py) falls back to checking the skill's own
                                             # declared "abilities" list (skills.toml) instead.
-difficulty = 10                             # UNUSED on a spell/technique today (spells/
-                                            # techniques resolve via resolve_opposed_action,
-                                            # which rolls the defender's own opposing skill
-                                            # instead of a fixed number) -- only [entity.test]'s
-                                            # own "difficulty" (below) is actually read.
-                                            # Reserved here for a future non-opposed cast option.
+difficulty = 10                             # The flat number the actor must roll (with this
+                                            # ability's own "skill") to pull the working off at
+                                            # all, independent of who it's aimed at -- checked in
+                                            # _resolve_roll (DM_Core.py) once range/language have
+                                            # passed. Absent (ex: an ordinary weapon ability like
+                                            # "bite"/"shortsword strike" below) keeps the older
+                                            # resolve_opposed_action behavior: the caster's skill
+                                            # vs. whatever the defender's own best matching
+                                            # "opposes" skill happens to be. If a target actually
+                                            # wants to resist, it authors its own [entity.test]
+                                            # instead (skill = [...], difficulty = ...) -- that's
+                                            # checked first and always wins over this fallback
+                                            # when it matches.
 targets = { number = 1, aoe = 0 }           # UNUSED today -- reserved for a future
                                             # multi-target/area-of-effect mechanic; nothing
                                             # currently reads "number" or "aoe".
@@ -477,9 +484,13 @@ action = "punch"
 # not an opposed roll against a defender (see CLAUDE.md's "Entity tests"). Resolved as a flat
 # resolve_action(player, skill, difficulty) check.
 [entity.test]
-difficulty = 12                             # The only "difficulty" the engine actually reads
-                                            # for a check (contrast the ability-level
-                                            # "difficulty" above, which is unused).
+difficulty = 12                             # Same resolve_action semantics as the ability-level
+                                            # "difficulty" above -- but this one lives on the
+                                            # *target* entity, not the acting ability, and (when
+                                            # its own "skill" matches) always takes priority over
+                                            # the ability's own fallback "difficulty" -- this is
+                                            # how a specific entity authors real resistance to a
+                                            # spell/ability rather than just eating its flat DC.
 skill = [ "finesse" ]                       # Which skill(s) can attempt this test at all --
                                             # gates whether it's a test in the first place
                                             # (is_test_available); a skill not listed here just

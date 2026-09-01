@@ -196,10 +196,12 @@ step `_on_turn_detected` calls once per action-kind clause) right after `_apply_
 fires whenever the turn's own `named_ability` carries a `summon` table
 and the roll succeeded — regardless of `target_name`/`via_test`, since a summon isn't "against"
 anyone the way damage is: casting with no `current_target` at all resolves as an ordinary flat,
-automatic `resolve_action` (difficulty 0); casting against a live hostile `current_target`
-resolves as an ordinary opposed roll instead (the caster's own skill vs. whatever the target's
-best matching `opposes` skill is — no bespoke "resist a summon" mechanic, just the same opposed
-check any other ability already uses).
+automatic `resolve_action` (difficulty 0, unaffected by the ability's own authored `difficulty`,
+which only ever gates the targeted branch below — see "Action resolution"); casting against a
+live hostile `current_target` resolves as a flat check against `summon spectral wolf`'s own
+authored `difficulty` (10) instead, the caster's `arcane` vs. that fixed number, same as every
+other spell that authors one — no bespoke "resist a summon" mechanic, and no opposed roll
+against the target at all unless the target itself authors a matching `[entity.test]`.
 
 Unlike `DM_Improvisation.py`'s own ad hoc creature conjuring, a summon never invents anything —
 `DM_Summoning.py`'s `_summon_creature` always instances a real, hand-authored `[[entity]]`/

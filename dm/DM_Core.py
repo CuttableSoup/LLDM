@@ -540,9 +540,11 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
     def _resolve_roll(self, skill_name, named_ability, target_name, dice_penalty=0):
         """!
         @brief Rolls the actual check for this action: a flat difficulty check against the
-            target's own [entity.test] if one applies (ex: a chest's lock), a range-gated
-            opposed check against a live combat target, or an untargeted resolve_action if
-            there's no target at all.
+            target's own [entity.test] if one applies (ex: a chest's lock), a range-gated flat
+            check against the ability's own authored "difficulty" if it has one and no
+            [entity.test] matched (ex: spells.toml's "suggestion"/"fireball"), a range-gated
+            opposed check against a live combat target otherwise, or an untargeted
+            resolve_action if there's no target at all.
         @param skill_name The skill being used, already resolved from any named ability.
         @param named_ability The resolved ability entity (technique/spell), or None.
         @param target_name self.current_target, or None.
@@ -621,6 +623,22 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
                 # with target_name, rather than a penalized roll or a "resolves but reads as
                 # garbled" compromise.
                 result = LanguageBarrierOutcome(self.player_name, skill_name, target_name)
+            elif ability and ability.get("difficulty"):
+                # An ability that authors its own "difficulty" (ex: spells.toml's "suggestion",
+                # "fireball") resolves as a flat check against that fixed number instead of the
+                # ordinary opposed-vs-defender's-skill roll below -- the number the caster needs
+                # to roll on the ability's own skill to pull the working off at all, independent
+                # of who it's aimed at. No weapon ability ever authors "difficulty" (find_
+                # attack_ability's own candidates never do), so this branch is spell/technique-
+                # only and every existing weapon attack keeps its unchanged opposed resolution.
+                # A target that actually wants to resist authors its own [entity.test] instead
+                # (skill = [...], difficulty = ...) -- checked above this branch, via_test,
+                # which already takes priority whenever it matches.
+                roll = self.resolve_action(
+                    self.player_name, skill_name, ability["difficulty"], dice_penalty=dice_penalty,
+                )
+                result = rolled_outcome_from_roll(roll)
+                result.defender = target_name
             else:
                 roll = self.resolve_opposed_action(
                     self.player_name, skill_name, target_name, dice_penalty=dice_penalty,
@@ -754,24 +772,43 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
                 # hard the hit landed relative to the defender's own max_hp, not a flat
                 # per-swing amount, so a graze barely registers and a near-kill genuinely
                 # scares them (the "threat" axis) even while disposition stays pinned at
-                # is_hostile's own floor. Only the player ever triggers this -- this method is
-                # only ever called for the player's own turn (see _on_turn_detected); an
-                # entity's own combat-turn attacks (resolve_behavior_action, DM_Combat.py)
-                # don't nudge anything, since there's no player-side attitude to move.
-                max_hp = self.entities.get(target_name, {}).get("max_hp") or 1
-                magnitude = min(1.0, damage.get("net_damage", 0) / max_hp)
-                self.nudge_attitude_from_event(target_name, self.player_name, "combat_hit", magnitude)
-                self._nudge_shared_enemy_bonds(target_name, magnitude)
+                # is_hostile's own floor. _nudge_combat_hit_attitude is the shared call-site
+                # shape resolve_behavior_action (DM_Combat.py, an entity's own combat-turn
+                # attack) also uses -- only who's attacking differs, never the shape.
+                self._nudge_combat_hit_attitude(target_name, self.player_name, damage.get("net_damage", 0))
 
-    def _nudge_shared_enemy_bonds(self, target_name, magnitude):
+    def _nudge_combat_hit_attitude(self, target_name, attacker_name, net_damage):
+        """!
+        @brief The shared "someone just landed a hit" attitude-drift shape -- a "combat_hit"
+            nudge on the victim's own attitude toward whoever hit it, plus the "bonds made on
+            the battlefield" ripple to bystanders (_nudge_shared_enemy_bonds). Shared by
+            _apply_damage_if_hit (the player's own attack) and resolve_behavior_action
+            (DM_Combat.py, any other entity's own combat-turn attack) -- the same call-site
+            shape either way, just parameterized on who actually swung. Stays one-directional,
+            same as before this was shared: only the victim's attitude toward the attacker
+            moves, never the reverse (an attacker's own feelings are already fully authored via
+            [[entity.behavior]]/[entity.attitudes]).
+        @param target_name The entity that was just hit.
+        @param attacker_name The entity that landed the hit.
+        @param net_damage The hit's own net_damage, scaled here against target_name's max_hp.
+        """
+        max_hp = self.entities.get(target_name, {}).get("max_hp") or 1
+        magnitude = min(1.0, net_damage / max_hp)
+        self.nudge_attitude_from_event(target_name, attacker_name, "combat_hit", magnitude)
+        self._nudge_shared_enemy_bonds(target_name, attacker_name, magnitude)
+
+    def _nudge_shared_enemy_bonds(self, target_name, attacker_name, magnitude):
         """!
         @brief "Bonds made on the battlefield" -- every other living scene entity that already
             considers target_name a real enemy (is_hostile(observer, target_name)) gets a
-            small "shared_enemy" attitude nudge toward the player, scaled by the same magnitude
-            the hit itself just earned (see _apply_damage_if_hit) -- a decisive blow against a
-            common enemy warms an onlooker up more than a graze. Deliberately not restricted to
-            allies/party members -- even a bystander merely wary of the player can start
-            softening if the player keeps fighting something that bystander already hates.
+            small "shared_enemy" attitude nudge toward attacker_name, scaled by the same
+            magnitude the hit itself just earned (see _nudge_combat_hit_attitude) -- a decisive
+            blow against a common enemy warms an onlooker up more than a graze. Deliberately not
+            restricted to allies/party members -- even a bystander merely wary of attacker_name
+            can start softening if attacker_name keeps fighting something that bystander already
+            hates. attacker_name need not be the player -- any entity's resolved attack routes
+            through here (see resolve_behavior_action, DM_Combat.py), so an ally striking down a
+            shared foe earns the same bystander warmth a player blow would.
             Safe to call for every observer in scenario_entities regardless of whether it has
             real attitude data of its own: is_hostile(observer, target_name) returns True
             unconditionally for a tableless creature (ex: another wolf -- see is_hostile's own
@@ -779,14 +816,15 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             no-ops for exactly that case, so a mindless hostile creature never actually
             accumulates a bond it has no data to hold.
         @param target_name The entity that was just hit -- excluded from its own "observers".
-        @param magnitude The same 0..1 magnitude _apply_damage_if_hit already computed for this
-            hit's own "combat_hit" nudge.
+        @param attacker_name The entity that landed the hit -- also excluded from "observers".
+        @param magnitude The same 0..1 magnitude _nudge_combat_hit_attitude already computed for
+            this hit's own "combat_hit" nudge.
         """
         for observer_name in self.scenario_entities:
-            if observer_name in (self.player_name, target_name):
+            if observer_name in (attacker_name, target_name):
                 continue
             if self.is_hostile(observer_name, target_name):
-                self.nudge_attitude_from_event(observer_name, self.player_name, "shared_enemy", magnitude)
+                self.nudge_attitude_from_event(observer_name, attacker_name, "shared_enemy", magnitude)
 
     def _apply_summon_if_hit(self, result, named_ability):
         """!

@@ -70,21 +70,35 @@ isn't aware of anything happening to it or nearby anymore, whether that's the ki
 itself, a theft, a gift, or a battlefield bond forming), mirroring `is_hostile`'s own "nothing to
 nudge" precedent for a tableless creature.
 
-Four call sites, each computing its own 0..1 magnitude from context: `DM_Core.py`'s
-`_apply_damage_if_hit` fires `combat_hit` after a landed player hit, scaled by
-`net_damage / defender max_hp` — a graze barely registers, a near-kill measurably scares the
-defender (the `threat` axis) even while `disposition` stays pinned at `is_hostile`'s own
-floor; only the player's own attacks trigger this (an entity's own combat-turn attack,
-`resolve_behavior_action`, never does — there's no player-side attitude to move). The same
-method's own `_nudge_shared_enemy_bonds` then fires `shared_enemy`, at that same magnitude,
-toward every *other* living scene entity that already considers the struck target a real enemy
-(`is_hostile(observer, target_name)`) — "bonds made on the battlefield," deliberately not
-restricted to allies/party members, so even a merely-wary bystander can start warming to the
-player for fighting something the bystander already hates. Safe to call unconditionally over
-every scene entity: a tableless creature's own `is_hostile` returns `True` regardless of
-`target_name` (see "Combat"), but `nudge_attitude_from_event`'s own "no `[entity.attitudes]`
-table" gate silently no-ops for exactly that case, so a mindless hostile creature never actually
-accumulates a bond it has no data to hold. `DM_Inventory.py`'s `_resolve_transfer_intent` fires
+`DM_Core.py`'s `_nudge_combat_hit_attitude(target_name, attacker_name, net_damage)` is the shared
+call-site shape behind `combat_hit`/`shared_enemy`: it fires `combat_hit` on `target_name`'s own
+attitude toward `attacker_name`, scaled by `net_damage / target_name`'s `max_hp` — a graze barely
+registers, a near-kill measurably scares the defender (the `threat` axis) even while
+`disposition` stays pinned at `is_hostile`'s own floor — then calls its own
+`_nudge_shared_enemy_bonds(target_name, attacker_name, magnitude)`, which fires `shared_enemy`,
+at that same magnitude, toward every *other* living scene entity that already considers the
+struck target a real enemy (`is_hostile(observer, target_name)`) — "bonds made on the
+battlefield," deliberately not restricted to allies/party members, so even a merely-wary
+bystander can start warming to `attacker_name` for fighting something the bystander already
+hates. Safe to call unconditionally over every scene entity: a tableless creature's own
+`is_hostile` returns `True` regardless of `target_name` (see "Combat"), but
+`nudge_attitude_from_event`'s own "no `[entity.attitudes]` table" gate silently no-ops for
+exactly that case, so a mindless hostile creature never actually accumulates a bond it has no
+data to hold. Two call sites share this shape, `attacker_name` being whichever side actually
+landed the hit: `_apply_damage_if_hit` after a landed *player* hit, and `DM_Combat.py`'s
+`resolve_behavior_action` after any *other* entity's own successful combat-turn attack (ex: a
+monster hitting the player, or an ally striking a shared foe) — a generalization
+`_nudge_shared_enemy_bonds` needed no changes of its own to support, since it already looped
+every other living scene entity generically. Stays one-directional either way: only the victim's
+attitude toward the attacker moves, never the reverse — an attacker's own feelings toward its
+target are already fully authored via `[[entity.behavior]]`/`[entity.attitudes]`, the data that
+decided it was attacking in the first place, so an automatic reciprocal nudge on the attacker's
+own side would be redundant with something already hand-authored.
+
+`theft`/`favor` stay player-only: both fire off `DM_Inventory.py`'s `_resolve_transfer_intent`,
+which only ever runs from the player's own `take`/`give` intents — there's no
+`[[entity.behavior]]` action type for an NPC to autonomously steal or gift something yet.
+`_resolve_transfer_intent` fires
 `theft` (a `"take"` that actually moved something) or `favor` (a `"give"`) once a real transfer
 completes against a real, distinct, *conscious* target (the shared HP gate above is what makes
 `theft` specifically require the victim to actually be aware it's happening, rather than looting
