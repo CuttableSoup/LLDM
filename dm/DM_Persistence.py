@@ -101,7 +101,7 @@ class PersistenceMixin(DMCoreProtocol):
         @brief Writes this core's mechanical state to Saves/<slot_name>/dm_state.json -- a
             diff from a fresh instantiation (round_number, scenario_entities, and each
             instance's hp/active_conditions/currency/inventory/equipped/band/attitude_deltas/
-            action_attitude_deltas/current_language), not a raw dump
+            action_attitude_deltas/current_language/prompt_directive), not a raw dump
             of self.entities, which also holds every static template. Loading re-instantiates
             fresh from Rules/Fantasy TOML and overlays this diff on top, so a save doesn't
             freeze stale stats if templates are edited between sessions. LLMCore
@@ -180,6 +180,11 @@ class PersistenceMixin(DMCoreProtocol):
                 # actually switches at least once, same unconditional per-instance treatment
                 # attitude_deltas gets rather than a player-only special case.
                 "current_language": entity.get("current_language"),
+                # A planted directive (Social_Resolution.py's set_prompt_directive, ex: a
+                # successfully-cast "suggestion") -- runtime state, absent (None) until something
+                # actually plants one, same unconditional per-instance treatment current_language
+                # gets.
+                "prompt_directive": entity.get("prompt_directive"),
             }
             if entity.get("generated"):
                 state["generated"] = True
@@ -487,6 +492,7 @@ class PersistenceMixin(DMCoreProtocol):
             entity["attitude_deltas"] = state.get("attitude_deltas", {})
             entity["action_attitude_deltas"] = state.get("action_attitude_deltas", {})
             entity["current_language"] = state.get("current_language")
+            entity["prompt_directive"] = state.get("prompt_directive")
             entity["currency"] = state.get("currency", entity.get("currency", 0))
             entity["inventory"] = state.get("inventory", entity.get("inventory", []))
             entity["equipped"] = state.get("equipped", entity.get("equipped", {}))

@@ -17,6 +17,11 @@
     nudge_attitude_from_event (of DM_Social.py's several attitude methods) needed to move: it's
     the one Program_Interpreter.py's own "attitude" op has to reach with no DMCore instance in
     hand.
+
+    set_prompt_directive is a sibling primitive for the same reason (Program_Interpreter.py's own
+    "inject_directive" op reaching in with no DMCore instance), not an extraction of an existing
+    DM_Social.py method -- nothing on the DMCore side calls it directly, only the op does, so it
+    gets no thin-wrapper counterpart there.
 """
 
 import resolution.Combat_Resolution as Combat_Resolution
@@ -101,6 +106,32 @@ def get_attitude(entities, entity_name, toward_name):
     if action_deltas:
         result = [value + delta for value, delta in zip(result, action_deltas)]
     return result
+
+
+def set_prompt_directive(entities, entity_name, text, source_name=None):
+    """!
+    @brief Plants (or overwrites) entity_name's own persistent prompt_directive -- free text
+        later read back by DM_Social.py's own describe_character, so a successfully-cast effect
+        (ex: spells.toml's "suggestion") actually shapes what that NPC says/does in every future
+        narration prompt built from its persona, not just this turn's own narration line. Mirrors
+        nudge_attitude_from_event's own "nothing to affect" gates: a no-op for a missing entity,
+        an inanimate object (supertype == "object"), or an entity with no HP left (a dead entity
+        has no mind left to plant anything in). One active directive at a time -- a second
+        successful suggestion overwrites the first rather than stacking, the simplest thing that
+        works.
+    @param entities The live entities dict.
+    @param entity_name The entity receiving the directive.
+    @param text The free-text directive itself.
+    @param source_name Who planted it, if known (ctx's own "actor") -- attributed in the stored
+        record so narration can credit the right party, but never required (ex: a
+        scenario-authored on_enter program with no "actor" in its own ctx).
+    """
+    entity = entities.get(entity_name)
+    if entity is None or entity.get("supertype") == "object":
+        return
+    if Combat_Resolution.get_current_hp(entities, entity_name) <= 0:
+        return
+    entity["prompt_directive"] = {"text": text, "source": source_name}
 
 
 def nudge_attitude_from_event(entities, rules, entity_name, toward_name, event_name, magnitude):

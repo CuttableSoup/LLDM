@@ -243,6 +243,30 @@ def _op_heal(step, ctx, entities, rules, event_bus):
     Combat_Resolution.apply_healing(entities, rules, event_bus, entity_name, amount)
 
 
+def _op_inject_directive(step, ctx, entities, rules, event_bus):
+    """!
+    @brief `inject_directive` -- plants a persistent, free-text directive on entity's resolved
+        role, later surfaced back to the LLM by DM_Social.py's own describe_character (so it
+        reaches every future narration prompt that already reads that entity's persona -- the
+        immediate cast's own DefenderDetailsEffect, and every later dialogue turn with that
+        entity, for free -- see Social_Resolution.py's set_prompt_directive for the actual
+        storage/gating). `text` is optional: given, it's used as a literal, scripted directive;
+        omitted (ex: spells.toml's "suggestion"), it falls back to ctx's own "input" -- the raw
+        turn text that triggered this program in the first place (DM_Core.py's
+        _run_ability_outcome_program threads it in specifically for this op), so the actual
+        planted content is always whatever the player actually typed, not a fixed line. A quiet
+        no-op if neither resolves to anything, same as every other op's "nothing to act on"
+        convention.
+    """
+    entity_name = resolve_role(_require(step, "entity"), ctx)
+    if entity_name is None:
+        return
+    text = step.get("text") or ctx.get("input")
+    if not text:
+        return
+    Social_Resolution.set_prompt_directive(entities, entity_name, text, ctx.get("actor"))
+
+
 def _op_transfer_item(step, ctx, entities, rules, event_bus):
     """!@brief `transfer_item` -- moves one named item from `from`'s resolved role to `to`'s."""
     from_name = resolve_role(_require(step, "from"), ctx)
@@ -274,6 +298,7 @@ OP_HANDLERS = {
     "attitude": _op_attitude,
     "damage": _op_damage,
     "heal": _op_heal,
+    "inject_directive": _op_inject_directive,
     "transfer_item": _op_transfer_item,
     "transfer_currency": _op_transfer_currency,
 }

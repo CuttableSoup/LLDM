@@ -196,7 +196,11 @@ class SocialMixin(DMCoreProtocol):
         """!
         @brief Builds a flavor-text description of an entity for narration prompts, out of its
             purely descriptive data (description, qualities, memories, quotes) rather than
-            mechanical data (skills/dice), since this is meant to tell the LLM who someone is.
+            mechanical data (skills/dice), since this is meant to tell the LLM who someone is --
+            plus, if one is currently planted (entity's own "prompt_directive",
+            Social_Resolution.py's set_prompt_directive), what they're currently privately
+            convinced they should do, the one piece of genuinely dynamic runtime state this
+            method surfaces rather than author-set TOML.
         @param entity_name The name of the entity to describe.
         @param toward_name If given (and different from entity_name), appends
             describe_attitude(entity_name, toward_name) as an additional part -- ex: passing
@@ -228,6 +232,19 @@ class SocialMixin(DMCoreProtocol):
         quotes = entity.get("quotes")
         if quotes:
             parts.append("Known to say: " + "; ".join(f"\"{quote}\"" for quote in quotes))
+
+        # A directive planted by Social_Resolution.py's set_prompt_directive (ex: spells.toml's
+        # "suggestion" landing) -- appended right before attitude, both being the most
+        # immediately action-relevant context the LLM needs to weigh before speaking/acting as
+        # this entity. No expiry: there's no time-of-day/turn clock yet to hang a duration off of
+        # (see CLAUDE.md's "Downtime"), so this persists until a later successful directive
+        # overwrites it (or ADaM's own ad hoc entity-edit path clears it manually).
+        directive = entity.get("prompt_directive")
+        if directive:
+            parts.append(
+                f"Currently privately convinced (planted by {directive.get('source') or 'someone'}): "
+                f"\"{directive.get('text')}\""
+            )
 
         if toward_name and toward_name != entity_name:
             attitude = self.describe_attitude(entity_name, toward_name)

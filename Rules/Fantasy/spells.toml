@@ -43,6 +43,26 @@ damage_tags = [ "lightning" ]
 materials = [ { item = "iron filings", quantity = 1 } ]
 
 [[entity]]
+name = "suggestion"
+supertype = "spell"
+subtype = "enchantment"
+description = "Plant a single, reasonable-sounding course of action in a listener's mind -- a successful working leaves them quietly convinced it was their own idea."
+skill = "arcane"
+difficulty = 10
+range = 5
+# Enchantment (Compulsion), Language-Dependent, Mind-Affecting (Pathfinder 1e) -- the words
+# themselves are the whole mechanism, so a target who can't understand them can't be swayed at
+# all. See entity_schema.toml's own "language_dependent" note and DM_Combat.py's
+# _ability_requires_language: no shared language means no roll attempted, not a penalized one.
+language_dependent = true
+# No materials -- Suggestion is verbal/somatic only, no material component in the source rule.
+# No on_fail -- a resisted suggestion is just a failed roll, no separate consequence to author.
+# "text" is deliberately omitted here -- Program_Interpreter.py's own inject_directive op falls
+# back to ctx's own "input" (the caster's raw turn text) when absent, so the actual suggested
+# course of action is always whatever the player actually typed, never a fixed scripted line.
+on_pass = { do = "inject_directive", entity = "target" }
+
+[[entity]]
 name = "summon spectral wolf"
 supertype = "spell"
 subtype = "conjuration"

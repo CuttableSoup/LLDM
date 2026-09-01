@@ -2097,6 +2097,131 @@ class TestAbilityOutcomeProgram(DMTestCase):
 
             self.assertNotIn(condition_name, self.dm_core.entities["target_dummy"].get("active_conditions", {}))
 
+    # --- inject_directive / suggestion --------------------------------------------------
+
+    def test_suggestion_on_pass_plants_the_raw_turn_text_as_a_directive(self):
+        # spells.toml's own "suggestion" omits a literal "text" on purpose -- see its own
+        # comment -- so the op falls back to ctx["input"], threaded in here as input_text.
+        suggestion = self.dm_core.entities["suggestion"]
+        result = RolledOutcome(entity="gladstone", skill="arcane", roll=15, difficulty=5, success=True)
+
+        self.dm_core._run_ability_outcome_program(
+            result, "arcane", None, suggestion, "target_dummy", via_test=False,
+            input_text="tell him to open the gate",
+        )
+
+        self.assertEqual(
+            self.dm_core.entities["target_dummy"]["prompt_directive"],
+            {"text": "tell him to open the gate", "source": "gladstone"},
+        )
+
+    def test_suggestion_on_a_failed_roll_plants_nothing(self):
+        suggestion = self.dm_core.entities["suggestion"]
+        result = RolledOutcome(entity="gladstone", skill="arcane", roll=1, difficulty=15, success=False)
+
+        self.dm_core._run_ability_outcome_program(
+            result, "arcane", None, suggestion, "target_dummy", via_test=False,
+            input_text="tell him to open the gate",
+        )
+
+        self.assertNotIn("prompt_directive", self.dm_core.entities["target_dummy"])
+
+    def test_inject_directive_with_no_input_text_and_no_literal_text_is_a_no_op(self):
+        suggestion = self.dm_core.entities["suggestion"]
+        result = RolledOutcome(entity="gladstone", skill="arcane", roll=15, difficulty=5, success=True)
+
+        self.dm_core._run_ability_outcome_program(result, "arcane", None, suggestion, "target_dummy", via_test=False)
+
+        self.assertNotIn("prompt_directive", self.dm_core.entities["target_dummy"])
+
+    def test_inject_directive_literal_text_wins_over_ctx_input(self):
+        scripted = {
+            "skill": "arcane", "on_pass": {"do": "inject_directive", "entity": "target", "text": "a scripted directive"},
+        }
+        result = RolledOutcome(entity="gladstone", skill="arcane", roll=15, difficulty=5, success=True)
+
+        self.dm_core._run_ability_outcome_program(
+            result, "arcane", None, scripted, "target_dummy", via_test=False, input_text="whatever the player typed",
+        )
+
+        self.assertEqual(
+            self.dm_core.entities["target_dummy"]["prompt_directive"],
+            {"text": "a scripted directive", "source": "gladstone"},
+        )
+
+    def test_inject_directive_no_ops_against_an_inanimate_object(self):
+        self.dm_core.entities["crate"] = {"name": "crate", "max_hp": 10, "hp": 10, "supertype": "object"}
+        suggestion = self.dm_core.entities["suggestion"]
+        result = RolledOutcome(entity="gladstone", skill="arcane", roll=15, difficulty=5, success=True)
+
+        self.dm_core._run_ability_outcome_program(
+            result, "arcane", None, suggestion, "crate", via_test=False, input_text="open yourself",
+        )
+
+        self.assertNotIn("prompt_directive", self.dm_core.entities["crate"])
+
+    def test_inject_directive_no_ops_against_a_dead_entity(self):
+        self.dm_core.entities["target_dummy"]["hp"] = 0
+        suggestion = self.dm_core.entities["suggestion"]
+        result = RolledOutcome(entity="gladstone", skill="arcane", roll=15, difficulty=5, success=True)
+
+        self.dm_core._run_ability_outcome_program(
+            result, "arcane", None, suggestion, "target_dummy", via_test=False, input_text="get up",
+        )
+
+        self.assertNotIn("prompt_directive", self.dm_core.entities["target_dummy"])
+
+
+class TestPromptDirective(DMTestCase):
+    """!
+    @brief DM_Social.py's describe_character surfacing a planted prompt_directive (see
+        Social_Resolution.py's set_prompt_directive and TestAbilityOutcomeProgram's own
+        inject_directive tests for how one actually gets planted) into narration prompts, plus
+        its save/load round-trip (DM_Persistence.py).
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.dm_core.entities["target_dummy"] = {
+            "name": "target_dummy", "max_hp": 20, "hp": 20, "description": "A plain townsperson.",
+        }
+
+    def test_describe_character_appends_the_directive_when_present(self):
+        self.dm_core.entities["target_dummy"]["prompt_directive"] = {
+            "text": "open the gate", "source": "gladstone",
+        }
+        description = self.dm_core.describe_character("target_dummy")
+        self.assertIn("Currently privately convinced (planted by gladstone): \"open the gate\"", description)
+
+    def test_describe_character_omits_anything_when_no_directive_is_planted(self):
+        description = self.dm_core.describe_character("target_dummy")
+        self.assertNotIn("Currently privately convinced", description)
+
+    def test_describe_character_falls_back_to_someone_when_source_is_unknown(self):
+        self.dm_core.entities["target_dummy"]["prompt_directive"] = {"text": "flee", "source": None}
+        description = self.dm_core.describe_character("target_dummy")
+        self.assertIn("planted by someone", description)
+
+    def test_prompt_directive_round_trips_through_save_and_load(self):
+        # A real, scenario-instanced entity, not the synthetic target_dummy above -- save_game's
+        # own _all_known_instance_names walks location_runtime's own persistent_names, so an
+        # entity added straight to self.entities with no location ever instancing it (like
+        # target_dummy here) wouldn't actually be in the save file at all.
+        slot_name = "test_prompt_directive_slot"
+        self.addCleanup(shutil.rmtree, self.dm_core._save_slot_dir(slot_name), ignore_errors=True)
+        player_name = self.dm_core.player_name
+        self.dm_core.entities[player_name]["prompt_directive"] = {
+            "text": "open the gate", "source": "an unseen voice",
+        }
+
+        self.dm_core.save_game(slot_name)
+        self.dm_core.load_game(slot_name)
+
+        self.assertEqual(
+            self.dm_core.entities[player_name]["prompt_directive"],
+            {"text": "open the gate", "source": "an unseen voice"},
+        )
+
 
 class TestMorePathfinderManeuvers(DMTestCase):
     """!
@@ -5509,7 +5634,7 @@ class TestSaveLoad(DMTestCase):
             set(gladstone_state.keys()),
             {
                 "hp", "active_conditions", "currency", "inventory", "equipped", "band",
-                "attitude_deltas", "action_attitude_deltas", "current_language",
+                "attitude_deltas", "action_attitude_deltas", "current_language", "prompt_directive",
             },
         )
 

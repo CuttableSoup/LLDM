@@ -23,6 +23,26 @@ phrase per axis.
 `describe_character(entity_name, toward_name=None)` builds a flavor-text roster line from purely
 descriptive TOML fields (`description`, `qualities`, `memories`, `quotes`) plus, when
 `toward_name` is given, the attitude sentence above — deliberately excluding mechanical data.
+The one genuinely dynamic exception: if the entity's own `prompt_directive` (a plain
+`{"text", "source"}` dict) is set, its text is appended too — "Currently privately convinced
+(planted by ...): '...'". This is the general "inject material into an NPC's prompt" mechanism:
+`resolution/Social_Resolution.py`'s `set_prompt_directive(entities, entity_name, text,
+source_name)` writes it, plugged into the `on_pass`/`on_fail` program language (see
+"Action resolution") as a new `inject_directive` op
+(`resolution/Program_Interpreter.py`) — `spells.toml`'s `suggestion` is the shipped example,
+whose own `on_pass = { do = "inject_directive", entity = "target" }` omits a literal `text` so
+the op falls back to `ctx["input"]`, the caster's own raw turn text (threaded in by
+`DM_Core.py`'s `_run_ability_outcome_program` specifically for this — the `[entity.test]`
+attachment point is *not* threaded the same way, since an item/lock has no NPC prompt to affect).
+Because `describe_character` already backs every NPC-facing prompt except live combat/behavior-
+turn narration (the `scenario_loaded` roster, `DefenderDetailsEffect` on every resolved roll,
+and free-form dialogue's own `persona` field, `DM_Dialogue.py`'s `_resolve_dialogue`), a planted
+directive reaches the very turn it lands *and* every later dialogue turn with that NPC, for free.
+One directive at a time (a later plant overwrites, never stacks); no expiry — there's no
+time-of-day/turn clock yet to hang a duration off of (see "Downtime"), so it persists until
+overwritten or manually cleared (ADaM's own ad hoc entity-edit path already can, incidentally).
+Round-trips through save/load the same unconditional per-instance way `current_language` already
+does (`DM_Persistence.py`).
 `DMCore.__init__` builds this roster into the `scenario_loaded` payload; `_on_turn_detected` also
 appends a fresh `DefenderDetailsEffect` to each `RolledOutcome`'s own `effects`.
 

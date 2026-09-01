@@ -300,7 +300,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             engaged_combat_target = True
 
             result, ability, via_test = self._resolve_roll(skill_name, named_ability, target_name, dice_penalty)
-            self._finish_rolled_outcome(result, skill_name, named_ability, ability, target_name, via_test)
+            self._finish_rolled_outcome(result, skill_name, named_ability, ability, target_name, via_test, input_text)
             player_actions.append(result)
 
         if not player_actions:
@@ -631,7 +631,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             result = rolled_outcome_from_roll(roll)
         return result, ability, via_test
 
-    def _finish_rolled_outcome(self, result, skill_name, named_ability, ability, target_name, via_test):
+    def _finish_rolled_outcome(self, result, skill_name, named_ability, ability, target_name, via_test, input_text=None):
         """!
         @brief The single post-roll step for the player's own action: everything that might
             apply once a roll has actually happened, in one call instead of the four separately
@@ -652,16 +652,20 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         @param ability The attack ability from _resolve_roll, if already resolved there.
         @param target_name self.current_target, or None.
         @param via_test True if the roll was a flat [entity.test] check.
+        @param input_text The player's raw turn text, forwarded only to _run_ability_outcome_program
+            (see its own docstring for why) -- optional, defaulting to None so every existing
+            direct caller (ex: test_unit.py's own ability-outcome-program tests) keeps working
+            unchanged.
         """
         if not isinstance(result, RolledOutcome):
             return
         self._consume_spell_materials_if_rolled(result, named_ability)
         self._apply_damage_if_hit(result, skill_name, named_ability, ability, target_name, via_test)
         self._apply_summon_if_hit(result, named_ability)
-        self._run_ability_outcome_program(result, skill_name, named_ability, ability, target_name, via_test)
+        self._run_ability_outcome_program(result, skill_name, named_ability, ability, target_name, via_test, input_text)
         self._attach_defender_details(result, target_name)
 
-    def _run_ability_outcome_program(self, result, skill_name, named_ability, ability, target_name, via_test):
+    def _run_ability_outcome_program(self, result, skill_name, named_ability, ability, target_name, via_test, input_text=None):
         """!
         @brief Runs the resolved ability's own on_pass/on_fail program (see
             docs/design/skill_effect_language.md's "Universal (untrained) abilities" and
@@ -680,6 +684,12 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             like _apply_damage_if_hit's own fallback does.
         @param target_name self.current_target, or None.
         @param via_test True if the roll was a flat [entity.test] check.
+        @param input_text The player's raw turn text, threaded into the program's own ctx as
+            "input" -- read by ops that want the actual free-text content of this turn rather
+            than a fixed, scripted value (ex: spells.toml's "suggestion", whose own on_pass omits
+            a literal "text" specifically so Program_Interpreter.py's "inject_directive" op falls
+            back to this). Optional, defaulting to None -- a program that never references
+            ctx["input"] is entirely unaffected either way.
         """
         if via_test:
             return
@@ -690,7 +700,10 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         program = ability.get("on_pass" if result.success else "on_fail")
         if not program:
             return
-        run_program(program, {"actor": self.player_name, "target": target_name}, self.entities, self.rules, self.event_bus)
+        run_program(
+            program, {"actor": self.player_name, "target": target_name, "input": input_text},
+            self.entities, self.rules, self.event_bus,
+        )
 
     def _run_test_outcome_program(self, test, success, entity_name):
         """!
