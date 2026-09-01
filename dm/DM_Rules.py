@@ -192,8 +192,6 @@ class RulesMixin(DMCoreProtocol):
             ability_name for skill in self.skills.values() for ability_name in skill.get("abilities", [])
         }
 
-        self._validate_equipped_slots()
-
     def get_equip_slots(self, entity_name):
         """!
         @brief Resolves the valid [entity.equipped] slot names for entity_name, from
@@ -224,12 +222,14 @@ class RulesMixin(DMCoreProtocol):
         """!
         @brief Cross-checks every loaded entity's own [entity.equipped] slot keys against
             get_equip_slots for its supertype/subtype, logging an error for any slot name
-            not on that list (ex: a "tail" slot on a humanoid). Called once load_rules has
-            finished reading every *.toml file, since an entity template (characters.toml)
-            and rules.toml's own [[equip_slot]] table can load in either order within the
-            same directory scan. Doesn't block loading -- same "malformed data degrades
-            quietly" convention as load_rules' own per-file try/except -- just surfaces the
-            mismatch instead of DM_Combat.py silently reading a slot key nothing declared.
+            not on that list (ex: a "tail" slot on a humanoid). Called from
+            DM_Validation.py's validate_loaded_data, after load_scenario_definition -- not
+            from load_rules itself, since a scenario-local entity (declared in a scenario file,
+            not one of the shared Rules/<setting>/*.toml catalogs) isn't loaded until after
+            load_rules finishes, and needs this same check too. Doesn't block loading -- same
+            "malformed data degrades quietly" convention as load_rules' own per-file try/except
+            -- just surfaces the mismatch instead of DM_Combat.py silently reading a slot key
+            nothing declared.
         """
         for name, entity in self.entities.items():
             equipped = entity.get("equipped")

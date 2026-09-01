@@ -5237,6 +5237,143 @@ class TestEquipSlots(DMTestCase):
         self.assertEqual(self.dm_core.get_equip_slots("gladstone"), ["rhand", "chest"])
 
 
+class TestValidation(DMTestCase):
+    """DM_Validation.py's referential-integrity checks. Each synthetic-data test injects a
+    minimal bad entity/entity_template/location directly into self.dm_core's own dicts (rather
+    than authoring a throwaway TOML file) and re-runs validate_loaded_data() -- since the real
+    arena fixture is already proven clean below, any error captured after that must come from
+    the injected data."""
+
+    def test_real_shipped_data_boots_with_zero_validation_errors(self):
+        # Every real scenario this repo ships, in both settings -- a regression guard that a
+        # future data edit doesn't quietly introduce a dangling reference, and proof the
+        # validator is genuinely setting-agnostic (no Fantasy-specific assumption anywhere in
+        # DM_Validation.py).
+        for setting in ("Fantasy", "Zombie"):
+            for scenario_key, _name, _description in list_available_scenarios(setting):
+                errors = []
+                bus = EventBus()
+                bus.subscribe("log_error", errors.append)
+                DMCore(bus, scenario_name=scenario_key, setting=setting)
+                self.assertEqual(errors, [], f"{setting}/{scenario_key} produced validation errors: {errors}")
+
+    def test_skill_reference_checks(self):
+        self.dm_core.entities["bad_skills_widget"] = {
+            "name": "bad_skills_widget", "supertype": "object", "skill": "nonexistent_skill",
+            "abilities": [{"name": "zap", "skill": ["blades", "nonexistent_ability_skill"]}],
+            "test": {"skill": ["nonexistent_test_skill"]},
+            "craft": {"skill": ["nonexistent_craft_skill"]},
+            "notice": {"skill": "nonexistent_notice_skill"},
+        }
+        errors = self._capture("log_error")
+        self.dm_core.validate_loaded_data()
+
+        for expected in (
+            "nonexistent_skill", "nonexistent_ability_skill", "nonexistent_test_skill",
+            "nonexistent_craft_skill", "nonexistent_notice_skill",
+        ):
+            self.assertTrue(any(expected in e for e in errors), f"missing error for {expected}")
+        # "blades" is a real skill -- not flagged alongside its bogus list-mate.
+        self.assertFalse(any("'blades'" in e for e in errors))
+
+    def test_behavior_action_reference(self):
+        self.dm_core.entities["bad_behavior_widget"] = {
+            "name": "bad_behavior_widget", "supertype": "creature",
+            "abilities": [{"name": "real move", "skill": "brawling"}],
+            "behavior": [
+                {"requirements": [], "action": "nonexistent_move"},
+                {"requirements": [], "action": "real move"},
+                {"requirements": [], "action": "advance"},
+                {"requirements": [], "action": "retreat"},
+            ],
+        }
+        errors = self._capture("log_error")
+        self.dm_core.validate_loaded_data()
+
+        self.assertTrue(any("nonexistent_move" in e for e in errors))
+        # A real owned ability, and the two reserved movement words, are never flagged.
+        self.assertFalse(any("real move" in e for e in errors))
+        self.assertFalse(any("advance" in e for e in errors))
+        self.assertFalse(any("retreat" in e for e in errors))
+
+    def test_entity_name_reference_checks(self):
+        self.dm_core.entities["bad_refs_widget"] = {
+            "name": "bad_refs_widget", "supertype": "object",
+            "inventory": ["nonexistent_item"],
+            "equipped": {"rhand": "nonexistent_weapon"},
+            "replace_with": "nonexistent_husk",
+            "damage_value": {"dice": 1, "pips": 0, "bonus": "user.nonexistent_rule"},
+            "abilities": [{
+                "name": "bad ability", "skill": "arcane",
+                "summon": {"name": "nonexistent_summon"},
+                "materials": [{"item": "nonexistent_material", "quantity": 1}],
+            }],
+            "craft": {"skill": ["strength"], "materials": [{"item": "nonexistent_craft_material", "quantity": 1}]},
+        }
+        errors = self._capture("log_error")
+        self.dm_core.validate_loaded_data()
+
+        for expected in (
+            "nonexistent_item", "nonexistent_weapon", "nonexistent_husk", "nonexistent_rule",
+            "nonexistent_summon", "nonexistent_material", "nonexistent_craft_material",
+        ):
+            self.assertTrue(any(expected in e for e in errors), f"missing error for {expected}")
+
+    def test_summon_template_reference(self):
+        self.dm_core.entities["bad_summon_template_widget"] = {
+            "name": "bad_summon_template_widget", "supertype": "object",
+            "abilities": [{"name": "conjure", "skill": "arcane", "summon": {"template": "nonexistent_template"}}],
+        }
+        errors = self._capture("log_error")
+        self.dm_core.validate_loaded_data()
+        self.assertTrue(any("nonexistent_template" in e for e in errors))
+
+    def test_entity_template_forbidden_fields(self):
+        self.dm_core.entity_templates["bad_shape_template"] = {
+            "name": "bad_shape_template", "supertype": "creature",
+            "skills": {"blades": {"dice": 2, "pips": 0}}, "max_hp": 10,
+        }
+        errors = self._capture("log_error")
+        self.dm_core.validate_loaded_data()
+
+        self.assertTrue(any("'skills'" in e for e in errors))
+        self.assertTrue(any("'max_hp'" in e for e in errors))
+        # "name" is required on a template (self.entity_templates is indexed by it) -- never
+        # itself flagged as a forbidden field.
+        self.assertFalse(any("'name'" in e for e in errors))
+
+    def test_location_reference_checks(self):
+        self.dm_core.locations["bad_location"] = {
+            "key": "bad_location", "start_room": "nonexistent_start_room", "return_to": "nonexistent_location",
+            "entities": [{"name": "nonexistent_persistent_entity"}],
+            "exit": [{"destination": "nonexistent_destination"}, {"destination": "arena_grounds", "arrival_room": "nonexistent_arrival_room"}],
+            "rooms": {
+                "real_room": {
+                    "key": "real_room", "bands": 2,
+                    "entities": [{"template": "nonexistent_room_template"}],
+                    "exit": [{"destination": "nonexistent_sibling_room"}],
+                },
+            },
+        }
+        errors = self._capture("log_error")
+        self.dm_core.validate_loaded_data()
+
+        for expected in (
+            "nonexistent_start_room", "nonexistent_location", "nonexistent_persistent_entity",
+            "nonexistent_destination", "nonexistent_arrival_room", "nonexistent_room_template",
+            "nonexistent_sibling_room",
+        ):
+            self.assertTrue(any(expected in e for e in errors), f"missing error for {expected}")
+
+    def test_player_placeholder_in_entities_list_is_not_flagged(self):
+        self.dm_core.locations["placeholder_location"] = {
+            "key": "placeholder_location", "entities": [{"name": "player"}],
+        }
+        errors = self._capture("log_error")
+        self.dm_core.validate_loaded_data()
+        self.assertEqual(errors, [])
+
+
 class TestSaveLoad(DMTestCase):
     def setUp(self):
         super().setUp()

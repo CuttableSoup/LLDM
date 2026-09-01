@@ -15,9 +15,15 @@
 # the same meaning; copy what you need from entity_schema.toml directly. Generation never
 # touches any of it -- abilities/equipped/inventory are still decided entirely by whoever
 # authors the entity_template, same as any hand-authored entity, not generated. The one real
-# exception: [entity.skills]/max_hp/name are never authored here at all -- NPC_Generation.py
-# fills those in at instancing time, fit to a target challenge rating (Challenge_Rating.py),
-# so an entity_template simply omits them rather than declaring a placeholder value.
+# exception: [entity.skills]/max_hp are never authored here at all -- NPC_Generation.py fills
+# those in at instancing time, fit to a target challenge rating (Challenge_Rating.py), so an
+# entity_template simply omits them rather than declaring a placeholder value. "name" looks
+# like it belongs in that same pair but doesn't: every entity_template still needs one, same as
+# a real [[entity]] does (load_rules indexes self.entity_templates by it, exactly like
+# self.entities) -- what generation actually overwrites is the *live instance's* own "name" (a
+# fresh deep copy under a disambiguated self.entities key), never the template's own, so the
+# template's "name" stays required, just never meaningfully load-bearing once an instance
+# exists.
 
 [[entity_template]]
 

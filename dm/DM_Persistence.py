@@ -418,6 +418,7 @@ class PersistenceMixin(DMCoreProtocol):
         self.removed_entities = set(data.get("removed_entities", []))
         self.load_rules(os.path.join("Rules", self.setting))
         self.load_scenario_definition(self.scenario_key)
+        self.validate_loaded_data()
 
         saved_instancing_order = data.get("entity_instancing_order")
         if saved_instancing_order:

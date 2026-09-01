@@ -37,6 +37,7 @@
 name = "human"
 description = "Adaptable and unremarkable -- no innate skill strengths or weaknesses."
 language = "common"
+nonsense_phrase = "Oping tu stei laik cius go mo men"
 
 [race.skill_dice]
 acrobatics = 2

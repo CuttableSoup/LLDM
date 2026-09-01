@@ -20,6 +20,7 @@ from dm.DM_Rules import RulesMixin, scenario_file_path
 from dm.DM_Social import SocialMixin
 from dm.DM_Status import StatusMixin
 from dm.DM_Summoning import SummoningMixin
+from dm.DM_Validation import ValidationMixin
 from resolution.Program_Interpreter import run_program
 
 # Multi-instance combat targeting (see DMCore._resolve_named_instance_ambiguity): NLPCore's own
@@ -41,7 +42,7 @@ TARGET_HEALTHY_KEYWORDS = ("healthy", "unhurt", "uninjured", "unharmed")
 # "wounded" shouldn't silently redirect to whichever one merely has the least HP among equals.
 TARGET_WOUNDED_HP_CUTOFF = 0.40
 
-class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixin, RulesMixin, PersistenceMixin, CharacterCreationMixin, NpcGenerationMixin, DialogueMixin, HelpMixin, ImprovisationMixin, EncounterMixin, SummoningMixin, CraftingMixin):
+class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixin, RulesMixin, PersistenceMixin, CharacterCreationMixin, NpcGenerationMixin, DialogueMixin, HelpMixin, ImprovisationMixin, EncounterMixin, SummoningMixin, CraftingMixin, ValidationMixin):
     """!
     @brief Main class handling the core mechanics of the RPG system. The implementation is
         composed from domain mixins in sibling files -- DM_Rules.py (rules/scenario
@@ -60,9 +61,11 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         DM_Improvisation.py (ad hoc entity creation/removal via LLM function calling, see
         its own module docstring and AdHoc_Generation.py), DM_Encounters.py (resolving a
         location/room's own [[location.encounter]] weighted-choice table on entry -- see its
-        own module docstring), and DM_Summoning.py (a spell/ability's own "summon" field --
+        own module docstring), DM_Summoning.py (a spell/ability's own "summon" field --
         conjuring a real, hand-authored entity as a temporary ally, and expiring it after its
-        own duration in combat rounds -- see its own module docstring) -- so that every
+        own duration in combat rounds -- see its own module docstring), and DM_Validation.py
+        (load-time referential-integrity checks over everything load_rules/
+        load_scenario_definition just loaded -- see its own module docstring) -- so that every
         dm_core.<method>(...) call site throughout the codebase and
         test_all.py keeps working unchanged regardless of which file actually defines a given
         method (Python's MRO flattens every mixin method onto this one class). DM_Core.py
@@ -150,6 +153,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         self.player_name = self._resolve_player_name()
         self.apply_character_creation(character)
         self.load_scenario_definition(scenario_name)
+        self.validate_loaded_data()
         self.load_scenario()
         self.event_bus.publish("log_info", "DMCore initialized.")
         self.event_bus.publish("rules_loaded", {

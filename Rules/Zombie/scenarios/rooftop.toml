@@ -1,16 +1,34 @@
 # A bare-bones single-room scenario, same shape as Rules/Fantasy/scenarios/arena.toml -- one
-# flat combat encounter, no room graph. enclosed = true: there's nowhere left to retreat to
-# but the ledge, same reasoning arena.toml's own walled combat ring uses (see
-# DM_Movement.py's "Movement and range").
+# flat combat encounter, no room graph beyond the one room. enclosed = true: there's nowhere
+# left to retreat to but the ledge, same reasoning arena.toml's own walled combat ring uses
+# (see DM_Movement.py's "Movement and range").
 
 [scenario]
+name = "The Rooftop"
+description = "A gravel rooftop, six stories up, the fire escape kicked away behind you. Downtown burns orange on the skyline. The door back inside is barricaded -- for now."
+start_location = "rooftop"
+
+# A single location wrapping one [[location.room]] -- see CLAUDE.md's "Scenarios and rooms" for
+# the [[location]] shape. Whoever persists across the whole location -- the player and marcus
+# (a party member, see characters.toml's own is_party) -- never the room's own local hostiles
+# (see DM_Rules.py's _populate_room: a room's own "entities" never repeats them).
+[[location]]
+key = "rooftop"
+name = "The Rooftop"
+description = "A gravel rooftop, six stories up, the fire escape kicked away behind you. Downtown burns orange on the skyline. The door back inside is barricaded -- for now."
+start_room = "roof"
+entities = [
+    { name = "player", band = 1 },
+    { name = "marcus", band = 1 },
+]
+
+[[location.room]]
+key = "roof"
 name = "The Rooftop"
 description = "A gravel rooftop, six stories up, the fire escape kicked away behind you. Downtown burns orange on the skyline. The door back inside is barricaded -- for now."
 bands = 5
 enclosed = true
 entities = [
-    { name = "player", band = 1 },
-    { name = "marcus", band = 1 },
     { name = "common infected", band = 4 },
     { name = "common infected", band = 4 },
     { name = "common infected", band = 5 },

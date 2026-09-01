@@ -144,23 +144,6 @@ something real to react to); "generate a quest" can't be meaningfully scoped bef
 even is as data" — tracking state, completion conditions, rewards — is designed as its own
 prerequisite topic, independent of hand-authored vs. generated. Not attempted here.
 
-**The TOML rule set itself needs standardizing — not yet started, no design decided.** Every
-mechanism proposed across this file's own design passes adds more to a schema that's
-documentation-only today, never enforced: `environments.toml`/`world_map.toml` and their new
-`rules.toml` tables ("Downtime"), a new `"language"` tag on abilities, a new reserved `"generate"`
-outcome kind in encounter tables, and three new offline authoring tools that each produce raw TOML
-content for a human to review. `Rules/Fantasy/reference/entity_schema.toml`/`template_schema.toml`/
-`location_schema.toml` catalog fields for a human to read, but `load_rules` never validates a file
-against them (see "Data/TOML conventions"), and a malformed file fails quietly — loading with less
-data than expected rather than erroring, deliberately, for engine resilience against one bad file.
-That silence is exactly what makes an offline-generated draft hard to trust on review alone: a
-field silently dropped at load time looks identical to one that was never wrong. What
-"standardized" concretely means — a load-time validator against the reference schemas, a separate
-dev-tool/test pass over `Rules/`, something else; how strict; whether every setting shares one
-validator despite deliberately not sharing any data (see the top-level `CLAUDE.md`'s own
-"nothing is shared or inherited between settings") — isn't decided. Flagged here as a real,
-load-bearing gap this session's own designs kept running into, not a specific proposal.
-
 **ADaM acting proactively, not just when addressed by name.** Today ADaM only reacts to an
 explicit "adam ..." turn. Since ADaM already *is* the closest thing this game has to a "dungeon
 master" persona — a prior version of this goal imagined a separate DM voice distinct from both
