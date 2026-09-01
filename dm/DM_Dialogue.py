@@ -116,17 +116,72 @@ class DialogueMixin(DMCoreProtocol):
             "attitude": self.describe_attitude(target_name, self.player_name),
         }
 
+    def _current_language(self):
+        """!
+        @brief The player's own currently-spoken language -- a persistent, single-language
+            choice rather than "all known languages at once" (see _detect_language_barrier's
+            own docstring for the gap this closes). Absent entity field defaults to the first
+            entry of the player's own "languages" list (chargen's own ordering: "common" first,
+            the chosen race's language appended after -- DM_CharacterCreation.py's
+            apply_character_creation), computed fresh every call rather than eagerly written at
+            chargen -- same "absent means the quiet default applies" convention every other
+            optional entity field already follows (ex: armor_tags).
+        @return The player's currently-active language name.
+        """
+        player = self.entities.get(self.player_name, {})
+        return player.get("current_language") or (player.get("languages") or ["common"])[0]
+
+    def _shares_language_with(self, target_name):
+        """!
+        @brief Whether the player's own _current_language is understood by target_name --
+            a plain bool wrapper around _detect_language_barrier for callers (ex: DM_Combat.py's
+            _ability_requires_language gate) that only need a yes/no, not the narration-facing
+            target_language/nonsense_phrase pair.
+        @param target_name The entity being checked against.
+        @return True if target_name understands the player's currently-spoken language.
+        """
+        return self._detect_language_barrier(target_name)[0] is None
+
+    def _resolve_language_intent(self, input_text, resolved):
+        """!
+        @brief Handles "speak_language" -- switching which of the player's own known languages
+            is currently active (see _current_language), the same "search the raw input for a
+            known name" pattern _resolve_formation_intent already uses for a party member's own
+            name, here searched against the player's own "languages" list instead. A player
+            naming a language they don't actually know (or naming nothing recognizable at all)
+            is declined outright rather than guessed at -- there's nothing sensible to switch to.
+        @param input_text The raw (lowercased, prefix-stripped) player input.
+        @param resolved The item_interaction_resolved publisher closure from
+            DMCore._on_item_interaction_detected.
+        """
+        known = self.entities.get(self.player_name, {}).get("languages") or ["common"]
+        named = [
+            language for language in known
+            if re.search(rf"\b{re.escape(language.lower())}\b", input_text or "")
+        ]
+        if not named:
+            resolved(False, reason="unknown_language")
+            return
+
+        self.entities[self.player_name]["current_language"] = named[0]
+        resolved(True, language=named[0])
+
     def _detect_language_barrier(self, target_name):
         """!
-        @brief Whether the player and target_name share no language at all -- both entities'
-            own "languages" list (an entity field, entity_schema.toml; absent entirely defaults
-            to ["common"], same as every entity shipped today, so this never fires against
-            existing data unless an author deliberately narrows an entity's own list, or the
-            player picks a race whose language that entity doesn't know either -- see
-            races.toml's own "language" field and DM_CharacterCreation.py's
-            apply_character_creation for how a chosen race's language lands on the player).
+        @brief Whether the player's own _current_language (a single, persistent choice -- not
+            "every language the player knows at once") is understood by target_name at all.
+            Compares against target_name's own full "languages" list (an entity field,
+            entity_schema.toml; absent entirely defaults to ["common"], same as every entity
+            shipped today, so this never fires against existing data unless an author
+            deliberately narrows an entity's own list, or the player's currently-active language
+            isn't one that entity knows either -- see races.toml's own "language" field and
+            DM_CharacterCreation.py's apply_character_creation for how a chosen race's language
+            lands on the player). Deliberately asymmetric: only the player's side is ever
+            narrowed to one active tongue -- a target's own multiple known languages all still
+            count toward whether *it* understands the player, since there's no equivalent
+            "which one is it currently speaking" ambiguity on that side.
         @param target_name The addressed entity, already confirmed present/alive/animate.
-        @return (None, None) if at least one language is shared. Otherwise
+        @return (None, None) if the player's current language is shared. Otherwise
                 (target_language, nonsense_phrase): target_language is the first of target's
                 own unshared languages (what a narration prompt names as "the language it
                 spoke"), nonsense_phrase is whichever race in races.toml claims that language
@@ -135,10 +190,10 @@ class DialogueMixin(DMCoreProtocol):
                 language-barrier prompt still works without one, just with no style example to
                 draw from.
         """
-        player_languages = set(self.entities.get(self.player_name, {}).get("languages") or ["common"])
+        current_language = self._current_language()
         target_languages = self.entities.get(target_name, {}).get("languages") or ["common"]
 
-        if player_languages.intersection(target_languages):
+        if current_language in target_languages:
             return None, None
 
         target_language = target_languages[0]

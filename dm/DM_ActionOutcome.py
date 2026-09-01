@@ -14,6 +14,11 @@
     craft, reveal) is a new Effect subtype the narrator's own formatter registry dispatches
     on, not a new field every existing ActionOutcome instance carries unused.
 
+    LanguageBarrierOutcome is OutOfRangeOutcome's own shape reused for a different pre-roll
+    gate -- a language_dependent ability/skill (DM_Combat.py's _ability_requires_language)
+    against a target the player's own current_language isn't shared with, same "can't do it,
+    don't roll" precedent (see DM_Core.py's _resolve_roll).
+
     Deliberately data-only -- no formatting logic lives here. LLM_Core.py's own
     _describe_outcome owns turning one of these into narration text (see CONTEXT.md's
     "ActionOutcome"/"Effect" entries for the vocabulary, kept independent of this module's
@@ -97,6 +102,16 @@ class OutOfRangeOutcome:
 
 
 @dataclass
+class LanguageBarrierOutcome:
+    """!@brief A language_dependent ability/skill needs a shared language and the player's own
+        current_language isn't one target_name knows -- no roll."""
+    entity: str
+    skill: str | None
+    defender: str | None
+    input: str | None = None
+
+
+@dataclass
 class MissingSpellMaterialsOutcome:
     """!@brief A named ability's own "materials" weren't fully present -- no roll."""
     entity: str
@@ -171,6 +186,7 @@ def rolled_outcome_from_roll(roll, effects=None, input_text=None):
 ActionOutcome = (
     RolledOutcome
     | OutOfRangeOutcome
+    | LanguageBarrierOutcome
     | MissingSpellMaterialsOutcome
     | NotCraftableOutcome
     | MissingStationOutcome

@@ -165,9 +165,16 @@ just generated/ad-hoc ones.
 
 **Language barriers.** Every entity's own `languages` list (an entity field,
 `entity_schema.toml`, absent entirely defaulting to `["common"]` — same as every entity shipped
-today) is what a `_resolve_dialogue` addressee actually understands. `DM_Dialogue.py`'s
-`_detect_language_barrier(target_name)` compares `set(player_languages)` against
-`target_name`'s own list; any overlap at all resolves as ordinary dialogue. No overlap resolves
+today) is what it understands. The player's own side of the comparison, though, is a single
+persistent choice, not the full list: `DM_Dialogue.py`'s `_current_language()` returns
+`current_language` (a runtime-only player-entity field, absent until the player deliberately
+switches) or, absent that, the first entry of the player's own `languages` — chargen's own
+ordering (`"common"` first, the chosen race's language appended after). This is deliberate: a
+community plausibly converges on one shared tongue, and re-deciding which language is in use on
+every single exchange would be tedious for no narrative payoff, so a bilingual player isn't
+treated as speaking every known language at once just because they know more than one.
+`_detect_language_barrier(target_name)` compares that one active language against
+`target_name`'s own full list; a match resolves as ordinary dialogue. No match resolves
 `{"found": True, "language_barrier": True, "target_language", "nonsense_phrase"}` instead of the
 ordinary persona/attitude reply — the target is still present and willing to react, just unable
 to understand the words, so `nudge_attitude` is deliberately skipped (a sentiment classifier
@@ -178,7 +185,24 @@ scenario-authored language with no matching race entry). `LLMCore.generate_npc_d
 branches on `language_barrier` to `_build_language_barrier_prompt`, instructing the model to
 reply only with invented gibberish styled after `nonsense_phrase` (explicitly told not to reuse
 it verbatim) rather than answering what was actually asked — persona/attitude still ground *tone*
-(a hostile speaker's gibberish should still read as hostile), just never the content.
+(a hostile speaker's gibberish should still read as hostile), just never the content. Only the
+player's own side is ever narrowed to one active tongue this way — a target's own multiple known
+languages all still count toward whether *it* understands the player, since there's no equivalent
+"which one is it currently speaking" ambiguity on that side.
+
+Which language is currently active is switched via a new free-standing intent, `speak_language`
+(`nlp/Intent_Classification.py`'s `SPEAK_LANGUAGE_KEYWORDS`: "speak in ", "switch to speaking ",
+"start speaking " — phrases, not a bare "speak ", to avoid colliding with the `linguistics`
+skill's own "speak" keyword, same reasoning `DIALOGUE_KEYWORDS`' own "speak to "/"speak with "
+already follow). Recognized and resolved the same way party formation is: `EXEMPT_ITEM_INTENTS`
+publishes it free-standing (no turn cost, the same "speech is free" treatment dialogue itself
+gets), and `DM_Dialogue.py`'s `_resolve_language_intent` — not NLPCore — figures out *which*
+language is named, by searching the raw input for one of the player's own known `languages` (the
+same "search input for a known name" pattern `_resolve_formation_intent` already uses for a
+party member's own name). Naming a language the player doesn't actually know (or naming nothing
+recognizable at all) is declined outright (`reason: "unknown_language"`), never guessed at.
+`current_language` round-trips through save/load the same unconditional per-instance way
+`attitude_deltas` already does (`DM_Persistence.py`).
 
 Each race in `races.toml` authors its own `language` (`human` → `"common"`, `elf` → `"elvish"`,
 `dwarf` → `"dwarvish"`, `half-orc` → `"orcish"`, `halfling` → `"halfling"`) plus a
@@ -189,7 +213,26 @@ onto the player template's existing `languages` list (deduped) alongside the poi
 override, so an elf player knows `["common", "elvish"]` while a human re-adding `"common"` is a
 no-op. This is opt-in for scenario/entity authors: nothing changes for existing data until an
 NPC's own `languages` list is deliberately narrowed (ex: `["elvish"]` alone, no `"common"`) or a
-player picks a race whose language that NPC doesn't share either.
+player picks a race (or later switches, via `speak_language`) to a language that NPC doesn't
+share either.
+
+**Language-dependent abilities and skill checks.** Free-form dialogue is diceless, so the barrier
+above only ever gates its flavor text. A named ability/spell/technique or a skill-based social
+check (persuade/deceive) can additionally require a shared language to function *at all* —
+opt-in via `language_dependent = true` on an ability entry (`entity_schema.toml`, the same
+fixed-classification role `damage_tags`/`armor_tags` already play, see `docs/combat.md`'s "Tags
+vs. conditions" — deliberately not reusing `damage_tags` itself, since that field only ever feeds
+the damage-reduction pipeline and many language-dependent checks deal no damage at all).
+`DM_Combat.py`'s `_ability_requires_language(skill_name, ability)` checks the resolved ability's
+own flag when one was named; for a bare skill use with no named ability (ex: "persuade the
+guard" resolves `skill_name="charisma"` with no ability, since `find_attack_ability` deliberately
+never scans *universal* abilities like `charm`), it falls back to checking the skill's own
+declared `abilities` list (`skills.toml`, ex: `charisma` → `["charm"]`). `DM_Core.py`'s
+`_resolve_roll` checks this right alongside `is_in_range`: no shared language auto-fails the
+ability outright as a `LanguageBarrierOutcome`, no roll attempted at all — the same "can't do it,
+don't roll" precedent `is_in_range` already sets. `maneuvers.toml`'s `charm` carries the flag
+(warm words only land if understood); its own `intimidate` doesn't (a raised weapon needs no
+shared tongue).
 
 **Room-level presence.** Every DM-published narration event carries `present_entities`: a
 snapshot of `self.scenario_entities` at publish time. `LLMCore` tags each `context_window`

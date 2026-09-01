@@ -11,9 +11,9 @@ narrates → `llm_response_ready` → GUI/Textual display it. `clauses` is alway
 the common single-clause input, and always mixes item-interaction and skill/ability entries
 freely — see "Multiple actions" for how more than one entry changes resolution. Each resolved
 action-kind entry is a typed `ActionOutcome` (`DM_ActionOutcome.py`) — a tagged union
-(`RolledOutcome`/`OutOfRangeOutcome`/`MissingSpellMaterialsOutcome`/`NotCraftableOutcome`/
-`MissingStationOutcome`/`MissingMaterialsOutcome`/`MovementOutcome`), not a loosely-shaped
-dict — populated into the `action_resolved`/`round_resolved` envelope's own `"actions"` list
+(`RolledOutcome`/`OutOfRangeOutcome`/`LanguageBarrierOutcome`/`MissingSpellMaterialsOutcome`/
+`NotCraftableOutcome`/`MissingStationOutcome`/`MissingMaterialsOutcome`/`MovementOutcome`), not a
+loosely-shaped dict — populated into the `action_resolved`/`round_resolved` envelope's own `"actions"` list
 (the envelope itself stays a plain dict, like every other `EventBus` payload). A `RolledOutcome`
 carries a list of `Effect`s (`DamageEffect`/`LootEffect`/`SummonEffect`/`CraftEffect`/
 `RevealEffect`/`DefenderDetailsEffect`) instead of a fixed set of optional fields, so a new kind
@@ -35,7 +35,10 @@ action-kind entry goes through:
    `resolve_named_ability`/`select_ability_skill` if the matched name is an ability, else
    `find_attack_ability` for a bare skill.
 2. If the ability has a range and the target is out of it (`is_in_range`), the action fails
-   immediately as an `OutOfRangeOutcome` — no roll happens.
+   immediately as an `OutOfRangeOutcome` — no roll happens. Same shape, right alongside it: a
+   `language_dependent` ability/skill (`_ability_requires_language`, see "Combat"'s own "Tags vs.
+   conditions") against a target the player's own current language isn't shared with fails
+   immediately as a `LanguageBarrierOutcome` — also no roll.
 3. Otherwise resolves against `self.current_target` (see "Combat"), or against an item-level
    `[entity.test]` target one level deeper (a container's contents or something already in
    inventory — see "Entity tests"), or with no target at all (difficulty 0). Every dice roll

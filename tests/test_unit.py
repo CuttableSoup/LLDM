@@ -34,9 +34,10 @@ from resolution.AdHoc_Generation import (
 from gui.Character_Creation_GUI import CharacterCreationDialog
 from resolution.Challenge_Rating import calculate_challenge_rating, calculate_party_challenge_rating, skill_rating
 from dm.DM_ActionOutcome import (
-    ActionOutcome, CraftEffect, DamageEffect, DefenderDetailsEffect, LootEffect,
-    MissingMaterialsOutcome, MissingSpellMaterialsOutcome, MissingStationOutcome, MovementOutcome,
-    NotCraftableOutcome, OutOfRangeOutcome, RevealEffect, RolledOutcome, SummonEffect,
+    ActionOutcome, CraftEffect, DamageEffect, DefenderDetailsEffect, LanguageBarrierOutcome,
+    LootEffect, MissingMaterialsOutcome, MissingSpellMaterialsOutcome, MissingStationOutcome,
+    MovementOutcome, NotCraftableOutcome, OutOfRangeOutcome, RevealEffect, RolledOutcome,
+    SummonEffect,
 )
 from dm.DM_Core import DMCore
 from dm.DM_Rules import list_available_scenarios
@@ -57,6 +58,7 @@ from nlp.Intent_Classification import (
     GIVE_KEYWORDS,
     OPEN_KEYWORDS,
     RETREAT_KEYWORDS,
+    SPEAK_LANGUAGE_KEYWORDS,
     TAKE_KEYWORDS,
     TRADE_KEYWORDS,
     TRAVEL_KEYWORDS,
@@ -673,6 +675,7 @@ class TestIntentClassification(unittest.TestCase):
             "FORMATION_ABREAST_KEYWORDS": FORMATION_ABREAST_KEYWORDS,
             "DIALOGUE_KEYWORDS": DIALOGUE_KEYWORDS,
             "TRAVEL_KEYWORDS": TRAVEL_KEYWORDS,
+            "SPEAK_LANGUAGE_KEYWORDS": SPEAK_LANGUAGE_KEYWORDS,
         }
         # No known exceptions remain: appraise's own skills.toml keywords deliberately exclude
         # "examine" (EXAMINE_KEYWORDS' own item-detection word, checked first) precisely so this
@@ -1411,6 +1414,43 @@ class TestMovementAndRange(DMTestCase):
         result = self.resolved[-1]
         action = result["actions"][0]
         self.assertIsInstance(action, OutOfRangeOutcome)
+
+    # --- _ability_requires_language / language_dependent gate ----------------------------
+
+    def test_ability_requires_language_reads_the_resolved_abilitys_own_flag(self):
+        # maneuvers.toml's "charm" is language_dependent = true, "intimidate" isn't.
+        charm = self.dm_core.entities["charm"]
+        intimidate = self.dm_core.entities["intimidate"]
+        self.assertTrue(self.dm_core._ability_requires_language("charisma", charm))
+        self.assertFalse(self.dm_core._ability_requires_language("intimidation", intimidate))
+
+    def test_ability_requires_language_falls_back_to_the_skills_own_abilities_list(self):
+        # A bare "charisma" use (no named ability -- ex: "persuade the guard") still finds
+        # charm's own flag via skills.toml's charisma -> ["charm"], the same skill-declared
+        # universal-ability list find_attack_ability deliberately never scans itself.
+        self.assertTrue(self.dm_core._ability_requires_language("charisma", None))
+        self.assertFalse(self.dm_core._ability_requires_language("intimidation", None))
+        # An unrelated skill with no such abilities list at all is simply False, not an error.
+        self.assertFalse(self.dm_core._ability_requires_language("blades", None))
+
+    def test_language_gated_ability_against_a_no_shared_language_target_is_denied_without_a_roll(self):
+        self.dm_core.entities["wolf"]["band"] = 1  # charm's own range defaults to 0 (melee)
+        self.dm_core.entities["wolf"]["languages"] = ["dwarvish"]
+
+        self.dm_core._on_turn_detected({"clauses": [{"kind": "action", "skill": "charm"}], "input": "I charm the wolf"})
+
+        result = self.resolved[-1]
+        action = result["actions"][0]
+        self.assertIsInstance(action, LanguageBarrierOutcome)
+
+    def test_language_gated_ability_with_a_shared_language_rolls_normally(self):
+        self.dm_core.entities["wolf"]["band"] = 1
+
+        self.dm_core._on_turn_detected({"clauses": [{"kind": "action", "skill": "charm"}], "input": "I charm the wolf"})
+
+        result = self.resolved[-1]
+        action = result["actions"][0]
+        self.assertIsInstance(action, RolledOutcome)
 
 
 class TestSpellMaterials(DMTestCase):
@@ -5098,16 +5138,75 @@ class TestLanguageBarrier(DMTestCase):
 
         self.assertEqual(self.dm_core.get_attitude("innkeeper", self.dm_core.player_name)[0], before)
 
-    def test_an_elf_character_can_talk_to_a_dwarvish_only_speaker_if_also_fluent_in_common(self):
-        # A player who knows the target's language directly (elvish here, matching the target's
-        # own sole language) resolves normally even without a shared "common" -- the check is
-        # "any overlap at all", not specifically "common".
+    def test_a_bilingual_player_is_not_understood_by_every_known_language_at_once(self):
+        # The gap this feature closes: a bilingual player defaults to speaking only the first
+        # of their own known languages (current_language, DM_Dialogue.py's _current_language),
+        # not "every language they know at once" -- so an elvish-only innkeeper no longer
+        # silently understands a player who never actually switched to Elvish.
         self.dm_core.entities[self.dm_core.player_name]["languages"] = ["common", "elvish"]
         self.dm_core.entities["innkeeper"]["languages"] = ["elvish"]
 
         result = self._talk("i talk to the innkeeper")
 
+        self.assertTrue(result["language_barrier"])
+
+    def test_switching_current_language_closes_the_barrier(self):
+        self.dm_core.entities[self.dm_core.player_name]["languages"] = ["common", "elvish"]
+        self.dm_core.entities["innkeeper"]["languages"] = ["elvish"]
+        self.dm_core.entities[self.dm_core.player_name]["current_language"] = "elvish"
+
+        result = self._talk("i talk to the innkeeper")
+
         self.assertNotIn("language_barrier", result)
+
+
+class TestCurrentLanguage(DMTestCase):
+    """!
+    @brief DM_Dialogue.py's _current_language/_resolve_language_intent -- the player's own
+        persistent, single-language choice (see TestLanguageBarrier for the barrier check
+        this feeds). scenario "tavern", same fixture TestLanguageBarrier uses.
+    """
+    scenario_name = "tavern"
+
+    def setUp(self):
+        super().setUp()
+        self.item_events = self._capture("item_interaction_resolved")
+
+    def _speak(self, input_text):
+        intent = detect_item_intent(input_text)
+        self.dm_core._on_item_interaction_detected({"intent": intent, "item_name": None, "input": input_text})
+        return self.item_events[-1]
+
+    def test_defaults_to_the_first_known_language_when_never_switched(self):
+        self.dm_core.entities[self.dm_core.player_name]["languages"] = ["common", "elvish"]
+        self.assertEqual(self.dm_core._current_language(), "common")
+
+    def test_speaking_a_known_language_switches_the_active_one(self):
+        self.dm_core.entities[self.dm_core.player_name]["languages"] = ["common", "elvish"]
+
+        result = self._speak("i speak in elvish")
+
+        self.assertTrue(result["found"])
+        self.assertEqual(result["language"], "elvish")
+        self.assertEqual(self.dm_core._current_language(), "elvish")
+
+    def test_naming_a_language_the_player_doesnt_know_is_declined(self):
+        result = self._speak("i speak in dwarvish")
+
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "unknown_language")
+        self.assertEqual(self.dm_core._current_language(), "common")
+
+    def test_current_language_round_trips_through_save_and_load(self):
+        slot_name = "test_current_language_slot"
+        self.addCleanup(shutil.rmtree, self.dm_core._save_slot_dir(slot_name), ignore_errors=True)
+        self.dm_core.entities[self.dm_core.player_name]["languages"] = ["common", "elvish"]
+        self._speak("i speak in elvish")
+
+        self.dm_core.save_game(slot_name)
+        self.dm_core.load_game(slot_name)
+
+        self.assertEqual(self.dm_core._current_language(), "elvish")
 
 
 class TestHelpChannel(DMTestCase):
@@ -5410,7 +5509,7 @@ class TestSaveLoad(DMTestCase):
             set(gladstone_state.keys()),
             {
                 "hp", "active_conditions", "currency", "inventory", "equipped", "band",
-                "attitude_deltas", "action_attitude_deltas",
+                "attitude_deltas", "action_attitude_deltas", "current_language",
             },
         )
 

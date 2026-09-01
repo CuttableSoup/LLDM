@@ -2,8 +2,9 @@ import os
 import re
 
 from dm.DM_ActionOutcome import (
-    DamageEffect, DefenderDetailsEffect, LootEffect, MissingSpellMaterialsOutcome,
-    OutOfRangeOutcome, RevealEffect, RolledOutcome, SummonEffect, rolled_outcome_from_roll,
+    DamageEffect, DefenderDetailsEffect, LanguageBarrierOutcome, LootEffect,
+    MissingSpellMaterialsOutcome, OutOfRangeOutcome, RevealEffect, RolledOutcome, SummonEffect,
+    rolled_outcome_from_roll,
 )
 from dm.DM_CharacterCreation import CharacterCreationMixin
 from dm.DM_Combat import CombatMixin
@@ -610,6 +611,16 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             ability = named_ability or self.find_attack_ability(self.player_name, skill_name)
             if not self.is_in_range(self.player_name, target_name, ability):
                 result = OutOfRangeOutcome(self.player_name, skill_name, target_name)
+            elif (
+                self._ability_requires_language(skill_name, ability)
+                and not self._shares_language_with(target_name)
+            ):
+                # Same "can't do it, don't roll" shape as is_in_range above -- a
+                # language_dependent ability/skill (ex: persuade) auto-fails outright with no
+                # roll attempted at all when the player's own current language isn't shared
+                # with target_name, rather than a penalized roll or a "resolves but reads as
+                # garbled" compromise.
+                result = LanguageBarrierOutcome(self.player_name, skill_name, target_name)
             else:
                 roll = self.resolve_opposed_action(
                     self.player_name, skill_name, target_name, dice_penalty=dice_penalty,
@@ -913,14 +924,18 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             container guarding it. "formation_behind"/"formation_abreast" (see
             _resolve_formation_intent, CLAUDE.md's "Party formation") direct any currently-
             present party member named in the input -- or every one present, if none is named
-            -- to a new follow_offset, taking effect immediately.
+            -- to a new follow_offset, taking effect immediately. "speak_language" (see
+            _resolve_language_intent, DM_Dialogue.py) switches which of the player's own known
+            languages is currently active, the same "search input for a known name" pattern
+            formation uses, just against the player's own "languages" list instead.
         @param data The item_interaction_detected payload from NLPCore
             ({intent, item_name, input, score}). "item_name" is None for "open"/"close",
-            "advance"/"retreat", "formation_behind"/"formation_abreast", "move", and "travel",
-            none of which act on a named item; "move" also carries a "direction" (ex: "forward",
-            "right"). "travel" carries no pre-parsed destination at all -- unlike "move",
-            NLPCore has no catalog of location names to match against, so DMCore resolves the
-            destination itself from the raw input (see _resolve_travel_intent).
+            "advance"/"retreat", "formation_behind"/"formation_abreast", "speak_language",
+            "move", and "travel", none of which act on a named item; "move" also carries a
+            "direction" (ex: "forward", "right"). "travel" carries no pre-parsed destination at
+            all -- unlike "move", NLPCore has no catalog of location names to match against, so
+            DMCore resolves the destination itself from the raw input (see
+            _resolve_travel_intent).
         """
         intent = data.get("intent")
         item_name = data.get("item_name")
@@ -964,6 +979,12 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             # Also unrelated to target_name/the locked gate -- directing the party has
             # nothing to do with any scene target at all.
             self._resolve_formation_intent(intent, input_text, resolved)
+            return
+
+        if intent == "speak_language":
+            # Also unrelated to target_name/the locked gate -- switching the player's own
+            # currently-spoken language has nothing to do with any scene target at all.
+            self._resolve_language_intent(input_text, resolved)
             return
 
         if intent == "move":

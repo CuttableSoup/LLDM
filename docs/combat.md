@@ -200,6 +200,12 @@ outside of `apply_damage`/`apply_healing`'s own calls.
   even if `resistance_tags`/`armor_tags` would otherwise have matched (Pathfinder's "DR
   10/magic": mundane weapons reduced, magic weapons cut straight through). Absent/empty on
   every entity that doesn't author it, so this never changes existing behavior on its own.
+  `language_dependent` (a plain bool, on an ability entry rather than an entity) plays the same
+  fixed-classification role but for a different question — not what kind of damage landed, but
+  whether the ability functions at all without a shared language (see "Dialogue"'s own
+  "Language-dependent abilities and skill checks") — deliberately its own field rather than a
+  value inside `damage_tags`, since that field only ever feeds the damage-reduction pipeline
+  above and most language-dependent checks (ex: persuade) deal no damage to begin with.
 - **Conditions** (`active_conditions`, `apply_condition`/`dismiss_condition`) are dynamic —
   gained/lost during play via triggers or tests. Use a condition for something that can plausibly
   change mid-scene; use a tag for something permanent to what the entity is.

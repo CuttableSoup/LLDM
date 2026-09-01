@@ -219,5 +219,10 @@ subtype = "maneuver"
 description = "Warm words and genuine charisma, meant to win someone over."
 keywords = [ "charm them", "win them over", "sweet talk them" ]
 skill = [ "charisma" ]
+language_dependent = true                   # Warm words only land if the words are understood --
+                                            # see entity_schema.toml's own note and
+                                            # docs/combat.md's "Tags vs. conditions". Contrast
+                                            # "intimidate" above: a raised weapon needs no shared
+                                            # tongue, so it carries no such flag.
 on_pass = { do = "attitude", entity = "target", toward = "actor", event = "charmed", magnitude = 0.6 }
 on_fail = { do = "attitude", entity = "target", toward = "actor", event = "failed_charm", magnitude = 0.2 }

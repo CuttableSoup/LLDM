@@ -8,30 +8,6 @@ Not yet started, except where noted. Each below was worked through as an actual 
 just restated — several correct or extend what's currently shipped rather than describing a clean
 gap.
 
-**Language barriers are checked as "all known languages at once," not as one spoken language —
-a real gap, not a documented boundary.** `_detect_language_barrier` (see "Dialogue"'s own
-"Language barriers") compares `set(player_languages)` against a target's entire `languages` list
-and treats any overlap as understood — so a bilingual player (`["common", "elvish"]`) is
-understood by an elvish-only NPC today with nothing in the fiction ever establishing they chose to
-speak Elvish rather than Common. The fix: a persistent "currently speaking" language, not a
-per-utterance detail — a community plausibly converges on one shared tongue, and re-deciding which
-language is in use on every single exchange would be tedious for no narrative payoff. Defaults to
-`languages[0]` (already the ordering chargen produces — `"common"` first, the chosen race's own
-language appended after); changed via a new intent recognized the same way a formation intent is
-("stay behind me" → `formation_behind`) — a known language named in the input ("speak in
-elvish"/"switch to elvish") resolved against the player's own `languages` list, declining if they
-name one they don't actually know. Whichever language is currently active is what gets compared
-against a target's full list, exactly as today otherwise (no overlap → the existing gibberish-reply
-path). **Extension**: some abilities/spells (and the skill-based social checks — persuade/deceive,
-distinct from free-form dialogue) should require a shared language to work at all, not just gate
-casual talk. Marked with a new static `"language"`-shaped tag on the ability entry — the same
-fixed-classification role `damage_tags`/`armor_tags` already play (see "Tags vs. conditions"),
-opt-in per entry so a scenario author decides persuade needs it while a raised weapon for
-intimidation doesn't. Checked against the same active-language-vs-target comparison; no shared
-language auto-fails the ability outright, no roll attempted at all — mirroring `is_in_range`'s own
-"can't reach, so don't roll" precedent, not a penalized roll or a "resolves but reads as garbled"
-compromise.
-
 **NPC-action-driven attitude drift** generalizes `combat_hit`/`shared_enemy` — the two
 `[[attitude_event]]` entries an attack can plausibly fire — from "the player's own attacks only"
 to any entity's resolved attack, via `resolve_behavior_action`'s own hit resolution, the same call

@@ -180,6 +180,23 @@ damage_value = { dice = 1, pips = 2, bonus = "strength_damage" }
 damage_tags = [ "slashing" ]                # Matched against a defender's resistance_tags/
                                             # immunity_tags/vulnerability_tags and an equipped
                                             # armor's own armor_tags.
+language_dependent = true                   # Opt-in precondition, not a damage classification --
+                                            # deliberately separate from damage_tags (which only
+                                            # ever feeds the damage-reduction pipeline above, and
+                                            # many language-dependent checks, ex: a persuade
+                                            # maneuver, deal no damage at all). If true, this
+                                            # ability/maneuver/spell requires the acting player to
+                                            # share a language with its target (_shares_language_
+                                            # with, DM_Dialogue.py) -- no roll attempted at all if
+                                            # not (LanguageBarrierOutcome), mirroring is_in_range's
+                                            # own "can't reach, don't roll" precedent. Absent (the
+                                            # default) means no gate -- ex: maneuvers.toml's
+                                            # "intimidate" (a raised weapon needs no shared words)
+                                            # versus its own "charm" (language_dependent = true).
+                                            # For a bare skill use with no named ability (ex:
+                                            # "persuade the guard"), _ability_requires_language
+                                            # (DM_Combat.py) falls back to checking the skill's own
+                                            # declared "abilities" list (skills.toml) instead.
 difficulty = 10                             # UNUSED on a spell/technique today (spells/
                                             # techniques resolve via resolve_opposed_action,
                                             # which rolls the defender's own opposing skill
@@ -322,6 +339,15 @@ languages = [ "common" ]                    # Every language this entity underst
                                             # fields (apply_character_creation adds the
                                             # player's chosen race's language onto their own
                                             # list at chargen time).
+current_language = "common"                 # Player-entity only, runtime state (not authored --
+                                            # never set on a template): whichever one of the
+                                            # player's own "languages" is currently being spoken.
+                                            # Absent defaults to languages[0] (_current_language,
+                                            # DM_Dialogue.py) -- switched via the "speak in
+                                            # <language>" intent (_resolve_language_intent).
+                                            # Compared against a target's own full "languages"
+                                            # list by _detect_language_barrier -- only the
+                                            # player's side is ever narrowed to one active tongue.
 memories = [ "A wife at home" ]
 quotes = [ "Hello, world" ]
 

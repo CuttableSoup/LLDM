@@ -282,6 +282,29 @@ class CombatMixin(DMCoreProtocol):
             return skill_name in ability_skill
         return ability_skill == skill_name
 
+    def _ability_requires_language(self, skill_name, ability):
+        """!
+        @brief Whether skill_name/ability needs a shared language to work at all -- the
+            language_dependent opt-in tag (entity_schema.toml, same fixed-classification role
+            damage_tags/armor_tags already play, see CLAUDE.md's "Tags vs. conditions") checked
+            by _resolve_roll (DM_Core.py) right alongside is_in_range.
+        @param skill_name The skill being used.
+        @param ability The resolved weapon/spell/technique table from _resolve_roll, or None.
+        @return True if ability itself is flagged, or -- when no ability was actually resolved
+                (ex: "persuade the guard" resolves skill_name="charisma" with ability=None,
+                since find_attack_ability deliberately never scans *universal* abilities like
+                "charm" -- see its own docstring) -- if any ability the skill declares in its
+                own skills.toml "abilities" list (ex: charisma -> ["charm"]) is flagged. False
+                for an unlisted/unresolvable skill or an ability/skill with no such abilities.
+        """
+        if ability is not None:
+            return bool(ability.get("language_dependent"))
+        for name in self.skills.get(skill_name, {}).get("abilities", []):
+            resolved = self.resolve_ability(name)
+            if resolved and resolved.get("language_dependent"):
+                return True
+        return False
+
     def resolve_ability(self, ability):
         """!
         @brief Resolves one entry from an entity's flat abilities list (mirroring how

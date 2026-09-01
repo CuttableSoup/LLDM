@@ -4,9 +4,9 @@ import urllib.request
 import threading
 
 from dm.DM_ActionOutcome import (
-    CraftEffect, DamageEffect, DefenderDetailsEffect, LootEffect, MissingMaterialsOutcome,
-    MissingSpellMaterialsOutcome, MissingStationOutcome, MovementOutcome, NotCraftableOutcome,
-    OutOfRangeOutcome, RevealEffect, RolledOutcome, SummonEffect,
+    CraftEffect, DamageEffect, DefenderDetailsEffect, LanguageBarrierOutcome, LootEffect,
+    MissingMaterialsOutcome, MissingSpellMaterialsOutcome, MissingStationOutcome, MovementOutcome,
+    NotCraftableOutcome, OutOfRangeOutcome, RevealEffect, RolledOutcome, SummonEffect,
 )
 from llm.LLM_Rag import RagIndex
 from paths import PROJECT_ROOT
@@ -60,6 +60,14 @@ def _format_out_of_range_outcome(outcome, actor):
     return (
         f"Skill used: {outcome.skill} -- {outcome.defender or 'the target'} is too far "
         f"away to reach with this right now, so no roll is attempted."
+    )
+
+
+def _format_language_barrier_outcome(outcome, actor):
+    return (
+        f"Skill used: {outcome.skill} -- {actor.capitalize()} and "
+        f"{outcome.defender or 'the target'} share no language, so the attempt never even "
+        f"lands and no roll is attempted."
     )
 
 
@@ -119,6 +127,7 @@ def _format_rolled_outcome(outcome, actor):
 _OUTCOME_FORMATTERS = {
     RolledOutcome: _format_rolled_outcome,
     OutOfRangeOutcome: _format_out_of_range_outcome,
+    LanguageBarrierOutcome: _format_language_barrier_outcome,
     MissingSpellMaterialsOutcome: _format_missing_spell_materials_outcome,
     NotCraftableOutcome: _format_not_craftable_outcome,
     MissingStationOutcome: _format_missing_station_outcome,
@@ -373,18 +382,20 @@ class LLMCore:
     def generate_item_interaction_response(self, data):
         """!
         @brief Narrates an "examine"/"take"/"give"/"trade"/"open"/"close"/"advance"/"retreat"/
-            "formation_behind"/"formation_abreast" attempt, resolved with no dice roll (see
-            DMCore._on_item_interaction_detected). "examine" only ever describes; it's the
-            deliberate alternative to items being auto-looted into the player's inventory the
-            moment a container opens (ex: a cursed weapon should be seen and described before
-            anyone decides to touch it).
+            "formation_behind"/"formation_abreast"/"speak_language" attempt, resolved with no
+            dice roll (see DMCore._on_item_interaction_detected). "examine" only ever describes;
+            it's the deliberate alternative to items being auto-looted into the player's
+            inventory the moment a container opens (ex: a cursed weapon should be seen and
+            described before anyone decides to touch it).
         @param data The "item_interaction_resolved" payload ({intent, item_name, input, found,
-            description?, container?, reason?, amount?, price?, moved?, members?, stance?}).
-            "item_name" is None for "open"/"close"/"advance"/"retreat"/"formation_behind"/
-            "formation_abreast"/"move"/"travel", which act on the scene directly rather than a
-            named item; "moved" (advance/retreat only) is advance_or_retreat's own list of
-            {entity, before, after} distance changes; "members"/"stance" (formation only) are
-            DMCore._resolve_formation_intent's own resolved party member(s) and new stance;
+            description?, container?, reason?, amount?, price?, moved?, members?, stance?,
+            language?}). "item_name" is None for "open"/"close"/"advance"/"retreat"/
+            "formation_behind"/"formation_abreast"/"speak_language"/"move"/"travel", which act
+            on the scene directly rather than a named item; "moved" (advance/retreat only) is
+            advance_or_retreat's own list of {entity, before, after} distance changes;
+            "members"/"stance" (formation only) are DMCore._resolve_formation_intent's own
+            resolved party member(s) and new stance; "language" (speak_language only) is
+            DMCore._resolve_language_intent's own resolved language name;
             "location_name"/"location_description" (travel only) are the arrival location's own
             fields, alongside the same "room_name"/"room_description" "move" already carries.
         """
@@ -416,6 +427,7 @@ class LLMCore:
                 "cant_equip": f"{subject} has nothing on the player's own body it could go onto",
                 "not_equipped": f"{subject} isn't currently equipped at all",
                 "no_party": "there's no one from the player's own party here to direct",
+                "unknown_language": "the player doesn't actually know any language matching that",
             }.get(data.get("reason"), f"the player's attempt to {intent} {subject} doesn't apply here")
             prompt = (
                 f"The player tries to {intent} {subject} "
@@ -544,6 +556,15 @@ class LLMCore:
             prompt = (
                 f"The player directs {members_text} to {stance_text}.\n"
                 f"Narrate this brief bit of party direction in 1-2 sentences as the Game Master."
+            )
+        elif intent == "speak_language":
+            # "language" is DMCore._resolve_language_intent's own real result -- whichever of
+            # the player's own known languages it actually matched in the raw input, never
+            # invented.
+            prompt = (
+                f"The player deliberately switches to speaking {data.get('language')} from now "
+                f"on.\n"
+                f"Narrate this brief moment in 1-2 sentences as the Game Master."
             )
         elif intent == "move":
             # Taking a declared exit to a different room of the current location (see
