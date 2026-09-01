@@ -718,10 +718,17 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         program = ability.get("on_pass" if result.success else "on_fail")
         if not program:
             return
-        run_program(
-            program, {"actor": self.player_name, "target": target_name, "input": input_text},
-            self.entities, self.rules, self.event_bus,
-        )
+        # resolve_targets (DM_Combat.py) is [target_name] alone (or [None], untargeted) for
+        # every ability with no authored "targets" table -- one run, unchanged from before this
+        # existed -- or the wider AoE/multi-target/discriminated pool its own {number, aoe,
+        # side} table describes, run once per resolved target so ex: a discriminating area
+        # effect's own on_pass (a condition applied via Program_Interpreter's apply_condition
+        # op) actually lands on every ally/enemy it caught, not just target_name.
+        for program_target in self.resolve_targets(self.player_name, target_name, ability):
+            run_program(
+                program, {"actor": self.player_name, "target": program_target, "input": input_text},
+                self.entities, self.rules, self.event_bus,
+            )
 
     def _run_test_outcome_program(self, test, success, entity_name):
         """!
@@ -759,23 +766,33 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         @param target_name self.current_target, or None.
         @param via_test True if the roll was a flat [entity.test] check.
         """
-        if result.success and target_name and not via_test:
+        if result.success and not via_test:
             if ability is None:
                 ability = named_ability or self.find_attack_ability(self.player_name, skill_name)
             if ability and "damage_value" in ability:
-                damage = self.calculate_damage(self.player_name, target_name, ability)
-                result.effects.append(DamageEffect(
-                    defender=damage["defender"], net_damage=damage["net_damage"],
-                    remaining_hp=damage["remaining_hp"],
-                ))
-                # "combat_hit" attitude drift (DM_Social.py's nudge_attitude_from_event) -- how
-                # hard the hit landed relative to the defender's own max_hp, not a flat
-                # per-swing amount, so a graze barely registers and a near-kill genuinely
-                # scares them (the "threat" axis) even while disposition stays pinned at
-                # is_hostile's own floor. _nudge_combat_hit_attitude is the shared call-site
-                # shape resolve_behavior_action (DM_Combat.py, an entity's own combat-turn
-                # attack) also uses -- only who's attacking differs, never the shape.
-                self._nudge_combat_hit_attitude(target_name, self.player_name, damage.get("net_damage", 0))
+                # resolve_targets (DM_Combat.py) is [target_name] alone for every ability with
+                # no authored "targets" table -- unchanged single-target behavior, [None] if
+                # there's also no target_name at all (skipped below, nothing to hit) -- or the
+                # wider AoE/multi-target/discriminated/self-only pool its own {number, aoe,
+                # side} table describes (ex: techniques.toml's cleave, a fireball-style blast, a
+                # self-only ward that needs no named target at all). Each real hit gets its own
+                # damage roll/DamageEffect/attitude nudge, same as a lone target already did.
+                for defender_name in self.resolve_targets(self.player_name, target_name, ability):
+                    if not defender_name:
+                        continue
+                    damage = self.calculate_damage(self.player_name, defender_name, ability)
+                    result.effects.append(DamageEffect(
+                        defender=damage["defender"], net_damage=damage["net_damage"],
+                        remaining_hp=damage["remaining_hp"],
+                    ))
+                    # "combat_hit" attitude drift (DM_Social.py's nudge_attitude_from_event) -- how
+                    # hard the hit landed relative to the defender's own max_hp, not a flat
+                    # per-swing amount, so a graze barely registers and a near-kill genuinely
+                    # scares them (the "threat" axis) even while disposition stays pinned at
+                    # is_hostile's own floor. _nudge_combat_hit_attitude is the shared call-site
+                    # shape resolve_behavior_action (DM_Combat.py, an entity's own combat-turn
+                    # attack) also uses -- only who's attacking differs, never the shape.
+                    self._nudge_combat_hit_attitude(defender_name, self.player_name, damage.get("net_damage", 0))
 
     def _nudge_combat_hit_attitude(self, target_name, attacker_name, net_damage):
         """!

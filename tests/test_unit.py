@@ -1047,6 +1047,113 @@ class TestDamageCalculation(DMTestCase):
         self.assertNotIn("action_attitude_deltas", self.dm_core.entities["thane"])
 
 
+class TestResolveTargets(DMTestCase):
+    """!
+    @brief DM_Combat.py's resolve_targets -- the {number, aoe, side} multi-target/area-of-
+        effect mechanic (entity_schema.toml's "targets" field). Arena's default layout puts
+        gladstone/thane/wolf/wolf_2 all at band 1 (wolf_2 -- see DM_Rules.py's own
+        occurrence-count suffixing), so aoe-radius tests mutate "band" directly.
+    """
+
+    def test_no_targets_table_is_just_target_name(self):
+        # Every ordinary weapon/most spells -- unchanged single-target behavior.
+        ability = {"damage_value": {"dice": 1, "pips": 0, "bonus": 0}, "damage_tags": []}
+        self.assertEqual(self.dm_core.resolve_targets("gladstone", "wolf", ability), ["wolf"])
+
+    def test_untargeted_ability_resolves_to_a_single_none(self):
+        # An ability with no current_target at all still runs its own on_pass/on_fail exactly
+        # once, against no one -- resolve_targets never widens a None target.
+        ability = {"targets": {"number": 3, "aoe": 5, "side": "all"}}
+        self.assertEqual(self.dm_core.resolve_targets("gladstone", None, ability), [None])
+
+    def test_side_defaults_to_enemies_and_target_is_always_first(self):
+        # cleave's own shape: {number = 3, aoe = 0} -- every other hostile sharing wolf's own
+        # band (wolf_2), but not thane (an ally).
+        ability = {"targets": {"number": 3, "aoe": 0}}
+        result = self.dm_core.resolve_targets("gladstone", "wolf", ability)
+        self.assertEqual(result[0], "wolf")
+        self.assertIn("wolf_2", result)
+        self.assertNotIn("thane", result)
+
+    def test_number_caps_the_combined_list(self):
+        ability = {"targets": {"number": 1, "aoe": 0}}
+        self.assertEqual(self.dm_core.resolve_targets("gladstone", "wolf", ability), ["wolf"])
+
+    def test_side_all_ignores_hostility(self):
+        # fireball's own shape -- an indiscriminate blast catches an ally (and even the caster
+        # themselves, arena's whole roster sharing band 1) standing in it too.
+        ability = {"targets": {"number": 0, "aoe": 0, "side": "all"}}
+        result = self.dm_core.resolve_targets("gladstone", "wolf", ability)
+        self.assertCountEqual(result, ["wolf", "wolf_2", "thane", "gladstone"])
+
+    def test_side_allies_excludes_hostiles(self):
+        # A Pathfinder-style channeling that only touches allies.
+        ability = {"targets": {"number": 0, "aoe": 0, "side": "allies"}}
+        result = self.dm_core.resolve_targets("gladstone", "thane", ability)
+        self.assertIn("thane", result)
+        self.assertNotIn("wolf", result)
+        self.assertNotIn("wolf_2", result)
+
+    def test_aoe_radius_excludes_entities_out_of_band_range(self):
+        self.dm_core.entities["wolf_2"]["band"] = 4
+        ability = {"targets": {"number": 0, "aoe": 1, "side": "all"}}
+        result = self.dm_core.resolve_targets("gladstone", "wolf", ability)
+        self.assertNotIn("wolf_2", result)
+
+    def test_aoe_radius_includes_entities_within_range(self):
+        self.dm_core.entities["wolf_2"]["band"] = 2
+        ability = {"targets": {"number": 0, "aoe": 1, "side": "all"}}
+        result = self.dm_core.resolve_targets("gladstone", "wolf", ability)
+        self.assertIn("wolf_2", result)
+
+    def test_dead_entities_are_never_included(self):
+        self.dm_core.entities["wolf_2"]["hp"] = 0
+        ability = {"targets": {"number": 0, "aoe": 0, "side": "all"}}
+        result = self.dm_core.resolve_targets("gladstone", "wolf", ability)
+        self.assertNotIn("wolf_2", result)
+
+    @patch("random.randint", return_value=3)
+    def test_apply_damage_if_hit_deals_damage_to_every_resolved_target(self, mock_randint):
+        ability = {
+            "damage_value": {"dice": 0, "pips": 0, "bonus": 5}, "damage_tags": [],
+            "targets": {"number": 0, "aoe": 0, "side": "enemies"},
+        }
+        result = RolledOutcome(entity="gladstone", skill="melee", roll=0, difficulty=0, success=True)
+
+        self.dm_core._apply_damage_if_hit(result, "melee", None, ability, "wolf", via_test=False)
+
+        defenders = {effect.defender for effect in result.effects}
+        self.assertEqual(defenders, {"wolf", "wolf_2"})
+        self.assertNotIn("thane", defenders)
+
+    def test_side_self_always_resolves_to_the_caster_ignoring_target_and_aoe(self):
+        # A personal ward standing in for a hostile current_target -- side = "self" must never
+        # actually hit "wolf", regardless of aoe/number, or spill onto thane despite sharing
+        # gladstone's own band.
+        ability = {"targets": {"number": 5, "aoe": 5, "side": "self"}}
+        self.assertEqual(self.dm_core.resolve_targets("gladstone", "wolf", ability), ["gladstone"])
+
+    def test_side_self_needs_no_target_at_all(self):
+        ability = {"targets": {"side": "self"}}
+        self.assertEqual(self.dm_core.resolve_targets("gladstone", None, ability), ["gladstone"])
+
+    @patch("random.randint", return_value=3)
+    def test_apply_damage_if_hit_applies_a_self_only_ability_with_no_target(self, mock_randint):
+        # target_name=None -- an ordinary damage ability would previously never even attempt
+        # this (see the untargeted-ability test above); side = "self" is the one case where
+        # _apply_damage_if_hit's own gate no longer requires a named target.
+        ability = {
+            "damage_value": {"dice": 0, "pips": 0, "bonus": 3}, "damage_tags": [],
+            "targets": {"side": "self"},
+        }
+        result = RolledOutcome(entity="gladstone", skill="arcane", roll=0, difficulty=0, success=True)
+
+        self.dm_core._apply_damage_if_hit(result, "arcane", None, ability, None, via_test=False)
+
+        self.assertEqual(len(result.effects), 1)
+        self.assertEqual(result.effects[0].defender, "gladstone")
+
+
 class TestActionDrivenAttitudeDrift(DMTestCase):
     """!
     @brief DM_Social.py's nudge_attitude_from_event -- the [[attitude_event]] (rules.toml)

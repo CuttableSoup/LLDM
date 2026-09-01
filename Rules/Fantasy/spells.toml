@@ -8,7 +8,10 @@ difficulty = 10
 # In bands now, not meters -- same single-number range every weapon/ability uses (see
 # DM_Movement.py's "Movement and range").
 range = 5
-targets = { number = 1, aoe = 5 }
+# Indiscriminate blast -- side = "all" hits everyone within 5 bands of the target regardless
+# of hostility (fire doesn't care who it burns), number = 0 (unlimited) so the blast radius
+# alone decides the casualty count, not an arbitrary cap.
+targets = { number = 0, aoe = 5, side = "all" }
 damage_value = { dice = 5, pips = 0, bonus = 0 }
 damage_tags = [ "fire" ]
 

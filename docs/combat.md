@@ -265,3 +265,37 @@ damage (`"user.weapon.dice"`/`"user.weapon.pips"`); see `ability_matches_skill`,
 `resolve_weapon_reference`, `resolve_damage_value` in `DM_Combat.py`. Naming a technique/spell
 directly in input can resolve it via `map_to_action` before a bare skill would.
 
+
+## Multi-target and area of effect
+
+An ability's own `targets = {number, aoe, side}` (`entity_schema.toml`) widens who a
+successful roll actually lands on, past the single `target_name` the roll was resolved
+against — absent entirely (every ordinary weapon, most spells) means just that one entity,
+unchanged. `resolve_targets` (`DM_Combat.py`) always puts `target_name` first, then — if
+`targets` is authored — adds every other living scene entity within `aoe` bands of it
+(`get_distance_between`, nearest-first; `aoe = 0`, the default, means only entities sharing
+`target_name`'s own band), filtered by `side` (`"enemies"`, the default, and `"allies"` via
+`is_hostile(candidate, attacker_name)` — relative to whoever is actually acting, not
+hardcoded to the player; `"all"` skips the hostility check entirely for an indiscriminate
+blast), and finally caps the combined list at `number` (default `1`, `0` = unlimited). One
+mechanic covers three distinct shapes: `techniques.toml`'s `cleave` (`{number = 3, aoe = 0}`)
+is discriminating multi-target — up to 3 other enemies sharing `target_name`'s band, no
+radius; `spells.toml`'s `fireball` (`{aoe = 5, side = "all", number = 0}`) is an indiscriminate
+blast — everyone within 5 bands, friend or foe, uncapped; a Pathfinder-style channeling that
+only touches allies would author `{aoe = <radius>, side = "allies"}`.
+
+**`side = "self"` is a fourth, short-circuiting case** — `resolve_targets` returns
+`[attacker_name]` outright, before even looking at `target_name`/`aoe`/`number`. This is what
+lets a personal ward/self-buff skip needing a named target at all (`_apply_damage_if_hit`'s
+own outer gate no longer requires `target_name` either, for exactly this case — a `resolve_
+targets` result of `[None]`, the ordinary untargeted-ability case, is simply skipped in the
+loop) and guarantees it never spills onto an adjacent ally the way an ordinary
+`{aoe = 0, side = "allies"}` still could if one happens to share `target_name`'s own band.
+
+Both `_apply_damage_if_hit` and `_run_ability_outcome_program` (`DM_Core.py`) call
+`resolve_targets` and loop over its result: each resolved defender gets its own
+`calculate_damage`/`DamageEffect`/`combat_hit` attitude nudge, and the ability's own
+`on_pass`/`on_fail` program (if any) runs once per resolved target rather than once against
+`target_name` alone — so a discriminating area effect's `on_pass` (ex: an `apply_condition`
+op) actually lands on every ally/enemy the blast caught.
+

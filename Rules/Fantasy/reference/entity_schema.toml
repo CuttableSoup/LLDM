@@ -231,9 +231,39 @@ difficulty = 10                             # The flat number the actor must rol
                                             # instead (skill = [...], difficulty = ...) -- that's
                                             # checked first and always wins over this fallback
                                             # when it matches.
-targets = { number = 1, aoe = 0 }           # UNUSED today -- reserved for a future
-                                            # multi-target/area-of-effect mechanic; nothing
-                                            # currently reads "number" or "aoe".
+targets = { number = 1, aoe = 0 }           # Widens a hit past the one entity the roll was
+                                            # actually resolved against (target_name), which is
+                                            # always included and always first -- absent
+                                            # entirely (every ordinary weapon/most spells) means
+                                            # exactly that one entity, unchanged. "aoe" (int,
+                                            # bands, default 0) adds every other living scene
+                                            # entity within that many bands of target_name
+                                            # (get_distance_between, nearest first); "side"
+                                            # (default "enemies") filters that widened pool --
+                                            # "enemies"/"allies" via is_hostile(candidate, the
+                                            # caster), "all" for an indiscriminate blast that
+                                            # never checks hostility (ex: fire doesn't care who
+                                            # it burns), or "self" -- a short-circuit that always
+                                            # resolves to just the caster, ignoring target_name/
+                                            # aoe/number entirely (no target needs to be named at
+                                            # all, ex: a personal ward cast outside combat with
+                                            # no current_target). "number" (default 1, 0 =
+                                            # unlimited) caps the combined, target_name-inclusive
+                                            # list -- meaningless (never consulted) with
+                                            # side = "self". techniques.toml's cleave
+                                            # ({number = 3, aoe = 0}) is discriminating
+                                            # multi-target -- up to 3 enemies sharing
+                                            # target_name's own band; an indiscriminate AoE (ex:
+                                            # spells.toml's fireball) authors {aoe = 5, side =
+                                            # "all", number = 0}; a discriminating area effect
+                                            # (ex: a Pathfinder-style channeling that only touches
+                                            # allies) authors {aoe = <radius>, side = "allies"};
+                                            # a self-only ward authors {side = "self"}. Resolved
+                                            # by DM_Combat.py's resolve_targets, called from
+                                            # DM_Core.py's _apply_damage_if_hit (one damage roll/
+                                            # DamageEffect/attitude nudge per resolved target) and
+                                            # _run_ability_outcome_program (this ability's own
+                                            # on_pass/on_fail run once per resolved target).
 summon = { name = "spectral wolf", duration = 4 }
                                             # A spell/technique/innate ability only -- opts a
                                             # successful cast into conjuring a temporary ally

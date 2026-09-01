@@ -150,6 +150,77 @@ class CombatMixin(DMCoreProtocol):
             self._award_xp_for_defeat(defender_name)
         return result
 
+    def resolve_targets(self, attacker_name, target_name, ability):
+        """!
+        @brief Expands a single rolled-against target_name into the full set of entities an
+            ability's hit/on_pass/on_fail actually lands on -- just [target_name] for the vast
+            majority of abilities (no authored "targets" table at all, entity_schema.toml's
+            {number, aoe, side}), which is exactly today's unchanged single-target behavior.
+            target_name itself is always the first entry (it's who the roll was actually
+            resolved against -- range/opposed-skill/language checks all already ran against
+            it specifically), then "aoe" (int, bands; 0 = target_name's own band) widens the
+            search to every other living scene entity within that many bands of it
+            (get_distance_between, nearest-first), "side" filters that widened pool
+            ("enemies", the default, matching every existing weapon/technique's implicit
+            behavior; "allies"; or "all" for an indiscriminate blast that doesn't check
+            hostility at all, ex: fire not caring who it burns), and "number" (0 = unlimited)
+            caps the combined, target_name-inclusive list. "enemies"/"allies" are resolved via
+            is_hostile(candidate, attacker_name) -- relative to whoever is actually casting/
+            swinging, not hardcoded to the player, so an NPC's own area attack/aura discriminates
+            correctly too. Covers three distinct authored shapes with one field, not three:
+            techniques.toml's cleave ({number = 3, aoe = 0}, side defaulting to "enemies") hits
+            up to 3 other enemies sharing target_name's own band; an indiscriminate blast (ex:
+            fireball) authors {aoe = 5, side = "all", number = 0}; a discriminating area effect
+            (ex: a Pathfinder-style channeling that only touches allies) authors
+            {aoe = <radius>, side = "allies"}.
+
+            "side" = "self" is a fourth, short-circuiting case: always exactly
+            [attacker_name], ignoring target_name/aoe/number entirely -- a personal ward or
+            self-buff shouldn't require the player to name themselves (so it works even with
+            no current_target at all, ex: cast outside combat), and mustn't spill onto an
+            adjacent ally the way an ordinary {aoe = 0, side = "allies"} still could if one
+            happens to share target_name's own band.
+        @param attacker_name The name of the acting entity (whose own hostility/allegiance
+            "enemies"/"allies" is resolved relative to, and who "self" always resolves to).
+        @param target_name self.current_target, or None.
+        @param ability The resolved weapon/spell/technique table, or None.
+        @return [None] if target_name is falsy and the ability isn't "self"-sided (an
+                untargeted ability still runs its own on_pass/on_fail program exactly once,
+                against no one); [attacker_name] if the ability's "targets" authors
+                side = "self"; otherwise a list of at least [target_name], widened/filtered/
+                capped per the ability's own "targets" table if it authors one.
+        """
+        targets_spec = ability.get("targets") if ability else None
+        if targets_spec and targets_spec.get("side") == "self":
+            return [attacker_name]
+        if not target_name:
+            return [None]
+        if not targets_spec:
+            return [target_name]
+
+        aoe = targets_spec.get("aoe", 0)
+        number = targets_spec.get("number", 0)
+        side = targets_spec.get("side", "enemies")
+
+        others = []
+        for entity_name in self.scenario_entities:
+            if entity_name == target_name or self.get_current_hp(entity_name) <= 0:
+                continue
+            distance = self.get_distance_between(entity_name, target_name)
+            if distance > aoe:
+                continue
+            if side == "enemies" and not self.is_hostile(entity_name, attacker_name):
+                continue
+            if side == "allies" and self.is_hostile(entity_name, attacker_name):
+                continue
+            others.append((distance, entity_name))
+        others.sort(key=lambda pair: pair[0])
+
+        names = [target_name] + [name for _, name in others]
+        if number and len(names) > number:
+            names = names[:number]
+        return names
+
     def roll_dice(self, dice, pips):
         """!
         @brief Rolls the D6 dice pool and adds flat pips, per the D6 system.
