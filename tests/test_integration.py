@@ -284,11 +284,19 @@ class TestMultiActionCombatConversation(_LivePipelineTestCase):
         self.event_bus.subscribe("round_resolved", round_events.append)
         self.event_bus.subscribe("action_resolved", action_events.append)
 
-        response = self._say("I attack the wolf and attack it again")
+        # "with my weapon", not a bare "attack the wolf" -- the target's own name is also a
+        # spell's own name ("summon spectral wolf"), and a bare "attack the wolf" loses to it
+        # on raw semantic similarity (both share the literal word "wolf") despite blades' own
+        # "attack the creature"/"attack the creature with my weapon" keywords existing
+        # specifically to fight this lexical-magnetism risk (see skills.toml's own comment) --
+        # naming the weapon explicitly is what actually closes the gap for a target whose name
+        # collides with an ability's own.
+        turn_input = "I attack the wolf with my weapon and attack it again"
+        response = self._say(turn_input)
 
         self.assertTrue(response.strip())
         self.assertNotIn("Could not connect to the local LLM", response)
-        print(f"\n=== Multi-action turn ===\n> I attack the wolf and attack it again\n{response}\n")
+        print(f"\n=== Multi-action turn ===\n> {turn_input}\n{response}\n")
 
         # Two clauses, both hostile-target attacks -- one round, not two, and the player's own
         # "actions" list actually has both entries (see DM_Core.py's engaged_combat_target note
@@ -298,7 +306,7 @@ class TestMultiActionCombatConversation(_LivePipelineTestCase):
         self.assertEqual(round_events[0]["round"], 1)
         actions = round_events[0]["actions"]
         self.assertEqual(len(actions), 2)
-        self.assertEqual([a["skill"] for a in actions], ["blades", "blades"])
+        self.assertEqual([a.skill for a in actions], ["blades", "blades"])
 
     def test_a_multi_action_turn_does_not_leak_state_into_the_next_ordinary_turn(self):
         round_events = []
@@ -356,7 +364,7 @@ class TestCreatedCharacterConversation(_LivePipelineTestCase):
         self.assertTrue(response.strip())
         self.assertNotIn("Could not connect to the local LLM", response)
         self.assertEqual(len(round_events), 1)
-        self.assertEqual(round_events[0]["actions"][0]["entity"], "Aria")
+        self.assertEqual(round_events[0]["actions"][0].entity, "Aria")
 
 
 @unittest.skipUnless(_ollama_reachable(), "Ollama not reachable at http://127.0.0.1:11434")

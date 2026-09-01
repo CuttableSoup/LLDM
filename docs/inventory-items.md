@@ -81,7 +81,12 @@ resolves — joins the same shared per-turn clause list a skill/ability action d
   player, computed as its own `already_owned` flag right alongside the ground-item check above —
   checked *ahead of* the locked/closed-target gates and the item-is-target-itself check below,
   not just the source/destination resolution, so an unrelated locked/closed container elsewhere
-  in the scene never blocks examining something the player already possesses.
+  in the scene never blocks examining something the player already possesses. Excludes the case
+  where the current target *also* currently carries an item of this same shared-catalog name (ex:
+  a second "health potion" in a chest, once the player already picked one up from an earlier
+  container this same session) — there's still something real left to actually take from the
+  target, so this never silently short-circuits into a self-transfer no-op that leaves the
+  target's own copy behind untaken.
 - A locked container denies everything else (`reason: "locked"`).
 - `item_name` equal to the current target's own name addresses the target itself, not something
   inside it.

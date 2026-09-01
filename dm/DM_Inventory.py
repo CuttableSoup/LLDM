@@ -410,11 +410,14 @@ class InventoryMixin(DMCoreProtocol):
             DM_Improvisation.py placing an ad hoc item straight into inventory) resolve directly
             against the player -- recomputed here as already_owned, the same check the dispatcher
             makes for its own locked-gate purposes, so this resolver stays callable on its own
-            with nothing but item_name/target_name and live entity state. "trade" additionally
-            charges the item's TOML `value` as a price (denied outright if the player can't
-            afford it, rather than a partial payment); trading for currency itself, or aiming
-            "take"/"give"/"trade" at the target's own name rather than something inside it, is
-            always "not_takeable" regardless of amount.
+            with nothing but item_name/target_name and live entity state. Excludes the case
+            where target_name *also* currently carries an item of this same shared-catalog name
+            (see DMCore._on_item_interaction_detected's own note) -- there, source/destination
+            below still resolve to target_name/self.player_name, an ordinary transfer, not the
+            self-no-op below. "trade" additionally charges the item's TOML `value` as a price
+            (denied outright if the player can't afford it, rather than a partial payment);
+            trading for currency itself, or aiming "take"/"give"/"trade" at the target's own
+            name rather than something inside it, is always "not_takeable" regardless of amount.
         @param intent "give", "trade", "examine", or "take".
         @param item_name NLPCore's best-guess item match (map_to_item), or the literal sentinel
             "currency".
@@ -422,7 +425,12 @@ class InventoryMixin(DMCoreProtocol):
         @param resolved The item_interaction_resolved publisher closure from
             DMCore._on_item_interaction_detected.
         """
-        already_owned = intent in ("examine", "take") and item_name in self.entities.get(self.player_name, {}).get("inventory", [])
+        target_has_item = bool(target_name) and item_name in self.entities.get(target_name, {}).get("inventory", [])
+        already_owned = (
+            intent in ("examine", "take")
+            and item_name in self.entities.get(self.player_name, {}).get("inventory", [])
+            and not target_has_item
+        )
 
         if not already_owned and item_name == target_name:
             # Interacting with the container/creature itself, not something inside it -- there's

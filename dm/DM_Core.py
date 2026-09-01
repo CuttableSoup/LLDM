@@ -947,8 +947,18 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         # locked/closed *unrelated* scene target never blocks examining something the player
         # already possesses (the same reasoning the ground-item check already follows: reaching
         # something the player can already reach without going through target_name at all must
-        # never be gated on target_name's own state).
-        already_owned = intent in ("examine", "take") and item_name in self.entities.get(self.player_name, {}).get("inventory", [])
+        # never be gated on target_name's own state). Excludes the case where target_name
+        # *also* currently carries an item of this same shared-catalog name (ex: a second
+        # "health potion" sitting in a chest after the player already picked one up elsewhere)
+        # -- there, "take" still has something real left to actually move, so this must not
+        # short-circuit into a self-transfer no-op that silently leaves the target's own copy
+        # behind untaken.
+        target_has_item = bool(target_name) and item_name in self.entities.get(target_name, {}).get("inventory", [])
+        already_owned = (
+            intent in ("examine", "take")
+            and item_name in self.entities.get(self.player_name, {}).get("inventory", [])
+            and not target_has_item
+        )
 
         def resolved(found, **extra):
             if found:
