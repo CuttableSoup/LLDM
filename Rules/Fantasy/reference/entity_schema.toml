@@ -11,9 +11,8 @@
 #
 # Every field is read with .get(), so an absent field just means "code that reads it falls
 # back to a default" (0, {}, [], or a hardcoded fallback like "untrained" 0D) rather than an
-# error. Fields marked UNUSED below are parsed and kept on the entity dict but nothing in
-# DM_*.py currently reads them -- reserved for narration flavor or a future mechanic (bulk
-# capacity, XP, encumbrance), not enforced by any rule today.
+# error. A field marked UNUSED below is parsed and kept on the entity dict but nothing in
+# DM_*.py currently reads it -- reserved for a future mechanic, not enforced by any rule today.
 
 [[entity]]
 
@@ -71,17 +70,39 @@ max_hp = 20                                # Ceiling for get_current_hp/apply_he
                                             # returns None for a non-positive max_hp).
 currency = 0                                # Starting money -- transfer_currency/loot_entity/
                                             # "trade"'s price check all read and mutate this.
-bulk = 0                                    # UNUSED today -- an object's own carry weight; no
-                                            # code currently checks it against max_bulk.
+bulk = 0                                    # An object's own carry weight -- get_current_bulk
+                                            # (DM_Rules.py) sums every "bulk" value across the
+                                            # player's own "inventory" list; "take"/"trade"/a
+                                            # ground "take" (DM_Inventory.py's own
+                                            # _bulk_would_be_exceeded) refuse with reason
+                                            # "bulk_exceeded" the moment that sum would rise
+                                            # past get_max_bulk. No cap enforced on any entity
+                                            # other than the player. There is no "max_bulk"
+                                            # entity field -- carrying capacity is never
+                                            # authored per-entity. It's always computed by
+                                            # get_max_bulk from rules.toml's own [bulk] table:
+                                            # min_bulk plus this entity's own "skill" dice (ex:
+                                            # "strength") times mod_multiplier. A setting that
+                                            # authors no [bulk] table at all (ex: Rules/Zombie/)
+                                            # simply never gets the cap enforced (get_max_bulk
+                                            # returns None).
 value = 0                                   # An object's price -- read by "trade"
                                             # (item_interaction_resolved's "price"; denied
                                             # "cant_afford" if the buyer's own currency is
                                             # short).
-weight = 0                                  # UNUSED today -- reserved, no code reads it.
-max_bulk = 0                                # UNUSED today -- reserved carry-capacity cap for
-                                            # "bulk"; no code enforces it yet.
-exp = 0                                     # UNUSED today -- reserved for a future
-                                            # leveling/XP mechanic.
+exp = 0                                     # Dual role, same "one field, two sides of the same
+                                            # economy" shape "currency" already has. On a
+                                            # player/party member: their own running XP total --
+                                            # _award_xp_for_defeat (DM_Combat.py) accumulates
+                                            # into this field, never resets it. On anything else
+                                            # (ex: a creature/npc): a custom flat XP grant for
+                                            # defeating it, checked via plain key presence (an
+                                            # authored `exp = 0` really does grant zero) --
+                                            # absent entirely (every shipped creature/npc today)
+                                            # falls back to that entity's own live
+                                            # get_challenge_rating instead. Neither role is ever
+                                            # read off a template directly by anything other
+                                            # than _award_xp_for_defeat/its own accumulation.
 
 # ---------------------------------------------------------------------------------------------
 # Movement (see DM_Movement.py's "Movement and range" in CLAUDE.md)
@@ -521,6 +542,24 @@ damage = { dice = 3, pips = 0, bonus = 0 }  # A {dice, pips, bonus} table -- dea
                                             # vulnerability/evaluate_statuses path a weapon hit
                                             # takes. Pair with damage_tags, below.
 damage_tags = [ "piercing" ]
+xp = true                                   # Truthy -> awards XP via _award_xp_for_defeat
+                                            # (DM_Combat.py) -- the same primitive a combat kill
+                                            # triggers, just called from here instead (ex:
+                                            # items.toml's dart trap/scythe trap, whose own
+                                            # [entity.test.pass] pairs this with
+                                            # dismiss_condition = "armed"). Only ever fires once
+                                            # per entity: dismissing this test's own
+                                            # requires_condition makes is_test_available false
+                                            # for every later attempt, same guarantee a combat
+                                            # kill gets from HP never going back above 0 on its
+                                            # own. Deliberately opt-in, unlike a combat kill --
+                                            # most entity.tests (ex: a chest's own lock above)
+                                            # aren't "surviving a threat" at all, so this can't
+                                            # be inferred from subtype == "trap" or any other
+                                            # property; it has to be authored. This entity's own
+                                            # top-level "exp" field is what decides the amount
+                                            # (custom if authored, else get_challenge_rating --
+                                            # see that field's own comment, above).
 
 [entity.test.fail]
 condition = "jammed"

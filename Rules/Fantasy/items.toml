@@ -277,6 +277,10 @@ supertype = "object"
 subtype = "trap"
 description = "A row of pinprick holes lines the wall at waist height, aimed squarely across the doorway."
 max_hp = 5
+# Custom XP grant (_award_xp_for_defeat, DM_Combat.py) -- get_challenge_rating would be a poor
+# stand-in for a trap, which has no skills/damage-dealing ability the usual way, so this is a
+# flat value instead, matching this trap's own test difficulty rather than anything CR-scaled.
+exp = 9
 
 [entity.conditions.armed]
 duration = "permanent"
@@ -294,8 +298,12 @@ skill = [ "finesse", "acrobatics" ]
 requires_condition = "armed"
 blocks_if_condition = "triggered"
 
+# xp = true opts this pass outcome into _award_xp_for_defeat -- surviving or disarming a real
+# hazard is worth XP the same declarative way loot/reveal/damage already are (see this trap's
+# own top-level "exp" above for the actual amount).
 [entity.test.pass]
 dismiss_condition = "armed"
+xp = true
 
 [entity.test.fail]
 condition = "triggered"
@@ -314,6 +322,9 @@ supertype = "object"
 subtype = "trap"
 description = "A rusted blade hangs half-hidden in the shadows overhead, strung on a taut wire across the passage."
 max_hp = 8
+# Custom XP grant -- see the dart trap's own "exp" comment above for why a trap authors this
+# explicitly rather than relying on get_challenge_rating.
+exp = 10
 
 [entity.conditions.armed]
 duration = "permanent"
@@ -342,6 +353,7 @@ blocks_if_condition = "triggered"
 
 [entity.test.pass]
 dismiss_condition = "armed"
+xp = true
 
 [entity.test.fail]
 condition = "triggered"

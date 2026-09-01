@@ -340,8 +340,20 @@ class StatusMixin(DMCoreProtocol):
             damage_value) deals real damage to the player via calculate_damage -- ex: a
             trap's failed disarm/dodge attempt -- reusing the exact same immunity/resistance/
             vulnerability and evaluate_statuses("on_damage") path a weapon hit already takes,
-            rather than a separate one-off HP subtraction. Any combination can be present at
-            once, or the whole outcome can be empty/omitted for no consequence.
+            rather than a separate one-off HP subtraction; a truthy "xp" key awards XP via
+            _award_xp_for_defeat (DM_Combat.py) -- the same primitive a combat kill triggers,
+            just from this call site instead, so surviving/disarming a trap (ex: items.toml's
+            dart trap/scythe trap, both `dismiss_condition = "armed"` + `xp = true` on their
+            own [entity.test.pass]) is worth XP the same principled way defeating a hostile
+            creature already is, rather than a bespoke "if trap" branch anywhere. Deliberately
+            opt-in (unlike a combat kill, which is unconditional the moment a hostile entity's
+            HP hits 0) -- most [entity.test]s (ex: a chest's lock) aren't "surviving a threat"
+            at all, so this has to be authored, not inferred from subtype == "trap" or any
+            other property. Naturally single-fire, no extra bookkeeping needed: once "armed" is
+            dismissed, is_test_available's own requires_condition gate makes this same test
+            permanently unavailable, so a disarmed trap can never re-fire this a second time.
+            Any combination of the above can be present at once, or the whole outcome can be
+            empty/omitted for no consequence.
         @param entity_name The name of the entity the test was performed against -- also the
             nominal "attacker" for a "damage" key (ex: the trap itself), purely so
             resolve_damage_value has something to resolve a flat/no bonus against; traps
@@ -365,6 +377,8 @@ class StatusMixin(DMCoreProtocol):
             )
         if outcome.get("reveal"):
             self.apply_condition(entity_name, "identified", duration="permanent", dismiss="")
+        if outcome.get("xp"):
+            self._award_xp_for_defeat(entity_name)
         effects = {}
         if outcome.get("loot"):
             effects["loot"] = self.loot_entity(entity_name, self.player_name)

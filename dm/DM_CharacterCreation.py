@@ -1,5 +1,7 @@
 from dm.DM_Types import DMCoreProtocol
-from resolution.Character_Creation import build_character_skills, get_race, validate_allocation
+from resolution.Character_Creation import (
+    build_character_skills, get_race, spend_exp_on_skills, validate_allocation,
+)
 
 
 class CharacterCreationMixin(DMCoreProtocol):
@@ -44,10 +46,22 @@ class CharacterCreationMixin(DMCoreProtocol):
             what lets LLDM.py's CLI quick-boot path pass a bare `{"name": ...}` (a rename with
             no point-buy sheet behind it at all) through this exact same method rather than
             needing its own separate rename-only code path.
-        @param character {"race": race_name, "allocation": {skill_name: dice_int}, "name":
-            new_name}, or None. "allocation"/"race" and "name" are independent of each other --
-            either can be given without the other. "name" absent/blank/unchanged leaves
-            self.player_name exactly as _resolve_player_name found it.
+
+            A non-empty "pip_spend" (see Character_Creation.py's spend_exp_on_skills) then
+            trains skills further, on top of whatever player["skills"] already is at that point
+            -- the just-built point-buy result if "allocation" ran, or the template's own
+            hand-authored skills otherwise -- spending from the player template's own "exp"
+            field (ex: characters.toml's gladstone, exp = 100). Replayed fresh here, never
+            trusting a client-submitted final {dice, pips}, same "recompute, don't trust"
+            precedent "allocation" already sets; a rejected spend (an unknown skill, or running
+            out of XP partway through) is logged and left entirely unapplied -- unlike a
+            rejected "allocation", this doesn't abort the rest of the method, since training and
+            renaming are unrelated.
+        @param character {"race": race_name, "allocation": {skill_name: dice_int}, "pip_spend":
+            [skill_name, ...], "name": new_name}, or None. "allocation"/"race", "pip_spend", and
+            "name" are independent of each other -- any can be given without the others. "name"
+            absent/blank/unchanged leaves self.player_name exactly as _resolve_player_name found
+            it.
         """
         if not character:
             return
@@ -79,6 +93,17 @@ class CharacterCreationMixin(DMCoreProtocol):
                 if race_language not in languages:
                     languages.append(race_language)
                 player["languages"] = languages
+
+        pip_spend = character.get("pip_spend") or []
+        if pip_spend:
+            new_skills, remaining_exp, reason = spend_exp_on_skills(
+                player.get("skills", {}), player.get("exp", 0), pip_spend,
+            )
+            if reason:
+                self.event_bus.publish("log_error", f"Character creation XP spend rejected: {reason}")
+            else:
+                player["skills"] = new_skills
+                player["exp"] = remaining_exp
 
         new_name = (character.get("name") or "").strip()
         if new_name and new_name != self.player_name:

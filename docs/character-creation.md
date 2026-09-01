@@ -19,9 +19,9 @@ rejects an unknown skill, a negative entry, anything over the per-skill cap, or 
 isn't *exactly* `pool_dice`; `build_character_skills` is baseline + allocation for every skill.
 
 `DM_CharacterCreation.py`'s `apply_character_creation(character)` — `character` being
-`{"race", "allocation", "name"}` — is the one piece that touches `DMCore` state, called from
-`DMCore.__init__` right after `_resolve_player_name()` and before any scenario loads.
-`"allocation"`, if non-empty, is validated and overwrites `self.entities[self.player_name]
+`{"race", "allocation", "pip_spend", "name"}` — is the one piece that touches `DMCore` state,
+called from `DMCore.__init__` right after `_resolve_player_name()` and before any scenario
+loads. `"allocation"`, if non-empty, is validated and overwrites `self.entities[self.player_name]
 ["skills"]` entirely and updates `qualities.race`; if absent, the override is skipped and the
 template's own hand-authored skills are left untouched (this is what lets `LLDM.py`'s CLI
 quick-boot pass a bare `{"name": ...}` through this same method rather than needing a separate
@@ -33,12 +33,35 @@ entity is rejected outright (`log_error`, not raised) — since this runs *befor
 accepted gap. Renaming doesn't touch any other entity's `[[entity.attitudes.name]]` override
 keyed to the old name. `character=None` (every caller that omits it) is a complete no-op.
 
+**Training (spending XP on skills).** `Character_Creation.py`'s `spend_pip(dice, pips, exp)`
+raises one skill by a single pip, costing XP equal to its own *current* dice count — pips roll
+over into an extra die at 3 (`skill_rating`'s own "3 pips = 1 die" scale, `Challenge_Rating.py`),
+so a trained-up skill lands on the same `{dice, pips}` shape any hand-authored one would.
+`spend_exp_on_skills(skills_dict, exp, pip_spend)` replays an ordered list of skill names (each
+entry = one more pip on that skill, its own cost based on wherever the replay has put that
+skill's dice by then) on top of `skills_dict`, all-or-nothing — the first unaffordable or
+unknown-skill entry rejects the whole spend and returns the original, untouched
+`skills_dict`/`exp`. `apply_character_creation`'s own `"pip_spend"` — independent of
+`"allocation"`/`"race"`, so it applies to the player template's own hand-authored skills just as
+well as a freshly-built point-buy result — replays this fresh against `player["skills"]` and
+`player["exp"]` (ex: `characters.toml`'s gladstone, `exp = 100`) the same "recompute, don't trust
+the client" way `"allocation"` is validated; a rejected spend is logged and left entirely
+unapplied, without aborting the rest of the method (training and renaming are unrelated).
+
 `Character_Creation_GUI.py`'s `CharacterCreationDialog` (a modal `Toplevel`) is the interactive
-front end: an optional name field, a race dropdown, a per-skill allocation row, and a "dice
-remaining" counter gating Create until it hits exactly zero. `self.result` is always
-`{"race", "allocation", "name"}` once Create is pressed, or `None` if cancelled.
-`GUICore.request_character_creation` runs this and, only when not cancelled, publishes
-`"character_created"`.
+front end: an optional name field, a race dropdown, a per-skill allocation row (baseline,
+point-buy spend, running total, and a "Train" button spending from `player_exp`), a "dice
+remaining"/"XP remaining" counter pair (only the dice counter gates Create — leftover XP just
+carries over unspent), and Create/Cancel. `self.pip_spend` is the literal, ordered click log —
+`_recompute_training` is the single source of truth, replaying it via `spend_exp_on_skills`
+against whatever the current baseline+allocation is (never hand-tracked incrementally), so
+switching race clears it (a purchase's own cost basis no longer means anything) and editing an
+allocation re-prices every later entry live rather than preserving what was actually paid at
+click time. `self.result` is always `{"race", "allocation", "pip_spend", "name"}` once Create is
+pressed, or `None` if cancelled. `GUICore.request_character_creation` loads
+`load_player_starting_exp(rules_dir)` (a second, separate `Rules/<setting>/*.toml` scan for the
+`is_player` template's own `"exp"`) alongside `load_character_creation_data`, runs the dialog,
+and — only when not cancelled — publishes `"character_created"`.
 
 
 ## Booting the game

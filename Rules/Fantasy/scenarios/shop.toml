@@ -34,8 +34,6 @@ description = "A cheerful, round-faced merchant standing behind a cluttered coun
 max_hp = 16
 
 currency = 60
-max_bulk = 5
-weight = 150
 
 languages = [ "common" ]
 memories = [ "Took over the shop from their father", "Knows every regular customer by name" ]

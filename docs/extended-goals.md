@@ -243,10 +243,15 @@ days, resolved as one roll at completion rather than a periodic per-day roll (av
 own swinginess) — scoped to locations with no active environment for a first pass, since crafting
 while camped somewhere dangerous is a real combination but not designed yet.
 
-**Training.** No scaffolding exists at all for this one — there is no post-chargen skill
-advancement/XP system, only chargen point-buy (see "Character creation"). Training's actual
-mechanics (what improves, by how much, gated by what) are a character-advancement design question
-independent of the clock itself, and are explicitly deferred rather than half-designed here.
+**Training.** The core mechanics now exist — raising a skill by a pip costs XP equal to its own
+current dice count, rolling over into an extra die at 3 pips (`spend_pip`/`spend_exp_on_skills`,
+`Character_Creation.py`; see `docs/character-creation.md`'s "Training") — but only reachable from
+the character-creation screen, which today only ever opens once, before the first game a session
+has (see "Booting the game" above). What's still genuinely deferred: **when** that screen (or an
+equivalent) can be reopened mid-game so accumulated post-chargen XP is actually spendable — a
+clock/downtime-adjacent design question in its own right, not yet decided — and quest-driven XP
+(only defeating a hostile entity, or surviving/disarming a trap, awards any today; see
+`docs/combat.md`'s "Experience (XP)").
 
 **Data conventions.** `environments.toml` and `world_map.toml` are new sibling files alongside
 the existing `Rules/Fantasy/*.toml` catalogs; block length, blocks/day, and whatever constants the

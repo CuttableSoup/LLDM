@@ -38,7 +38,6 @@ hint = "the innkeeper running the bar tonight"
 target_cr = "player"
 
 currency = 40
-max_bulk = 5
 
 [entity_template.attitudes]
 # Just a flat default -- warm toward everyone alike, no special-cased exceptions.
@@ -60,7 +59,6 @@ target_cr = "player"
 cr_multiplier = {min = 0.8, max = 1.2} # can vary from weaker to stronger
 
 currency = {min = 10, max = 50}
-max_bulk = 5
 
 [entity_template.attitudes]
 default = [
@@ -94,7 +92,6 @@ target_cr = "player"
 cr_multiplier = 0.6                         # a background patron, not meant to rival the player
 
 currency = 5
-max_bulk = 5
 
 [entity_template.attitudes]
 default = [ 15, 0, 0 ]

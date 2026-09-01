@@ -7,7 +7,7 @@ from tkinter import ttk, simpledialog
 from collections import Counter
 
 import resolution.Combat_Resolution as Combat_Resolution
-from resolution.Character_Creation import load_character_creation_data
+from resolution.Character_Creation import load_character_creation_data, load_player_starting_exp
 from gui.Character_Creation_GUI import run_character_creation_dialog
 from dm.DM_Rules import list_available_scenarios, list_available_settings
 from paths import PROJECT_ROOT
@@ -323,14 +323,14 @@ class GUICore:
             blocking modally the same way request_load's own picker does -- moved here from
             LLDM.py's main(), which used to run this unconditionally, before DMCore even
             existed, on every single boot. Publishes "character_created" with the dialog's own
-            result ({"race", "allocation", "name"}) only if "Create" was actually pressed;
-            cancelling leaves self.result None and nothing is published at all, so a cancelled
-            dialog can't be mistaken for "create a character with no race/allocation" by
-            whatever's listening. load_character_creation_data() re-scans Rules/Fantasy/*.toml
-            directly (see its own module docstring) rather than asking a DMCore for the same
-            data, since one may not exist yet -- the entire reason this event-published, no
-            direct reference, pattern exists in the first place (see this class's own
-            docstring further up).
+            result ({"race", "allocation", "pip_spend", "name"}) only if "Create" was actually
+            pressed; cancelling leaves self.result None and nothing is published at all, so a
+            cancelled dialog can't be mistaken for "create a character with no race/allocation"
+            by whatever's listening. load_character_creation_data()/load_player_starting_exp()
+            re-scan Rules/<setting>/*.toml directly (see their own module docstrings) rather
+            than asking a DMCore for the same data, since one may not exist yet -- the entire
+            reason this event-published, no direct reference, pattern exists in the first place
+            (see this class's own docstring further up).
 
             A freshly-created character doesn't start a game by itself anymore -- it just
             becomes self._pending_character and unlocks Scenario -> Load... (request_
@@ -338,10 +338,12 @@ class GUICore:
             always landing in whatever LLDM.py's own default happens to be. No-ops (past
             publishing the event) if a game is already active -- see _on_game_started.
         """
-        skills, races, character_creation = load_character_creation_data(
-            os.path.join("Rules", self.setting_var.get())
+        rules_dir = os.path.join("Rules", self.setting_var.get())
+        skills, races, character_creation = load_character_creation_data(rules_dir)
+        player_exp = load_player_starting_exp(rules_dir)
+        character = run_character_creation_dialog(
+            self.root, skills, races, character_creation, player_exp,
         )
-        character = run_character_creation_dialog(self.root, skills, races, character_creation)
         if character is None:
             return
         self.event_bus.publish("character_created", {"character": character})

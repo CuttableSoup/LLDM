@@ -9,7 +9,6 @@ max_hp = 30
 
 currency = 0
 max_bulk = 5
-weight = 160
 
 inventory = [
     "pistol",

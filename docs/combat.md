@@ -187,6 +187,54 @@ Nothing automatically re-evaluates a status-driven condition once its requiremen
 outside of `apply_damage`/`apply_healing`'s own calls.
 
 
+## Experience (XP)
+
+`_award_xp_for_defeat` (`DM_Combat.py`) is one shared primitive with two call sites, each
+deciding independently *when* an entity counts as neutralized rather than duplicating this
+method's own math:
+- `calculate_damage` captures `defender_name`'s HP before calling into
+  `Combat_Resolution.calculate_damage`, and if that call brings it from positive down to
+  exactly 0 *and* `is_hostile(defender_name, player_name)` is true, calls
+  `_award_xp_for_defeat(defender_name)` before returning — a real kill, once, never a second hit
+  against an already-dead corpse, and never for an ally/the player/an inanimate object (all
+  `is_hostile` false by construction — see "Combat", above). Unconditional whenever it fires —
+  no per-entity authoring needed.
+- `apply_test_outcome` (`DM_Status.py`, see `docs/inventory-items.md`'s "Entity tests") calls it
+  whenever the matched `[entity.test]` outcome carries a truthy `xp` key — ex: `items.toml`'s
+  dart trap/scythe trap, whose own `[entity.test.pass]` pairs `xp = true` with
+  `dismiss_condition = "armed"`, so surviving or disarming a trap is worth XP the same
+  declarative way `loot`/`reveal`/`damage` already are, rather than a bespoke "if trap" branch
+  anywhere. Deliberately opt-in, unlike a combat kill — most `[entity.test]`s (ex: a chest's
+  lock) aren't "surviving a threat" at all, so this can't be inferred from `subtype == "trap"`
+  or any other property; it has to be authored. Naturally single-fire too, with no extra
+  bookkeeping: once `"armed"` is dismissed, `is_test_available`'s own `requires_condition` gate
+  makes that same test permanently unavailable, so a disarmed trap can never re-award XP.
+
+`_award_xp_for_defeat`'s base amount is the neutralized entity's own `exp` field if it authored one
+at all — checked via plain key presence, so an authored `exp = 0` really does grant zero XP —
+else its live `get_challenge_rating` (see "Challenge rating") — a poor stand-in for a trap
+specifically, which has no skills/damage-dealing ability the usual way, so every shipped trap
+authors an explicit `exp` instead. `exp` plays a second, dual role on
+a player/party member instead: their own running XP total, only ever accumulated into, never
+read as a custom-grant override (the same "one field, two sides of the same economy" shape
+`currency` already has between a lootable entity's stash and a party member's own purse).
+
+The base amount is multiplied by `rules.toml`'s own `[xp]` `xp_multiplier`, then either split
+evenly across every entity in `self.scenario_entities` that's currently `is_player`/`is_party`
+(`divide_between_party = true`, floor `//` division so an uneven split never grants fractional
+XP) or credited to each one in full (`false` — Fantasy's own shipped default, mirroring how
+`loot_entity`/`transfer_currency` already hand a defeated/looted entity's full currency to
+whoever loots it rather than splitting it first). `[xp]` itself is a tuning table, not an opt-in
+gate the way `[bulk]` is — a setting that authors no `[xp]` table at all still accumulates XP on
+its party members' `exp` field, just at `xp_multiplier = 1`, `divide_between_party = false`.
+
+Spending `exp` — training a skill up by a pip at a time — is `Character_Creation.py`'s
+`spend_pip`/`spend_exp_on_skills`, wired into the character-creation screen today (see
+`docs/character-creation.md`'s "Training"); quest-driven XP (as opposed to defeating an enemy),
+and reopening that screen mid-game rather than only once at first boot, are both still open —
+see `docs/extended-goals.md`.
+
+
 ## Tags vs. conditions
 
 - **Tags** are static classification data, fixed for an entity's lifetime: `damage_tags`/

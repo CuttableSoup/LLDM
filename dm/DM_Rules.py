@@ -218,6 +218,38 @@ class RulesMixin(DMCoreProtocol):
 
         return supertype_only_slots if supertype_only_slots is not None else []
 
+    def get_current_bulk(self, entity_name):
+        """!
+        @brief Sums the "bulk" field of every item entity_name is currently carrying (its own
+            "inventory" list -- an equipped item is always also listed there, see
+            entity_schema.toml's own [entity.equipped] comment, so it's never double-counted).
+        @param entity_name The name of the entity to total.
+        @return The summed bulk, 0 if entity_name carries nothing or is unknown.
+        """
+        entity = self.entities.get(entity_name, {})
+        return sum(self.entities.get(item_name, {}).get("bulk", 0) for item_name in entity.get("inventory", []))
+
+    def get_max_bulk(self, entity_name):
+        """!
+        @brief Resolves entity_name's own carrying capacity from rules.toml's [bulk] table --
+            min_bulk plus this entity's own "skill" dice times mod_multiplier (ex: Fantasy's
+            min_bulk = 3, mod_multiplier = 2, so a 2D strength character carries 3 + 2*2 = 7
+            bulk before DM_Inventory.py's own _bulk_would_be_exceeded starts refusing
+            "take"/"trade" with reason "bulk_exceeded"). Unlike every other rules.toml-backed
+            formula in this file, max_bulk is never itself an authored [[entity]] field --
+            it's always computed here, the same "decided by a rules entry" the [bulk] table's
+            own comment describes.
+        @param entity_name The name of the entity to look up.
+        @return The max bulk this entity can carry, or None if the current setting authors no
+                [bulk] table at all (ex: Rules/Zombie/) -- callers treat None as "uncapped",
+                never as zero.
+        """
+        formula = self.rules.get("bulk")
+        if not formula:
+            return None
+        skill_stats = self.entities.get(entity_name, {}).get("skills", {}).get(formula.get("skill"), {})
+        return formula.get("min_bulk", 0) + skill_stats.get("dice", 0) * formula.get("mod_multiplier", 1)
+
     def _validate_equipped_slots(self):
         """!
         @brief Cross-checks every loaded entity's own [entity.equipped] slot keys against

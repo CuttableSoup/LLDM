@@ -174,6 +174,36 @@ modifier = { dice = 1, pips = 0, bonus = 0 }
 skill = "strength"
 divisor = 2
 
+# Carry-capacity formula -- get_max_bulk (DM_Rules.py) reads this once per lookup: min_bulk plus
+# this entity's own "skill" dice times mod_multiplier (ex: a 2D strength character here carries
+# 3 + 2*2 = 7 bulk before "take"/"trade"/a ground "take" starts refusing with reason
+# "bulk_exceeded" -- DM_Inventory.py's own _bulk_would_be_exceeded, checked against
+# get_current_bulk's live sum of every entity_schema.toml "bulk" value currently in the player's
+# own inventory). Absent entirely (ex: Rules/Zombie/, which authors no [bulk] table of its own)
+# means get_max_bulk returns None and the cap is never enforced at all -- same "a setting that
+# never opts in just doesn't get the mechanic" precedent [[equip_slot]] already sets.
+[bulk]
+skill = "strength"
+min_bulk = 3
+mod_multiplier = 2
+
+# XP award formula -- _award_xp_for_defeat (DM_Combat.py) reads this once per kill, the moment a
+# hostile-to-the-player entity's HP first reaches 0 (calculate_damage's own "previous_hp > 0,
+# now 0" check). The base amount is the defeated entity's own "exp" field if it authored one
+# (entity_schema.toml), else its live get_challenge_rating -- same "decided live, not fixed at
+# creation time" value get_party_challenge_rating already reflects. That base is multiplied by
+# xp_multiplier, then either split evenly across every current is_player/is_party member
+# (divide_between_party = true, floor division) or credited to each one in full
+# (divide_between_party = false, the shipped Fantasy default -- undivided XP mirrors how
+# loot_entity/transfer_currency already hand a defeated/looted entity's full currency to
+# whoever loots it, never splitting it first). Absent entirely defaults to xp_multiplier = 1,
+# divide_between_party = false -- XP tracking itself isn't gated behind authoring this table the
+# way [bulk]'s own cap is; a setting that never authors [xp] still accumulates XP on its party
+# members' own "exp" field, just at the plainest possible rate.
+[xp]
+xp_multiplier = 1
+divide_between_party = false
+
 # Point-buy constants for character creation (Character_Creation.py/DM_CharacterCreation.py).
 # A new character's starting dice come entirely from whichever race is picked -- every race
 # in races.toml spells out an absolute dice count for every skill (human's own is a flat 2D

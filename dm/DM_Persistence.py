@@ -100,8 +100,8 @@ class PersistenceMixin(DMCoreProtocol):
         """!
         @brief Writes this core's mechanical state to Saves/<slot_name>/dm_state.json -- a
             diff from a fresh instantiation (round_number, scenario_entities, and each
-            instance's hp/active_conditions/currency/inventory/equipped/band/attitude_deltas/
-            action_attitude_deltas/current_language/prompt_directive), not a raw dump
+            instance's hp/active_conditions/currency/exp/inventory/equipped/band/
+            attitude_deltas/action_attitude_deltas/current_language/prompt_directive), not a raw dump
             of self.entities, which also holds every static template. Loading re-instantiates
             fresh from Rules/Fantasy TOML and overlays this diff on top, so a save doesn't
             freeze stale stats if templates are edited between sessions. LLMCore
@@ -164,6 +164,11 @@ class PersistenceMixin(DMCoreProtocol):
                 "hp": self.get_current_hp(name),
                 "active_conditions": entity.get("active_conditions", {}),
                 "currency": entity.get("currency", 0),
+                # A party member's own running XP total (_award_xp_for_defeat, DM_Combat.py --
+                # see docs/combat.md's "Experience (XP)") -- genuinely accumulated runtime
+                # state, same unconditional per-instance treatment currency gets, not just the
+                # static starting value a hand-authored template's own "exp" field provides.
+                "exp": entity.get("exp", 0),
                 "inventory": entity.get("inventory", []),
                 "equipped": entity.get("equipped", {}),
                 "band": self.get_band(name),
@@ -494,6 +499,7 @@ class PersistenceMixin(DMCoreProtocol):
             entity["current_language"] = state.get("current_language")
             entity["prompt_directive"] = state.get("prompt_directive")
             entity["currency"] = state.get("currency", entity.get("currency", 0))
+            entity["exp"] = state.get("exp", entity.get("exp", 0))
             entity["inventory"] = state.get("inventory", entity.get("inventory", []))
             entity["equipped"] = state.get("equipped", entity.get("equipped", {}))
             entity["band"] = state.get("band", entity.get("band", 1))

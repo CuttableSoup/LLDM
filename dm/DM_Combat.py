@@ -133,14 +133,22 @@ class CombatMixin(DMCoreProtocol):
             as "touched by fire" for this purpose, the same simplification real Pathfinder
             regeneration makes (fire/acid suppress it outright, not just when damage gets
             through).
+            Also the sole trigger point for XP: if this hit is what brings defender_name from
+            positive HP down to 0 (a real kill, not a second hit against an already-dead
+            corpse) and defender_name is_hostile toward the player, _award_xp_for_defeat runs
+            before returning -- see that method and rules.toml's own [xp] table.
         @param attacker_name The name of the entity dealing damage.
         @param defender_name The name of the entity taking damage.
         @param ability A table with damage_value {dice, pips, bonus} and damage_tags, such as a weapon, spell, or innate ability.
         @return A dict describing the raw damage, reduction, vulnerability bonus, net damage, and the defender's remaining HP.
         """
-        return Combat_Resolution.calculate_damage(
+        previous_hp = self.get_current_hp(defender_name)
+        result = Combat_Resolution.calculate_damage(
             self.entities, self.rules, self.event_bus, attacker_name, defender_name, ability,
         )
+        if previous_hp > 0 and result["remaining_hp"] == 0 and self.is_hostile(defender_name, self.player_name):
+            self._award_xp_for_defeat(defender_name)
+        return result
 
     def roll_dice(self, dice, pips):
         """!
@@ -579,4 +587,54 @@ class CombatMixin(DMCoreProtocol):
             self.get_challenge_rating(name)
             for name in self.scenario_entities
             if self.entities.get(name, {}).get("is_player") or self.entities.get(name, {}).get("is_party")
+        )
+
+    def _award_xp_for_defeat(self, entity_name):
+        """!
+        @brief Awards XP for a just-neutralized threat to every current party member -- one
+            shared primitive, two call sites, each deciding independently *when* entity_name
+            actually counts as neutralized rather than duplicating this method's own math:
+            calculate_damage (above), unconditionally the moment a hostile entity's HP first
+            reaches 0, and apply_test_outcome (DM_Status.py), only when the matched
+            [entity.test] outcome carries a truthy "xp" key (ex: items.toml's dart trap/scythe
+            trap, surviving or disarming being just as real a threat neutralized as a kill,
+            authored the same declarative way loot/reveal/damage already are rather than a
+            special "if trap" branch anywhere in this method itself).
+
+            The base award is entity_name's own "exp" field if it authored one at all
+            (entity_schema.toml -- a deliberate custom value, even 0), else its live
+            get_challenge_rating -- the same "no explicit exp" default every shipped
+            creature/npc uses today (a trap's own get_challenge_rating is a poor stand-in for
+            "how dangerous was this," since it has no skills/damage-dealing ability the usual
+            way, so every shipped trap authors an explicit "exp" instead). Multiplied by
+            rules.toml's own [xp] xp_multiplier, then either split evenly across the party
+            (divide_between_party = true, floor division so an uneven split never grants
+            fractional XP) or credited to each member in full (false). No-ops if nobody
+            currently in self.scenario_entities is_player/is_party -- mirrors
+            get_party_challenge_rating's own filter exactly, so a defeat that happens to leave
+            no live party member (shouldn't happen in practice) can't raise on an empty list.
+        @param entity_name The name of the entity that was just neutralized.
+        """
+        formula = self.rules.get("xp", {})
+        entity = self.entities.get(entity_name, {})
+        base_xp = entity["exp"] if "exp" in entity else self.get_challenge_rating(entity_name)
+        awarded = base_xp * formula.get("xp_multiplier", 1)
+
+        party_members = [
+            name for name in self.scenario_entities
+            if self.entities.get(name, {}).get("is_player") or self.entities.get(name, {}).get("is_party")
+        ]
+        if not party_members:
+            return
+        if formula.get("divide_between_party"):
+            awarded = awarded // len(party_members)
+        if awarded <= 0:
+            return
+
+        for member_name in party_members:
+            member = self.entities[member_name]
+            member["exp"] = member.get("exp", 0) + awarded
+        self.event_bus.publish(
+            "log_info",
+            f"{entity_name} defeated -- {awarded} XP awarded to {', '.join(party_members)}.",
         )

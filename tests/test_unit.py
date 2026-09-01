@@ -22,7 +22,10 @@ from resolution.Character_Creation import (
     build_character_skills,
     get_race,
     load_character_creation_data,
+    load_player_starting_exp,
     race_baseline_skills,
+    spend_exp_on_skills,
+    spend_pip,
     validate_allocation,
 )
 from resolution.AdHoc_Generation import (
@@ -2809,6 +2812,55 @@ class TestCharacterCreation(unittest.TestCase):
         self.assertEqual(skills["blades"], {"dice": 2, "pips": 0})  # untouched, elf's own override
 
 
+    def test_load_player_starting_exp_reads_gladstones_own_authored_exp(self):
+        self.assertEqual(load_player_starting_exp(), 100)  # characters.toml's own gladstone
+
+
+class TestSpendPip(unittest.TestCase):
+    """!
+    @brief spend_pip/spend_exp_on_skills (Character_Creation.py) -- the training math a skill's
+        own {dice, pips} is raised through by spending XP, one pip at a time.
+    """
+
+    def test_raising_a_pip_costs_the_current_dice_count(self):
+        self.assertEqual(spend_pip(dice=3, pips=0, exp=10), (3, 1, 7))
+
+    def test_a_third_pip_rolls_over_into_an_additional_die(self):
+        # Mirrors skill_rating's own "3 pips = 1 die" scale (Challenge_Rating.py) exactly.
+        self.assertEqual(spend_pip(dice=3, pips=2, exp=10), (4, 0, 7))
+
+    def test_insufficient_exp_returns_none_and_changes_nothing(self):
+        self.assertIsNone(spend_pip(dice=5, pips=0, exp=4))
+
+    def test_spend_exp_on_skills_applies_each_entry_in_order_at_its_own_live_cost(self):
+        skills = {"blades": {"dice": 2, "pips": 2}, "dodge": {"dice": 3, "pips": 0}}
+        # blades: 2D2p -costs 2-> 3D0p (rolled over) -costs 3-> 3D1p; dodge: 3D0p -costs 3-> 3D1p.
+        # Total spent: 2 + 3 + 3 = 8, starting from 20 XP.
+        new_skills, remaining, reason = spend_exp_on_skills(
+            skills, 20, ["blades", "blades", "dodge"],
+        )
+        self.assertIsNone(reason)
+        self.assertEqual(new_skills["blades"], {"dice": 3, "pips": 1})
+        self.assertEqual(new_skills["dodge"], {"dice": 3, "pips": 1})
+        self.assertEqual(remaining, 12)
+        # The original dict is never mutated -- a fresh copy is returned instead.
+        self.assertEqual(skills["blades"], {"dice": 2, "pips": 2})
+
+    def test_spend_exp_on_skills_is_all_or_nothing_on_insufficient_exp(self):
+        skills = {"blades": {"dice": 5, "pips": 0}}
+        new_skills, remaining, reason = spend_exp_on_skills(skills, 5, ["blades", "blades"])
+        self.assertIsNotNone(reason)
+        self.assertIn("blades", reason)
+        # Nothing applied at all -- not even the first, affordable purchase.
+        self.assertEqual(new_skills, skills)
+        self.assertEqual(remaining, 5)
+
+    def test_spend_exp_on_skills_rejects_an_unknown_skill_name(self):
+        new_skills, remaining, reason = spend_exp_on_skills({"blades": {"dice": 2, "pips": 0}}, 10, ["nonexistent"])
+        self.assertIn("nonexistent", reason)
+        self.assertEqual(remaining, 10)
+
+
 class TestChallengeRating(unittest.TestCase):
     """!
     @brief Challenge_Rating.py's pure "how powerful is this entity" math -- no DMCore, same
@@ -2874,6 +2926,92 @@ class TestChallengeRatingDMCoreIntegration(DMTestCase):
 
     def test_party_rating_sums_gladstone_and_thane_but_not_the_wolves(self):
         self.assertEqual(self.dm_core.get_party_challenge_rating(), 41 + 26)
+
+
+class TestXpAward(DMTestCase):
+    """!
+    @brief _award_xp_for_defeat (DM_Combat.py), triggered from calculate_damage the moment a
+        hostile entity's HP first reaches 0 -- arena.toml's own gladstone (is_player, starts
+        with exp = 100)/thane (is_party, no authored "exp" -- starts at the implicit 0) and its
+        first wolf (hostile by default, challenge rating 21 -- TestChallengeRatingDMCoreIntegration).
+    """
+
+    def _drop_the_wolf_to_one_hp(self):
+        self.dm_core.entities["wolf"]["hp"] = 1
+
+    def _deal_five_damage(self, attacker="gladstone", defender="wolf"):
+        # Untagged, so nothing on the defender's own resistance/armor ever reduces it -- keeps
+        # every test's own net_damage a fixed, known 5 regardless of which entity is targeted.
+        self.dm_core.calculate_damage(attacker, defender, {"damage_value": {"dice": 0, "pips": 0, "bonus": 5}, "damage_tags": []})
+
+    def test_defeating_a_hostile_entity_awards_its_challenge_rating_as_xp_by_default(self):
+        self._drop_the_wolf_to_one_hp()
+        self._deal_five_damage()
+
+        self.assertEqual(self.dm_core.get_current_hp("wolf"), 0)
+        self.assertEqual(self.dm_core.entities["gladstone"]["exp"], 100 + 21)
+        self.assertEqual(self.dm_core.entities["thane"]["exp"], 21)
+
+    def test_custom_exp_field_overrides_the_challenge_rating_default(self):
+        self.dm_core.entities["wolf"]["exp"] = 5
+        self._drop_the_wolf_to_one_hp()
+        self._deal_five_damage()
+
+        self.assertEqual(self.dm_core.entities["gladstone"]["exp"], 100 + 5)
+
+    def test_an_authored_exp_of_zero_grants_no_xp_at_all(self):
+        # Presence, not truthiness -- an authored 0 is a deliberate "worth nothing" override,
+        # distinct from never authoring "exp" at all (which falls back to the challenge rating).
+        self.dm_core.entities["wolf"]["exp"] = 0
+        self._drop_the_wolf_to_one_hp()
+        self._deal_five_damage()
+
+        self.assertEqual(self.dm_core.entities["gladstone"]["exp"], 100)
+        self.assertEqual(self.dm_core.entities["thane"].get("exp", 0), 0)
+
+    def test_xp_multiplier_scales_the_award(self):
+        self.dm_core.rules["xp"]["xp_multiplier"] = 3
+        self._drop_the_wolf_to_one_hp()
+        self._deal_five_damage()
+
+        self.assertEqual(self.dm_core.entities["gladstone"]["exp"], 100 + 21 * 3)
+
+    def test_divide_between_party_splits_the_award_evenly_by_floor_division(self):
+        self.dm_core.rules["xp"]["divide_between_party"] = True
+        self._drop_the_wolf_to_one_hp()
+        self._deal_five_damage()
+
+        # 21 // 2 party members (gladstone, thane) = 10 each, not 21 each.
+        self.assertEqual(self.dm_core.entities["gladstone"]["exp"], 100 + 10)
+        self.assertEqual(self.dm_core.entities["thane"]["exp"], 10)
+
+    def test_a_second_hit_against_an_already_dead_entity_awards_no_further_xp(self):
+        self._drop_the_wolf_to_one_hp()
+        self._deal_five_damage()
+        gladstone_exp_after_the_kill = self.dm_core.entities["gladstone"]["exp"]
+
+        self._deal_five_damage()  # the wolf is already at 0 HP -- previous_hp is 0, not > 0
+
+        self.assertEqual(self.dm_core.entities["gladstone"]["exp"], gladstone_exp_after_the_kill)
+
+    def test_defeating_a_non_hostile_entity_awards_no_xp(self):
+        # thane is is_party, friendly disposition -- never hostile toward the player, so his
+        # own defeat (however it happened) is never treated as a party accomplishment.
+        self.dm_core.entities["thane"]["hp"] = 1
+        self._deal_five_damage(attacker="wolf", defender="thane")
+
+        self.assertEqual(self.dm_core.entities["gladstone"]["exp"], 100)
+        self.assertEqual(self.dm_core.entities["thane"].get("exp", 0), 0)
+
+    def test_a_passed_entity_test_with_no_xp_key_awards_nothing(self):
+        # items.toml's own chest lock -- [entity.test.pass] is only {dismiss_condition =
+        # "locked"}, no "xp" key -- proving apply_test_outcome's own xp handling is genuinely
+        # opt-in per outcome, not automatic for every passed [entity.test] (ex:
+        # TestMultiRoomDungeon's own dart trap, which does author xp = true).
+        self.dm_core.apply_test_outcome("chest", {"dismiss_condition": "locked"})
+
+        self.assertEqual(self.dm_core.entities["gladstone"]["exp"], 100)
+        self.assertEqual(self.dm_core.entities["thane"].get("exp", 0), 0)
 
 
 class TestNpcGeneration(unittest.TestCase):
@@ -4173,6 +4311,39 @@ class TestCharacterCreationDMCoreIntegration(DMTestCase):
         dm = DMCore(EventBus(), scenario_name="arena", character=character)
         self.assertEqual(dm.entities["gladstone"]["languages"], ["common"])
 
+    def test_pip_spend_trains_a_skill_further_using_the_players_own_starting_exp(self):
+        character = {
+            "race": "elf",
+            "allocation": {"arcane": 5, "stealth": 5, "observation": 5},
+            "pip_spend": ["arcane"],
+        }
+        dm = DMCore(EventBus(), scenario_name="arena", character=character)
+        # arcane: 3 baseline + 5 allocated = 8D -- one more pip costs 8 XP, gladstone starts
+        # at exp = 100 (characters.toml).
+        self.assertEqual(dm.entities["gladstone"]["skills"]["arcane"], {"dice": 8, "pips": 1})
+        self.assertEqual(dm.entities["gladstone"]["exp"], 100 - 8)
+
+    def test_pip_spend_works_with_no_allocation_at_all(self):
+        # "allocation" absent entirely -- pip_spend still trains gladstone's own hand-authored
+        # skills directly (characters.toml's own blades = 5D).
+        character = {"pip_spend": ["blades"]}
+        dm = DMCore(EventBus(), scenario_name="arena", character=character)
+        self.assertEqual(dm.entities["gladstone"]["skills"]["blades"], {"dice": 5, "pips": 1})
+        self.assertEqual(dm.entities["gladstone"]["exp"], 100 - 5)
+
+    def test_pip_spend_rejected_on_insufficient_exp_leaves_skills_and_exp_untouched(self):
+        # Far more pips than gladstone's own 100 starting exp can ever cover.
+        character = {"pip_spend": ["blades"] * 30}
+        event_bus = EventBus()
+        errors = []
+        event_bus.subscribe("log_error", errors.append)
+
+        dm = DMCore(event_bus, scenario_name="arena", character=character)
+
+        self.assertEqual(dm.entities["gladstone"]["skills"]["blades"], {"dice": 5, "pips": 0})
+        self.assertEqual(dm.entities["gladstone"]["exp"], 100)
+        self.assertTrue(any("XP spend rejected" in e for e in errors))
+
 
 class TestCharacterCreationRename(unittest.TestCase):
     """!
@@ -4716,6 +4887,106 @@ class TestOpenClose(DMTestCase):
         self.assertFalse(result["found"])
         self.assertEqual(result["reason"], "locked")
         self.assertTrue(self.dm_core.is_closed("chest"))
+
+
+class TestBulk(DMTestCase):
+    # dungeon.toml's chest (cursed dagger, bulk 1) -- same fixture TestItemInteraction/
+    # TestOpenClose already use for take/open.
+    scenario_name = "dungeon"
+
+    def setUp(self):
+        super().setUp()
+        self.resolved = self._capture("item_interaction_resolved")
+
+    def _unlock_and_open_the_chest(self):
+        self._stub_roll_dice(99)
+        self.dm_core._on_turn_detected({"clauses": [{"kind": "action", "skill": "finesse"}], "input": "I pick the lock"})
+        self.dm_core._on_item_interaction_detected({
+            "intent": "open", "item_name": None, "input": "I open the chest",
+        })
+
+    def _pad_gladstones_bulk_to_the_cap(self):
+        # Cheaper than accumulating real loot -- a single throwaway heavy item pushes
+        # gladstone's own get_current_bulk straight to max_bulk (7 -- see
+        # test_get_max_bulk_is_min_bulk_plus_strength_dice_times_mod_multiplier below), so the
+        # very next "take"/"trade" has zero room left regardless of the item's own bulk.
+        self.dm_core.entities["anvil"] = {"name": "anvil", "supertype": "object", "description": "A heavy anvil.", "bulk": 7}
+        self.dm_core.entities["gladstone"]["inventory"].append("anvil")
+
+    def test_get_max_bulk_is_min_bulk_plus_strength_dice_times_mod_multiplier(self):
+        # Fantasy's own rules.toml [bulk] table: min_bulk = 3, mod_multiplier = 2 -- gladstone's
+        # own strength is 2D (characters.toml), so 3 + 2*2 = 7.
+        self.assertEqual(self.dm_core.get_max_bulk("gladstone"), 7)
+
+    def test_get_current_bulk_sums_the_inventorys_own_bulk_fields(self):
+        # longsword(1) + chain mail(1) + 3x health potion(0 each) + iron filings(0) = 2.
+        self.assertEqual(self.dm_core.get_current_bulk("gladstone"), 2)
+
+    def test_take_is_denied_once_it_would_exceed_max_bulk(self):
+        self._pad_gladstones_bulk_to_the_cap()
+        self._unlock_and_open_the_chest()
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "take", "item_name": "cursed dagger", "input": "I take the cursed dagger",
+        })
+
+        result = self.resolved[-1]
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "bulk_exceeded")
+        self.assertNotIn("cursed dagger", self.dm_core.entities["gladstone"]["inventory"])
+        self.assertIn("cursed dagger", self.dm_core.entities["chest"]["inventory"])
+
+    def test_dropping_an_item_frees_capacity_for_a_later_take(self):
+        self._pad_gladstones_bulk_to_the_cap()
+        self._unlock_and_open_the_chest()
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "drop", "item_name": "anvil", "input": "I drop the anvil",
+        })
+        self.dm_core._on_item_interaction_detected({
+            "intent": "take", "item_name": "cursed dagger", "input": "I take the cursed dagger",
+        })
+
+        result = self.resolved[-1]
+        self.assertTrue(result["found"])
+        self.assertIn("cursed dagger", self.dm_core.entities["gladstone"]["inventory"])
+
+    def test_trade_is_denied_once_it_would_exceed_max_bulk_and_charges_no_currency(self):
+        # dungeon.toml's chest doubles as a "shop" -- same reuse
+        # test_trade_charges_the_items_toml_value (TestGiveAndTrade) relies on, just against the
+        # scenario's own already-instanced chest rather than a fresh ad hoc one (a second ad hoc
+        # "chest" would collide with this class's own scenario_name = "dungeon" load in setUp
+        # and get disambiguated to "chest_2" -- see _instance_entities' own docstring).
+        self._pad_gladstones_bulk_to_the_cap()
+        self._unlock_and_open_the_chest()
+        starting_currency = self.dm_core.entities["gladstone"]["currency"]
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "trade", "item_name": "cursed dagger", "input": "I buy the cursed dagger",
+        })
+
+        result = self.resolved[-1]
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "bulk_exceeded")
+        self.assertEqual(self.dm_core.entities["gladstone"]["currency"], starting_currency)
+        self.assertNotIn("cursed dagger", self.dm_core.entities["gladstone"]["inventory"])
+
+    def test_get_max_bulk_returns_none_when_the_setting_authors_no_bulk_rule(self):
+        del self.dm_core.rules["bulk"]
+        self.assertIsNone(self.dm_core.get_max_bulk("gladstone"))
+
+    def test_take_is_never_denied_when_the_setting_authors_no_bulk_rule(self):
+        del self.dm_core.rules["bulk"]
+        self.dm_core.entities["anvil"] = {"name": "anvil", "supertype": "object", "description": "A heavy anvil.", "bulk": 999}
+        self.dm_core.entities["gladstone"]["inventory"].append("anvil")
+        self._unlock_and_open_the_chest()
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "take", "item_name": "cursed dagger", "input": "I take the cursed dagger",
+        })
+
+        result = self.resolved[-1]
+        self.assertTrue(result["found"])
 
 
 class TestGiveAndTrade(DMTestCase):
@@ -5701,7 +5972,7 @@ class TestSaveLoad(DMTestCase):
         self.assertEqual(
             set(gladstone_state.keys()),
             {
-                "hp", "active_conditions", "currency", "inventory", "equipped", "band",
+                "hp", "active_conditions", "currency", "exp", "inventory", "equipped", "band",
                 "attitude_deltas", "action_attitude_deltas", "current_language", "prompt_directive",
             },
         )
@@ -5744,6 +6015,21 @@ class TestSaveLoad(DMTestCase):
 
         self.assertEqual(fresh_dm.entities["gladstone"]["equipped"], {"chest": "chain mail"})
         self.assertIn("longsword", fresh_dm.entities["gladstone"]["inventory"])
+
+
+    def test_accumulated_exp_round_trips_through_save_load(self):
+        # gladstone starts at exp = 100 (characters.toml) -- without saving "exp" as its own
+        # per-instance field, a reload would silently reset any XP _award_xp_for_defeat
+        # (DM_Combat.py) accumulated back down to that static template value.
+        slot = self._track("test_exp_round_trip")
+        self.dm_core.entities["gladstone"]["exp"] += 21  # as if a wolf had just been defeated
+        self.dm_core.save_game(slot)
+
+        fresh_dm = DMCore(EventBus(), scenario_name="arena")  # boots with the template default
+        self.assertEqual(fresh_dm.entities["gladstone"]["exp"], 100)
+        fresh_dm.load_game(slot)
+
+        self.assertEqual(fresh_dm.entities["gladstone"]["exp"], 121)
 
 
     def test_dropped_items_round_trip_through_save_load(self):
@@ -5914,6 +6200,34 @@ class TestMultiRoomDungeon(DMTestCase):
         roster_text = " ".join(dm._describe_scenario_characters())
         self.assertNotIn("dart trap", roster_text)
 
+
+    def test_successful_disarm_awards_xp_to_the_whole_party(self):
+        # dart trap's own custom "exp" (items.toml, 9 -- see _award_xp_for_defeat's own
+        # docstring for why a trap authors this instead of relying on get_challenge_rating) via
+        # its [entity.test.pass]'s xp = true, paired with dismiss_condition = "armed". crypt's
+        # party is gladstone (is_player, starts at exp = 100)/thane/anne (is_party, no
+        # authored "exp" -- start at the implicit 0).
+        with patch("random.randint", return_value=6):  # finesse well clears difficulty 9
+            self.dm_core._on_turn_detected({"clauses": [{"kind": "action", "skill": "finesse"}], "input": "I disarm the trap"})
+
+        self.assertTrue(self.action_events[-1]["actions"][0].success)
+        self.assertNotIn("armed", self.dm_core.entities["dart trap"]["active_conditions"])
+        self.assertEqual(self.dm_core.entities["gladstone"]["exp"], 100 + 9)
+        self.assertEqual(self.dm_core.entities["thane"]["exp"], 9)
+        self.assertEqual(self.dm_core.entities["anne"]["exp"], 9)
+
+    def test_a_second_disarm_attempt_is_impossible_and_awards_no_further_xp(self):
+        # Once "armed" is dismissed, is_test_available's own requires_condition gate makes this
+        # same test permanently unavailable -- there's no real second attempt to even make, the
+        # same single-fire guarantee a combat kill gets from HP never rising back above 0.
+        with patch("random.randint", return_value=6):
+            self.dm_core._on_turn_detected({"clauses": [{"kind": "action", "skill": "finesse"}], "input": "I disarm the trap"})
+        gladstone_exp_after_the_disarm = self.dm_core.entities["gladstone"]["exp"]
+
+        with patch("random.randint", return_value=6):
+            self.dm_core._on_turn_detected({"clauses": [{"kind": "action", "skill": "finesse"}], "input": "I disarm the trap again"})
+
+        self.assertEqual(self.dm_core.entities["gladstone"]["exp"], gladstone_exp_after_the_disarm)
 
     def test_failed_disarm_damages_the_player_and_arms_blocks_further_attempts(self):
         starting_hp = self.dm_core.get_current_hp("gladstone")
@@ -6537,8 +6851,10 @@ class TestCharacterCreationDialog(unittest.TestCase):
         ]
         self.character_creation = {"pool_dice": 3, "max_allocation_per_skill": 2}
 
-    def _make_dialog(self):
-        return CharacterCreationDialog(self.root, self.skills, self.races, self.character_creation)
+    def _make_dialog(self, player_exp=0):
+        return CharacterCreationDialog(
+            self.root, self.skills, self.races, self.character_creation, player_exp,
+        )
 
 
     def test_create_sets_result_and_closes_the_dialog(self):
@@ -6550,7 +6866,7 @@ class TestCharacterCreationDialog(unittest.TestCase):
 
         self.assertEqual(
             dialog.result,
-            {"race": "human", "allocation": {"alpha": 2, "gamma": 1}, "name": ""},
+            {"race": "human", "allocation": {"alpha": 2, "gamma": 1}, "pip_spend": [], "name": ""},
         )
         self.assertEqual(dialog.winfo_exists(), 0)
 
@@ -6563,6 +6879,88 @@ class TestCharacterCreationDialog(unittest.TestCase):
         dialog.create_button.invoke()
 
         self.assertEqual(dialog.result["name"], "Aria")
+
+
+    def test_train_button_spends_a_pip_at_the_current_dice_cost(self):
+        # human baseline: alpha/beta/gamma all 2D -- one pip on alpha costs 2 XP.
+        dialog = self._make_dialog(player_exp=10)
+
+        dialog.train_buttons["alpha"].invoke()
+
+        self.assertEqual(dialog.pip_spend, ["alpha"])
+        self.assertEqual(dialog.trained_skills["alpha"], {"dice": 2, "pips": 1})
+        self.assertEqual(dialog.remaining_exp, 8)
+        self.assertEqual(dialog.total_labels["alpha"]["total"].cget("text"), "2D +1p")
+        self.assertEqual(dialog.exp_remaining_label.cget("text"), "XP remaining: 8 / 10")
+
+    def test_a_third_trained_pip_rolls_over_into_a_die_and_a_higher_next_cost(self):
+        dialog = self._make_dialog(player_exp=20)
+
+        for _ in range(3):
+            dialog.train_buttons["alpha"].invoke()
+
+        self.assertEqual(dialog.trained_skills["alpha"], {"dice": 3, "pips": 0})
+        self.assertEqual(dialog.remaining_exp, 20 - (2 + 2 + 2))  # each pip still cost 2D
+        self.assertEqual(dialog.train_buttons["alpha"].cget("text"), "Train (3 xp)")  # next pip costs the new 3D
+
+    def test_train_button_is_disabled_once_exp_runs_out(self):
+        dialog = self._make_dialog(player_exp=2)
+
+        dialog.train_buttons["alpha"].invoke()  # spends the only 2 XP available
+
+        self.assertEqual(str(dialog.train_buttons["alpha"].cget("state")), tk.DISABLED)
+        self.assertEqual(str(dialog.train_buttons["beta"].cget("state")), tk.DISABLED)
+
+    def test_train_click_past_zero_exp_is_a_silent_no_op(self):
+        # tk.Button.invoke() already refuses to fire a disabled button's own command -- this
+        # calls _on_train_clicked directly instead, to prove the method's own internal
+        # affordability guard is real defense-in-depth, not just something the disabled button
+        # state happens to prevent from ever being exercised.
+        dialog = self._make_dialog(player_exp=2)
+        dialog.train_buttons["alpha"].invoke()  # spends the only 2 XP available
+        self.assertEqual(dialog.remaining_exp, 0)
+
+        dialog._on_train_clicked("beta")
+
+        self.assertEqual(dialog.pip_spend, ["alpha"])
+        self.assertEqual(dialog.remaining_exp, 0)
+
+    def test_changing_allocation_after_training_rebases_the_next_costs_live(self):
+        # self.pip_spend is always replayed fresh from scratch (_recompute_training), never a
+        # sunk cost locked in at click time -- so raising alpha's own point-buy allocation
+        # *after* already training it there doesn't just add a new die on top, it also
+        # retroactively re-prices that same one already-bought pip at the new, higher 4D cost.
+        dialog = self._make_dialog(player_exp=10)
+        dialog.train_buttons["alpha"].invoke()  # 2D -> 2D1p, costing 2, 8 XP left
+        self.assertEqual(dialog.remaining_exp, 8)
+
+        dialog.allocation_vars["alpha"].set(2)  # alpha's own baseline+allocation is now 4D
+
+        self.assertEqual(dialog.pip_spend, ["alpha"])  # the earlier purchase still replays fine
+        self.assertEqual(dialog.trained_skills["alpha"], {"dice": 4, "pips": 1})
+        self.assertEqual(dialog.remaining_exp, 10 - 4)  # re-priced at the new 4D cost, not the original 2
+        self.assertEqual(dialog.train_buttons["alpha"].cget("text"), "Train (4 xp)")
+
+    def test_race_switch_clears_pip_spend_and_refunds_exp(self):
+        dialog = self._make_dialog(player_exp=10)
+        dialog.train_buttons["alpha"].invoke()
+        self.assertEqual(dialog.remaining_exp, 8)
+
+        dialog.race_combo.current(1)  # switch to elf
+        dialog._on_race_selected()
+
+        self.assertEqual(dialog.pip_spend, [])
+        self.assertEqual(dialog.remaining_exp, 10)
+
+    def test_pip_spend_is_included_in_the_create_result(self):
+        dialog = self._make_dialog(player_exp=10)
+        dialog.allocation_vars["alpha"].set(2)
+        dialog.allocation_vars["gamma"].set(1)
+        dialog.train_buttons["beta"].invoke()
+
+        dialog.create_button.invoke()
+
+        self.assertEqual(dialog.result["pip_spend"], ["beta"])
 
 
 class TestGUICore(unittest.TestCase):
@@ -6638,9 +7036,10 @@ class TestGUICore(unittest.TestCase):
         self.assertEqual(str(self.gui.scenario_menu.entrycget(0, "state")), tk.DISABLED)
 
     @patch("gui.GUI_Core.run_character_creation_dialog")
+    @patch("gui.GUI_Core.load_player_starting_exp", return_value=0)
     @patch("gui.GUI_Core.load_character_creation_data", return_value=({}, [], {}))
     def test_character_creation_unlocks_scenario_menu_and_load_publishes_scenario_selected(
-        self, mock_load, mock_dialog,
+        self, mock_load, mock_exp, mock_dialog,
     ):
         mock_dialog.return_value = {"race": "elf", "allocation": {"arcane": 5}, "name": "Aria"}
         self.gui.request_character_creation()
@@ -6691,6 +7090,7 @@ class TestGUICore(unittest.TestCase):
 
         # A later Create... doesn't reopen it once a game has actually started.
         with patch("gui.GUI_Core.load_character_creation_data", return_value=({}, [], {})), \
+             patch("gui.GUI_Core.load_player_starting_exp", return_value=0), \
              patch("gui.GUI_Core.run_character_creation_dialog", return_value={"race": "human", "allocation": {}, "name": "X"}):
             self.gui.request_character_creation()
         self.assertIsNone(self.gui._pending_character)
@@ -6758,9 +7158,10 @@ class TestGUICore(unittest.TestCase):
         self.assertFalse(picker.winfo_exists())
 
     @patch("gui.GUI_Core.run_character_creation_dialog")
+    @patch("gui.GUI_Core.load_player_starting_exp", return_value=100)
     @patch("gui.GUI_Core.load_character_creation_data", return_value=({}, [], {}))
     def test_request_character_creation_publishes_character_created_with_the_dialogs_result(
-        self, mock_load, mock_dialog,
+        self, mock_load, mock_exp, mock_dialog,
     ):
         mock_dialog.return_value = {"race": "elf", "allocation": {"arcane": 5}, "name": "Aria"}
         events = []
@@ -6769,7 +7170,8 @@ class TestGUICore(unittest.TestCase):
         self.gui.request_character_creation()
 
         mock_load.assert_called_once()
-        mock_dialog.assert_called_once_with(self.gui.root, {}, [], {})
+        mock_exp.assert_called_once()
+        mock_dialog.assert_called_once_with(self.gui.root, {}, [], {}, 100)
         self.assertEqual(
             events, [{"character": {"race": "elf", "allocation": {"arcane": 5}, "name": "Aria"}}],
         )

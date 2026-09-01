@@ -184,6 +184,25 @@ class InventoryMixin(DMCoreProtocol):
             return
         resolved(True, slot=slot)
 
+    def _bulk_would_be_exceeded(self, item_name):
+        """!
+        @brief Checks whether adding item_name's own "bulk" to the player's current load
+            (get_current_bulk) would push it past get_max_bulk -- the gate "take"/"trade"/a
+            ground "take" all share before actually moving the item (reason "bulk_exceeded").
+            Only ever checked against the player -- "a player cannot carry more than their max
+            bulk" is deliberately not enforced on any other entity (an NPC/creature's own
+            inventory is never capacity-checked).
+        @param item_name The item entity that would be added to the player's own inventory.
+        @return True if the move would exceed the player's own max bulk; always False if the
+                current setting authors no [bulk] rules.toml table at all (get_max_bulk
+                returns None -- see DM_Rules.py).
+        """
+        max_bulk = self.get_max_bulk(self.player_name)
+        if max_bulk is None:
+            return False
+        added_bulk = self.entities.get(item_name, {}).get("bulk", 0)
+        return self.get_current_bulk(self.player_name) + added_bulk > max_bulk
+
     def _current_ground_items(self):
         """!
         @brief The mutable list of item names dropped in the current room/scene -- a room's
@@ -237,6 +256,9 @@ class InventoryMixin(DMCoreProtocol):
             description = self.entities.get(item_name, {}).get("description", "")
             revealed = list(self.entities.get(item_name, {}).get("tags", [])) if self.is_identified(item_name) else []
             resolved(True, description=description, revealed=revealed)
+            return
+        if self._bulk_would_be_exceeded(item_name):
+            resolved(False, reason="bulk_exceeded")
             return
         self._current_ground_items().remove(item_name)
         self.entities.setdefault(self.player_name, {}).setdefault("inventory", []).append(item_name)
@@ -418,6 +440,9 @@ class InventoryMixin(DMCoreProtocol):
             (denied outright if the player can't afford it, rather than a partial payment);
             trading for currency itself, or aiming "take"/"give"/"trade" at the target's own
             name rather than something inside it, is always "not_takeable" regardless of amount.
+            "take"/"trade" are also denied "bulk_exceeded" (_bulk_would_be_exceeded) if the item
+            would push the player's own carried bulk past get_max_bulk -- "give" is never
+            bulk-gated (only the player's own carrying capacity is enforced, never a target's).
         @param intent "give", "trade", "examine", or "take".
         @param item_name NLPCore's best-guess item match (map_to_item), or the literal sentinel
             "currency".
@@ -516,10 +541,16 @@ class InventoryMixin(DMCoreProtocol):
             if buyer_currency < price:
                 resolved(False, reason="cant_afford", price=price)
                 return
+            if self._bulk_would_be_exceeded(item_name):
+                resolved(False, reason="bulk_exceeded")
+                return
             self.transfer_currency(self.player_name, target_name, price)
             self.transfer_item(source_name, destination_name, item_name)
             resolved(True, container=target_name, price=price)
         else:
+            if intent == "take" and not already_owned and self._bulk_would_be_exceeded(item_name):
+                resolved(False, reason="bulk_exceeded")
+                return
             self.transfer_item(source_name, destination_name, item_name)
             container = target_name if source_name != destination_name else None
             if container:

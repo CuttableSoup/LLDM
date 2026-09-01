@@ -132,6 +132,104 @@ def validate_allocation(skills, race, character_creation, allocation):
     return True, None
 
 
+def load_player_starting_exp(rules_dir=os.path.join("Rules", "Fantasy")):
+    """!
+    @brief Finds the is_player = true [[entity]] template's own "exp" field -- the starting XP
+        balance a character-creation-time training spend (see spend_exp_on_skills) draws from,
+        before any DMCore/live player instance exists to read it off of. Same "has to be
+        readable before a DMCore exists" reasoning load_character_creation_data's own module
+        docstring gives for re-scanning Rules/<setting>/*.toml directly rather than asking a
+        DMCore -- a second, deliberately separate scan (not folded into that function's own
+        return tuple) so its existing 3-value return shape never changes for callers that don't
+        care about this.
+    @param rules_dir Path to the rules directory, relative to the project root.
+    @return The is_player template's own "exp" (0 if it doesn't author one), or 0 if no
+            is_player entity is found in rules_dir at all.
+    """
+    full_dir = os.path.join(PROJECT_ROOT, rules_dir)
+    if not os.path.exists(full_dir):
+        return 0
+
+    for filename in os.listdir(full_dir):
+        if not filename.endswith(".toml"):
+            continue
+        filepath = os.path.join(full_dir, filename)
+        try:
+            with open(filepath, "rb") as f:
+                data = tomllib.load(f)
+        except Exception:
+            continue
+        for entity in data.get("entity", []):
+            if entity.get("is_player"):
+                return entity.get("exp", 0)
+    return 0
+
+
+def spend_pip(dice, pips, exp):
+    """!
+    @brief Raises one skill by a single pip, spending XP equal to its own *current* dice count
+        (not counting pips) -- rolling over into an additional die once pips reach 3, the same
+        "3 pips = 1 die" scale skill_rating (Challenge_Rating.py) already uses, so a trained-up
+        skill lands on exactly the same dice/pips shape a real skill entry (entity_schema.toml's
+        [entity.skills]) would ever author by hand. Callers spend one pip at a time (see
+        spend_exp_on_skills) rather than a single batch computation, since the cost itself rises
+        as dice increase -- there's no closed-form shortcut for "raise this skill by N pips".
+    @param dice The skill's current dice count.
+    @param pips The skill's current pips (0, 1, or 2 -- 3 always rolls over immediately, so a
+        skill never actually holds pips = 3 at rest).
+    @param exp The XP balance to spend from.
+    @return (new_dice, new_pips, remaining_exp), or None if exp is less than dice (the cost) --
+            the "can't afford it" case, left entirely unchanged for the caller to report.
+    """
+    cost = dice
+    if exp < cost:
+        return None
+    pips += 1
+    if pips == 3:
+        dice += 1
+        pips = 0
+    return dice, pips, exp - cost
+
+
+def spend_exp_on_skills(skills_dict, exp, pip_spend):
+    """!
+    @brief Applies an ordered list of "raise this skill by one more pip" requests on top of
+        skills_dict, spending from exp one pip at a time via spend_pip -- the training
+        counterpart to validate_allocation/build_character_skills' own point-buy math, replayed
+        server-side from scratch rather than trusting a client-submitted final {dice, pips} per
+        skill (same "recompute, don't trust the submitted totals" precedent validate_allocation
+        already sets). All-or-nothing: the first unaffordable or unknown-skill entry rejects the
+        *entire* spend and returns the original, completely untouched skills_dict/exp -- no
+        partial application, same shape validate_allocation's own pool_dice mismatch rejection
+        already has for point-buy.
+    @param skills_dict {skill_name: {"dice": int, "pips": int}} -- ex: build_character_skills'
+        own output, or a live player entity's own "skills" table. Never mutated -- a shallow
+        per-entry copy is built and returned instead.
+    @param exp The XP balance to spend from (ex: load_player_starting_exp's own return, or a
+        live player entity's own "exp" field).
+    @param pip_spend A list of skill names, in order -- each entry is one more "raise this skill
+        by a pip" request, so ["blades", "blades", "dodge"] means blades twice then dodge once,
+        each purchase's own cost based on whatever that skill's dice count is by that point in
+        the replay (including any earlier entries in this same list that already rolled it over
+        to a higher die count).
+    @return (new_skills_dict, remaining_exp, error_reason_or_None) -- error_reason is a string
+            (an unknown skill name, or which skill/at what dice cost ran out of XP) if the whole
+            spend was rejected, in which case new_skills_dict/remaining_exp are skills_dict/exp
+            completely unchanged; None on success.
+    """
+    result = {name: dict(entry) for name, entry in skills_dict.items()}
+    remaining = exp
+    for name in pip_spend:
+        if name not in result:
+            return skills_dict, exp, f"Unknown skill: {name}"
+        entry = result[name]
+        spent = spend_pip(entry["dice"], entry["pips"], remaining)
+        if spent is None:
+            return skills_dict, exp, f"Not enough XP to raise \"{name}\" (needs {entry['dice']}, have {remaining})"
+        entry["dice"], entry["pips"], remaining = spent
+    return result, remaining, None
+
+
 def build_character_skills(skills, race, allocation):
     """!
     @brief The final {dice, pips} per skill for a newly-created character: race_baseline_skills
