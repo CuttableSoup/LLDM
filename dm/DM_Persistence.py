@@ -99,7 +99,9 @@ class PersistenceMixin(DMCoreProtocol):
     def save_game(self, slot_name):
         """!
         @brief Writes this core's mechanical state to Saves/<slot_name>/dm_state.json -- a
-            diff from a fresh instantiation (round_number, scenario_entities, and each
+            diff from a fresh instantiation (round_number, current_block (the block clock --
+            see DM_Time.py/docs/downtime.md, a fully separate axis from round_number),
+            scenario_entities, and each
             instance's hp/active_conditions/currency/exp/inventory/equipped/band/
             attitude_deltas/action_attitude_deltas/current_language/prompt_directive), not a raw dump
             of self.entities, which also holds every static template. Loading re-instantiates
@@ -143,6 +145,9 @@ class PersistenceMixin(DMCoreProtocol):
             -- every name ever forcibly removed via ImprovisationMixin.remove_entity_from_scene
             (DM_Improvisation.py), so a reload doesn't let a scenario/room's own static
             "entities" list respawn something the player (or ADaM, on their behalf) removed.
+            And "known_locations" (DM_Travel.py, docs/downtime.md's "Travel") -- every gridded
+            (or not) location key ever entered, so a reload doesn't forget which overworld
+            destinations grid-based travel has already unlocked by name.
 
             Also saves "entity_instancing_order" (DM_Rules.py's self.entity_instancing_order) --
             the exact chronological sequence every location/room scope was first instanced in,
@@ -230,6 +235,7 @@ class PersistenceMixin(DMCoreProtocol):
             "scenario_key": self.scenario_key,
             "player_name": self.player_name,
             "round_number": self.round_number,
+            "current_block": self.current_block,
             "current_target": self.current_target,
             "scenario_entities": self.scenario_entities,
             "current_location_key": self.current_location_key,
@@ -239,6 +245,7 @@ class PersistenceMixin(DMCoreProtocol):
             "instances": {name: _instance_state(name) for name in instance_names},
             "ad_hoc_entities": self._collect_ad_hoc_entities(),
             "removed_entities": list(self.removed_entities),
+            "known_locations": list(self.known_locations),
             "entity_instancing_order": [list(entry) for entry in self.entity_instancing_order],
         }
         with open(os.path.join(slot_dir, "dm_state.json"), "w") as f:
@@ -426,11 +433,17 @@ class PersistenceMixin(DMCoreProtocol):
 
         self.player_name = data.get("player_name", self.player_name)
         self.round_number = data.get("round_number", 0)
+        self.current_block = data.get("current_block", 0)
         self.scenario_key = data.get("scenario_key", self.scenario_key)
         self.setting = data.get("setting", self.setting)
         # Must precede load_scenario_definition/load_scenario -- see this method's own
         # docstring for why _instance_entities needs this available before it ever runs.
         self.removed_entities = set(data.get("removed_entities", []))
+        # Grid-based travel's own knowledge gate (see DM_Travel.py/docs/downtime.md's "Travel")
+        # -- restored before load_scenario() runs below, same reasoning removed_entities just
+        # above follows, though nothing here actually consults it until a later travel attempt;
+        # load_scenario()'s own known_locations seeding re-unions harmlessly on top of this.
+        self.known_locations = set(data.get("known_locations", []))
         self.load_rules(os.path.join("Rules", self.setting))
         self.load_scenario_definition(self.scenario_key)
         self.validate_loaded_data()

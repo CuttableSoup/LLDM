@@ -35,6 +35,7 @@ class DMCoreProtocol(Protocol):
     persistent_entities: list
     rules: dict
     round_number: int
+    current_block: int
     current_target: str | None
     scenario_key: str
     player_name: str
@@ -43,6 +44,7 @@ class DMCoreProtocol(Protocol):
     visited_rooms: dict
     removed_entities: set
     locations: dict
+    known_locations: set
 
     # Cross-mixin methods -- each actually implemented by exactly one mixin (see that
     # mixin's own file for the real body); declared here once so every other mixin calling

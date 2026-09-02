@@ -107,6 +107,18 @@ FORMATION_ABREAST_KEYWORDS = (
 # (skills.toml) -- same collision-avoidance reason DIALOGUE_KEYWORDS' own "speak to "/"speak
 # with " already follow.
 SPEAK_LANGUAGE_KEYWORDS = ("speak in ", "switch to speaking ", "start speaking ")
+# Downtime rest (see DM_Time.py's rest, docs/downtime.md) -- like formation/speak_language
+# above, this acts on the player's own party/clock rather than a named item, so no
+# map_to_item lookup ever runs for it either; DMCore, not this module, is what decides *how
+# long* the rest lasts (a plain "rest" spends one block, a phrase naming night/dawn/morning
+# spends a whole day's worth), by searching the raw input the same "search input for
+# specifics" pattern travel/formation/speak_language already follow. Bare "rest" is safe
+# (word-boundary matched -- see _phrase_matches) since no skills.toml keyword is the literal
+# word "rest"; "camp"/"sleep" only ever appear here as part of a longer phrase, never bare,
+# so neither risks colliding with survivalism's own bare "camp" keyword the way a bare "camp"
+# here would have. Deliberately no "take a rest" -- TAKE_KEYWORDS' own "take " is checked
+# well ahead of this tuple and would swallow it as an item "take" first.
+REST_KEYWORDS = ("rest", "make camp", "set up camp", "sleep", "camp for the night")
 # Free-form conversational address -- bypasses the skill/dice system entirely, the same as
 # every item/movement intent above (see DM_Core.py's "Items and movement as intents"), but
 # checked only after item-interaction detection has already had its shot, so a genuine item
@@ -215,7 +227,7 @@ ACTION_CLAUSE_PATTERN = re.compile(r"--|[,;:?]|\band\b|\bthen\b")
 # independent of whether the intent is exempt -- "open"/"close" still cost a turn action (see
 # DM_Core.py) despite needing no item lookup, the same way "give"/"take"/etc. do.
 EXEMPT_ITEM_INTENTS = frozenset({
-    "advance", "retreat", "formation_behind", "formation_abreast", "speak_language",
+    "advance", "retreat", "formation_behind", "formation_abreast", "speak_language", "rest",
 })
 NO_ITEM_LOOKUP_INTENTS = frozenset({"open", "close"})
 
@@ -332,7 +344,7 @@ def detect_item_intent(processed_text):
     @param processed_text The cleaned and processed player input.
     @return "examine", "equip", "unequip", "drop", "take", "give", "trade", "use", "craft",
         "open", "close", "advance", "retreat", "formation_behind", "formation_abreast",
-        "speak_language", or None.
+        "speak_language", "rest", or None.
     """
     if _keyword_gate(processed_text, EXAMINE_KEYWORDS):
         return "examine"
@@ -370,6 +382,8 @@ def detect_item_intent(processed_text):
         return "formation_abreast"
     if _keyword_gate(processed_text, SPEAK_LANGUAGE_KEYWORDS):
         return "speak_language"
+    if _keyword_gate(processed_text, REST_KEYWORDS):
+        return "rest"
     if _keyword_gate(processed_text, ADVANCE_KEYWORDS):
         return "advance"
     if _keyword_gate(processed_text, RETREAT_KEYWORDS):

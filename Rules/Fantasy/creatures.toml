@@ -6,7 +6,11 @@
 # own separate copy of wolf too, for the same reason). "fire elemental", "wraith", "troll", and
 # "spectral wolf" all stay here -- none is owned by any scenario (all four referenced directly
 # by test_unit.py's own tests instead, "spectral wolf" also by spells.toml's own "summon
-# spectral wolf"), so there's no scenario file for any of them to move into.
+# spectral wolf"), so there's no scenario file for any of them to move into. "wild boar"/
+# "coyote" are here for the same reason environments.toml's "plains" environment references
+# them from its own day/night encounter tables (see docs/downtime.md's "Travel") -- a shared,
+# setting-wide environment table needs shared, setting-wide creatures to resolve to, regardless
+# of which scenario the player is actually in when the roll happens.
 
 [[entity]]
 name = "fire elemental"
@@ -186,3 +190,75 @@ damage_value = { dice = 2, pips = 1, bonus = 0 }
 [[entity.behavior]]
 requirements = [ { field = "hp_per_remain", operator = ">=", value = 0.01 } ]
 action = "spectral bite"
+
+[[entity]]
+name = "wild boar"
+supertype = "creature"
+subtype = "animal"
+description = "A heavyset, bristling boar, tusks lowered and ready to charge."
+
+max_hp = 20
+
+[[entity.abilities]]
+name = "gore"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "piercing" ]
+damage_value = { dice = 2, pips = 0, bonus = "user.strength_damage" }
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+    { field = "hp_per_remain", operator = "<", value = 0.30 },
+]
+action = "retreat"
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "gore"
+
+[entity.skills]
+fortitude = { dice = 3, pips = 0 }
+reflexes = { dice = 1, pips = 0 }
+dodge = { dice = 1, pips = 0 }
+strength = { dice = 3, pips = 0 }
+brawling = { dice = 3, pips = 0 }
+
+[[entity]]
+name = "coyote"
+supertype = "creature"
+subtype = "animal"
+description = "A lean, rangy coyote, keeping its distance until it senses weakness."
+
+max_hp = 10
+
+[[entity.abilities]]
+name = "bite"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "piercing" ]
+damage_value = { dice = 1, pips = 0, bonus = "user.strength_damage" }
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+    { field = "hp_per_remain", operator = "<", value = 0.50 },
+]
+action = "retreat"
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "bite"
+
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+reflexes = { dice = 3, pips = 0 }
+dodge = { dice = 4, pips = 0 }
+strength = { dice = 2, pips = 0 }
+brawling = { dice = 3, pips = 0 }

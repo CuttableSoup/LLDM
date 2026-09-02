@@ -37,6 +37,8 @@ this overview.
   fitting generated stats to a target challenge rating.
 - [docs/movement-scenarios.md](docs/movement-scenarios.md) — bands/range/formation, locations
   vs. rooms, location-to-location travel, and random encounter tables.
+- [docs/downtime.md](docs/downtime.md) — the block clock (day/night, `DMCore.current_block`),
+  rest, and grid-based travel/environments/world map; what's still not built (night watch).
 - [docs/character-creation.md](docs/character-creation.md) — race/point-buy skill dice, and the
   three routes a game can actually start from (`LLDM.py`'s `main()`).
 - [docs/inventory-items.md](docs/inventory-items.md) — entity tests, currency/item transfer, the

@@ -1,0 +1,30 @@
+# Shared environment catalog (see docs/downtime.md's "Travel") -- a flat Rules/Fantasy/*.toml
+# file like npc_keywords.toml, referenced by name from world_map.toml's own [[region]] entries,
+# never instanced or entered directly itself.
+#
+# Each environment owns a day and a night encounter table -- the exact same weighted-choice
+# [ { "choice" = weight }, ... ] shape [[location.encounter]]'s own "encounter" field already
+# uses (a real [[entity]]/[[entity_template]] name, the reserved "nothing", or a flavor-only
+# string; see DM_Encounters.py), resolved via the same _resolve_one_encounter -- just once per
+# block of travel actually spent inside this environment (DM_Travel.py), rather than once on
+# location entry. Neither table carries a "trigger"/"name" field the way [[location.encounter]]
+# does -- travel is the only thing that ever rolls these, so there's nothing to gate on.
+#
+# watch_difficulty is authored now for the future night-watch/surprise mechanic
+# (docs/extended-goals.md's "Downtime" -- a flat-difficulty "observation" check on a hostile
+# night block) -- not read by anything yet; travel today rolls day_encounter/night_encounter
+# with no watch check at all, exactly like basic rest skips the same gate.
+[[environment]]
+name = "plains"
+watch_difficulty = 9
+day_encounter = [
+    { "wild boar" = 15 },
+    { "coyote" = 15 },
+    { "A hawk wheels lazily overhead on a thermal, uninterested in you." = 20 },
+    { "nothing" = 50 },
+]
+night_encounter = [
+    { "coyote" = 25 },
+    { "A distant howl carries across the dark grassland." = 20 },
+    { "nothing" = 55 },
+]

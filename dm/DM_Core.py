@@ -21,7 +21,10 @@ from dm.DM_Rules import RulesMixin, scenario_file_path
 from dm.DM_Social import SocialMixin
 from dm.DM_Status import StatusMixin
 from dm.DM_Summoning import SummoningMixin
+from dm.DM_Time import TimeMixin
+from dm.DM_Travel import TravelMixin
 from dm.DM_Validation import ValidationMixin
+from intents.registry import HANDLERS as FREE_STANDING_INTENT_HANDLERS
 from resolution.Program_Interpreter import run_program
 
 # Multi-instance combat targeting (see DMCore._resolve_named_instance_ambiguity): NLPCore's own
@@ -43,7 +46,7 @@ TARGET_HEALTHY_KEYWORDS = ("healthy", "unhurt", "uninjured", "unharmed")
 # "wounded" shouldn't silently redirect to whichever one merely has the least HP among equals.
 TARGET_WOUNDED_HP_CUTOFF = 0.40
 
-class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixin, RulesMixin, PersistenceMixin, CharacterCreationMixin, NpcGenerationMixin, DialogueMixin, HelpMixin, ImprovisationMixin, EncounterMixin, SummoningMixin, CraftingMixin, ValidationMixin):
+class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixin, RulesMixin, PersistenceMixin, CharacterCreationMixin, NpcGenerationMixin, DialogueMixin, HelpMixin, ImprovisationMixin, EncounterMixin, SummoningMixin, CraftingMixin, ValidationMixin, TimeMixin, TravelMixin):
     """!
     @brief Main class handling the core mechanics of the RPG system. The implementation is
         composed from domain mixins in sibling files -- DM_Rules.py (rules/scenario
@@ -124,6 +127,11 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         self.locations = {}
         self.current_location_key = None
         self.location_runtime = {}
+        # Grid-based travel's own knowledge gate (see DM_Travel.py/docs/downtime.md's "Travel")
+        # -- every location key ever entered, plus whatever a scenario's own [scenario].
+        # known_locations seeds ahead of time. Round-tripped through save_game/load_game the
+        # same way removed_entities is.
+        self.known_locations = set()
         self.persistent_entities = []
         self.rooms = {}
         self.current_room_key = None
@@ -136,6 +144,11 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         self.removed_entities = set()
         self.rules = {}
         self.round_number = 0
+        # The block clock (see docs/downtime.md / DM_Time.py) -- a single monotonic counter of
+        # every 8-hour (by default) "block" elapsed since the scenario started, a fully separate
+        # axis from round_number above (tactical/per-turn vs. strategic/per-downtime-action).
+        # Round-tripped through save_game/load_game the same way round_number already is.
+        self.current_block = 0
         # The player's persisted combat target -- distinct from _get_target_name()'s "first
         # non-player entity" (which stays purely for non-combat interaction resolution, ex:
         # the dungeon's chest or the tavern's innkeeper). Set for real by load_scenario()
@@ -960,25 +973,22 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         """!
         @brief Event handler for a free-text item-interaction match (see NLPCore.map_to_item):
             "examine"/"take"/"give"/"trade"/"use"/"equip"/"unequip"/"drop" against a named
-            item, "open"/"close" against the scene target itself, "advance"/"retreat"
-            against the whole scene, "move" (with a "direction") to take a declared exit
-            to a different room of the current location, or "travel" to take a declared
-            [[location.exit]] (or the current location's own "return_to") to a different
-            location entirely. Deliberately bypasses the
-            whole skill/dice system -- none of these warrant a roll (see DM_Movement.py's
-            module docstring for why movement specifically is deterministic, not a check).
-            Publishes "item_interaction_resolved" either way, with enough detail for
-            narration to explain a miss (locked, closed, not present, not takeable, not
-            usable, not equippable, cant_equip, not_equipped, no exit, wrong band, blocked by
-            enemies, ...) rather than staying silent.
+            item, "open"/"close" against the scene target itself, or one of the eight
+            free-standing intents (see CONTEXT.md's "Free-standing intent" -- "advance",
+            "retreat", "formation_behind", "formation_abreast", "speak_language", "rest",
+            "move", "travel"), each resolved and narrated by its own module under intents/
+            (see intents/registry.py's own HANDLERS manifest) rather than a branch here.
+            Deliberately bypasses the whole skill/dice system either way -- none of these
+            warrant a roll (see DM_Movement.py's module docstring for why movement specifically
+            is deterministic, not a check). Publishes "item_interaction_resolved" either way,
+            with enough detail for narration to explain a miss (locked, closed, not present,
+            not takeable, not usable, not equippable, cant_equip, not_equipped, no exit, wrong
+            band, blocked by enemies, ...) rather than staying silent.
 
             "give"/"trade"/"examine"/"take" against a named item (see _resolve_transfer_intent)
             move it between the player and the current scene target -- "take"/"trade" toward the
             player, "give" away from them, "examine" never moves anything. "open"/"close" never
-            move anything either;
-            "advance"/"retreat" move every living scenario entity's distance at once (see
-            advance_or_retreat in DM_Movement.py), not just one target; "move" replaces the
-            whole current room (see _resolve_room_transition_intent/_find_room_exit); "use"
+            move anything either. "use"
             consumes or activates an item already in the player's own inventory (see
             _resolve_use_intent), never a target's -- NLPCore's own keyword set for it today
             is just "drink"/"quaff" (potions), but the intent itself is the generic "use" so
@@ -989,21 +999,14 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             item out of inventory onto the current room/scene's own ground (see
             _current_ground_items), where a later "take"/"examine" can reach it again --
             checked ahead of the target/locked gate below, since a dropped item has no
-            container guarding it. "formation_behind"/"formation_abreast" (see
-            _resolve_formation_intent, CLAUDE.md's "Party formation") direct any currently-
-            present party member named in the input -- or every one present, if none is named
-            -- to a new follow_offset, taking effect immediately. "speak_language" (see
-            _resolve_language_intent, DM_Dialogue.py) switches which of the player's own known
-            languages is currently active, the same "search input for a known name" pattern
-            formation uses, just against the player's own "languages" list instead.
+            container guarding it.
         @param data The item_interaction_detected payload from NLPCore
-            ({intent, item_name, input, score}). "item_name" is None for "open"/"close",
-            "advance"/"retreat", "formation_behind"/"formation_abreast", "speak_language",
-            "move", and "travel", none of which act on a named item; "move" also carries a
-            "direction" (ex: "forward", "right"). "travel" carries no pre-parsed destination at
-            all -- unlike "move", NLPCore has no catalog of location names to match against, so
-            DMCore resolves the destination itself from the raw input (see
-            _resolve_travel_intent).
+            ({intent, item_name, input, score}). "item_name" is None for "open"/"close" and
+            every free-standing intent, none of which act on a named item; "move" also
+            carries a "direction" (ex: "forward", "right"). "travel" carries no pre-parsed
+            destination at all -- unlike "move", NLPCore has no catalog of location names to
+            match against, so intents/travel.py resolves the destination itself from the raw
+            input.
         """
         intent = data.get("intent")
         item_name = data.get("item_name")
@@ -1044,40 +1047,13 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             })
             self._publish_party_status()
 
-        if intent in ("advance", "retreat"):
-            # Unlike everything else this handler resolves, this isn't about target_name/
-            # the locked gate at all -- see advance_or_retreat's own docstring (DM_Movement.py)
-            # for why it shifts every living scenario entity's distance at once rather than
-            # just the current target.
-            moved = self.advance_or_retreat(intent)
-            resolved(True, moved=moved)
-            return
-
-        if intent in ("formation_behind", "formation_abreast"):
-            # Also unrelated to target_name/the locked gate -- directing the party has
-            # nothing to do with any scene target at all.
-            self._resolve_formation_intent(intent, input_text, resolved)
-            return
-
-        if intent == "speak_language":
-            # Also unrelated to target_name/the locked gate -- switching the player's own
-            # currently-spoken language has nothing to do with any scene target at all.
-            self._resolve_language_intent(input_text, resolved)
-            return
-
-        if intent == "move":
-            # Also unrelated to target_name/the locked gate -- leaving the room entirely has
-            # nothing to do with reaching a container's contents, same reasoning advance/
-            # retreat above already follows.
-            self._resolve_room_transition_intent(data.get("direction"), resolved)
-            return
-
-        if intent == "travel":
-            # Location-to-location travel (see DM_Movement.py's _resolve_travel_intent) --
-            # also unrelated to target_name/the locked gate. Unlike "move", NLPCore never
-            # resolves *which* location this names (it has no access to self.locations) --
-            # it just recognizes the input as travel-flavored and hands the raw text through.
-            self._resolve_travel_intent(input_text, resolved)
+        handler = FREE_STANDING_INTENT_HANDLERS.get(intent)
+        if handler:
+            # A free-standing intent (see CONTEXT.md) -- unrelated to target_name/the locked
+            # gate below, resolved and narrated entirely by its own module under intents/
+            # (intents/registry.py's own HANDLERS manifest), not a branch here.
+            resolve, _narrate = handler
+            resolve(self, data, resolved)
             return
 
         if intent == "use":

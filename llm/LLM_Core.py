@@ -8,6 +8,7 @@ from dm.DM_ActionOutcome import (
     MissingMaterialsOutcome, MissingSpellMaterialsOutcome, MissingStationOutcome, MovementOutcome,
     NotCraftableOutcome, OutOfRangeOutcome, RevealEffect, RolledOutcome, SummonEffect,
 )
+from intents.registry import HANDLERS as FREE_STANDING_INTENT_HANDLERS
 from llm.LLM_Rag import RagIndex
 from paths import PROJECT_ROOT
 
@@ -381,26 +382,32 @@ class LLMCore:
 
     def generate_item_interaction_response(self, data):
         """!
-        @brief Narrates an "examine"/"take"/"give"/"trade"/"open"/"close"/"advance"/"retreat"/
-            "formation_behind"/"formation_abreast"/"speak_language" attempt, resolved with no
-            dice roll (see DMCore._on_item_interaction_detected). "examine" only ever describes;
-            it's the deliberate alternative to items being auto-looted into the player's
-            inventory the moment a container opens (ex: a cursed weapon should be seen and
-            described before anyone decides to touch it).
+        @brief Narrates an "examine"/"take"/"give"/"trade"/"open"/"close" attempt against a
+            named item or the scene target, or one of the eight free-standing intents (see
+            CONTEXT.md's "Free-standing intent") -- each resolved with no dice roll (see
+            DMCore._on_item_interaction_detected) and, for the free-standing group, narrated
+            entirely by its own module under intents/ (intents/registry.py's own HANDLERS
+            manifest), including its own failure-reason text, rather than a branch here.
+            "examine" only ever describes; it's the deliberate alternative to items being
+            auto-looted into the player's inventory the moment a container opens (ex: a cursed
+            weapon should be seen and described before anyone decides to touch it).
         @param data The "item_interaction_resolved" payload ({intent, item_name, input, found,
-            description?, container?, reason?, amount?, price?, moved?, members?, stance?,
-            language?}). "item_name" is None for "open"/"close"/"advance"/"retreat"/
-            "formation_behind"/"formation_abreast"/"speak_language"/"move"/"travel", which act
-            on the scene directly rather than a named item; "moved" (advance/retreat only) is
-            advance_or_retreat's own list of {entity, before, after} distance changes;
-            "members"/"stance" (formation only) are DMCore._resolve_formation_intent's own
-            resolved party member(s) and new stance; "language" (speak_language only) is
-            DMCore._resolve_language_intent's own resolved language name;
-            "location_name"/"location_description" (travel only) are the arrival location's own
-            fields, alongside the same "room_name"/"room_description" "move" already carries.
+            description?, container?, reason?, amount?, price?, ...}) -- for a free-standing
+            intent, whatever extra fields its own intents/ module's resolve() attached (see
+            that module's own docstring). "item_name" is None for "open"/"close" and every
+            free-standing intent, none of which act on a named item.
         """
         intent = data.get("intent")
         self.event_bus.publish("log_info", f"Generating item interaction response ({intent}).")
+
+        handler = FREE_STANDING_INTENT_HANDLERS.get(intent)
+        if handler:
+            _resolve, narrate = handler
+            self._queue_narration(
+                narrate(self, data), rag_query=data.get("input"),
+                present_entities=data.get("present_entities"),
+            )
+            return
 
         item_name = data.get("item_name")
         container = data.get("container")
@@ -420,14 +427,9 @@ class LLMCore:
                 "already_open": f"{container or 'it'} is already open",
                 "already_closed": f"{container or 'it'} is already closed",
                 "cant_afford": f"the player can't afford the {data.get('price', 0)} currency it costs",
-                "no_exit": "there's no way through in that direction",
-                "wrong_band": "the player isn't standing in the right spot to reach that way out",
-                "blocked_by_enemies": "something hostile is still standing in the way",
                 "not_equippable": f"{subject} isn't something that can be worn or wielded",
                 "cant_equip": f"{subject} has nothing on the player's own body it could go onto",
                 "not_equipped": f"{subject} isn't currently equipped at all",
-                "no_party": "there's no one from the player's own party here to direct",
-                "unknown_language": "the player doesn't actually know any language matching that",
             }.get(data.get("reason"), f"the player's attempt to {intent} {subject} doesn't apply here")
             prompt = (
                 f"The player tries to {intent} {subject} "
@@ -516,96 +518,6 @@ class LLMCore:
             prompt = (
                 f"The player uses \"{item_name}\"{effect_text}.{aftermath}\n"
                 f"Narrate this in 1-2 sentences as the Game Master."
-            )
-        elif intent in ("advance", "retreat"):
-            # "moved" is advance_or_retreat's own {entity, before, after} list (DM_Movement.py)
-            # -- real band-gap numbers already earned by the player's own movement, never
-            # invented. Only the player's own band actually changes (see DM_Movement.py's
-            # module note), so the effect on any two entities isn't necessarily the same
-            # direction -- retreating from current_target can close the gap to something else
-            # entirely, which is why this doesn't claim a uniform "moves away from everyone".
-            moved = data.get("moved") or []
-            if moved:
-                movement_text = "; ".join(
-                    f"{entry['entity']} ({entry['before']} -> {entry['after']} bands away)" for entry in moved
-                )
-                verb = "advances" if intent == "advance" else "retreats"
-                prompt = (
-                    f"The player {verb}, changing how many bands away everyone present now is: "
-                    f"{movement_text}.\n"
-                    f"Narrate this brief repositioning in 1-2 sentences as the Game Master -- if "
-                    f"the numbers show the player got closer to one but farther from another, "
-                    f"that's real, not a mistake."
-                )
-            else:
-                prompt = (
-                    f"The player tries to {intent}, but there's no one else here for it to matter "
-                    f"against.\n"
-                    f"Narrate this in 1-2 sentences as the Game Master."
-                )
-        elif intent in ("formation_behind", "formation_abreast"):
-            # "members"/"stance" are DMCore._resolve_formation_intent's own real result --
-            # whichever party member(s) it actually resolved (named in the input, or every
-            # party member present if none was), never invented.
-            members = data.get("members") or []
-            members_text = " and ".join(members)
-            stance_text = (
-                "stay a band behind the player from now on" if data.get("stance") == "behind"
-                else "walk abreast of the player from now on"
-            )
-            prompt = (
-                f"The player directs {members_text} to {stance_text}.\n"
-                f"Narrate this brief bit of party direction in 1-2 sentences as the Game Master."
-            )
-        elif intent == "speak_language":
-            # "language" is DMCore._resolve_language_intent's own real result -- whichever of
-            # the player's own known languages it actually matched in the raw input, never
-            # invented.
-            prompt = (
-                f"The player deliberately switches to speaking {data.get('language')} from now "
-                f"on.\n"
-                f"Narrate this brief moment in 1-2 sentences as the Game Master."
-            )
-        elif intent == "move":
-            # Taking a declared exit to a different room of the current location (see
-            # DM_Rules.py's room-graph notes) -- unlike advance/retreat (repositioning
-            # within one room), this replaces the whole scene, so the room's own name/
-            # description/characters (DMCore._resolve_room_transition_intent) get folded into
-            # ongoing narration grounding exactly the way generate_scene_intro does for a
-            # brand-new scenario -- otherwise every later combat/action prompt in the new
-            # room would keep citing the *previous* room's flavor text, stale the moment the
-            # player actually moved.
-            self.scenario_description = data.get("room_description", "")
-            self.scenario_characters = data.get("characters", [])
-            characters_text = (
-                "\nCharacters present: " + " | ".join(self.scenario_characters)
-                if self.scenario_characters else ""
-            )
-            prompt = (
-                f"The player heads {data.get('direction', 'onward')}, arriving at: "
-                f"\"{data.get('room_name', '')}\".\n"
-                f"{self.scenario_description}{characters_text}\n"
-                f"Narrate arriving in this new area in 2-3 sentences as the Game Master."
-            )
-        elif intent == "travel":
-            # Taking a declared [[location.exit]] (or the current location's own "return_to")
-            # to a different [[location]] entirely (see DM_Movement.py's _resolve_travel_intent)
-            # -- the location-graph counterpart to "move" above, same grounding-refresh
-            # reasoning. Grounds on the arrival *room*'s own name/description when the new
-            # location has one active (ex: walking straight into a building's own interior),
-            # else the location's own name/description (ex: an open town square with nothing
-            # more specific to narrate).
-            scene_name = data.get("room_name") or data.get("location_name", "")
-            self.scenario_description = data.get("room_description") or data.get("location_description", "")
-            self.scenario_characters = data.get("characters", [])
-            characters_text = (
-                "\nCharacters present: " + " | ".join(self.scenario_characters)
-                if self.scenario_characters else ""
-            )
-            prompt = (
-                f"The player travels to: \"{scene_name}\".\n"
-                f"{self.scenario_description}{characters_text}\n"
-                f"Narrate arriving in this new place in 2-3 sentences as the Game Master."
             )
         elif item_name == "currency":
             if intent == "give":

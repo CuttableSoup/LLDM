@@ -378,6 +378,13 @@ class MovementMixin(DMCoreProtocol):
             "no_exit") if that's also absent (ex: town_square, the top of the graph, has
             nowhere to "leave" to).
 
+            **Gridded locations branch out entirely** -- see DM_Travel.py's TravelMixin/
+            docs/downtime.md's "Travel". If the *current* location carries a "grid" field, the
+            authored [[location.exit]]/"return_to" graph below never runs at all: connectivity
+            for this coordinate-bearing subset comes purely from grid distance and
+            self.known_locations, handled start to finish by _resolve_grid_travel_intent
+            (including its own hostile gate, mirroring the one below).
+
             Hostile gate: never blocks a move taken from a location's own freeform "entities"
             space (self.rooms empty) -- an open square is non-linear on purpose, so ducking
             into a shop mid-fight is allowed. Always blocks one taken from inside a
@@ -389,6 +396,10 @@ class MovementMixin(DMCoreProtocol):
         @param resolved The item_interaction_resolved publisher closure from
             DMCore._on_item_interaction_detected.
         """
+        if "grid" in self.locations.get(self.current_location_key, {}):
+            self._resolve_grid_travel_intent(input_text, resolved)
+            return
+
         exit_def = self._resolve_location_exit(input_text)
         if exit_def is not None:
             destination_key = exit_def["destination"]

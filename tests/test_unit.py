@@ -15,6 +15,7 @@ import numpy as np
 import pytest
 from sentence_transformers import SentenceTransformer
 
+import dm.DM_Encounters as DM_Encounters
 import resolution.Combat_Resolution as Combat_Resolution
 import resolution.Social_Resolution as Social_Resolution
 from resolution.Program_Interpreter import evaluate_condition, run_program
@@ -60,6 +61,7 @@ from nlp.Intent_Classification import (
     FORMATION_BEHIND_KEYWORDS,
     GIVE_KEYWORDS,
     OPEN_KEYWORDS,
+    REST_KEYWORDS,
     RETREAT_KEYWORDS,
     SPEAK_LANGUAGE_KEYWORDS,
     TAKE_KEYWORDS,
@@ -76,6 +78,7 @@ from nlp.Intent_Classification import (
     split_action_clauses,
 )
 import LLDM
+from intents.registry import HANDLERS as FREE_STANDING_INTENT_HANDLERS
 from llm.LLM_Core import LLMCore, _OUTCOME_FORMATTERS
 import llm.Ollama_Launcher as Ollama_Launcher
 from llm.Ollama_Launcher import ensure_ollama_running
@@ -679,6 +682,7 @@ class TestIntentClassification(unittest.TestCase):
             "DIALOGUE_KEYWORDS": DIALOGUE_KEYWORDS,
             "TRAVEL_KEYWORDS": TRAVEL_KEYWORDS,
             "SPEAK_LANGUAGE_KEYWORDS": SPEAK_LANGUAGE_KEYWORDS,
+            "REST_KEYWORDS": REST_KEYWORDS,
         }
         # No known exceptions remain: appraise's own skills.toml keywords deliberately exclude
         # "examine" (EXAMINE_KEYWORDS' own item-detection word, checked first) precisely so this
@@ -1561,6 +1565,372 @@ class TestMovementAndRange(DMTestCase):
         result = self.resolved[-1]
         action = result["actions"][0]
         self.assertIsInstance(action, RolledOutcome)
+
+
+class TestDowntime(DMTestCase):
+    # arena.toml authors no [time] table, so DM_Time.py's own default (24 hours/day, 16
+    # daylight, 3 blocks/day -- an 8-hour block) is what every test here exercises.
+
+    def test_get_time_state_starts_at_day_zero_block_zero_daytime(self):
+        state = self.dm_core.get_time_state()
+        self.assertEqual(state, {
+            "day": 0, "block_in_day": 0, "hour": 0.0, "is_day": True,
+            "blocks_per_day": 3, "hours_per_day": 24,
+        })
+        self.assertTrue(self.dm_core.is_daytime())
+
+    def test_day_night_is_read_off_elapsed_hours_not_block_index_parity(self):
+        # Block 2 starts at hour 16 -- exactly daylight_hours -- so it's night; block 3 wraps
+        # to day 1, block_in_day 0, daytime again. Proves is_day comes from real elapsed
+        # hours against daylight_hours, not simply "last of every three".
+        self.dm_core.advance_blocks(2)
+        state = self.dm_core.get_time_state()
+        self.assertEqual(state["block_in_day"], 2)
+        self.assertEqual(state["hour"], 16.0)
+        self.assertFalse(state["is_day"])
+
+        self.dm_core.advance_blocks(1)
+        state = self.dm_core.get_time_state()
+        self.assertEqual(state["day"], 1)
+        self.assertEqual(state["block_in_day"], 0)
+        self.assertTrue(state["is_day"])
+
+    def test_advance_blocks_is_current_blocks_only_mutation(self):
+        self.assertEqual(self.dm_core.current_block, 0)
+        self.dm_core.advance_blocks(5)
+        self.assertEqual(self.dm_core.current_block, 5)
+        self.dm_core.advance_blocks()  # default: one block
+        self.assertEqual(self.dm_core.current_block, 6)
+
+    def test_rest_heals_party_scaled_by_fortitude_and_advances_the_clock(self):
+        # gladstone's own fortitude is {dice: 2, pips: 0} (characters.toml) -- _stub_roll_dice
+        # makes every roll_dice call return 10 regardless of dice/pips actually passed, so this
+        # only has to prove the roll happened and landed, not re-derive the D6 dice math.
+        self._stub_roll_dice(10)
+        self.dm_core.apply_damage("gladstone", 20)  # 36 max_hp -> 16 current
+        self.assertEqual(self.dm_core.get_current_hp("gladstone"), 16)
+
+        result = self.dm_core.rest(2)
+
+        self.assertEqual(self.dm_core.current_block, 2)  # advanced by blocks spent
+        self.assertEqual(result["healed"]["gladstone"], {"healed": 10, "remaining_hp": 26})
+        self.assertEqual(self.dm_core.get_current_hp("gladstone"), 26)
+        # arena's wolf is hostile, not is_party -- never healed by a party rest.
+        self.assertNotIn("wolf", result["healed"])
+        self.assertEqual(result["time"], self.dm_core.get_time_state())
+
+    def test_rest_never_heals_a_dead_party_member(self):
+        self._stub_roll_dice(10)
+        self.dm_core.apply_damage("gladstone", 999)
+        self.assertEqual(self.dm_core.get_current_hp("gladstone"), 0)
+
+        result = self.dm_core.rest()
+
+        self.assertNotIn("gladstone", result["healed"])
+
+    def test_rest_intent_is_diceless_and_free_standing(self):
+        # A plain "rest" spends exactly one block; overnight/dawn/morning phrasing spends a
+        # whole day's worth (blocks_per_day) -- DMCore decides this from the raw input itself,
+        # the same "NLP only flags the intent" split travel/formation/speak_language follow.
+        resolved_events = self._capture("item_interaction_resolved")
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "rest", "item_name": None, "input": "i rest",
+        })
+        self.assertEqual(self.dm_core.current_block, 1)
+        self.assertEqual(resolved_events[-1]["blocks_spent"], 1)
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "rest", "item_name": None, "input": "we camp for the night",
+        })
+        self.assertEqual(self.dm_core.current_block, 4)  # 1 + blocks_per_day (3)
+        self.assertEqual(resolved_events[-1]["blocks_spent"], 3)
+
+    def test_detect_item_intent_recognizes_rest_phrases(self):
+        for phrase in ("i rest", "let's make camp", "set up camp here", "i sleep", "camp for the night"):
+            with self.subTest(phrase=phrase):
+                self.assertEqual(detect_item_intent(phrase), "rest")
+
+    def test_detect_item_intent_take_a_rest_is_still_a_take_not_a_rest(self):
+        # TAKE_KEYWORDS' own "take " is checked well ahead of REST_KEYWORDS -- documented,
+        # deliberate ordering (see REST_KEYWORDS' own module comment), not an oversight.
+        self.assertEqual(detect_item_intent("take a rest"), "take")
+
+
+class TestGridTravel(DMTestCase):
+    # plains.toml: "trailhead" (grid 0,0, start_location) and "border_stones" (grid 4,0), both
+    # seeded into known_locations by the scenario's own [scenario].known_locations, both inside
+    # world_map.toml's "the open plains" region (-10..20 x, -10..10 y) naming the "plains"
+    # environment. rules.toml's [travel] default_speed is 4, so this 4-unit hop costs exactly
+    # one block.
+    scenario_name = "plains"
+
+    def _stub_encounter_roll(self, result):
+        """Forces DM_Encounters.py's own resolve_varied_value call to always return result,
+        regardless of the weighted table passed in -- the encounter-table analog of
+        DMTestCase._stub_roll_dice. Also records every table (the raw "encounter" list) it was
+        called with, so a test can assert *which* day/night table actually got rolled."""
+        calls = []
+
+        def fake_resolve_varied_value(choices):
+            calls.append(choices)
+            return result
+
+        original = DM_Encounters.resolve_varied_value
+        DM_Encounters.resolve_varied_value = fake_resolve_varied_value
+        self.addCleanup(setattr, DM_Encounters, "resolve_varied_value", original)
+        return calls
+
+    def test_grid_travel_computes_distance_and_blocks_and_advances_the_clock(self):
+        self._stub_encounter_roll("nothing")
+        resolved_events = self._capture("item_interaction_resolved")
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "travel", "item_name": None, "input": "i travel to the border stones",
+        })
+
+        self.assertEqual(self.dm_core.current_location_key, "border_stones")
+        self.assertEqual(self.dm_core.current_block, 1)
+        result = resolved_events[-1]
+        self.assertTrue(result["found"])
+        self.assertEqual(result["blocks_spent"], 1)
+        self.assertEqual(result["distance"], 4.0)
+        self.assertEqual(result["time"], self.dm_core.get_time_state())
+
+    def test_grid_travel_denies_a_destination_that_isnt_known(self):
+        self.dm_core.known_locations.discard("border_stones")
+        resolved_events = self._capture("item_interaction_resolved")
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "travel", "item_name": None, "input": "i travel to the border stones",
+        })
+
+        result = resolved_events[-1]
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "no_exit")
+        self.assertEqual(self.dm_core.current_location_key, "trailhead")  # never moved
+
+    def test_grid_travel_denies_a_wholly_unknown_name(self):
+        resolved_events = self._capture("item_interaction_resolved")
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "travel", "item_name": None, "input": "i travel to nowhereville",
+        })
+
+        self.assertFalse(resolved_events[-1]["found"])
+        self.assertEqual(resolved_events[-1]["reason"], "no_exit")
+
+    def test_grid_travel_rolls_the_environment_table_and_instances_a_hostile_creature(self):
+        self._stub_encounter_roll("wild boar")
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "travel", "item_name": None, "input": "i travel to the border stones",
+        })
+
+        self.assertIn("wild boar", self.dm_core.scenario_entities)
+        self.assertEqual(self.dm_core.current_target, "wild boar")  # hostile by default
+
+    def test_grid_travel_rolls_the_day_table_by_day_and_night_table_by_night(self):
+        calls = self._stub_encounter_roll("nothing")
+        day_table = self.dm_core._find_environment("plains")["day_encounter"]
+        night_table = self.dm_core._find_environment("plains")["night_encounter"]
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "travel", "item_name": None, "input": "i travel to the border stones",
+        })
+        self.assertEqual(calls[-1], day_table)  # block 0 starts at hour 0 -- daytime
+
+        self.dm_core._enter_location("trailhead")
+        self.dm_core.current_block = 2  # hour 16 -- night, per rules.toml's [time] table
+        self.dm_core._on_item_interaction_detected({
+            "intent": "travel", "item_name": None, "input": "i travel to the border stones",
+        })
+        self.assertEqual(calls[-1], night_table)
+
+    def test_resolve_region_environment_matches_inside_the_map_and_none_outside_it(self):
+        self.assertEqual(self.dm_core.resolve_region_environment(0, 0), "plains")
+        self.assertEqual(self.dm_core.resolve_region_environment(4, 0), "plains")
+        self.assertIsNone(self.dm_core.resolve_region_environment(1000, 1000))
+
+    def test_party_travel_speed_falls_back_to_rules_toml_default(self):
+        self.assertEqual(self.dm_core._party_travel_speed(), 4)  # rules.toml's [travel] table
+
+    def test_party_travel_speed_uses_an_entitys_own_override_when_present(self):
+        self.dm_core.entities["gladstone"]["travel_speed"] = 2
+        self.assertEqual(self.dm_core._party_travel_speed(), 2)
+
+    def test_known_locations_round_trips_through_save_and_load(self):
+        slot = "test_known_locations_round_trip"
+        slot_dir = os.path.join("Saves", slot)
+        self.addCleanup(shutil.rmtree, slot_dir, ignore_errors=True)
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "travel", "item_name": None, "input": "i travel to the border stones",
+        })
+        self.dm_core.save_game(slot)
+
+        fresh_dm = DMCore(EventBus(), scenario_name="plains")
+        fresh_dm.load_game(slot)
+
+        self.assertEqual(fresh_dm.known_locations, {"trailhead", "border_stones"})
+
+
+class TestFreeStandingIntentHandlers(unittest.TestCase):
+    """!
+    @brief Direct, isolated coverage of every intents/ module's own narrate() (see CONTEXT.md's
+        "Free-standing intent") -- the actual testability payoff of collapsing DM_Core.py's
+        dispatch and LLM_Core.py's narration ladder into per-intent handlers. None of these
+        need a real DMCore/LLMCore/scenario at all: narrate() is a pure function of the
+        "item_interaction_resolved" payload (plus, for move/travel only, the llm_core object
+        whose scenario_description/scenario_characters it updates for ongoing narration
+        grounding -- proven here with a bare object carrying just those two attributes, not a
+        real LLMCore, since narrate_move/narrate_travel never call anything else on it).
+        resolve()'s own behavior stays covered by the existing end-to-end DMCore tests
+        (TestMovementAndRange, TestDowntime, TestGridTravel, ...), which dispatch through
+        DMCore._on_item_interaction_detected exactly as before -- this class only closes the
+        narration-side gap that had no coverage prior to this collapse.
+    """
+
+    class _FakeLLMCore:
+        """A stand-in for LLMCore carrying only the two attributes narrate_move/narrate_travel
+        actually touch -- proves those two functions need nothing else from LLMCore, and that
+        every other free-standing intent's narrate() needs no llm_core at all (called with
+        None, below)."""
+        scenario_description = ""
+        scenario_characters = []
+
+    def _narrate(self, intent, data, llm_core=None):
+        _resolve, narrate = FREE_STANDING_INTENT_HANDLERS[intent]
+        return narrate(llm_core, data)
+
+    def test_narrate_advance_retreat_reports_real_band_gap_changes(self):
+        prompt = self._narrate("advance", {
+            "intent": "advance", "found": True,
+            "moved": [{"entity": "wolf", "before": 3, "after": 2}],
+        })
+        self.assertIn("wolf (3 -> 2 bands away)", prompt)
+        self.assertIn("advances", prompt)
+
+    def test_narrate_advance_retreat_handles_no_one_else_present(self):
+        prompt = self._narrate("retreat", {"intent": "retreat", "found": True, "moved": []})
+        self.assertIn("no one else here", prompt)
+
+    def test_narrate_formation_reports_real_members_and_stance(self):
+        prompt = self._narrate("formation_behind", {
+            "intent": "formation_behind", "found": True,
+            "members": ["anne"], "stance": "behind",
+        })
+        self.assertIn("anne", prompt)
+        self.assertIn("stay a band behind", prompt)
+
+    def test_narrate_formation_explains_no_party_present(self):
+        prompt = self._narrate("formation_abreast", {
+            "intent": "formation_abreast", "found": False, "reason": "no_party", "input": "walk beside me",
+        })
+        self.assertIn("no one from the player's own party here", prompt)
+
+    def test_narrate_speak_language_reports_the_real_resolved_language(self):
+        prompt = self._narrate("speak_language", {
+            "intent": "speak_language", "found": True, "language": "elvish",
+        })
+        self.assertIn("speaking elvish", prompt)
+
+    def test_narrate_speak_language_explains_an_unknown_language(self):
+        prompt = self._narrate("speak_language", {
+            "intent": "speak_language", "found": False, "reason": "unknown_language", "input": "speak in dwarvish",
+        })
+        self.assertIn("doesn't actually know any language", prompt)
+
+    def test_narrate_rest_reports_real_healed_amounts_and_time(self):
+        prompt = self._narrate("rest", {
+            "intent": "rest", "found": True, "blocks_spent": 2,
+            "healed": {"gladstone": {"healed": 10, "remaining_hp": 26}},
+            "time": {"is_day": False, "day": 1},
+        })
+        self.assertIn("gladstone recovers 10 HP (now at 26 HP)", prompt)
+        self.assertIn("night on day 1", prompt)
+
+    def test_narrate_rest_never_claims_recovery_that_didnt_happen(self):
+        prompt = self._narrate("rest", {
+            "intent": "rest", "found": True, "blocks_spent": 1, "healed": {},
+            "time": {"is_day": True, "day": 0},
+        })
+        self.assertIn("no one recovers any HP", prompt)
+
+    def test_narrate_move_grounds_ongoing_narration_on_the_new_room(self):
+        llm_core = self._FakeLLMCore()
+        prompt = self._narrate("move", {
+            "intent": "move", "found": True, "direction": "forward",
+            "room_name": "the crypt entrance", "room_description": "Cold air rises from below.",
+            "characters": ["thane"],
+        }, llm_core)
+        self.assertIn("the crypt entrance", prompt)
+        self.assertEqual(llm_core.scenario_description, "Cold air rises from below.")
+        self.assertEqual(llm_core.scenario_characters, ["thane"])
+
+    def test_narrate_move_explains_each_failure_reason(self):
+        for reason, expected_phrase in (
+            ("no_exit", "no way through"), ("wrong_band", "right spot"),
+            ("blocked_by_enemies", "hostile is still standing"),
+        ):
+            with self.subTest(reason=reason):
+                prompt = self._narrate("move", {
+                    "intent": "move", "found": False, "reason": reason, "direction": "forward", "input": "go forward",
+                })
+                self.assertIn(expected_phrase, prompt)
+
+    def test_narrate_travel_grounds_ongoing_narration_and_reports_elapsed_time(self):
+        llm_core = self._FakeLLMCore()
+        prompt = self._narrate("travel", {
+            "intent": "travel", "found": True, "location_name": "border stones",
+            "location_description": "A ring of weathered stones.", "characters": [],
+            "blocks_spent": 1, "distance": 4.0, "time": {"is_day": True, "day": 0},
+        }, llm_core)
+        self.assertIn("border stones", prompt)
+        self.assertIn("1 block(s) of travel time", prompt)
+        self.assertEqual(llm_core.scenario_description, "A ring of weathered stones.")
+
+    def test_narrate_travel_omits_elapsed_time_for_an_ordinary_exit_graph_hop(self):
+        llm_core = self._FakeLLMCore()
+        prompt = self._narrate("travel", {
+            "intent": "travel", "found": True, "location_name": "town square",
+            "location_description": "A bustling square.", "characters": [],
+        }, llm_core)
+        self.assertNotIn("block(s) of travel time", prompt)
+
+    def test_narrate_travel_explains_each_failure_reason(self):
+        for reason, expected_phrase in (("no_exit", "no way through"), ("blocked_by_enemies", "hostile is still standing")):
+            with self.subTest(reason=reason):
+                prompt = self._narrate("travel", {
+                    "intent": "travel", "found": False, "reason": reason, "input": "i travel to nowhere",
+                })
+                self.assertIn(expected_phrase, prompt)
+
+
+class TestGenerateItemInteractionResponseDispatchesFreeStandingIntents(LLMTestCase):
+    """!
+    @brief Proves LLM_Core.py's generate_item_interaction_response actually wires into
+        intents/registry.py's own HANDLERS for a free-standing intent, rather than falling
+        through to the item-named ladder below it -- the plumbing TestFreeStandingIntentHandlers
+        above deliberately bypasses by calling narrate() directly.
+    """
+
+    def test_rest_narration_reaches_the_context_window(self):
+        self.llm_core.generate_item_interaction_response({
+            "intent": "rest", "found": True, "blocks_spent": 1,
+            "healed": {"gladstone": {"healed": 5, "remaining_hp": 30}},
+            "time": {"is_day": True, "day": 0}, "input": "i rest",
+        })
+        prompt = self.llm_core.context_window[-1]["content"]
+        self.assertIn("gladstone recovers 5 HP", prompt)
+
+    def test_move_grounds_ongoing_scenario_description_on_the_llmcore_itself(self):
+        self.llm_core.generate_item_interaction_response({
+            "intent": "move", "found": True, "direction": "forward",
+            "room_name": "the antechamber", "room_description": "Dust hangs in the still air.",
+            "characters": [], "input": "go forward",
+        })
+        self.assertEqual(self.llm_core.scenario_description, "Dust hangs in the still air.")
 
 
 class TestSpellMaterials(DMTestCase):
@@ -6137,6 +6507,21 @@ class TestSaveLoad(DMTestCase):
         fresh_dm.load_game(slot)
 
         self.assertEqual(fresh_dm.entities["gladstone"]["exp"], 121)
+
+
+    def test_current_block_round_trips_through_save_and_load(self):
+        # A downtime clock that forgot elapsed time on reload would let a save-scum trivially
+        # dodge whatever eventually consumes it (ex: a bad watch roll) -- see docs/downtime.md.
+        slot = self._track("test_current_block_round_trip")
+        self.dm_core.rest(2)
+        self.assertEqual(self.dm_core.current_block, 2)
+        self.dm_core.save_game(slot)
+
+        fresh_dm = DMCore(EventBus(), scenario_name="arena")  # boots at current_block = 0
+        self.assertEqual(fresh_dm.current_block, 0)
+        fresh_dm.load_game(slot)
+
+        self.assertEqual(fresh_dm.current_block, 2)
 
 
     def test_dropped_items_round_trip_through_save_load(self):

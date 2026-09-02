@@ -204,6 +204,30 @@ mod_multiplier = 2
 xp_multiplier = 1
 divide_between_party = false
 
+# The block clock underlying downtime (see docs/downtime.md) -- DMCore.current_block is a single
+# monotonic counter of 8-hour "blocks" elapsed since the scenario started; DMCore.get_time_state
+# derives day/block-in-day/hour/is_day from it against these three tunables alone, nothing else
+# stored redundantly. hours_per_day and blocks_per_day are independent (a day doesn't have to
+# divide evenly among its blocks, though it does by default: 24 / 3 = an 8-hour block).
+# daylight_hours is read against elapsed hours *within* the current day, not block index parity --
+# a block counts as daytime if it starts before daylight_hours (16 here, so the first two 8-hour
+# blocks are day and the third, starting at hour 16, is night). Absent entirely defaults to
+# exactly these three values, the same "still works with nothing authored" fallback [xp] gets.
+[time]
+hours_per_day = 24
+daylight_hours = 16
+blocks_per_day = 3
+
+# Overworld travel speed (see docs/downtime.md's "Travel") -- distinct from combat's own
+# per-band-action "speed" (DM_Movement.py's advance_or_retreat), which never applies outside a
+# room's own band line. Grid units (world_map.toml's own region bounds, a [[location]]'s own
+# "grid") covered per block of travel time; an entity may override this with its own
+# "travel_speed" field (ex: a race with a slower or faster gait), else falls back to
+# default_speed here. A party paces to its slowest is_player/is_party member currently present
+# (see DM_Travel.py's _party_travel_speed), not just the player's own value.
+[travel]
+default_speed = 4
+
 # Point-buy constants for character creation (Character_Creation.py/DM_CharacterCreation.py).
 # A new character's starting dice come entirely from whichever race is picked -- every race
 # in races.toml spells out an absolute dice count for every skill (human's own is a flat 2D

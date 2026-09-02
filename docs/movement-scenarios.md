@@ -146,6 +146,14 @@ blocks a move taken from a location's own freeform space; always blocks one take
 already runs for an ordinary room-to-room move, scoped to that one room's own occupants, whether
 the destination is another room in the same location or a jump to a different location entirely.
 
+**Gridded locations skip this graph entirely.** An optional `grid = {x, y}` field on a
+`[[location]]` — see `docs/downtime.md`'s "Travel" — replaces its own `[[location.exit]]`/
+`return_to` graph with pure grid connectivity: any *known* location (`DMCore.known_locations`) is
+reachable directly by name/alias, distance/time cost computed from grid coordinates and party
+travel speed. `_resolve_travel_intent` branches on the *current* location's own `grid` field before
+ever touching `_resolve_location_exit` below; a non-gridded location's exits are completely
+unaffected either way.
+
 **`self.entities` holds templates and live instances under the same keys** — instancing a
 single-occurrence entity overwrites its template slot. `load_game` re-runs `load_rules()` before
 re-instancing for this reason (see "Saving and loading").

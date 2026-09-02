@@ -1,0 +1,14 @@
+# Placing environments on the overworld (see docs/downtime.md's "Travel") -- named, rectangular
+# regions rather than a per-tile dict, matching how every other table in this codebase stays
+# hand-sized rather than combinatorial. A grid coordinate resolves to whichever region's own
+# bounds contain it (DM_Travel.py's resolve_region_environment) -- first match wins if two ever
+# overlapped, though none do here. A gap between authored regions has no environment at all,
+# which is what "safe" looks like everywhere in this design: no watch check, no encounter roll,
+# full stop, the same "absence means safe" default basic rest already follows.
+[[region]]
+name = "the open plains"
+environment = "plains"
+min_x = -10
+max_x = 20
+min_y = -10
+max_y = 10

@@ -653,6 +653,12 @@ class RulesMixin(DMCoreProtocol):
             DM_Persistence.py's load_game (re-instancing a save shouldn't pay for a real
             LLM round trip just to immediately overwrite the result with saved values).
         """
+        # Seeds any location a scenario wants already known ahead of a first visit (ex:
+        # plains.toml's own known_locations -- ordinarily "having visited it," but "some other
+        # in-fiction means" per docs/downtime.md's "Travel" covers a map the player starts
+        # with). A no-op union with whatever's already known -- harmless to re-run on every
+        # load_scenario call (__init__, load_game, an ad hoc test scenario).
+        self.known_locations.update(self.scenario.get("known_locations", []))
         self._enter_location(self.scenario.get("start_location"), skip_llm_generation=skip_llm_generation)
         self.event_bus.publish("log_info", f"Scenario loaded: {self.scenario_entities}")
 
@@ -720,6 +726,10 @@ class RulesMixin(DMCoreProtocol):
             from DM_Persistence.py's load_game.
         """
         self.current_location_key = location_key
+        # Grid-based travel's own gate (see DM_Travel.py/docs/downtime.md's "Travel") -- every
+        # location entered, gridded or not, becomes reachable-by-name from now on. A set, so
+        # revisiting somewhere already known is a no-op.
+        self.known_locations.add(location_key)
         location = self.locations.get(location_key, {})
         cache = self.location_runtime.setdefault(location_key, {})
 
