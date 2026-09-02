@@ -9,11 +9,13 @@ class TravelMixin(DMCoreProtocol):
     @brief Grid-based overworld travel (DMCore mixin -- only ever composed into DMCore, never
         instantiated on its own; relies on self.rules/self.entities/self.locations/
         self.scenario_entities/self.current_location_key/self.known_locations/self.event_bus/
-        self.rooms/self.player_name/self._is_party_member/self.is_hostile/self.get_current_hp/
-        self._enter_location/self._current_room/self._describe_scenario_characters/
-        self.advance_blocks/self.is_daytime/self._resolve_one_encounter, set up by
-        DMCore.__init__ or implemented by DM_Rules.py/DM_Encounters.py/DM_Time.py). See
-        docs/downtime.md's "Travel" for the design this implements.
+        self.rooms/self.player_name/self.watch_rotation_index/self._is_party_member/
+        self.is_hostile/self.get_current_hp/self._enter_location/self._current_room/
+        self._describe_scenario_characters/self.advance_blocks/self.is_daytime/
+        self._resolve_one_encounter/self.resolve_action/self.apply_condition, set up by
+        DMCore.__init__ or implemented by DM_Rules.py/DM_Encounters.py/DM_Time.py/
+        DM_Combat.py/DM_Status.py). See docs/downtime.md's "Travel" for the design this
+        implements.
 
         An optional "grid" field ({x, y}) on a [[location]] table opts it into this whole
         connectivity model, replacing its authored [[location.exit]]/"return_to" entirely (see
@@ -43,8 +45,17 @@ class TravelMixin(DMCoreProtocol):
         pausing the clock mid-journey for a real fight (docs/downtime.md's own "Not yet built"
         note) is a separable future step. A creature this rolls up is simply added to the
         destination's own arrival scene, exactly like [[location.encounter]]'s own on_enter roll
-        (which still fires separately, right after, unaffected). No night watch/surprise check
-        either (docs/extended-goals.md's "Downtime") -- every block just rolls its table outright.
+        (which still fires separately, right after, unaffected).
+
+        A night block (self.is_daytime() false) whose own encounter roll actually placed a
+        hostile entity is followed by a night watch check (_roll_night_watch,
+        docs/extended-goals.md's "Night watch and surprise") -- a day block, or a night block
+        that rolled "nothing"/a friendly name/pure flavor, never rolls a watch at all, since
+        there'd be nothing for a failed watch to matter against. This whole "one block against
+        one environment" step is factored into _resolve_environment_block so DM_Time.py's own
+        rest can reuse it verbatim against a single fixed point (_current_environment) instead
+        of a line of travel -- the one place this mixin is itself relied on by another, rather
+        than only ever the other way around.
     """
 
     def _travel_rules(self):
@@ -102,6 +113,47 @@ class TravelMixin(DMCoreProtocol):
                 return environment
         return None
 
+    def _current_environment(self):
+        """!
+        @brief The environment (if any) at the current location's own fixed grid point --
+            rest's own "what environment am I resting inside of" lookup (DM_Time.py's rest),
+            the single-point counterpart to _resolve_grid_travel_intent's own per-block *line*
+            sampling: nothing moves during rest, so there's only ever one point to sample, not
+            a leg of a journey. A location with no "grid" field at all (ex: any dungeon room,
+            or an overworld location simply never placed on world_map.toml) resolves to None
+            here, same as a gridded point that happens to fall in an unmapped gap -- both are
+            the same "absence of an environment" default that's already what "safe" looks like
+            everywhere else in this design (no watch check, no encounter roll).
+        @return An environments.toml [[environment]] entry, or None.
+        """
+        grid = self.locations.get(self.current_location_key, {}).get("grid")
+        if not grid:
+            return None
+        environment_name = self.resolve_region_environment(grid["x"], grid["y"])
+        return self._find_environment(environment_name) if environment_name else None
+
+    def _resolve_environment_block(self, environment):
+        """!
+        @brief Resolves one elapsed block's worth of exposure to a single environment -- the
+            "roll this environment's own day/night encounter table off self.is_daytime() at
+            this moment, then a night watch check if that roll turned out hostile" logic
+            shared by grid travel's own per-block loop (_resolve_grid_travel_intent) and rest
+            (DM_Time.py's rest), so the two don't each re-derive it independently and risk
+            drifting apart.
+        @param environment One environments.toml [[environment]] entry (ex: from
+            _find_environment/_current_environment) -- never None; both callers only invoke
+            this once they've already confirmed one actually applies.
+        @return True if this block's own encounter roll turned out hostile (regardless of
+            whether a night watch check followed, or how it went) -- callers that don't care
+            can simply ignore it.
+        """
+        is_night = not self.is_daytime()
+        table_key = "night_encounter" if is_night else "day_encounter"
+        hostile = self._resolve_one_encounter({"encounter": environment.get(table_key, [])})
+        if is_night and hostile:
+            self._roll_night_watch(environment)
+        return hostile
+
     def _resolve_grid_destination(self, input_text):
         """!
         @brief Finds a known, gridded [[location]] named in input_text -- the grid-model
@@ -123,6 +175,46 @@ class TravelMixin(DMCoreProtocol):
                 if phrase and re.search(rf"\b{re.escape(phrase.lower())}\b", input_text or ""):
                     return key
         return None
+
+    def _roll_night_watch(self, environment):
+        """!
+        @brief Resolves whether a night block's own hostile encounter catches the party
+            unprepared (docs/extended-goals.md's "Night watch and surprise") -- only ever
+            called once a night block's own encounter roll has already placed a hostile
+            entity, since "success, or a non-hostile roll, changes nothing" leaves nothing for
+            a watch check to matter against otherwise.
+
+            Whichever currently-present is_party member (player included -- on any given
+            night, the watch could fall to either) is next up in self.watch_rotation_index's
+            own fixed rotation rolls "observation" against environment's own
+            "watch_difficulty"; the index only advances on a night a watch is actually rolled,
+            not every night, so it still cycles through the same party across however many
+            hostile nights occur, just not in lockstep with elapsed time. A party of one --
+            nobody to rotate a watch to while the sole traveler sleeps -- always fails outright,
+            no roll attempted (the alternative, treating solo rest as automatically safe, would
+            make traveling alone strictly safer than with company, inverting the usual "safety
+            in numbers" logic this design deliberately keeps).
+
+            A failed (or skipped) watch applies "surprised" (rules.toml's own [[condition]]) to
+            every present is_party member -- the whole party was caught off guard, not just
+            whoever stood watch -- cleared after that fight's own first round of upkeep
+            (_expire_surprised_if_due, DM_Status.py).
+        @param environment The night block's own environments.toml entry, read for its
+            "watch_difficulty".
+        @return True if the party was surprised.
+        """
+        roster = [name for name in self.scenario_entities if self._is_party_member(name)]
+        if len(roster) <= 1:
+            surprised = True
+        else:
+            watcher = roster[self.watch_rotation_index % len(roster)]
+            self.watch_rotation_index += 1
+            result = self.resolve_action(watcher, "observation", environment.get("watch_difficulty", 0))
+            surprised = not result["success"]
+        if surprised:
+            for name in roster:
+                self.apply_condition(name, "surprised", duration="1 round", dismiss="")
+        return surprised
 
     def _resolve_grid_travel_intent(self, input_text, resolved):
         """!
@@ -165,8 +257,7 @@ class TravelMixin(DMCoreProtocol):
             if environment_name:
                 environment = self._find_environment(environment_name)
                 if environment:
-                    table_key = "day_encounter" if self.is_daytime() else "night_encounter"
-                    self._resolve_one_encounter({"encounter": environment.get(table_key, [])})
+                    self._resolve_environment_block(environment)
             self.advance_blocks(1)
 
         new_location = self.locations.get(self.current_location_key, {})

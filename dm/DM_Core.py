@@ -149,6 +149,12 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         # axis from round_number above (tactical/per-turn vs. strategic/per-downtime-action).
         # Round-tripped through save_game/load_game the same way round_number already is.
         self.current_block = 0
+        # Night watch's own "fixed rotation, not always the same member" cursor
+        # (docs/extended-goals.md's "Night watch and surprise") -- an index into whichever
+        # is_party members are present at the time, advanced once per night block a watch is
+        # actually rolled (see DM_Travel.py's _roll_night_watch). Round-tripped through
+        # save_game/load_game the same way current_block already is.
+        self.watch_rotation_index = 0
         # The player's persisted combat target -- distinct from _get_target_name()'s "first
         # non-player entity" (which stays purely for non-combat interaction resolution, ex:
         # the dungeon's chest or the tavern's innkeeper). Set for real by load_scenario()

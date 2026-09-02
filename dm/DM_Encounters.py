@@ -49,30 +49,39 @@ class EncounterMixin(DMCoreProtocol):
             possible outcomes.
         @param entry One [[location.encounter]]/[[location.room.encounter]] table
             ({"name", "trigger", "encounter"}).
+        @return True if this roll instanced at least one entity hostile to the player --
+            DM_Travel.py's own night-watch check (_roll_night_watch) uses this to know whether
+            a night block's roll is even worth a watch check against; every other existing
+            caller (_resolve_location_encounter) simply ignores it, exactly as it ignored this
+            method returning nothing before.
         """
         choices = entry.get("encounter", [])
         if not choices:
-            return
+            return False
         result = resolve_varied_value(choices)
         if result == "nothing":
-            return
+            return False
 
         if result in self.entities or result in self.entity_templates:
             key = "name" if result in self.entities else "template"
             instanced = self._instance_entities(
                 [{key: result, "band": self.get_band(self.player_name)}], party_pool=self.persistent_entities,
             )
+            hostile = False
             for name in instanced:
                 self.scenario_entities.append(name)
                 if self.is_hostile(name, self.player_name):
                     self._claim_current_target_if_free(name)
+                    hostile = True
             self.event_bus.publish("encounter_triggered", {
                 "description": None,
                 "entity_name": instanced[0] if instanced else None,
                 "present_entities": list(self.scenario_entities),
             })
+            return hostile
         else:
             self.event_bus.publish("encounter_triggered", {
                 "description": result, "entity_name": None,
                 "present_entities": list(self.scenario_entities),
             })
+            return False

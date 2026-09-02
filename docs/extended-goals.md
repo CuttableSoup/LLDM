@@ -145,13 +145,13 @@ training — inspired by Pathfinder's downtime rules. Fully grilled (see the des
 this section was built from); recorded here as the target shape, not a plan that was ever meant to
 build in one pass — see "Suggested build order" at the end.
 
-**Built**: the block clock primitive, a first basic slice of rest (heal-on-rest, no environment/
-watch gate yet), and grid-based travel with environments/world map — see `docs/downtime.md` for
-what's actually shipped and exactly where it diverges from the sketch below (day/night is read off
-real elapsed hours against a `daylight_hours` tunable, not fixed block-index parity, since the
-clock's own `[time]` rules.toml table exposes `daylight_hours` as a real, load-bearing value rather
-than pure flavor). Still unbuilt: night watch/surprise, crafting's day-extension, and training's
-reopening question.
+**Built**: the block clock primitive, grid-based travel with environments/world map, night
+watch/surprise, and rest, now sharing the same per-block environment/watch check travel uses (see
+`docs/downtime.md` for what's actually shipped and exactly where it diverges from the sketch below
+-- day/night is read off real elapsed hours against a `daylight_hours` tunable, not fixed
+block-index parity, since the clock's own `[time]` rules.toml table exposes `daylight_hours` as a
+real, load-bearing value rather than pure flavor). Still unbuilt: pausing the block clock
+mid-journey/mid-rest for a real fight, crafting's day-extension, and training's reopening question.
 
 **The block clock.** An 8-hour "block" (three per day) is the atomic time unit — fine enough for
 meaningful travel/rest granularity, coarse enough that a multi-day journey doesn't mean
@@ -227,7 +227,9 @@ away information the map actually contains. `plains.toml`'s own shipped map is s
 this hasn't yet been exercised by a real multi-region journey, but the sampling math itself doesn't
 special-case the single-region case at all.
 
-**Night watch and surprise.** On a night block, whichever `is_party` member is next up in a fixed
+**Night watch and surprise — built, for both travel and rest (see `docs/downtime.md`'s "Night
+watch and surprise" for the shipped mechanics and exactly what still diverges from this sketch).**
+On a night block, whichever `is_party` member is next up in a fixed
 rotation (not player-chosen, not always the same member) rolls `observation` against that block's
 *current* environment's own watch difficulty — the same flat-difficulty check `[entity.test]`
 locks/traps already use, not a new check type; `observation` was picked over introducing a new
@@ -244,18 +246,19 @@ nobody to rotate to, any hostile night result always applies `surprised` uncondi
 for a solo traveler, the same as an absent environment — was rejected: it would make solo travel
 strictly *safer* than traveling with a party, inverting the usual "safety in numbers" logic.)
 
-**Rest — built, basic slice only.** Rest consumes one or more blocks and heals via the ordinary
-`apply_healing` call (so the existing wound-tier condition dismiss-sweep applies for free), scaled
-by `fortitude` — picked over `medicine` because this is the body's own recovery, not a caregiver
-treating someone else's wound; `medicine` stays free for some other future check that actually
-wants a caregiving/treatment framing. See `docs/downtime.md` for the shipped mechanics (the
-`"rest"` free-text intent, one aggregate roll over the whole rest rather than per-block).
-**Still unbuilt**: resting overnight anywhere with an active environment going through the same
-per-block watch/encounter machinery travel now uses (environments exist as of "Travel," below) —
-`rest` itself still never consults `resolve_region_environment`/an environment's own tables at
-all, a deliberate scope cut when basic rest first shipped, not an oversight; the "absence of an
-environment means safe" default (above) is what will actually exempt an inn or a cleared room once
-this is wired up, not a bespoke flag.
+**Rest — built.** Rest consumes one or more blocks, consulting the current location's own
+environment (if any -- a location with no `grid` field, or an unmapped `world_map.toml` gap, both
+still mean "safe" by the same absence-of-an-environment default as everywhere else) and rolling its
+day/night encounter table (plus a night watch check on a hostile roll) once per block via the same
+`_resolve_environment_block` grid travel's own per-block loop uses, against a single fixed point
+rather than a line of travel. Once every block has elapsed, heals via the ordinary `apply_healing`
+call (so the existing wound-tier condition dismiss-sweep applies for free), scaled by `fortitude` —
+picked over `medicine` because this is the body's own recovery, not a caregiver treating someone
+else's wound; `medicine` stays free for some other future check that actually wants a
+caregiving/treatment framing. One aggregate heal roll over the whole rest, not per-block, unaffected
+by whatever the per-block environment rolls above turned up — resting through an ambush heals
+exactly as much as an uneventful rest of the same length would. See `docs/downtime.md` for the
+shipped mechanics (the `"rest"` free-text intent).
 
 **Crafting.** Already exists as an instant single-roll check (see "Inventory and items"). The
 downtime extension: a recipe gains a `days_required`, and completion gates on spending that many
@@ -275,18 +278,16 @@ clock/downtime-adjacent design question in its own right, not yet decided — an
 
 **Data conventions.** `environments.toml` and `world_map.toml` are now real sibling files alongside
 the existing `Rules/Fantasy/*.toml` catalogs (see `docs/downtime.md`'s "Travel"); each environment
-already authors a `watch_difficulty` field for the future watch formula, unread by anything yet.
-Block length/blocks-per-day/daylight-hours and travel speed are folded into `rules.toml`'s own
+authors a `watch_difficulty` field, read by night watch (above) for both travel and rest. Block
+length/blocks-per-day/daylight-hours and travel speed are folded into `rules.toml`'s own
 `[time]`/`[travel]` tables (see `docs/downtime.md`) — mirroring exactly how `[[status]]`/
 `[[condition]]`/`[[initiative]]` already centralize tunables there rather than living as Python
 constants; the heal formula needed no table of its own beyond `[time]`, since it reads straight
 off the resting entity's own `fortitude` skill.
 
-**Suggested build order.** Clock primitive, basic rest, and grid/environment/distance travel are
-all done (see `docs/downtime.md`). Night watch/surprise is next — built almost entirely from
-reused machinery (flat-difficulty tests, condition/duration) plus the one genuinely new piece, the
-watch formula itself, since every environment already authors its own `watch_difficulty`; folding
-an environment/watch gate into the existing `rest` once watch exists is a natural fast-follow on
-top of *that*. Crafting's day-extension and training's whole design are natural fast-follows too,
-not blockers to building watch; `known_locations`-gated ad hoc destination generation is a
-fast-follow on top of travel, independent of watch entirely.
+**Suggested build order.** Clock primitive, grid/environment/distance travel, night watch/surprise,
+and rest (now sharing the same per-block environment/watch machinery as travel) are all done (see
+`docs/downtime.md`). Pausing the block clock mid-journey/mid-rest for a real fight is the natural
+next step on that same axis, whenever it's wanted. Crafting's day-extension and training's whole
+design are natural fast-follows too, independent of that; `known_locations`-gated ad hoc
+destination generation is a fast-follow on top of travel, independent of watch entirely.

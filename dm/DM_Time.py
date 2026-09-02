@@ -6,15 +6,14 @@ class TimeMixin(DMCoreProtocol):
     @brief The block clock underlying downtime (DMCore mixin -- only ever composed into
         DMCore, never instantiated on its own; relies on self.rules/self.entities/
         self.scenario_entities/self.event_bus/self.roll_dice/self.apply_healing/
-        self._is_party_member/self.get_current_hp, set up by DMCore.__init__). See
-        docs/downtime.md for the design this implements: self.current_block is a single
-        monotonic counter of every 8-hour (by default) "block" elapsed since the scenario
-        started -- round-tripped through save_game/load_game the same way round_number
-        already is (see DM_Persistence.py) -- and every other time concept (day number,
-        block-in-day, hour-of-day, day/night) is derived from it fresh rather than stored
-        redundantly. Day/night and rest are the only two things built on this clock so far;
-        travel/environments/watch stay unbuilt (see docs/downtime.md's own "Not yet built"
-        note).
+        self._is_party_member/self.get_current_hp/self._current_environment/
+        self._resolve_environment_block, set up by DMCore.__init__ or implemented by
+        DM_Travel.py). See docs/downtime.md for the design this implements: self.current_block
+        is a single monotonic counter of every 8-hour (by default) "block" elapsed since the
+        scenario started -- round-tripped through save_game/load_game the same way
+        round_number already is (see DM_Persistence.py) -- and every other time concept (day
+        number, block-in-day, hour-of-day, day/night) is derived from it fresh rather than
+        stored redundantly.
     """
 
     def _time_rules(self):
@@ -72,22 +71,42 @@ class TimeMixin(DMCoreProtocol):
 
     def rest(self, blocks=1):
         """!
-        @brief Downtime rest (docs/downtime.md): advances the clock by blocks, then heals
-            every living party member (is_player/is_party -- see _is_party_member) via the
-            ordinary apply_healing call, scaled by their own "fortitude" skill -- the body's
-            own recovery, picked over "medicine" (a caregiver treating someone else's
-            wound). One aggregate roll per rester over the whole rest, not one per block --
-            fortitude's own dice/pips scale directly with blocks spent before the roll
-            happens, so a longer rest's variance still grows the way rolling more dice
-            actually would, the same "avoid swinginess from rolling repeatedly" reasoning
-            crafting's own days_required already follows. No environment/watch check yet
-            (see docs/downtime.md) -- every rest today is exactly as safe as resting
-            somewhere with no active environment always will be.
+        @brief Downtime rest (docs/downtime.md): consults the current location's own
+            environment (_current_environment, DM_Travel.py -- None for a location with no
+            "grid" field, or one whose grid point falls in an unmapped world_map.toml gap,
+            both the same "absence of an environment" default that's what "safe" looks like
+            everywhere in this design) once, then advances the clock one block at a time,
+            rolling that same environment's own day/night encounter table (and, on a night
+            block whose roll turns out hostile, a watch check) via _resolve_environment_block
+            for every block spent -- the exact machinery grid travel's own per-block loop
+            already uses, just against one fixed point instead of a line of travel, since
+            nothing moves during rest. A location with no environment at all skips this
+            entirely, same as before this existed. Deliberate simplification, matching grid
+            travel's own: a hostile encounter (or a failed watch) doesn't cut the rest short
+            or block the healing below -- pausing downtime for a real fight is a separate,
+            still-deferred extension (see docs/downtime.md's "Not yet built").
+
+            Once every block has elapsed, heals every living party member (is_player/is_party
+            -- see _is_party_member) via the ordinary apply_healing call, scaled by their own
+            "fortitude" skill -- the body's own recovery, picked over "medicine" (a caregiver
+            treating someone else's wound). One aggregate roll per rester over the whole rest,
+            not one per block -- fortitude's own dice/pips scale directly with blocks spent
+            before the roll happens, so a longer rest's variance still grows the way rolling
+            more dice actually would, the same "avoid swinginess from rolling repeatedly"
+            reasoning crafting's own days_required already follows. Unaffected by however many
+            of those blocks turned out hostile above -- resting through an ambush still heals
+            exactly as much as an uneventful rest of the same length would.
         @param blocks How many blocks to spend resting (floored at 1).
         @return {healed: {entity_name: {healed, remaining_hp}}, time: get_time_state()}.
         """
         blocks = max(1, blocks)
-        time_state = self.advance_blocks(blocks)
+        environment = self._current_environment()
+        for _ in range(blocks):
+            if environment:
+                self._resolve_environment_block(environment)
+            self.advance_blocks(1)
+        time_state = self.get_time_state()
+
         healed = {}
         for entity_name in self.scenario_entities:
             if not self._is_party_member(entity_name) or self.get_current_hp(entity_name) <= 0:

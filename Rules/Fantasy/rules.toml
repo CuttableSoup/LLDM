@@ -70,6 +70,16 @@ description = "Broken neck; punctured lung; eviscerated."
 name = "stunned"
 modifier = { dice = -1, pips = 0, bonus = 0 }
 
+# Applied by DM_Travel.py's own _roll_night_watch (docs/extended-goals.md's "Night watch and
+# surprise") to every is_party member when a night block's own hostile encounter catches a
+# failed (or unattempted, for a solo traveler) watch -- a heavier penalty than "stunned" since
+# it represents being caught asleep/unprepared, not just dazed mid-fight. Cleared the round
+# after it's applied by _expire_surprised_if_due (DM_Status.py's run_round_upkeep), the bespoke
+# stand-in for a real "duration" countdown -- see that method's own docstring.
+[[condition]]
+name = "surprised"
+modifier = { dice = -2, pips = 0, bonus = 0 }
+
 [[condition]]
 name = "wounded"
 modifier = { dice = -1, pips = 0, bonus = 0 }

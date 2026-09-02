@@ -236,6 +236,7 @@ class PersistenceMixin(DMCoreProtocol):
             "player_name": self.player_name,
             "round_number": self.round_number,
             "current_block": self.current_block,
+            "watch_rotation_index": self.watch_rotation_index,
             "current_target": self.current_target,
             "scenario_entities": self.scenario_entities,
             "current_location_key": self.current_location_key,
@@ -434,6 +435,7 @@ class PersistenceMixin(DMCoreProtocol):
         self.player_name = data.get("player_name", self.player_name)
         self.round_number = data.get("round_number", 0)
         self.current_block = data.get("current_block", 0)
+        self.watch_rotation_index = data.get("watch_rotation_index", 0)
         self.scenario_key = data.get("scenario_key", self.scenario_key)
         self.setting = data.get("setting", self.setting)
         # Must precede load_scenario_definition/load_scenario -- see this method's own

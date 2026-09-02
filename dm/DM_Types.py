@@ -36,6 +36,7 @@ class DMCoreProtocol(Protocol):
     rules: dict
     round_number: int
     current_block: int
+    watch_rotation_index: int
     current_target: str | None
     scenario_key: str
     player_name: str

@@ -1759,6 +1759,166 @@ class TestGridTravel(DMTestCase):
         self.dm_core.entities["gladstone"]["travel_speed"] = 2
         self.assertEqual(self.dm_core._party_travel_speed(), 2)
 
+    def _add_party_member(self, name):
+        # Both of plains.toml's locations author an empty "entities" list, so a freeform
+        # _enter_location rebuilds scenario_entities from location_runtime's own cached
+        # persistent_names on every arrival (DM_Rules.py) -- a name merely appended to
+        # scenario_entities directly would be wiped out the moment travel's own
+        # _enter_location(destination_key) runs. Seeding it into both locations' own
+        # persistent_names instead makes it survive travel exactly like a real
+        # hand-authored ally (ex: crypt.toml's thane) would.
+        self.dm_core.entities[name] = {
+            "is_party": True, "name": name, "hp": 10, "max_hp": 10, "skills": {},
+        }
+        self.dm_core.scenario_entities.append(name)
+        for location_key in ("trailhead", "border_stones"):
+            cache = self.dm_core.location_runtime.setdefault(location_key, {})
+            persistent_names = cache.get("persistent_names")
+            if persistent_names is None:
+                # A location not yet visited (ex: border_stones, before the first travel in
+                # these tests) has no cache at all yet -- _instance_location_persistent_names
+                # would normally guarantee the player is in it (DM_Rules.py); reproduce that
+                # here since this helper builds the cache directly instead of going through it.
+                persistent_names = [self.dm_core.player_name]
+                cache["persistent_names"] = persistent_names
+            if name not in persistent_names:
+                persistent_names.append(name)
+
+    def test_night_watch_solo_party_is_always_surprised_by_a_hostile_night_encounter(self):
+        self._stub_encounter_roll("wild boar")
+        self.dm_core.current_block = 2  # hour 16 -- night, per rules.toml's [time] table
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "travel", "item_name": None, "input": "i travel to the border stones",
+        })
+
+        self.assertTrue(self.dm_core.has_condition("gladstone", "surprised"))
+        self.assertEqual(self.dm_core.watch_rotation_index, 0)  # nobody to rotate to -- no roll
+
+    def test_night_watch_never_rolled_against_a_daytime_encounter(self):
+        self._stub_encounter_roll("wild boar")
+        # default current_block is 0 -- daytime
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "travel", "item_name": None, "input": "i travel to the border stones",
+        })
+
+        self.assertFalse(self.dm_core.has_condition("gladstone", "surprised"))
+
+    def test_night_watch_never_rolled_against_a_non_hostile_night_encounter(self):
+        self._stub_encounter_roll("nothing")
+        self.dm_core.current_block = 2
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "travel", "item_name": None, "input": "i travel to the border stones",
+        })
+
+        self.assertFalse(self.dm_core.has_condition("gladstone", "surprised"))
+        self.assertEqual(self.dm_core.watch_rotation_index, 0)
+
+    def test_night_watch_with_a_party_surprises_everyone_on_a_failed_observation_roll(self):
+        self._add_party_member("thane")
+        self._stub_encounter_roll("wild boar")
+        self._stub_roll_dice(3)  # well under plains' own watch_difficulty of 9
+        self.dm_core.current_block = 2
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "travel", "item_name": None, "input": "i travel to the border stones",
+        })
+
+        self.assertTrue(self.dm_core.has_condition("gladstone", "surprised"))
+        self.assertTrue(self.dm_core.has_condition("thane", "surprised"))
+        self.assertEqual(self.dm_core.watch_rotation_index, 1)
+
+    def test_night_watch_with_a_party_applies_no_condition_on_a_successful_watch(self):
+        self._add_party_member("thane")
+        self._stub_encounter_roll("wild boar")
+        self._stub_roll_dice(99)  # comfortably clears plains' own watch_difficulty of 9
+        self.dm_core.current_block = 2
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "travel", "item_name": None, "input": "i travel to the border stones",
+        })
+
+        self.assertFalse(self.dm_core.has_condition("gladstone", "surprised"))
+        self.assertFalse(self.dm_core.has_condition("thane", "surprised"))
+        self.assertEqual(self.dm_core.watch_rotation_index, 1)  # still advances on a pass
+
+    def test_night_watch_rotation_advances_through_the_party_across_hostile_nights(self):
+        self._add_party_member("thane")
+        self._stub_encounter_roll("wild boar")
+        self._stub_roll_dice(99)
+        watchers = []
+        original_resolve_action = self.dm_core.resolve_action
+
+        def spy(entity_name, skill_name, difficulty=0, dice_penalty=0):
+            if skill_name == "observation":
+                watchers.append(entity_name)
+            return original_resolve_action(entity_name, skill_name, difficulty, dice_penalty)
+
+        self.dm_core.resolve_action = spy
+        self.dm_core.current_block = 2  # night
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "travel", "item_name": None, "input": "i travel to the border stones",
+        })
+        self.dm_core.current_block = 5  # next night block (5 % 3 == 2)
+        self.dm_core._on_item_interaction_detected({
+            "intent": "travel", "item_name": None, "input": "i travel to the trailhead",
+        })
+
+        self.assertEqual(watchers, ["gladstone", "thane"])
+
+    def test_rest_consults_the_current_locations_environment(self):
+        # trailhead sits at grid (0, 0), inside world_map.toml's "the open plains" region --
+        # rest (DM_Time.py) now rolls that same environment's own tables via
+        # _resolve_environment_block, exactly like travel already does per block.
+        self._stub_encounter_roll("wild boar")
+        self.dm_core.current_block = 2  # hour 16 -- night, per rules.toml's [time] table
+
+        self.dm_core.rest(1)
+
+        self.assertIn("wild boar", self.dm_core.scenario_entities)
+        self.assertTrue(self.dm_core.has_condition("gladstone", "surprised"))  # solo -- always caught
+
+    def test_rest_rolls_the_day_table_by_day_and_night_table_by_night(self):
+        calls = self._stub_encounter_roll("nothing")
+        day_table = self.dm_core._find_environment("plains")["day_encounter"]
+        night_table = self.dm_core._find_environment("plains")["night_encounter"]
+
+        self.dm_core.rest(1)
+        self.assertEqual(calls[-1], day_table)
+
+        self.dm_core.current_block = 2  # night
+        self.dm_core.rest(1)
+        self.assertEqual(calls[-1], night_table)
+
+    def test_rest_healing_is_unaffected_by_a_hostile_night_block(self):
+        self._stub_encounter_roll("wild boar")
+        self._stub_roll_dice(10)
+        self.dm_core.apply_damage("gladstone", 20)  # 36 max_hp -> 16 current
+        self.dm_core.current_block = 2  # night -- rolls the hostile encounter and gets surprised
+
+        result = self.dm_core.rest(1)
+
+        # gladstone's own fortitude is {dice: 2, pips: 0} (characters.toml) -- unaffected by
+        # having also been surprised this same rest, since healing is one aggregate roll,
+        # never gated on whatever the per-block environment rolls turned up.
+        self.assertEqual(result["healed"]["gladstone"], {"healed": 10, "remaining_hp": 26})
+
+    def test_rest_at_a_location_with_no_grid_never_consults_an_environment(self):
+        # A location with no "grid" field at all has no environment mapped onto it --
+        # _current_environment resolves to None, so rest behaves exactly as it did before this
+        # existed (see TestDowntime, which exercises this same path against arena.toml).
+        self.dm_core.locations["trailhead"].pop("grid")
+        calls = self._stub_encounter_roll("wild boar")
+        self.dm_core.current_block = 2
+
+        self.dm_core.rest(1)
+
+        self.assertEqual(calls, [])
+        self.assertNotIn("wild boar", self.dm_core.scenario_entities)
+
     def test_known_locations_round_trips_through_save_and_load(self):
         slot = "test_known_locations_round_trip"
         slot_dir = os.path.join("Saves", slot)
@@ -1773,6 +1933,19 @@ class TestGridTravel(DMTestCase):
         fresh_dm.load_game(slot)
 
         self.assertEqual(fresh_dm.known_locations, {"trailhead", "border_stones"})
+
+    def test_watch_rotation_index_round_trips_through_save_and_load(self):
+        slot = "test_watch_rotation_index_round_trip"
+        slot_dir = os.path.join("Saves", slot)
+        self.addCleanup(shutil.rmtree, slot_dir, ignore_errors=True)
+
+        self.dm_core.watch_rotation_index = 3
+        self.dm_core.save_game(slot)
+
+        fresh_dm = DMCore(EventBus(), scenario_name="plains")
+        fresh_dm.load_game(slot)
+
+        self.assertEqual(fresh_dm.watch_rotation_index, 3)
 
 
 class TestFreeStandingIntentHandlers(unittest.TestCase):
@@ -2261,6 +2434,13 @@ class TestRoundUpkeep(DMTestCase):
         self.dm_core.apply_damage("troll", 999)
         self.dm_core.run_round_upkeep()
         self.assertEqual(self.dm_core.get_current_hp("troll"), 0)
+
+    def test_run_round_upkeep_expires_surprised_after_one_round(self):
+        # Night watch's own bespoke "duration = 1 round" stand-in (_expire_surprised_if_due,
+        # DM_Status.py) -- see docs/extended-goals.md's "Night watch and surprise".
+        self.dm_core.apply_condition("gladstone", "surprised", duration="1 round", dismiss="")
+        self.dm_core.run_round_upkeep()
+        self.assertFalse(self.dm_core.has_condition("gladstone", "surprised"))
 
     @patch("random.randint", return_value=3)
     def test_resolve_combat_round_regenerates_the_troll_unless_burned_this_round(self, mock_randint):
@@ -3163,6 +3343,15 @@ class TestConditionModifiers(DMTestCase):
         self.assertEqual(
             self.dm_core.get_condition_modifier("gladstone"),
             {"dice": -1, "pips": 0, "bonus": 0},
+        )
+
+    def test_get_condition_modifier_sums_the_surprised_condition(self):
+        # rules.toml's own "surprised" [[condition]] entry is {dice: -2, pips: 0, bonus: 0} --
+        # heavier than "wounded"'s -1, per docs/extended-goals.md's "Night watch and surprise".
+        self.dm_core.apply_condition("gladstone", "surprised", duration="1 round", dismiss="")
+        self.assertEqual(
+            self.dm_core.get_condition_modifier("gladstone"),
+            {"dice": -2, "pips": 0, "bonus": 0},
         )
 
     def test_get_condition_modifier_ignores_conditions_with_no_rules_entry(self):

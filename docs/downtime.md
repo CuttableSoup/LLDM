@@ -25,17 +25,29 @@ hours, not a fixed block-index parity, so a `daylight_hours` that doesn't evenly
 
 ## Rest
 
-`rest(blocks=1)` (`DM_Time.py`) advances the clock by `blocks`, then heals every living
-`is_player`/`is_party` member (`_is_party_member`) via the ordinary `apply_healing` call, scaled by
-their own `fortitude` skill — the body's own recovery, picked over `medicine` (a caregiver treating
-someone else's wound, which stays free for some other future check that actually wants that
-framing). One aggregate roll per rester over the whole rest, not one per block spent — `fortitude`'s
-own dice/pips scale directly with `blocks` before the single roll happens, so a longer rest's
-variance still grows the way rolling more dice actually would, the same "avoid swinginess from
-rolling repeatedly" reasoning crafting's own `days_required` already follows (see
-`docs/inventory-items.md`). **No environment/watch check yet** — that's `extended-goals.md`'s own
-"Downtime" design, not built here; every rest today is exactly as safe as resting somewhere with no
-active environment always will be once environments exist.
+`rest(blocks=1)` (`DM_Time.py`) first looks up the current location's own environment once
+(`_current_environment`, `DM_Travel.py` — `None` for a location with no `grid` field, or one whose
+grid point falls in an unmapped `world_map.toml` gap, both the same "absence of an environment"
+default that's what "safe" looks like everywhere in this design), then advances the clock one block
+at a time, rolling that environment's own day/night encounter table — and, on a night block whose
+roll turns out hostile, a night watch check — via `_resolve_environment_block` for every block
+spent, the exact machinery grid travel's own per-block loop already uses (see "Travel"/"Night watch
+and surprise" below), just against one fixed point instead of a line of travel, since nothing moves
+during rest. A location with no environment at all skips this entirely, same as before this
+existed. Matching travel's own deliberate simplification: a hostile encounter (or a failed watch)
+doesn't cut the rest short or reduce the healing below — pausing downtime for a real fight stays a
+separate, still-deferred extension (see "Not yet built").
+
+Once every block has elapsed, heals every living `is_player`/`is_party` member (`_is_party_member`)
+via the ordinary `apply_healing` call, scaled by their own `fortitude` skill — the body's own
+recovery, picked over `medicine` (a caregiver treating someone else's wound, which stays free for
+some other future check that actually wants that framing). One aggregate roll per rester over the
+whole rest, not one per block spent — `fortitude`'s own dice/pips scale directly with `blocks`
+before the single roll happens, so a longer rest's variance still grows the way rolling more dice
+actually would, the same "avoid swinginess from rolling repeatedly" reasoning crafting's own
+`days_required` already follows (see `docs/inventory-items.md`) — and is unaffected by however many
+of those blocks turned out hostile: resting through an ambush still heals exactly as much as an
+uneventful rest of the same length would.
 
 Reachable in play as the free-text `"rest"` intent (`Intent_Classification.py`'s `REST_KEYWORDS` —
 `"rest"`, `"make camp"`, `"set up camp"`, `"sleep"`, `"camp for the night"`), one of
@@ -83,15 +95,17 @@ never applies outside a room's own band line.
 table, the exact same weighted-choice shape `[[location.encounter]]`'s own `encounter` field
 already uses (a real `[[entity]]`/`[[entity_template]]` name, the reserved `"nothing"`, or a
 flavor-only string), resolved through the identical `_resolve_one_encounter` — just once per block
-of travel instead of once on location entry. `Rules/Fantasy/world_map.toml` places environments on
-the grid as named rectangular `[[region]]`s (`resolve_region_environment(x, y)` finds whichever
-region's bounds contain a point); a gap between authored regions has no environment at all, which
-is what "safe" looks like everywhere in this design — no watch check, no encounter roll, exactly
-the same default basic rest already follows. `_resolve_grid_travel_intent` samples the *midpoint*
-of each block's own leg of the straight line between origin and destination — true per-block
-sampling, not a coarser origin/destination split — so a journey crossing multiple regions (not
-exercised by `plains.toml`'s own single-region shipped map, but already correct for one) would roll
-from each proportional to how much of the line it covers.
+of travel (or of rest — see "Rest" above) instead of once on location entry.
+`Rules/Fantasy/world_map.toml` places environments on the grid as named rectangular `[[region]]`s
+(`resolve_region_environment(x, y)` finds whichever region's bounds contain a point); a gap between
+authored regions has no environment at all, which is what "safe" looks like everywhere in this
+design — no watch check, no encounter roll. `_resolve_grid_travel_intent` samples the *midpoint* of
+each block's own leg of the straight line between origin and destination — true per-block sampling,
+not a coarser origin/destination split — so a journey crossing multiple regions (not exercised by
+`plains.toml`'s own single-region shipped map, but already correct for one) would roll from each
+proportional to how much of the line it covers. `_resolve_environment_block` factors the actual
+"roll this environment's own day/night table, then a watch check if it's hostile at night" step out
+of this per-block loop so rest (a single fixed point, not a line) can reuse it unchanged.
 
 Shipped worked example: `Rules/Fantasy/scenarios/plains.toml`'s `trailhead` (grid `0,0`) and
 `border_stones` (grid `4,0`), both inside `world_map.toml`'s `"the open plains"` region (naming the
@@ -103,13 +117,35 @@ default travel speed of 4, to cost exactly one block.
 advance it rides on) happens in one uninterrupted burst right after `_enter_location` lands at the
 destination, not spread across an "in transit" scene of its own — there's no such scene to hold an
 encountered creature if the player hasn't arrived anywhere yet. Pausing the clock mid-journey for a
-real fight, and night watch/surprise (every block just rolls its table outright, no observation
-check), are both real, separately deferred extensions — see `extended-goals.md`'s own "Downtime".
+real fight is still a real, separately deferred extension — see `extended-goals.md`'s own
+"Downtime".
+
+## Night watch and surprise
+
+Built for both travel and rest, off the same shared `_resolve_environment_block`. A night block
+(`is_daytime()` false) whose own encounter roll (above) actually placed a hostile entity is
+followed by `_roll_night_watch` (`DM_Travel.py`): whichever currently-present `is_party` member (player
+included) is next up in `DMCore.watch_rotation_index`'s own fixed rotation — a persistent,
+top-level counter, round-tripped through save/load like `current_block` — rolls `observation`
+(the same skill already pooled into initiative) against that block's environment's own
+`watch_difficulty` via the ordinary flat-difficulty `resolve_action`. The index only advances on a
+night a watch is actually rolled, cycling through the party across however many hostile nights
+occur rather than every elapsed night. A party of one skips the roll and is always caught —
+nobody to rotate a watch to while the sole traveler sleeps, and treating solo rest as automatically
+safe would invert the usual "safety in numbers" logic.
+
+A failed (or skipped) watch applies `rules.toml`'s new `[[condition]]` `"surprised"` (a heavier
+`-2` dice penalty than `"stunned"`'s `-1`) to every present `is_party` member — the whole party was
+caught off guard, not just whoever stood watch. Nothing in this engine interprets a condition's own
+`duration` field as a real countdown (see `docs/combat.md`'s "Status and conditions"), so
+`"surprised"` uses the same bespoke-expiry shape `"summon_expires_in"` already does:
+`_expire_surprised_if_due` (`DM_Status.py`) dismisses it the first time `run_round_upkeep` runs
+after it was applied, giving it exactly the one round of penalty `"duration = 1 round"` calls for.
 
 ## Not yet built
 
-Crafting's `days_required` day-extension, reopening character creation mid-game for training, and
-night watch/surprise (an authored `watch_difficulty` already sits unused on every environment,
-waiting for it) stay exactly as undesigned-in-code as `extended-goals.md`'s own "Downtime" section
-left them. Read that section before starting any of it; it was fully grilled as a design pass, not
-just sketched.
+Crafting's `days_required` day-extension and reopening character creation mid-game for training
+stay exactly as undesigned-in-code as `extended-goals.md`'s own "Downtime" section left them — read
+that section before starting either; it was fully grilled as a design pass, not just sketched.
+Pausing the block clock mid-journey/mid-rest for a real fight (see "Travel"/"Rest" above) is also
+still unbuilt — both stay one uninterrupted burst today.
