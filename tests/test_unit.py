@@ -45,6 +45,7 @@ from dm.DM_ActionOutcome import (
 )
 from dm.DM_Core import DMCore
 from dm.DM_Rules import list_available_scenarios
+from dm.DM_Travel import ROAD_ENCOUNTER_KEY
 from dm.DM_Social import TALK_ATTITUDE_DRIFT_CAP, ACTION_ATTITUDE_DRIFT_CAP
 from Event_Bus import EventBus
 from gui.GUI_Core import GUICore
@@ -1862,6 +1863,11 @@ class TestGridTravel(DMTestCase):
         self.dm_core._on_item_interaction_detected({
             "intent": "travel", "item_name": None, "input": "i travel to the border stones",
         })
+        # Travel now pauses on a hostile block (docs/downtime.md's "Pausing for a fight")
+        # instead of arriving inline -- clear the ambush and let the trip actually complete
+        # before issuing the second one, the same way a real fight would resolve it.
+        self.dm_core.apply_damage("wild boar", 999)
+        self.dm_core._resume_pending_downtime()
         self.dm_core.current_block = 5  # next night block (5 % 3 == 2)
         self.dm_core._on_item_interaction_detected({
             "intent": "travel", "item_name": None, "input": "i travel to the trailhead",
@@ -1897,13 +1903,18 @@ class TestGridTravel(DMTestCase):
         self._stub_encounter_roll("wild boar")
         self._stub_roll_dice(10)
         self.dm_core.apply_damage("gladstone", 20)  # 36 max_hp -> 16 current
-        self.dm_core.current_block = 2  # night -- rolls the hostile encounter and gets surprised
+        self.dm_core.current_block = 2  # night -- rolls the hostile encounter and pauses
 
-        result = self.dm_core.rest(1)
+        paused = self.dm_core.rest(1)
+        self.assertTrue(paused["interrupted"])
 
-        # gladstone's own fortitude is {dice: 2, pips: 0} (characters.toml) -- unaffected by
-        # having also been surprised this same rest, since healing is one aggregate roll,
-        # never gated on whatever the per-block environment rolls turned up.
+        # Clearing the ambush and letting the rest actually finish -- healing is one
+        # aggregate roll computed only once the rest completes, never gated on whatever the
+        # per-block environment rolls turned up along the way.
+        self.dm_core.apply_damage("wild boar", 999)
+        result = self.dm_core._advance_pending_rest()
+
+        # gladstone's own fortitude is {dice: 2, pips: 0} (characters.toml).
         self.assertEqual(result["healed"]["gladstone"], {"healed": 10, "remaining_hp": 26})
 
     def test_rest_at_a_location_with_no_grid_never_consults_an_environment(self):
@@ -1919,11 +1930,169 @@ class TestGridTravel(DMTestCase):
         self.assertEqual(calls, [])
         self.assertNotIn("wild boar", self.dm_core.scenario_entities)
 
+    def test_hostile_travel_pauses_the_block_clock_and_enters_an_encounter_site(self):
+        self._stub_encounter_roll("wild boar")
+        resolved_events = self._capture("item_interaction_resolved")
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "travel", "item_name": None, "input": "i travel to the border stones",
+        })
+
+        self.assertIsNotNone(self.dm_core.pending_downtime)
+        self.assertEqual(self.dm_core.pending_downtime["kind"], "travel")
+        self.assertEqual(self.dm_core.pending_downtime["destination_key"], "border_stones")
+        self.assertEqual(self.dm_core.current_location_key, ROAD_ENCOUNTER_KEY)
+        self.assertIn("wild boar", self.dm_core.scenario_entities)
+        self.assertEqual(self.dm_core.current_target, "wild boar")
+        # No arrival narration this turn -- travel hasn't actually finished.
+        self.assertEqual(resolved_events, [])
+
+    def test_hostile_travel_preserves_a_partys_live_hp_and_conditions_across_the_site_swap(self):
+        self._add_party_member("thane")
+        self.dm_core.apply_damage("thane", 4)
+        self.dm_core.apply_condition("thane", "wounded", duration="permanent", dismiss="")
+        self._stub_encounter_roll("wild boar")
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "travel", "item_name": None, "input": "i travel to the border stones",
+        })
+
+        # Still "thane" -- not re-instanced as a fresh "thane_2" copy of the template, and
+        # its live hp/condition from before the ambush survived the site swap intact.
+        self.assertIn("thane", self.dm_core.scenario_entities)
+        self.assertNotIn("thane_2", self.dm_core.entities)
+        self.assertEqual(self.dm_core.get_current_hp("thane"), 6)  # 10 - 4
+        self.assertTrue(self.dm_core.has_condition("thane", "wounded"))
+
+    def test_travel_resumes_automatically_once_the_hostile_dies_in_combat(self):
+        self._stub_encounter_roll("wild boar")
+        resolved_events = self._capture("item_interaction_resolved")
+        self.dm_core._on_item_interaction_detected({
+            "intent": "travel", "item_name": None, "input": "i travel to the border stones",
+        })
+        self.assertIsNotNone(self.dm_core.pending_downtime)
+
+        self.dm_core.apply_damage("wild boar", 999)
+        self.dm_core._resolve_combat_round({"actions": []})  # the ordinary per-turn hook
+
+        self.assertIsNone(self.dm_core.pending_downtime)
+        self.assertEqual(self.dm_core.current_location_key, "border_stones")
+        self.assertEqual(resolved_events[-1]["intent"], "travel")
+        self.assertTrue(resolved_events[-1]["found"])
+        self.assertEqual(resolved_events[-1]["location_name"], "the border stones")
+
+    def test_second_travel_is_denied_while_a_downtime_is_pending(self):
+        self._stub_encounter_roll("wild boar")
+        self.dm_core._on_item_interaction_detected({
+            "intent": "travel", "item_name": None, "input": "i travel to the border stones",
+        })
+        resolved_events = self._capture("item_interaction_resolved")
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "travel", "item_name": None, "input": "i travel to the trailhead",
+        })
+
+        self.assertFalse(resolved_events[-1]["found"])
+        self.assertEqual(resolved_events[-1]["reason"], "downtime_interrupted")
+        self.assertIsNotNone(self.dm_core.pending_downtime)  # not stomped by the new attempt
+
+    def test_rest_is_denied_while_a_downtime_is_pending(self):
+        self._stub_encounter_roll("wild boar")
+        self.dm_core._on_item_interaction_detected({
+            "intent": "travel", "item_name": None, "input": "i travel to the border stones",
+        })
+
+        result = self.dm_core.rest(1)
+
+        self.assertTrue(result["interrupted"])
+        self.assertEqual(result["reason"], "downtime_interrupted")
+
+    def test_a_stale_pending_downtime_auto_resumes_once_its_blocker_is_gone(self):
+        # The hostile is removed by something other than the ordinary combat-round hook (ex:
+        # ADaM despawning it) -- a later travel/rest attempt should still find its own way
+        # clear, rather than denying forever.
+        self._stub_encounter_roll("wild boar")
+        self.dm_core._on_item_interaction_detected({
+            "intent": "travel", "item_name": None, "input": "i travel to the border stones",
+        })
+        self.dm_core.apply_damage("wild boar", 999)  # dead, but _resolve_combat_round never ran
+        self._stub_encounter_roll("nothing")  # the fresh trip's own block should roll clean
+        resolved_events = self._capture("item_interaction_resolved")
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "travel", "item_name": None, "input": "i travel to the trailhead",
+        })
+
+        # The stale trip to border_stones completes first (published manually, no "resolved"
+        # closure available for it any more), then the fresh request to trailhead succeeds too.
+        self.assertEqual(len(resolved_events), 2)
+        self.assertTrue(resolved_events[0]["found"])
+        self.assertEqual(resolved_events[0]["location_name"], "the border stones")
+        self.assertTrue(resolved_events[1]["found"])
+        self.assertEqual(resolved_events[1]["location_name"], "the trailhead")
+        self.assertIsNone(self.dm_core.pending_downtime)
+
+    def test_pending_travel_round_trips_through_save_and_load(self):
+        slot = "test_pending_travel_round_trip"
+        slot_dir = os.path.join("Saves", slot)
+        self.addCleanup(shutil.rmtree, slot_dir, ignore_errors=True)
+
+        self._stub_encounter_roll("wild boar")
+        self.dm_core._on_item_interaction_detected({
+            "intent": "travel", "item_name": None, "input": "i travel to the border stones",
+        })
+        self.dm_core.apply_damage("wild boar", 5)
+        self.dm_core.save_game(slot)
+
+        fresh_dm = DMCore(EventBus(), scenario_name="plains")
+        fresh_dm.load_game(slot)
+
+        # current_location_key resolves to a real, non-empty location (not {}) -- the
+        # ephemeral site's own shape was reinjected from pending_downtime before this ran.
+        self.assertEqual(fresh_dm.current_location_key, ROAD_ENCOUNTER_KEY)
+        self.assertEqual(fresh_dm.locations[ROAD_ENCOUNTER_KEY]["name"], "the road")
+        self.assertIsNotNone(fresh_dm.pending_downtime)
+        self.assertEqual(fresh_dm.pending_downtime["kind"], "travel")
+        # The hostile's own live hp survived reload (ad_hoc = True -- DM_Encounters.py).
+        self.assertIn("wild boar", fresh_dm.scenario_entities)
+        self.assertEqual(fresh_dm.get_current_hp("wild boar"), fresh_dm.entities["wild boar"]["max_hp"] - 5)
+
+        # Resolving the fight after reload still auto-resumes travel correctly.
+        fresh_dm.apply_damage("wild boar", 999)
+        fresh_dm._resolve_combat_round({"actions": []})
+        self.assertIsNone(fresh_dm.pending_downtime)
+        self.assertEqual(fresh_dm.current_location_key, "border_stones")
+
+    def test_pending_rest_round_trips_through_save_and_load(self):
+        slot = "test_pending_rest_round_trip"
+        slot_dir = os.path.join("Saves", slot)
+        self.addCleanup(shutil.rmtree, slot_dir, ignore_errors=True)
+
+        self._stub_encounter_roll("wild boar")
+        self.dm_core.rest(2)
+        self.dm_core.save_game(slot)
+
+        fresh_dm = DMCore(EventBus(), scenario_name="plains")
+        fresh_dm.load_game(slot)
+
+        self.assertIsNotNone(fresh_dm.pending_downtime)
+        self.assertEqual(fresh_dm.pending_downtime, {"kind": "rest", "blocks_total": 2, "blocks_done": 1})
+
+        fresh_dm.apply_damage("wild boar", 999)
+        self._stub_encounter_roll("nothing")  # the remaining block rolls clean this time
+        result = fresh_dm._advance_pending_rest()
+        self.assertFalse(result["interrupted"])
+        self.assertIsNone(fresh_dm.pending_downtime)
+
     def test_known_locations_round_trips_through_save_and_load(self):
         slot = "test_known_locations_round_trip"
         slot_dir = os.path.join("Saves", slot)
         self.addCleanup(shutil.rmtree, slot_dir, ignore_errors=True)
 
+        # Deterministic and uneventful -- a hostile roll would now pause travel (see "Pausing
+        # for a fight") and add its own ephemeral encounter site to known_locations, which
+        # isn't what this test is about.
+        self._stub_encounter_roll("nothing")
         self.dm_core._on_item_interaction_detected({
             "intent": "travel", "item_name": None, "input": "i travel to the border stones",
         })
@@ -2072,7 +2241,11 @@ class TestFreeStandingIntentHandlers(unittest.TestCase):
         self.assertNotIn("block(s) of travel time", prompt)
 
     def test_narrate_travel_explains_each_failure_reason(self):
-        for reason, expected_phrase in (("no_exit", "no way through"), ("blocked_by_enemies", "hostile is still standing")):
+        for reason, expected_phrase in (
+            ("no_exit", "no way through"),
+            ("blocked_by_enemies", "hostile is still standing"),
+            ("downtime_interrupted", "unresolved threat"),
+        ):
             with self.subTest(reason=reason):
                 prompt = self._narrate("travel", {
                     "intent": "travel", "found": False, "reason": reason, "input": "i travel to nowhere",

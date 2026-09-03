@@ -331,12 +331,9 @@ class MovementMixin(DMCoreProtocol):
             resolved(False, reason=reason)
             return
 
-        for entity_name in self.scenario_entities:
-            if entity_name == self.player_name:
-                continue
-            if self.is_hostile(entity_name, self.player_name) and self.get_current_hp(entity_name) > 0:
-                resolved(False, reason="blocked_by_enemies")
-                return
+        if self._any_hostile_present():
+            resolved(False, reason="blocked_by_enemies")
+            return
 
         self.enter_room(exit_def["destination"], exit_def.get("arrival_band", 1))
         new_room = self._current_room()
@@ -392,10 +389,25 @@ class MovementMixin(DMCoreProtocol):
             check _resolve_room_transition_intent already runs, scoped to this one room's own
             occupants, whether the destination is another room in the same location or a jump
             to a different location entirely.
+
+            **Denied outright (reason "downtime_interrupted") while a paused grid travel/rest
+            hasn't cleared yet** -- opportunistically resumed first, in case its own blocker
+            was removed some other way (see DM_Core.py's _resume_pending_downtime). Checked
+            here, ahead of the grid/non-grid branch, rather than inside
+            _resolve_grid_travel_intent itself: a paused *travel*'s own ephemeral encounter
+            site (DM_Travel.py's _enter_encounter_site) deliberately carries no "grid" field of
+            its own, so a travel attempt issued from there would otherwise fall through to
+            *this* method's own non-grid branch below and never reach that check at all.
         @param input_text The raw (lowercased, prefix-stripped) player input.
         @param resolved The item_interaction_resolved publisher closure from
             DMCore._on_item_interaction_detected.
         """
+        if self.pending_downtime and not self._any_hostile_present():
+            self._resume_pending_downtime()
+        if self.pending_downtime:
+            resolved(False, reason="downtime_interrupted")
+            return
+
         if "grid" in self.locations.get(self.current_location_key, {}):
             self._resolve_grid_travel_intent(input_text, resolved)
             return
@@ -414,13 +426,9 @@ class MovementMixin(DMCoreProtocol):
             arrival_room = None
             arrival_band = 1
 
-        if self.rooms:
-            for entity_name in self.scenario_entities:
-                if entity_name == self.player_name:
-                    continue
-                if self.is_hostile(entity_name, self.player_name) and self.get_current_hp(entity_name) > 0:
-                    resolved(False, reason="blocked_by_enemies")
-                    return
+        if self.rooms and self._any_hostile_present():
+            resolved(False, reason="blocked_by_enemies")
+            return
 
         self._enter_location(destination_key, arrival_room=arrival_room, arrival_band=arrival_band)
         new_location = self.locations.get(self.current_location_key, {})

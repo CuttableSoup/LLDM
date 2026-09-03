@@ -27,8 +27,10 @@ import urllib.request
 
 import pytest
 
+import dm.DM_Encounters as DM_Encounters
 from dm.DM_ActionOutcome import DamageEffect, DefenderDetailsEffect, RevealEffect
 from dm.DM_Core import DMCore
+from dm.DM_Travel import ROAD_ENCOUNTER_KEY
 from Event_Bus import EventBus
 from llm.LLM_Core import LLMCore
 from llm.Ollama_Launcher import ensure_ollama_running
@@ -258,6 +260,95 @@ class TestArenaCombatConversation(_LivePipelineTestCase):
         # lands a bite back, this doesn't depend on any roll's outcome.
         first_round_actors = [turn["actor"] for turn in round_events[0].get("turns", [])]
         self.assertIn("thane", first_round_actors)
+
+
+@unittest.skipUnless(_ollama_reachable(), "Ollama not reachable at http://127.0.0.1:11434")
+class TestGridTravelAmbushConversation(_LivePipelineTestCase):
+    """!
+    @brief Live-pipeline proof for "pausing the block clock for a mid-block hostile encounter"
+        (see docs/downtime.md's "Pausing for a fight") -- real NLPCore parsing free-text
+        "travel"/"attack" input, real DMCore pause/resume state, and a real LLM narrating both
+        the ambush and the eventual arrival, the latter fired from a turn where the player
+        never typed "travel" at all (DMCore._resume_pending_downtime's own manual publish,
+        once the last hostile actually drops). The mechanics themselves (pending_downtime's
+        shape, the ephemeral encounter site, ad_hoc persistence) are already exhaustively
+        unit-tested with no LLM involved at all (TestGridTravel, test_unit.py); this only
+        checks the whole chain -- NLP parsing, DMCore state, and LLM narration -- is wired
+        together correctly end to end, the same reasoning every other class in this file gives
+        for earning a live-Ollama test.
+
+        The encounter roll itself (DM_Encounters.py's resolve_varied_value) is forced to
+        "wild boar" -- pure Python, unrelated to Ollama, the same determinism
+        test_unit.py's own _stub_encounter_roll gets for free -- so the ambush is guaranteed
+        without needing a live model to cooperate. roll_dice is left genuinely random/unseeded
+        (see DM_Combat.py), matching TestArenaCombatConversation's own precedent: this attacks
+        for real through the ordinary pipeline first, and only force-finishes the wild boar
+        (bypassing further real dice) if it's still alive after a bounded number of real
+        attacks, so the test can't hang or flake on an unlucky streak of misses.
+    """
+    scenario_name = "plains"
+
+    def setUp(self):
+        original_resolve_varied_value = DM_Encounters.resolve_varied_value
+        DM_Encounters.resolve_varied_value = lambda choices: "wild boar"
+        self.addCleanup(setattr, DM_Encounters, "resolve_varied_value", original_resolve_varied_value)
+        self._boot()
+
+    def test_ambush_pauses_travel_and_resuming_narrates_arrival_automatically(self):
+        transcript = []
+
+        def say(player_input):
+            response = self._say(player_input)
+            transcript.append((player_input, response))
+            self.assertTrue(response.strip())
+            self.assertNotIn("Could not connect to the local LLM", response)
+            return response
+
+        # "go to " -- NLPCore's own TRAVEL_KEYWORDS (Intent_Classification.py) don't include
+        # the literal word "travel" at all, only phrasings like "go to "/"head to "/"walk to ".
+        say("I go to the border stones")
+
+        # Paused, not arrived -- the ambush interrupted the trip before it ever completed.
+        self.assertIsNotNone(self.dm_core.pending_downtime)
+        self.assertEqual(self.dm_core.pending_downtime["kind"], "travel")
+        self.assertEqual(self.dm_core.current_location_key, ROAD_ENCOUNTER_KEY)
+        self.assertIn("wild boar", self.dm_core.scenario_entities)
+        self.assertEqual(self.dm_core.current_target, "wild boar")
+
+        # A second "travel" attempt while the ambush is still live is denied outright, never
+        # silently stomping the paused trip -- narrated by intents/travel.py's own failure text.
+        say("I go to the trailhead")
+        self.assertIsNotNone(self.dm_core.pending_downtime)
+        self.assertEqual(self.dm_core.current_location_key, ROAD_ENCOUNTER_KEY)
+
+        # Fighting for real, through the ordinary attack path (NLPCore/DMCore/LLMCore, no
+        # test-only shortcuts) -- proves an ambush fight is an entirely ordinary combat turn,
+        # not some special mode. Bounded retries since roll_dice is genuinely unseeded.
+        for _ in range(3):
+            if self.dm_core.get_current_hp("wild boar") <= 0:
+                break
+            say("I attack the wild boar with my weapon")
+
+        # Force-finish only if real dice didn't already settle it -- deterministic either way,
+        # never flaky on how the live rolls actually landed.
+        if self.dm_core.pending_downtime is not None:
+            self.dm_core.apply_damage("wild boar", 999)
+            self.dm_core._resolve_combat_round({"actions": []})
+            self._wait_for_responses(len(self.responses) + 1)
+            arrival_response = self.responses[-1]
+            transcript.append(("(the last hostile drops -- no player input this turn)", arrival_response))
+            self.assertTrue(arrival_response.strip())
+            self.assertNotIn("Could not connect to the local LLM", arrival_response)
+
+        print("\n=== Ambush/resume transcript ===")
+        for player_input, response in transcript:
+            print(f"> {player_input}\n{response}\n")
+
+        # The trip actually completed -- real arrival at the real destination, not still paused
+        # in the ephemeral encounter site.
+        self.assertIsNone(self.dm_core.pending_downtime)
+        self.assertEqual(self.dm_core.current_location_key, "border_stones")
+        self.assertNotIn("wild boar", self.dm_core.scenario_entities)
 
 
 @unittest.skipUnless(_ollama_reachable(), "Ollama not reachable at http://127.0.0.1:11434")

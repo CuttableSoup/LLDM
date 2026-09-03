@@ -146,12 +146,12 @@ this section was built from); recorded here as the target shape, not a plan that
 build in one pass — see "Suggested build order" at the end.
 
 **Built**: the block clock primitive, grid-based travel with environments/world map, night
-watch/surprise, and rest, now sharing the same per-block environment/watch check travel uses (see
-`docs/downtime.md` for what's actually shipped and exactly where it diverges from the sketch below
--- day/night is read off real elapsed hours against a `daylight_hours` tunable, not fixed
-block-index parity, since the clock's own `[time]` rules.toml table exposes `daylight_hours` as a
-real, load-bearing value rather than pure flavor). Still unbuilt: pausing the block clock
-mid-journey/mid-rest for a real fight, crafting's day-extension, and training's reopening question.
+watch/surprise, rest (sharing the same per-block environment/watch check travel uses), and pausing
+the block clock for a real fight (see `docs/downtime.md` for what's actually shipped and exactly
+where it diverges from the sketch below -- day/night is read off real elapsed hours against a
+`daylight_hours` tunable, not fixed block-index parity, since the clock's own `[time]` rules.toml
+table exposes `daylight_hours` as a real, load-bearing value rather than pure flavor). Still
+unbuilt: crafting's day-extension and training's reopening question.
 
 **The block clock.** An 8-hour "block" (three per day) is the atomic time unit — fine enough for
 meaningful travel/rest granularity, coarse enough that a multi-day journey doesn't mean
@@ -161,13 +161,15 @@ would consume instead of spending blocks directly. This clock is a new, persiste
 `location_runtime` already are — a downtime system that forgot elapsed time on reload would let a
 save-scum trivially dodge a bad watch roll, undermining the whole mechanic) and a fully separate
 axis from combat's own `round_number` — no shared upkeep hook with `run_round_upkeep`
-(`DM_Status.py`), since one is tactical/per-turn and the other strategic/per-watch. Entering combat
-mid-block, pausing the block clock, and auto-resuming travel toward the same destination once
-combat resolves (mirroring how the existing hostile gate already blocks a *room* transition until a
-fight clears rather than canceling the player's stated intent) is still unbuilt, now that travel is
-real: today's shipped travel (`docs/downtime.md`) rolls every block's own encounter in one
-uninterrupted burst right after arrival instead, a deliberate simplification recorded there, not
-this design.
+(`DM_Status.py`), since one is tactical/per-turn and the other strategic/per-watch.
+
+**Entering combat mid-block, pausing the block clock, and auto-resuming travel toward the same
+destination once combat resolves — built.** See `docs/downtime.md`'s "Pausing for a fight" for the
+shipped mechanics (`DMCore.pending_downtime`, `_resume_pending_downtime`, the ephemeral
+`ROAD_ENCOUNTER_KEY` scratch scene for a mid-journey ambush). Mirrors how the existing hostile gate
+already blocked a *room* transition rather than canceling the player's stated intent, extended into
+genuinely resumable state — the gate alone had nothing to resume *from*, since it was a stateless
+re-deny with no memory of what the player had tried.
 
 **Overworld locations get grid coordinates; the grid *defines* connectivity for them — built.**
 See `docs/downtime.md`'s "Travel" for the shipped mechanics (`DM_Travel.py`). An optional
@@ -286,8 +288,7 @@ constants; the heal formula needed no table of its own beyond `[time]`, since it
 off the resting entity's own `fortitude` skill.
 
 **Suggested build order.** Clock primitive, grid/environment/distance travel, night watch/surprise,
-and rest (now sharing the same per-block environment/watch machinery as travel) are all done (see
-`docs/downtime.md`). Pausing the block clock mid-journey/mid-rest for a real fight is the natural
-next step on that same axis, whenever it's wanted. Crafting's day-extension and training's whole
-design are natural fast-follows too, independent of that; `known_locations`-gated ad hoc
-destination generation is a fast-follow on top of travel, independent of watch entirely.
+rest, and pausing the block clock for a real fight are all done (see `docs/downtime.md`). Crafting's
+day-extension and training's whole design are natural fast-follows, independent of all of the
+above; `known_locations`-gated ad hoc destination generation is a fast-follow on top of travel,
+independent of watch/pausing entirely.

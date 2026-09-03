@@ -10,6 +10,7 @@
 _REASON_TEXT = {
     "no_exit": "there's no way through in that direction",
     "blocked_by_enemies": "something hostile is still standing in the way",
+    "downtime_interrupted": "an unresolved threat from earlier is still keeping the party in place",
 }
 
 
@@ -18,8 +19,9 @@ def resolve_travel(core, data, resolved):
     @brief Resolves "travel" (see DM_Movement.py's _resolve_travel_intent) -- location-to-
         location travel, branching to grid-based travel first if the current location carries
         one. Denied (reason "no_exit") if no destination is named/known and no "return_to"
-        applies, or (reason "blocked_by_enemies") if a living hostile remains in the current
-        room.
+        applies, (reason "blocked_by_enemies") if a living hostile remains in the current
+        room, or (reason "downtime_interrupted") if a previously-paused trip/rest hasn't
+        cleared yet (see docs/downtime.md's "Pausing for a fight").
     @param core The DMCore instance.
     @param data The item_interaction_detected payload ({input, ...}).
     @param resolved The item_interaction_resolved publisher closure from

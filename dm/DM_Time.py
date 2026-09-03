@@ -6,14 +6,15 @@ class TimeMixin(DMCoreProtocol):
     @brief The block clock underlying downtime (DMCore mixin -- only ever composed into
         DMCore, never instantiated on its own; relies on self.rules/self.entities/
         self.scenario_entities/self.event_bus/self.roll_dice/self.apply_healing/
-        self._is_party_member/self.get_current_hp/self._current_environment/
-        self._resolve_environment_block, set up by DMCore.__init__ or implemented by
-        DM_Travel.py). See docs/downtime.md for the design this implements: self.current_block
-        is a single monotonic counter of every 8-hour (by default) "block" elapsed since the
-        scenario started -- round-tripped through save_game/load_game the same way
-        round_number already is (see DM_Persistence.py) -- and every other time concept (day
-        number, block-in-day, hour-of-day, day/night) is derived from it fresh rather than
-        stored redundantly.
+        self.pending_downtime/self._is_party_member/self.get_current_hp/
+        self._current_environment/self._resolve_environment_block/
+        self._any_hostile_present/self._resume_pending_downtime, set up by DMCore.__init__ or
+        implemented by DM_Travel.py/DM_Core.py). See docs/downtime.md for the design this
+        implements: self.current_block is a single monotonic counter of every 8-hour (by
+        default) "block" elapsed since the scenario started -- round-tripped through
+        save_game/load_game the same way round_number already is (see DM_Persistence.py) --
+        and every other time concept (day number, block-in-day, hour-of-day, day/night) is
+        derived from it fresh rather than stored redundantly.
     """
 
     def _time_rules(self):
@@ -75,36 +76,85 @@ class TimeMixin(DMCoreProtocol):
             environment (_current_environment, DM_Travel.py -- None for a location with no
             "grid" field, or one whose grid point falls in an unmapped world_map.toml gap,
             both the same "absence of an environment" default that's what "safe" looks like
-            everywhere in this design) once, then advances the clock one block at a time,
-            rolling that same environment's own day/night encounter table (and, on a night
-            block whose roll turns out hostile, a watch check) via _resolve_environment_block
-            for every block spent -- the exact machinery grid travel's own per-block loop
+            everywhere in this design) once, then advances the clock one block at a time via
+            _advance_pending_rest, rolling that same environment's own day/night encounter
+            table (and, on a night block whose roll turns out hostile, a watch check) via
+            _resolve_environment_block -- the exact machinery grid travel's own per-block loop
             already uses, just against one fixed point instead of a line of travel, since
             nothing moves during rest. A location with no environment at all skips this
-            entirely, same as before this existed. Deliberate simplification, matching grid
-            travel's own: a hostile encounter (or a failed watch) doesn't cut the rest short
-            or block the healing below -- pausing downtime for a real fight is a separate,
-            still-deferred extension (see docs/downtime.md's "Not yet built").
+            entirely.
 
-            Once every block has elapsed, heals every living party member (is_player/is_party
-            -- see _is_party_member) via the ordinary apply_healing call, scaled by their own
-            "fortitude" skill -- the body's own recovery, picked over "medicine" (a caregiver
-            treating someone else's wound). One aggregate roll per rester over the whole rest,
-            not one per block -- fortitude's own dice/pips scale directly with blocks spent
-            before the roll happens, so a longer rest's variance still grows the way rolling
-            more dice actually would, the same "avoid swinginess from rolling repeatedly"
-            reasoning crafting's own days_required already follows. Unaffected by however many
-            of those blocks turned out hostile above -- resting through an ambush still heals
-            exactly as much as an uneventful rest of the same length would.
+            A hostile block pauses the rest (self.pending_downtime, "kind": "rest") exactly
+            like grid travel now does (see docs/downtime.md's "Pausing for a fight") --
+            without needing a scene of its own the way a mid-journey ambush does, since rest
+            already happens at a real, already-loaded location. Denied outright (reason
+            "downtime_interrupted") if a previously-paused trip/rest hasn't cleared yet,
+            opportunistically resumed first in case its blocker was removed some other way.
+
+            Once every block has actually elapsed, heals every living party member
+            (is_player/is_party -- see _is_party_member) via the ordinary apply_healing call,
+            scaled by their own "fortitude" skill -- the body's own recovery, picked over
+            "medicine" (a caregiver treating someone else's wound). One aggregate roll per
+            rester over the whole rest, not one per block -- fortitude's own dice/pips scale
+            directly with blocks spent before the roll happens, so a longer rest's variance
+            still grows the way rolling more dice actually would, the same "avoid swinginess
+            from rolling repeatedly" reasoning crafting's own days_required already follows.
+            Unaffected by however many of those blocks turned out hostile above -- resting
+            through an ambush (once it's actually cleared) still heals exactly as much as an
+            uneventful rest of the same length would.
         @param blocks How many blocks to spend resting (floored at 1).
-        @return {healed: {entity_name: {healed, remaining_hp}}, time: get_time_state()}.
+        @return {"interrupted": True, "reason": "downtime_interrupted"} if denied outright;
+                {"interrupted": True} if this call paused partway through; otherwise
+                {"interrupted": False, "healed": {entity_name: {healed, remaining_hp}},
+                "blocks_spent": blocks, "time": get_time_state()}.
         """
+        if self.pending_downtime and not self._any_hostile_present():
+            self._resume_pending_downtime()
+        if self.pending_downtime:
+            return {"interrupted": True, "reason": "downtime_interrupted"}
+
         blocks = max(1, blocks)
+        self.pending_downtime = {"kind": "rest", "blocks_total": blocks, "blocks_done": 0}
+        return self._advance_pending_rest()
+
+    def _advance_pending_rest(self):
+        """!
+        @brief Runs (or resumes) self.pending_downtime's own per-block loop from wherever
+            "blocks_done" left off -- rest's counterpart to DM_Travel.py's own
+            _advance_pending_travel, against _current_environment's single fixed point rather
+            than a line, so no per-block position math is needed here at all. A block whose
+            own roll turns out hostile updates "blocks_done" and returns immediately
+            ({"interrupted": True}) instead of continuing -- no encounter site to enter, since
+            rest already happens at a real location. Running every remaining block clean hands
+            off to _finish_pending_rest for the actual healing.
+        @return _finish_pending_rest's own result, or {"interrupted": True}.
+        """
+        pending = self.pending_downtime
         environment = self._current_environment()
-        for _ in range(blocks):
+        for i in range(pending["blocks_done"], pending["blocks_total"]):
+            hostile = False
             if environment:
-                self._resolve_environment_block(environment)
+                hostile = self._resolve_environment_block(environment)
             self.advance_blocks(1)
+            if hostile:
+                pending["blocks_done"] = i + 1
+                return {"interrupted": True}
+
+        return self._finish_pending_rest()
+
+    def _finish_pending_rest(self):
+        """!
+        @brief Completes a self.pending_downtime rest once every block has cleared without
+            interruption -- the actual healing roll, deferred until now instead of running
+            right after a single bulk advance_blocks call. Clears self.pending_downtime first,
+            same reasoning _finish_pending_travel follows.
+        @return {"interrupted": False, "healed": {...}, "blocks_spent": int, "time": {...}} --
+                exactly the fields intents/rest.py's narrate_rest expects, plus "blocks_spent"
+                for load-bearing use by the resume path (DM_Core.py's _resume_pending_downtime).
+        """
+        pending = self.pending_downtime
+        blocks = pending["blocks_total"]
+        self.pending_downtime = None
         time_state = self.get_time_state()
 
         healed = {}
@@ -119,4 +169,4 @@ class TimeMixin(DMCoreProtocol):
             )
             remaining_hp = self.apply_healing(entity_name, amount)
             healed[entity_name] = {"healed": amount, "remaining_hp": remaining_hp}
-        return {"healed": healed, "time": time_state}
+        return {"interrupted": False, "healed": healed, "blocks_spent": blocks, "time": time_state}

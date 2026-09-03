@@ -34,9 +34,8 @@ roll turns out hostile, a night watch check — via `_resolve_environment_block`
 spent, the exact machinery grid travel's own per-block loop already uses (see "Travel"/"Night watch
 and surprise" below), just against one fixed point instead of a line of travel, since nothing moves
 during rest. A location with no environment at all skips this entirely, same as before this
-existed. Matching travel's own deliberate simplification: a hostile encounter (or a failed watch)
-doesn't cut the rest short or reduce the healing below — pausing downtime for a real fight stays a
-separate, still-deferred extension (see "Not yet built").
+existed. A hostile block pauses the rest exactly like grid travel now does — see "Pausing for a
+fight" below.
 
 Once every block has elapsed, heals every living `is_player`/`is_party` member (`_is_party_member`)
 via the ordinary `apply_healing` call, scaled by their own `fortitude` skill — the body's own
@@ -113,12 +112,10 @@ Shipped worked example: `Rules/Fantasy/scenarios/plains.toml`'s `trailhead` (gri
 `creatures.toml` wildlife entries, `"wild boar"`/`"coyote"`) — exactly far enough apart, at the
 default travel speed of 4, to cost exactly one block.
 
-**Deliberate simplification, not yet built further.** Every block's encounter roll (and the clock
-advance it rides on) happens in one uninterrupted burst right after `_enter_location` lands at the
-destination, not spread across an "in transit" scene of its own — there's no such scene to hold an
-encountered creature if the player hasn't arrived anywhere yet. Pausing the clock mid-journey for a
-real fight is still a real, separately deferred extension — see `extended-goals.md`'s own
-"Downtime".
+**Arrival is deferred, not up front.** `_enter_location(destination_key)` no longer runs before the
+per-block loop — it's the very last step, run only once every block has cleared without a hostile
+interruption (`_finish_pending_travel`). A hostile block instead pauses the whole trip — see
+"Pausing for a fight" below.
 
 ## Night watch and surprise
 
@@ -142,10 +139,62 @@ caught off guard, not just whoever stood watch. Nothing in this engine interpret
 `_expire_surprised_if_due` (`DM_Status.py`) dismisses it the first time `run_round_upkeep` runs
 after it was applied, giving it exactly the one round of penalty `"duration = 1 round"` calls for.
 
+## Pausing for a fight
+
+Built for both travel and rest. A hostile block (`_resolve_environment_block` returning `True`)
+no longer just gets folded into an otherwise-uninterrupted burst — it pauses the whole trip/rest
+via `DMCore.pending_downtime`, a new persistent, top-level field (`None` when nothing's paused,
+round-tripped through save/load like `current_block`) holding `{"kind": "travel"|"rest",
+"blocks_total", "blocks_done", ...kind-specific fields}`. `_advance_pending_travel`/
+`_advance_pending_rest` (`DM_Travel.py`/`DM_Time.py`) run (or resume) the per-block loop starting
+from `blocks_done` instead of 0; a fresh hostile block updates `blocks_done` and returns
+immediately instead of continuing, while running every remaining block clean hands off to
+`_finish_pending_travel`/`_finish_pending_rest` for the actual arrival/healing.
+
+**The ephemeral encounter site (travel only).** Since arrival is now deferred (see "Travel" above),
+a mid-journey ambush happens before the party has really gotten anywhere — `_enter_encounter_site`
+(`DM_Travel.py`) moves them into a small scratch scene (`ROAD_ENCOUNTER_KEY`, a single key reused
+by every such pause rather than a freshly-minted one) to actually fight in. This deliberately does
+**not** go through the ordinary `_enter_location`: naming an already-live ally in a *new* location's
+own `"entities"` list would re-instance it as a fresh, occurrence-disambiguated copy of its
+template (`_instance_entities`), silently orphaning the real live instance and its current
+hp/`active_conditions` — and `_enter_location`'s freeform branch would also reset
+`scenario_entities` down to just the player. `_enter_encounter_site` instead touches only
+`current_location_key`/`known_locations`/`rooms` — `scenario_entities`/`persistent_entities` are
+left completely alone, so the party (and the creature `_resolve_one_encounter` just placed) stay
+exactly who they already were. Rest never needs this — it already happens at a real location.
+
+**Resuming.** `DMCore._any_hostile_present()` (the same `is_hostile`/`get_current_hp>0` loop the
+`blocked_by_enemies` gates already ran, now factored out into one shared predicate) is checked at
+the end of every combat round (`_resolve_combat_round`); once nothing hostile remains,
+`_resume_pending_downtime()` continues the paused trip/rest automatically, publishing
+`item_interaction_resolved` itself (with exactly the fields `intents/travel.py`'s `narrate_travel`
+/ `intents/rest.py`'s `narrate_rest` already expect) since there's no original `resolved` closure
+left to call on a turn that started out having nothing to do with travel or rest at all. A *new*
+travel/rest attempt while one is already pending is denied (`reason: "downtime_interrupted"`) —
+checked in `DM_Movement.py`'s `_resolve_travel_intent`, ahead of its own grid/non-grid branch
+(the encounter site deliberately carries no `"grid"` field, so a travel attempt issued from it
+would otherwise fall through to the *non*-grid path and never reach a check placed only inside
+`_resolve_grid_travel_intent`) — opportunistically resuming first, in case the blocking hostile was
+actually cleared some other way (ex: ADaM despawning it), so a stale `pending_downtime` can't
+deadlock every future trip.
+
+**Save/load.** `load_scenario_definition()` rebuilds `self.locations` purely from TOML on every
+load, so a synthetic `ROAD_ENCOUNTER_KEY` entry wouldn't survive a reload on its own —
+`_enter_encounter_site` also stashes its own minimal `{key, name, description}` shape into
+`pending_downtime["encounter_site"]`, and `load_game` reinjects it into `self.locations` right
+after `load_scenario_definition()` but before its own existing `_enter_location(saved_location_key,
+...)` call, so a saved `current_location_key` pointing at the site resolves to a real location
+instead of silently degrading to an empty `{}` one. This only closes half the gap, though: an
+entity `_resolve_one_encounter` instances is now also flagged `entity["ad_hoc"] = True`
+(`DM_Encounters.py`) so it round-trips through `_collect_ad_hoc_entities`
+(`docs/persistence.md`) with its *live* hp/conditions intact — previously only its bare presence in
+`scenario_entities` survived a reload, silently resetting it to pristine template stats, a
+pre-existing gap that a multi-turn-spanning, savable pause now makes load-bearing rather than a
+rare edge case.
+
 ## Not yet built
 
 Crafting's `days_required` day-extension and reopening character creation mid-game for training
 stay exactly as undesigned-in-code as `extended-goals.md`'s own "Downtime" section left them — read
 that section before starting either; it was fully grilled as a design pass, not just sketched.
-Pausing the block clock mid-journey/mid-rest for a real fight (see "Travel"/"Rest" above) is also
-still unbuilt — both stay one uninterrupted burst today.

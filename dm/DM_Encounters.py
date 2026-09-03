@@ -70,6 +70,14 @@ class EncounterMixin(DMCoreProtocol):
             hostile = False
             for name in instanced:
                 self.scenario_entities.append(name)
+                # No location/room "entities" list names this instance -- unlike a
+                # hand-authored occupant, nothing re-derives its presence on a later
+                # save/load beyond the generic "ad hoc" path (_collect_ad_hoc_entities,
+                # DM_Persistence.py), so it needs that same flag to keep its live hp/
+                # active_conditions instead of silently resetting to template stats on
+                # reload -- load-bearing now that a hostile roll here can pause travel/rest
+                # across multiple turns (see docs/downtime.md's "Pausing for a fight").
+                self.entities[name]["ad_hoc"] = True
                 if self.is_hostile(name, self.player_name):
                     self._claim_current_target_if_free(name)
                     hostile = True

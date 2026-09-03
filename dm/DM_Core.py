@@ -155,6 +155,13 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         # actually rolled (see DM_Travel.py's _roll_night_watch). Round-tripped through
         # save_game/load_game the same way current_block already is.
         self.watch_rotation_index = 0
+        # A paused downtime action (grid travel or rest) waiting on a hostile encounter to
+        # clear before it resumes -- see docs/downtime.md's "Pausing for a fight". None
+        # whenever nothing is interrupted (the overwhelmingly common case). Shape while set:
+        # {"kind": "travel"|"rest", "blocks_total", "blocks_done", ...kind-specific fields}
+        # -- plain JSON-safe data only, no live object references, so it round-trips through
+        # save_game/load_game exactly like current_block.
+        self.pending_downtime = None
         # The player's persisted combat target -- distinct from _get_target_name()'s "first
         # non-player entity" (which stays purely for non-combat interaction resolution, ex:
         # the dungeon's chest or the tavern's innkeeper). Set for real by load_scenario()
@@ -974,6 +981,59 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         # target that survived the round's own attacks).
         if self.current_target and self.get_current_hp(self.current_target) <= 0:
             self.current_target = self._choose_combat_target()
+        # A paused travel/rest (see docs/downtime.md's "Pausing for a fight") resumes the
+        # instant the last hostile in the scene actually drops -- checked fresh every round
+        # (not just when current_target itself dies) since an ally's own turn above, or this
+        # same round's upkeep damage, can be what actually finishes off the last one.
+        if self.pending_downtime and not self._any_hostile_present():
+            self._resume_pending_downtime()
+
+    def _any_hostile_present(self):
+        """!
+        @brief Whether any living entity hostile to the player is currently in the scene --
+            the same is_hostile/get_current_hp>0 loop DM_Movement.py's own room-transition
+            gates and DM_Travel.py's own grid-travel gate already each ran independently;
+            factored out here since a paused-downtime resume check (_resolve_combat_round,
+            above; _resolve_grid_travel_intent/rest's own defensive check) is now a fourth
+            use of the exact same predicate.
+        @return True if scenario_entities holds at least one hostile, living, non-player
+                entity.
+        """
+        return any(
+            self.is_hostile(entity_name, self.player_name) and self.get_current_hp(entity_name) > 0
+            for entity_name in self.scenario_entities
+            if entity_name != self.player_name
+        )
+
+    def _resume_pending_downtime(self):
+        """!
+        @brief Continues whatever grid travel/rest self.pending_downtime describes, from
+            wherever its own block loop left off -- called once the hostile encounter that
+            paused it has actually cleared (_resolve_combat_round, above, or a caller of
+            DM_Movement.py's _resolve_travel_intent/DM_Time.py's rest opportunistically
+            catching a pending downtime whose blocker was removed some other way, ex: ADaM
+            despawning it). Unlike the
+            *first* call into _advance_pending_travel/_advance_pending_rest (which still has
+            the original turn's own "resolved" publisher closure on hand), this one runs on
+            a turn that has nothing else to do with travel or rest at all, so there's no
+            closure to call -- if the trip/rest turns out to finish here, this publishes
+            "item_interaction_resolved" itself, with exactly the field names
+            intents/travel.py's narrate_travel / intents/rest.py's narrate_rest already
+            expect, so the player still gets an ordinary arrival/rest narration even though
+            nothing they just typed was "travel" or "rest".
+        """
+        kind = self.pending_downtime["kind"]
+        if kind == "travel":
+            result = self._advance_pending_travel()
+        else:
+            result = self._advance_pending_rest()
+        if result["interrupted"]:
+            return
+        payload = {k: v for k, v in result.items() if k != "interrupted"}
+        self.event_bus.publish("item_interaction_resolved", {
+            "intent": kind, "item_name": None, "input": "", "found": True,
+            "present_entities": list(self.scenario_entities), **payload,
+        })
 
     def _on_item_interaction_detected(self, data):
         """!

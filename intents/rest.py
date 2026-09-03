@@ -12,7 +12,16 @@ def resolve_rest(core, data, resolved):
         requested at all; how long is decided here from the raw input itself, the same
         "DMCore resolves the specifics" split every other free-standing intent follows: a
         phrase naming night/dawn/morning spends a whole day's worth of blocks, anything else
-        spends a single block. Always succeeds -- there's no failure reason this can report.
+        spends a single block.
+
+        A hostile mid-block encounter can now pause the rest partway through (see
+        docs/downtime.md's "Pausing for a fight") -- core.rest returns {"interrupted": True}
+        either way that happens (a fresh pause this call, or an outright denial because a
+        previously-paused downtime is still unresolved), and this simply publishes nothing
+        this turn: the encounter's own existing "encounter_triggered" narration (or, for an
+        outright denial, nothing new at all -- the player already knows why, from whatever
+        made the earlier one pause) already covers it, and the eventual arrival/healing
+        narration fires later, on its own, once DMCore._resume_pending_downtime completes it.
     @param core The DMCore instance.
     @param data The item_interaction_detected payload ({input, ...}).
     @param resolved The item_interaction_resolved publisher closure from
@@ -26,7 +35,9 @@ def resolve_rest(core, data, resolved):
         else 1
     )
     result = core.rest(blocks_spent)
-    resolved(True, healed=result["healed"], blocks_spent=blocks_spent, time=result["time"])
+    if result["interrupted"]:
+        return
+    resolved(True, healed=result["healed"], blocks_spent=result["blocks_spent"], time=result["time"])
 
 
 def narrate_rest(llm_core, data):

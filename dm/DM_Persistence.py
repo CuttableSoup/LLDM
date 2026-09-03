@@ -237,6 +237,7 @@ class PersistenceMixin(DMCoreProtocol):
             "round_number": self.round_number,
             "current_block": self.current_block,
             "watch_rotation_index": self.watch_rotation_index,
+            "pending_downtime": self.pending_downtime,
             "current_target": self.current_target,
             "scenario_entities": self.scenario_entities,
             "current_location_key": self.current_location_key,
@@ -436,6 +437,7 @@ class PersistenceMixin(DMCoreProtocol):
         self.round_number = data.get("round_number", 0)
         self.current_block = data.get("current_block", 0)
         self.watch_rotation_index = data.get("watch_rotation_index", 0)
+        self.pending_downtime = data.get("pending_downtime")
         self.scenario_key = data.get("scenario_key", self.scenario_key)
         self.setting = data.get("setting", self.setting)
         # Must precede load_scenario_definition/load_scenario -- see this method's own
@@ -448,6 +450,15 @@ class PersistenceMixin(DMCoreProtocol):
         self.known_locations = set(data.get("known_locations", []))
         self.load_rules(os.path.join("Rules", self.setting))
         self.load_scenario_definition(self.scenario_key)
+        # load_scenario_definition just rebuilt self.locations purely from TOML, which has no
+        # notion of a mid-journey ambush's own ephemeral scratch scene -- reinject it (see
+        # DM_Travel.py's _enter_encounter_site, which stashed this same dict into
+        # pending_downtime for exactly this) *before* the saved_location_key branch below runs,
+        # so a saved current_location_key pointing at it resolves to a real location instead of
+        # silently degrading to an empty {} one.
+        pending_site = (self.pending_downtime or {}).get("encounter_site")
+        if pending_site:
+            self.locations[pending_site["key"]] = pending_site
         self.validate_loaded_data()
 
         saved_instancing_order = data.get("entity_instancing_order")

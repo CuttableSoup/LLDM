@@ -3,19 +3,25 @@ import re
 
 from dm.DM_Types import DMCoreProtocol
 
+# A single, reused scratch location key for a mid-journey ambush -- never a freshly-minted
+# key per pause (see _enter_encounter_site), so a long playthrough with many interrupted
+# trips doesn't accumulate one throwaway self.locations entry per ambush.
+ROAD_ENCOUNTER_KEY = "__road_encounter"
+
 
 class TravelMixin(DMCoreProtocol):
     """!
     @brief Grid-based overworld travel (DMCore mixin -- only ever composed into DMCore, never
         instantiated on its own; relies on self.rules/self.entities/self.locations/
         self.scenario_entities/self.current_location_key/self.known_locations/self.event_bus/
-        self.rooms/self.player_name/self.watch_rotation_index/self._is_party_member/
-        self.is_hostile/self.get_current_hp/self._enter_location/self._current_room/
-        self._describe_scenario_characters/self.advance_blocks/self.is_daytime/
-        self._resolve_one_encounter/self.resolve_action/self.apply_condition, set up by
-        DMCore.__init__ or implemented by DM_Rules.py/DM_Encounters.py/DM_Time.py/
-        DM_Combat.py/DM_Status.py). See docs/downtime.md's "Travel" for the design this
-        implements.
+        self.rooms/self.player_name/self.watch_rotation_index/self.pending_downtime/
+        self._is_party_member/self.is_hostile/self.get_current_hp/self._enter_location/
+        self._current_room/self._describe_scenario_characters/self.advance_blocks/
+        self.is_daytime/self._resolve_one_encounter/self.resolve_action/
+        self.apply_condition/self._any_hostile_present/self._resume_pending_downtime, set up
+        by DMCore.__init__ or implemented by DM_Rules.py/DM_Encounters.py/DM_Time.py/
+        DM_Combat.py/DM_Status.py/DM_Core.py). See docs/downtime.md's "Travel" for the design
+        this implements.
 
         An optional "grid" field ({x, y}) on a [[location]] table opts it into this whole
         connectivity model, replacing its authored [[location.exit]]/"return_to" entirely (see
@@ -38,14 +44,16 @@ class TravelMixin(DMCoreProtocol):
         a multi-region journey (not exercised by today's single-region shipped map, but already
         correct for one) rolls from every region proportional to how much of the line it covers.
 
-        Deliberate simplification, not yet built: every block's encounter roll (and the clock
-        advance it rides on) happens in one uninterrupted burst right after _enter_location lands
-        at the destination, not spread across an "in transit" scene of its own -- there's no such
-        scene to hold an encountered creature if the player hasn't arrived anywhere yet, and
-        pausing the clock mid-journey for a real fight (docs/downtime.md's own "Not yet built"
-        note) is a separable future step. A creature this rolls up is simply added to the
-        destination's own arrival scene, exactly like [[location.encounter]]'s own on_enter roll
-        (which still fires separately, right after, unaffected).
+        Arrival (_enter_location(destination_key)) no longer happens up front -- it's deferred
+        until every block actually clears without interruption (_finish_pending_travel), so a
+        mid-journey encounter is genuinely mid-journey, not narrated as already having arrived.
+        A hostile block pauses the whole trip (self.pending_downtime, "kind": "travel") and
+        moves the party into a small ephemeral scratch scene (_enter_encounter_site,
+        ROAD_ENCOUNTER_KEY) to actually fight in -- see docs/downtime.md's "Pausing for a
+        fight" for the full design (why this doesn't go through the ordinary _enter_location,
+        how it survives save/load, and how the trip resumes automatically once the threat
+        clears). [[location.encounter]]'s own on_enter roll still fires separately, unaffected,
+        once real arrival finally happens.
 
         A night block (self.is_daytime() false) whose own encounter roll actually placed a
         hostile entity is followed by a night watch check (_roll_night_watch,
@@ -221,7 +229,10 @@ class TravelMixin(DMCoreProtocol):
         @brief Handles "travel" from a gridded current location -- see this class's own
             docstring for the full model. Denied (reason "no_exit") if input_text doesn't name
             a known, gridded destination, or (reason "blocked_by_enemies") under the exact same
-            room-occupant gate DM_Movement.py's own exit-graph path already runs.
+            room-occupant gate DM_Movement.py's own exit-graph path already runs. The
+            "downtime_interrupted" denial/opportunistic-resume check lives one level up, in
+            DM_Movement.py's own _resolve_travel_intent -- see that method's own docstring for
+            why it has to run before the grid/non-grid branch decision, not here.
         @param input_text The raw (lowercased, prefix-stripped) player input.
         @param resolved The item_interaction_resolved publisher closure from
             DMCore._on_item_interaction_detected.
@@ -232,44 +243,132 @@ class TravelMixin(DMCoreProtocol):
             resolved(False, reason="no_exit")
             return
 
-        if self.rooms:
-            for entity_name in self.scenario_entities:
-                if entity_name == self.player_name:
-                    continue
-                if self.is_hostile(entity_name, self.player_name) and self.get_current_hp(entity_name) > 0:
-                    resolved(False, reason="blocked_by_enemies")
-                    return
+        if self.rooms and self._any_hostile_present():
+            resolved(False, reason="blocked_by_enemies")
+            return
 
         destination_grid = self.locations[destination_key]["grid"]
         distance = math.hypot(destination_grid["x"] - origin_grid["x"], destination_grid["y"] - origin_grid["y"])
         speed = self._party_travel_speed()
         blocks = max(1, math.ceil(distance / speed)) if speed > 0 else 1
 
-        self._enter_location(destination_key)
+        self.pending_downtime = {
+            "kind": "travel", "destination_key": destination_key,
+            "origin_grid": origin_grid, "destination_grid": destination_grid,
+            "blocks_total": blocks, "blocks_done": 0, "distance": distance,
+        }
+        result = self._advance_pending_travel()
+        if result["interrupted"]:
+            return
+        resolved(True, **{k: v for k, v in result.items() if k != "interrupted"})
 
-        for i in range(blocks):
+    def _advance_pending_travel(self):
+        """!
+        @brief Runs (or resumes) self.pending_downtime's own per-block loop from wherever
+            "blocks_done" left off -- the exact same midpoint-sampling/_resolve_environment_block
+            math _resolve_grid_travel_intent always ran, just able to stop partway through and
+            be called again later. A block whose own roll turns out hostile updates
+            "blocks_done" and returns immediately ({"interrupted": True}) instead of
+            continuing -- moving into the ephemeral encounter site first (_enter_encounter_site)
+            if this is the first interruption of this trip (a second ambush during an
+            already-paused trip is already standing there, nothing to re-enter). Running every
+            remaining block clean hands off to _finish_pending_travel for real arrival.
+        @return _finish_pending_travel's own result, or {"interrupted": True}.
+        """
+        pending = self.pending_downtime
+        origin_grid = pending["origin_grid"]
+        destination_grid = pending["destination_grid"]
+        blocks_total = pending["blocks_total"]
+
+        for i in range(pending["blocks_done"], blocks_total):
             # Midpoint of this block's own leg of the straight line from origin to
             # destination -- true per-block sampling, not a coarser origin/destination split.
-            t = (i + 0.5) / blocks
+            t = (i + 0.5) / blocks_total
             point_x = origin_grid["x"] + (destination_grid["x"] - origin_grid["x"]) * t
             point_y = origin_grid["y"] + (destination_grid["y"] - origin_grid["y"]) * t
+            hostile = False
             environment_name = self.resolve_region_environment(point_x, point_y)
             if environment_name:
                 environment = self._find_environment(environment_name)
                 if environment:
-                    self._resolve_environment_block(environment)
+                    hostile = self._resolve_environment_block(environment)
             self.advance_blocks(1)
+            if hostile:
+                pending["blocks_done"] = i + 1
+                if self.current_location_key != ROAD_ENCOUNTER_KEY:
+                    destination_name = self.locations.get(
+                        pending["destination_key"], {},
+                    ).get("name", "your destination")
+                    self._enter_encounter_site(
+                        f"Caught in the open, still short of {destination_name}.",
+                    )
+                return {"interrupted": True}
 
+        return self._finish_pending_travel()
+
+    def _finish_pending_travel(self):
+        """!
+        @brief Completes a self.pending_downtime travel once every block has cleared without
+            interruption -- the real _enter_location(destination_key) arrival this class's own
+            docstring describes, deferred until now instead of running up front. Clears
+            self.pending_downtime first, so nothing downstream (ex: a status/on_enter program
+            the arrival itself triggers) can observe a stale "still traveling" state.
+        @return {"interrupted": False, ...} with exactly the fields
+                intents/travel.py's narrate_travel expects (location_name/location_description/
+                room_name/room_description/characters/blocks_spent/time), plus "distance" for
+                the mechanics-only side of the original resolved() payload.
+        """
+        pending = self.pending_downtime
+        self.pending_downtime = None
+        self._enter_location(pending["destination_key"])
         new_location = self.locations.get(self.current_location_key, {})
         new_room = self._current_room()
-        resolved(
-            True,
-            location_name=new_location.get("name", ""),
-            location_description=new_location.get("description", ""),
-            room_name=new_room.get("name", "") if new_room else "",
-            room_description=new_room.get("description", "") if new_room else "",
-            characters=self._describe_scenario_characters(),
-            blocks_spent=blocks,
-            distance=round(distance, 1),
-            time=self.get_time_state(),
-        )
+        return {
+            "interrupted": False,
+            "location_name": new_location.get("name", ""),
+            "location_description": new_location.get("description", ""),
+            "room_name": new_room.get("name", "") if new_room else "",
+            "room_description": new_room.get("description", "") if new_room else "",
+            "characters": self._describe_scenario_characters(),
+            "blocks_spent": pending["blocks_total"],
+            "distance": round(pending["distance"], 1),
+            "time": self.get_time_state(),
+        }
+
+    def _enter_encounter_site(self, description):
+        """!
+        @brief Moves the party into a small, ephemeral scratch scene for a mid-journey ambush
+            -- ROAD_ENCOUNTER_KEY, a single fixed key reused by every such pause rather than a
+            freshly-minted one each time. Deliberately does NOT go through the ordinary
+            _enter_location: naming an already-live entity (an ally like crypt.toml's "thane")
+            in a *new* location's own "entities" list would re-instance it as a fresh
+            occurrence-disambiguated copy of its template (_instance_entities), silently
+            orphaning the real live instance and its current hp/active_conditions -- exactly
+            the bug _instance_location_persistent_names's own docstring already warns about for
+            the player specifically. _enter_location's freeform branch would also reset
+            scenario_entities to just [player_name] (list(self.persistent_entities)), losing
+            both the ally and whatever _resolve_one_encounter just placed. This changes only
+            "where we are" for narration/lookup purposes -- scenario_entities/
+            persistent_entities are left completely untouched, so the party (and the
+            encountered hostile) stay exactly who they already were.
+
+            Also stashes this site's own dict into self.pending_downtime["encounter_site"] --
+            self.locations gets fully rebuilt from TOML alone on a later load_game, so without
+            this a saved-mid-ambush current_location_key would resolve to nothing on reload
+            (see DM_Persistence.py's load_game, which reads this same key back out to
+            reinject the site before it re-runs _enter_location on the saved location key).
+        @param description Flavor text for this specific ambush (ex: naming the destination
+            the party hasn't reached yet).
+        """
+        site = {
+            "key": ROAD_ENCOUNTER_KEY, "name": "the road",
+            "description": description, "entities": [],
+        }
+        self.locations[ROAD_ENCOUNTER_KEY] = site
+        self.pending_downtime["encounter_site"] = site
+        self.current_location_key = ROAD_ENCOUNTER_KEY
+        self.known_locations.add(ROAD_ENCOUNTER_KEY)
+        self.rooms = {}
+        self.current_room_key = None
+        self.visited_rooms = {}
+        self.entities[self.player_name]["band"] = 1
