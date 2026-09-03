@@ -15,9 +15,14 @@ Left 4 Dead-inspired survival shooter) that proves the engine is setting-agnosti
 `Rules/Zombie/scenarios/rooftop.toml` (`python LLDM.py rooftop --setting Zombie`). Every
 setting authors its own skills/rules/races from scratch — nothing is shared or inherited
 between settings, deliberately, so one setting's data can never leak into another's.
-GUI-driven character creation (Character → Create...) and NPC generation are still wired to
-`Rules/Fantasy/` only; a second setting is reachable only via CLI quick-boot (`--setting`) or a
-save file that already carries its own `"setting"`.
+GUI-driven character creation (Character → Create...) already reads whichever `Rules/<setting>`
+the Ruleset menu is set to (`list_available_settings`, `DM_Rules.py`) — `Rules/Zombie/`'s own
+`archetypes.toml` (survivor archetypes + starting-gear loadouts, playing the role
+`Rules/Fantasy/races.toml` does) is what actually makes that a real experience rather than an
+empty race dropdown. NPC generation is a separate story: the code itself is equally
+setting-agnostic (reads `self.setting` off the live `DMCore`), but `Rules/Zombie/` authors no
+`[[entity_template]]`/`npc_keywords.toml` at all, so it has nothing to generate from yet — a
+content gap, not a code one.
 
 ## Documentation map
 

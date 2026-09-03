@@ -1,0 +1,116 @@
+# Character-creation "race" templates -- see Rules/Fantasy/races.toml's own header comment for
+# the full mechanism (Character_Creation.load_character_creation_data reads this generic
+# per-file [[race]] scan the same way for any setting, DM_CharacterCreation.py's
+# apply_character_creation bakes the chosen one into the player entity). Named "archetypes.toml"
+# rather than "races.toml" since a survivor's starting profile here is about background and
+# gear, not ancestry -- the TOML table itself still has to be named [[race]] regardless of this
+# file's own filename, since that's the literal key the generic scan looks for.
+#
+# Every archetype lists every one of skills.toml's 16 skills explicitly, human-equivalent
+# baseline 2D raised to 3D on four and lowered to 1D on four -- the identical "no archetype
+# starts with more or fewer total dice than any other" balance races.toml's own fantasy races
+# already follow, just against this setting's own smaller skill list. None authors "language" --
+# there's no elvish-equivalent concept in a survival-horror setting, every survivor already
+# speaks "common" (characters.toml's own riley), so omitting it is a correct no-op, not a gap.
+#
+# "starting_items"/"starting_equipped" are new, setting-agnostic fields DM_CharacterCreation.py's
+# apply_character_creation now reads on any [[race]] table (see its own comment) -- absent
+# entirely for every Rules/Fantasy/races.toml race (an elf/dwarf/etc. is purely a skill/language
+# profile), authored here instead: replaces riley's own hand-authored starting inventory/equipped
+# outright with a loadout matching the chosen archetype, the same "chargen fully decides this"
+# precedent "skills" already sets. "starting_items" is the full inventory list (equipped items
+# still have to appear here too, entity_schema.toml's own [entity.equipped] convention);
+# "starting_equipped" is a plain slot -> item_name map, author-declared directly rather than
+# auto-resolved through get_equip_slots -- no ambiguity to resolve when the archetype's own
+# author already knows exactly which slot each item belongs in. Both bare keys/sub-tables have
+# to be written *before* [race.skill_dice] opens below -- TOML has no way back to a [[race]]
+# table's own top level once a nested [race.*] table has been opened.
+
+[[race]]
+name = "Scavenger"
+description = "Quiet, resourceful, and quick to disappear -- survives by not being noticed and knowing where to look."
+starting_items = [ "crowbar", "pain pills" ]
+
+[race.starting_equipped]
+melee = "crowbar"
+
+[race.skill_dice]
+# Raised to 3D
+stealth = 3
+survival = 3
+observation = 3
+mechanics = 3
+# Lowered to 1D
+firearms = 1
+brawling = 1
+strength = 1
+fortitude = 1
+# Everything else stays at the baseline of 2D
+melee = 2
+throwing = 2
+athletics = 2
+reflexes = 2
+dodge = 2
+willpower = 2
+medicine = 2
+charisma = 2
+
+[[race]]
+name = "Ex-Military"
+description = "Trained, disciplined, and used to carrying a gun for a living -- steady under fire, out of practice at everything else."
+starting_items = [ "combat rifle", "crowbar" ]
+
+[race.starting_equipped]
+primary = "combat rifle"
+melee = "crowbar"
+
+[race.skill_dice]
+# Raised to 3D
+firearms = 3
+athletics = 3
+fortitude = 3
+willpower = 3
+# Lowered to 1D
+stealth = 1
+medicine = 1
+mechanics = 1
+charisma = 1
+# Everything else stays at the baseline of 2D
+melee = 2
+brawling = 2
+throwing = 2
+strength = 2
+reflexes = 2
+dodge = 2
+observation = 2
+survival = 2
+
+[[race]]
+name = "Medic"
+description = "Calm under pressure and good with people -- kept a group alive this long by patching wounds, not picking fights."
+starting_items = [ "pistol", "first aid kit" ]
+
+[race.starting_equipped]
+secondary = "pistol"
+medkit = "first aid kit"
+
+[race.skill_dice]
+# Raised to 3D
+medicine = 3
+charisma = 3
+observation = 3
+willpower = 3
+# Lowered to 1D
+firearms = 1
+strength = 1
+brawling = 1
+throwing = 1
+# Everything else stays at the baseline of 2D
+melee = 2
+athletics = 2
+reflexes = 2
+dodge = 2
+stealth = 2
+fortitude = 2
+survival = 2
+mechanics = 2

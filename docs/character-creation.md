@@ -37,6 +37,25 @@ the player's original template name (ex: `crypt.toml`'s own `anne`, keyed to `gl
 applying to whoever they were actually renamed to. `character=None` (every caller that omits
 it) is a complete no-op.
 
+**Starting gear.** A `[[race]]` table can also author `"starting_items"` (a flat inventory list)
+and `"starting_equipped"` (a plain `slot -> item_name` map, `entity_schema.toml`'s own
+`[entity.equipped]` shape) — setting-agnostic fields no `Rules/Fantasy/races.toml` race uses (an
+elf/dwarf/etc. is purely a skill/language profile), but `Rules/Zombie/archetypes.toml`'s own
+`"Scavenger"`/`"Ex-Military"`/`"Medic"` do — the same generic `[[race]]` mechanism, just
+authored under a differently-named file (the TOML table itself still has to be `[[race]]`,
+since that's the literal key `load_character_creation_data`'s generic per-file scan looks for).
+When present, `apply_character_creation` replaces the player template's own hand-authored
+`"inventory"`/`"equipped"` outright (`characters.toml`'s `riley` starts with a pistol/crowbar/
+first aid kit/pain pills; choosing `"Medic"` instead ends up with a pistol and a first aid kit,
+not both loadouts stacked) — the same "chargen fully decides this" precedent `"skills"` already
+sets. No auto-equip-slot resolution (`get_equip_slots`) involved — the archetype's own author
+already knows exactly which slot each item belongs in, so `"starting_equipped"` just states it
+directly. Every `Rules/Zombie/archetypes.toml` archetype also lists all 16 of that setting's own
+skills explicitly, human-equivalent 2D baseline raised to 3D on four and lowered to 1D on four —
+the identical balance convention `races.toml`'s own fantasy races follow, just against a smaller
+skill list, and deliberately authors no `"language"` (no elvish-equivalent concept in a
+survival-horror setting).
+
 **Training (spending XP on skills).** `Character_Creation.py`'s `spend_pip(dice, pips, exp)`
 raises one skill by a single pip, costing XP equal to its own *current* dice count — pips roll
 over into an extra die at 3 (`skill_rating`'s own "3 pips = 1 die" scale, `Challenge_Rating.py`),

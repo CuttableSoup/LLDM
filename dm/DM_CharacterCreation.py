@@ -25,7 +25,10 @@ class CharacterCreationMixin(DMCoreProtocol):
             onto the player's own "languages" list if it isn't already there (ex: an elf adds
             "elvish" onto the template's default ["common"]; a human re-adding "common" is a
             no-op), which is what DM_Dialogue.py's language-barrier check reads to decide
-            whether the player shares a tongue with whoever they're addressing -- and -- if
+            whether the player shares a tongue with whoever they're addressing -- and, if the
+            chosen race itself authors a "starting_items" list, replacing the player's own
+            "inventory"/"equipped" outright with that loadout (ex: Rules/Zombie/
+            archetypes.toml's "Scavenger" vs. "Ex-Military") -- and -- if
             character carries a non-blank "name" different
             from self.player_name -- renames the player entity itself, re-keying self.entities,
             updating self.player_name to match, and rewriting any other entity's own
@@ -99,6 +102,22 @@ class CharacterCreationMixin(DMCoreProtocol):
                 if race_language not in languages:
                     languages.append(race_language)
                 player["languages"] = languages
+
+            # Optional starting-gear loadout -- races.toml's own fantasy races never author
+            # this (an elf/dwarf/etc. is purely a skill/language profile), but a setting whose
+            # own [[race]] table represents something gear-defining instead (ex: Rules/Zombie/
+            # archetypes.toml's "Scavenger"/"Ex-Military") can. Replaces the player template's
+            # own hand-authored "inventory"/"equipped" outright rather than adding to it -- the
+            # same "chargen fully decides this, the template's own value was only ever a
+            # pre-chargen default" precedent "skills" above already sets. "equipped" is
+            # author-declared directly (a plain slot -> item_name map, entity_schema.toml's own
+            # [entity.equipped] shape) rather than auto-resolved through get_equip_slots -- no
+            # ambiguity to resolve when the archetype's own author already knows exactly which
+            # slot each item belongs in.
+            starting_items = (race or {}).get("starting_items")
+            if starting_items is not None:
+                player["inventory"] = list(starting_items)
+                player["equipped"] = dict((race or {}).get("starting_equipped") or {})
 
         pip_spend = character.get("pip_spend") or []
         if pip_spend:

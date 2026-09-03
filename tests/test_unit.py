@@ -6105,6 +6105,67 @@ class TestCharacterCreationRename(unittest.TestCase):
         self.assertEqual(dm.entities["Aria"]["skills"]["blades"], {"dice": 5, "pips": 0})
 
 
+class TestZombieArchetypeCharacterCreation(unittest.TestCase):
+    """!
+    @brief The character-creation pipeline against a real *non-Fantasy* setting --
+        Rules/Zombie/archetypes.toml's own [[race]] tables (the same generic mechanism
+        races.toml uses, proving it's genuinely setting-agnostic, not just Fantasy-shaped) plus
+        their own "starting_items"/"starting_equipped" fields, which no Fantasy race authors.
+    """
+
+    def test_load_character_creation_data_finds_the_zombie_archetypes(self):
+        skills, races, character_creation = load_character_creation_data("Rules/Zombie")
+        self.assertEqual(
+            sorted(race["name"] for race in races), ["Ex-Military", "Medic", "Scavenger"],
+        )
+        # Same shared point-buy constants convention as Fantasy -- Rules/Zombie/rules.toml's
+        # own [character_creation] table, not a hardcoded Fantasy-only default.
+        self.assertEqual(character_creation, {"pool_dice": 15, "max_allocation_per_skill": 5})
+
+    def test_every_archetype_lists_every_skill_at_a_balanced_baseline(self):
+        skills, races, _character_creation = load_character_creation_data("Rules/Zombie")
+        for race in races:
+            with self.subTest(race=race["name"]):
+                self.assertEqual(set(race["skill_dice"]), set(skills))
+                # 16 skills * 2D baseline, +1D on four/-1D on four cancels out -- the same
+                # "no archetype starts with more or fewer total dice than any other" balance
+                # races.toml's own fantasy races already follow.
+                self.assertEqual(sum(race["skill_dice"].values()), 32)
+
+    def test_archetype_chargen_replaces_the_zombie_players_own_starting_gear(self):
+        character = {
+            "race": "Ex-Military",
+            "allocation": {"firearms": 5, "athletics": 5, "fortitude": 5},
+        }
+        dm = DMCore(EventBus(), scenario_name="rooftop", setting="Zombie", character=character)
+
+        player = dm.entities[dm.player_name]
+        # Replaced outright, not appended onto riley's own hand-authored characters.toml
+        # inventory (pistol/crowbar/first aid kit/pain pills).
+        self.assertEqual(player["inventory"], ["combat rifle", "crowbar"])
+        self.assertEqual(player["equipped"], {"primary": "combat rifle", "melee": "crowbar"})
+        self.assertEqual(player["skills"]["firearms"], {"dice": 8, "pips": 0})  # 3D + 5D
+
+    def test_archetype_chargen_boots_with_zero_validation_errors(self):
+        # Belt-and-suspenders against DM_Validation.py flagging the new starting_items/
+        # starting_equipped item names as unresolvable, or any other referential-integrity
+        # regression from this real, non-Fantasy chargen path.
+        errors = []
+        bus = EventBus()
+        bus.subscribe("log_error", errors.append)
+        character = {"race": "Medic", "allocation": {"medicine": 5, "charisma": 5, "observation": 5}}
+        DMCore(bus, scenario_name="rooftop", setting="Zombie", character=character)
+        self.assertEqual(errors, [])
+
+    def test_a_fantasy_race_never_touches_inventory_at_all(self):
+        # No Rules/Fantasy/races.toml race authors "starting_items" -- confirms the new
+        # field is purely additive and doesn't change existing Fantasy chargen behavior.
+        character = {"race": "elf", "allocation": {"arcane": 5, "stealth": 5, "observation": 5}}
+        dm = DMCore(EventBus(), scenario_name="arena", character=character)
+        # characters.toml's own hand-authored gladstone starting gear, untouched.
+        self.assertIn("longsword", dm.entities["gladstone"]["inventory"])
+
+
 class TestScenarioLocalEntities(unittest.TestCase):
     """!
     @brief A scenario file's own [[entity]]/[[entity_template]] tables (DM_Rules.py's
@@ -7559,11 +7620,11 @@ class TestEquipSlots(DMTestCase):
 
 
 class TestValidation(DMTestCase):
-    """DM_Validation.py's referential-integrity checks. Each synthetic-data test injects a
-    minimal bad entity/entity_template/location directly into self.dm_core's own dicts (rather
-    than authoring a throwaway TOML file) and re-runs validate_loaded_data() -- since the real
-    arena fixture is already proven clean below, any error captured after that must come from
-    the injected data."""
+    """DM_Validation.py's referential-integrity *and* field-shape/type checks. Each
+    synthetic-data test injects a minimal bad entity/entity_template/location directly into
+    self.dm_core's own dicts (rather than authoring a throwaway TOML file) and re-runs
+    validate_loaded_data() -- since the real arena fixture is already proven clean below, any
+    error captured after that must come from the injected data."""
 
     def test_real_shipped_data_boots_with_zero_validation_errors(self):
         # Every real scenario this repo ships, in both settings -- a regression guard that a
@@ -7693,6 +7754,210 @@ class TestValidation(DMTestCase):
         errors = self._capture("log_error")
         self.dm_core.validate_loaded_data()
         self.assertEqual(errors, [])
+
+    # --- Field shape/type -----------------------------------------------------------------
+
+    def test_scalar_field_type_checks(self):
+        self.dm_core.entities["bad_scalars_widget"] = {
+            "name": "bad_scalars_widget", "supertype": "object",
+            "max_hp": "twenty", "is_party": "yes", "description": 123,
+        }
+        errors = self._capture("log_error")
+        self.dm_core.validate_loaded_data()
+
+        for expected in ("max_hp should be a int/float", "is_party should be a bool", "description should be a str"):
+            self.assertTrue(any(expected in e for e in errors), f"missing error for {expected!r}")
+
+    def test_scalar_field_type_checks_tolerate_absent_fields(self):
+        # A field simply not being authored at all is never an error -- only the wrong type
+        # present is.
+        self.dm_core.entities["bare_widget"] = {"name": "bare_widget", "supertype": "object"}
+        errors = self._capture("log_error")
+        self.dm_core.validate_loaded_data()
+        self.assertEqual(errors, [])
+
+    def test_string_list_field_type_check(self):
+        self.dm_core.entities["bad_tags_widget"] = {
+            "name": "bad_tags_widget", "supertype": "object", "damage_tags": "slashing",
+        }
+        errors = self._capture("log_error")
+        self.dm_core.validate_loaded_data()
+        self.assertTrue(any("damage_tags should be a list of strings" in e for e in errors))
+
+    def test_dice_table_field_type_checks(self):
+        self.dm_core.entities["bad_damage_widget"] = {
+            "name": "bad_damage_widget", "supertype": "object",
+            "damage_value": {"dice": "two", "pips": 0, "bonus": []},
+        }
+        errors = self._capture("log_error")
+        self.dm_core.validate_loaded_data()
+        self.assertTrue(any("damage_value.dice should be a number" in e for e in errors))
+        self.assertTrue(any('damage_value.bonus should be a number or a "user.<rule>" string' in e for e in errors))
+
+    def test_dice_table_field_rejects_a_bare_non_user_prefixed_string(self):
+        # Only "user.<field>" strings are tolerated on dice/pips -- an arbitrary bad string
+        # (ex: a typo'd number) still has to be flagged.
+        self.dm_core.entities["typo_widget"] = {
+            "name": "typo_widget", "supertype": "object", "damage_value": {"dice": "two", "pips": 0},
+        }
+        errors = self._capture("log_error")
+        self.dm_core.validate_loaded_data()
+        self.assertTrue(any("damage_value.dice should be a number" in e for e in errors))
+
+    def test_dice_table_field_tolerates_the_user_weapon_dice_string_shape(self):
+        # techniques.toml's own "cleave" -- dice/pips resolved off the wielded weapon at roll
+        # time, a documented string shape, not a real mistake.
+        self.dm_core.entities["cleave_like"] = {
+            "name": "cleave_like", "supertype": "technique",
+            "damage_value": {"dice": "user.weapon.dice", "pips": "user.weapon.pips", "bonus": 0},
+        }
+        errors = self._capture("log_error")
+        self.dm_core.validate_loaded_data()
+        self.assertEqual(errors, [])
+
+    def test_skills_table_shape_check(self):
+        self.dm_core.entities["bad_skills_shape_widget"] = {
+            "name": "bad_skills_shape_widget", "supertype": "creature",
+            "skills": {"blades": {"dice": "five", "pips": 0}},
+        }
+        errors = self._capture("log_error")
+        self.dm_core.validate_loaded_data()
+        self.assertTrue(any("[entity.skills].blades.dice should be a number" in e for e in errors))
+
+    def test_equipped_table_shape_check(self):
+        self.dm_core.entities["bad_equipped_widget"] = {
+            "name": "bad_equipped_widget", "supertype": "creature", "equipped": {"rhand": 123},
+        }
+        errors = self._capture("log_error")
+        self.dm_core.validate_loaded_data()
+        self.assertTrue(any("[entity.equipped] should be a table of slot -> item name" in e for e in errors))
+
+    def test_attitudes_table_shape_checks(self):
+        self.dm_core.entities["bad_attitudes_widget"] = {
+            "name": "bad_attitudes_widget", "supertype": "creature",
+            "attitudes": {
+                "default": [0, 0],  # wrong length
+                "name": [{"gladstone": [0, "not a number", 0]}],
+            },
+        }
+        errors = self._capture("log_error")
+        self.dm_core.validate_loaded_data()
+        self.assertTrue(any(
+            "[entity.attitudes].default should be a list of exactly 3 numbers" in e for e in errors
+        ))
+        self.assertTrue(any(
+            "[[entity.attitudes.name]].gladstone[1] should be a number" in e for e in errors
+        ))
+
+    def test_attitudes_axes_allow_varied_values_only_on_entity_templates(self):
+        varied_axes = {"default": [{"min": -40, "max": 40}, 0, {"min": -40, "max": 40}]}
+        self.dm_core.entity_templates["template_with_varied_attitudes"] = {
+            "name": "template_with_varied_attitudes", "attitudes": varied_axes,
+        }
+        self.dm_core.entities["entity_with_varied_attitudes"] = {
+            "name": "entity_with_varied_attitudes", "supertype": "creature", "attitudes": varied_axes,
+        }
+        errors = self._capture("log_error")
+        self.dm_core.validate_loaded_data()
+
+        self.assertFalse(any("template_with_varied_attitudes" in e for e in errors))
+        self.assertTrue(any(
+            "entity_with_varied_attitudes" in e and "[0] should be a number" in e for e in errors
+        ))
+
+    def test_behavior_list_shape_checks(self):
+        self.dm_core.entities["bad_behavior_widget"] = {
+            "name": "bad_behavior_widget", "supertype": "creature",
+            "behavior": [
+                {"requirements": [{"field": "hp_per_remain"}], "action": "bite"},  # missing operator/value
+                {"requirements": [], "action": 123},
+            ],
+        }
+        errors = self._capture("log_error")
+        self.dm_core.validate_loaded_data()
+        self.assertTrue(any(
+            "requirements[0] should be a {field, operator, value} table" in e for e in errors
+        ))
+        self.assertTrue(any("[[entity.behavior]][1] action should be a string" in e for e in errors))
+
+    def test_ability_shape_checks_cover_targets_summon_and_materials(self):
+        self.dm_core.entities["bad_ability_widget"] = {
+            "name": "bad_ability_widget", "supertype": "creature",
+            "abilities": [{
+                "name": "bad_zap", "supertype": "innate", "subtype": "weapon", "skill": "arcane",
+                "targets": {"number": "one", "side": 5},
+                "summon": {"name": "wraith", "template": "generated_stranger"},  # both, not exactly one
+                "materials": [{"item": "iron filings", "quantity": "one"}],
+            }],
+        }
+        errors = self._capture("log_error")
+        self.dm_core.validate_loaded_data()
+
+        for expected in (
+            "targets.number should be a number", "targets.side should be a string",
+            "summon should author exactly one of \"name\"/\"template\"",
+            "materials[0].quantity should be a number",
+        ):
+            self.assertTrue(any(expected in e for e in errors), f"missing error for {expected!r}")
+
+    def test_ability_shape_checks_also_apply_to_a_standalone_ability_entity(self):
+        # A weapon/spell/technique catalog entity is itself ability-shaped at its own top
+        # level, not just when referenced from some other entity's "abilities" list.
+        self.dm_core.entities["bad_weapon"] = {
+            "name": "bad_weapon", "supertype": "object", "subtype": "weapon", "skill": "blades",
+            "range": "far",
+        }
+        errors = self._capture("log_error")
+        self.dm_core.validate_loaded_data()
+        self.assertTrue(any("entity 'bad_weapon' range should be a number" in e for e in errors))
+
+    def test_entity_template_generation_field_checks(self):
+        self.dm_core.entity_templates["bad_template"] = {
+            "name": "bad_template", "target_cr": "not player, party, or a number",
+            "cr_multiplier": "big", "hint": 5,
+        }
+        errors = self._capture("log_error")
+        self.dm_core.validate_loaded_data()
+
+        for expected in (
+            "target_cr should be a number", "cr_multiplier should be a number or a varied value",
+            "hint should be a string or a varied value",
+        ):
+            self.assertTrue(any(expected in e for e in errors), f"missing error for {expected!r}")
+
+    def test_entity_template_generation_fields_allow_varied_value_shapes(self):
+        self.dm_core.entity_templates["varied_template"] = {
+            "name": "varied_template", "target_cr": "party",
+            "cr_multiplier": {"min": 0.8, "max": 1.2},
+            "hint": [{"a stranger": 30}, {"a merchant": 30}],
+        }
+        errors = self._capture("log_error")
+        self.dm_core.validate_loaded_data()
+        self.assertEqual(errors, [])
+
+    def test_location_shape_checks(self):
+        self.dm_core.locations["bad_shape_location"] = {
+            "key": 123, "name": "Bad Shapes", "grid": {"x": "zero", "y": 0},
+            "exit": [{"destination": 5, "aliases": "not a list"}],
+            "start_room": "shapeless_room",
+            "rooms": {
+                "shapeless_room": {
+                    "key": "shapeless_room", "bands": "two", "enclosed": "yes",
+                    "exit": [{"destination": "shapeless_room", "band": "one"}],
+                },
+            },
+        }
+        errors = self._capture("log_error")
+        self.dm_core.validate_loaded_data()
+
+        for expected in (
+            "key should be a str", "grid should be a {x, y} table of numbers",
+            "[[location.exit]] destination should be a string",
+            "[[location.exit]] aliases should be a list of strings",
+            "bands should be a number", "enclosed should be a boolean",
+            "[[location.room.exit]] band should be a number",
+        ):
+            self.assertTrue(any(expected in e for e in errors), f"missing error for {expected!r}")
 
 
 class TestSaveLoad(DMTestCase):
