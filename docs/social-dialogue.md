@@ -24,23 +24,29 @@ phrase per axis.
 descriptive TOML fields (`description`, `qualities`, `memories`, `quotes`) plus, when
 `toward_name` is given, the attitude sentence above — deliberately excluding mechanical data.
 The one genuinely dynamic exception: if the entity's own `prompt_directive` (a plain
-`{"text", "source"}` dict) is set, its text is appended too — "Currently privately convinced
-(planted by ...): '...'". This is the general "inject material into an NPC's prompt" mechanism:
-`resolution/Social_Resolution.py`'s `set_prompt_directive(entities, entity_name, text,
-source_name)` writes it, plugged into the `on_pass`/`on_fail` program language (see
-"Action resolution") as a new `inject_directive` op
+`{"text", "source", "expires_in_blocks"?}` dict) is set, its text is appended too — "Currently
+privately convinced (planted by ...): '...'". This is the general "inject material into an
+NPC's prompt" mechanism: `resolution/Social_Resolution.py`'s `set_prompt_directive(entities,
+entity_name, text, source_name, duration_blocks=None)` writes it, plugged into the
+`on_pass`/`on_fail` program language (see "Action resolution") as an `inject_directive` op
 (`resolution/Program_Interpreter.py`) — `spells.toml`'s `suggestion` is the shipped example,
-whose own `on_pass = { do = "inject_directive", entity = "target" }` omits a literal `text` so
-the op falls back to `ctx["input"]`, the caster's own raw turn text (threaded in by
-`DM_Core.py`'s `_run_ability_outcome_program` specifically for this — the `[entity.test]`
+whose own `on_pass = { do = "inject_directive", entity = "target", duration = 1 }` omits a
+literal `text` so the op falls back to `ctx["input"]`, the caster's own raw turn text (threaded
+in by `DM_Core.py`'s `_run_ability_outcome_program` specifically for this — the `[entity.test]`
 attachment point is *not* threaded the same way, since an item/lock has no NPC prompt to affect).
 Because `describe_character` already backs every NPC-facing prompt except live combat/behavior-
 turn narration (the `scenario_loaded` roster, `DefenderDetailsEffect` on every resolved roll,
 and free-form dialogue's own `persona` field, `DM_Dialogue.py`'s `_resolve_dialogue`), a planted
 directive reaches the very turn it lands *and* every later dialogue turn with that NPC, for free.
-One directive at a time (a later plant overwrites, never stacks); no expiry — there's no
-time-of-day/turn clock yet to hang a duration off of (see "Downtime"), so it persists until
-overwritten or manually cleared (ADaM's own ad hoc entity-edit path already can, incidentally).
+One directive at a time (a later plant overwrites, never stacks). `duration_blocks` (in
+block-clock blocks, see "Downtime") is optional — an authored `inject_directive`'s own
+`"duration"` field sets it (`suggestion`'s own `duration = 1` matches its source rule's "a short
+while" flavor); absent means no expiry at all, persisting until overwritten or manually cleared
+(ADaM's own ad hoc entity-edit path already can, incidentally). `DMCore.advance_blocks`'s own
+`_expire_prompt_directives` (`DM_Time.py`) decrements every planted directive's countdown by
+however many blocks just elapsed and clears it once that reaches zero — the same bespoke,
+bolted-on-per-mechanism countdown idiom `"summon_expires_in"`/`"surprised"` already use, rather
+than the (never-enforced) `duration` field a `[[condition]]` itself carries.
 Round-trips through save/load the same unconditional per-instance way `current_language` already
 does (`DM_Persistence.py`).
 `DMCore.__init__` builds this roster into the `scenario_loaded` payload; `_on_turn_detected` also
@@ -58,9 +64,14 @@ per-axis deltas (`combat_hit`, `theft`, `favor`, `shared_enemy` today) — appli
 `magnitude = 1.0` (ex: a killing blow, or the single most valuable item `items.toml` authors);
 an ordinary occurrence scales down from there. Each event authors only `disposition`/`threat`/
 `familiarity` deltas now — `shared_enemy` in particular lost its only two non-disposition deltas
-(`trust`/`respect`) when those axes were dropped, so it's disposition-only today; `favor` lost
-its single largest value (`obligation = 20`), leaving a comparatively modest `familiarity` bump
-in its place — an accepted consequence of the axis collapse, not rebalanced to compensate.
+(`trust`/`respect`) when those axes were dropped, so it's disposition-only today, deliberately
+smaller than `favor`'s own deltas ("watching someone fight your enemy is a lighter touch than
+being on the receiving end of a real gift" — `rules.toml`'s own comment). `favor` itself did
+lose its single largest value (`obligation = 20`) in the collapse, leaving it noticeably weaker
+than its own negative mirror, `theft` — since fixed by restoring roughly that lost weight into
+`disposition`/`familiarity` instead, so `favor` now mirrors `theft`'s own magnitude exactly
+(give vs. take being the direct positive/negative mirror of the same mechanic, with no
+principled reason for one to carry less emotional weight than the other).
 `DM_Social.py`'s `nudge_attitude_from_event(entity_name, toward_name, event_name, magnitude)`
 looks up the named event and writes the scaled deltas into their own `action_attitude_deltas`
 accumulator (`get_attitude` sums it elementwise alongside `attitude_deltas`, same as before) — a
@@ -95,10 +106,20 @@ target are already fully authored via `[[entity.behavior]]`/`[entity.attitudes]`
 decided it was attacking in the first place, so an automatic reciprocal nudge on the attacker's
 own side would be redundant with something already hand-authored.
 
-`theft`/`favor` stay player-only: both fire off `DM_Inventory.py`'s `_resolve_transfer_intent`,
-which only ever runs from the player's own `take`/`give` intents — there's no
-`[[entity.behavior]]` action type for an NPC to autonomously steal or gift something yet.
-`_resolve_transfer_intent` fires
+`theft`/`favor` aren't player-only anymore: `DM_Inventory.py`'s `_resolve_transfer_intent` still
+covers the player's own `take`/`give` intents, and `DM_Combat.py`'s `TRANSFER_ACTIONS`/
+`_resolve_transfer_behavior` cover the NPC side — reserved `[[entity.behavior]]` action names
+`"steal"`/`"gift"` (parallel to `MOVEMENT_ACTIONS`' own `"advance"`/`"retreat"`), naming which
+item to move via the behavior entry's own `"item"` field (`"currency"`, the same reserved
+sentinel `_resolve_transfer_intent` already uses, moves currency instead — `"amount"` caps how
+much, since `transfer_currency`'s own unset default is "everything the source has," too
+punishing for an ambush the player didn't choose to walk into). Fires the identical
+`theft`/`favor` nudge either way, just with entity_name (not the player) as the mover.
+`creatures.toml`'s `"pickpocket"` is the shipped worked example — no attack ability at all,
+just a `"steal"` (a modest, capped sum) behavior entry that gives way to `"retreat"` the moment
+it actually takes a hit.
+
+On the player's own side, `_resolve_transfer_intent` fires
 `theft` (a `"take"` that actually moved something) or `favor` (a `"give"`) once a real transfer
 completes against a real, distinct, *conscious* target (the shared HP gate above is what makes
 `theft` specifically require the victim to actually be aware it's happening, rather than looting
@@ -166,9 +187,13 @@ negative/positive at `sentiment_confidence_threshold`'s own floor; the richer pe
 (ex: `"negative in tone"`/`"neutral or informational"`/`"positive in tone"` for sentiment) plus a
 dialogue-framed hypothesis template were tuned against held-out sets spanning hostile/warm/
 informational/sarcastic/valence-crossed lines and resolved this without needing to raise the
-confidence threshold at all — `threat`/`familiarity` were validated less exhaustively than
-disposition (a smaller, though still adversarial, test battery), which is worth keeping in mind
-if either axis's real-play behavior looks off. Each `classify_*` method returns `(label, score)`
+confidence threshold at all — `threat`/`familiarity` were originally validated less exhaustively
+than disposition by hand; `test_unit.py`'s `TestGameBoot` now carries a real, live-model
+regression test for each (the same deliberately valence-crossed cases this section's own tuning
+notes already named — "your skill with that blade is terrifying..." for threat, an "I've known
+you my whole life" vs. "I don't know you" pair for familiarity), so a future embedding/label/
+template change that quietly breaks either axis gets caught the same way the sentiment axis's
+own regression test already catches drift there. Each `classify_*` method returns `(label, score)`
 — normalized back to plain `"negative"`/`"positive"`, and the winning label's own entailment
 probability — gated at the shared `sentiment_confidence_threshold` (0.5, "meaningfully more
 confident than the ~0.33 a 3-way coin-flip would give") and short-circuited to `(None, score)`

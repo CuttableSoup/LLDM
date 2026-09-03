@@ -184,8 +184,7 @@ class RulesMixin(DMCoreProtocol):
                     self.event_bus.publish("log_error", f"Error loading {filename}: {e}")
 
         # A flat set of every ability name appearing in any [[skill]]'s own "abilities" field --
-        # a skill-listed ability is usable by any entity, no ownership check at all (see
-        # docs/design/skill_effect_language.md's "Universal (untrained) abilities"). Built once
+        # a skill-listed ability is usable by any entity, no ownership check at all. Built once
         # here, alongside self.skills itself, so resolve_named_ability's own skill-list fallback
         # (DM_Combat.py) stays a cheap membership check rather than a per-turn scan over every
         # loaded skill.
@@ -947,9 +946,9 @@ class RulesMixin(DMCoreProtocol):
 
     def _run_on_enter_programs(self):
         """!
-        @brief Runs every present scene entity's own [entity.on_enter] program (see
-            docs/design/skill_effect_language.md's "Attachment points") -- an entity opts in on
-            its own template; nothing fires for one that doesn't declare it. No "actor" role for
+        @brief Runs every present scene entity's own [entity.on_enter] program -- an entity
+            opts in on its own template; nothing fires for one that doesn't declare it. No
+            "actor" role for
             this trigger (same as on_round_upkeep) -- there's no single entity this is "done by",
             it's a passive reaction to the scene itself being entered. Called once per
             _enter_location, after this location/room's own [[location.encounter]] roll.

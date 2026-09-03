@@ -1,12 +1,20 @@
 import resolution.Combat_Resolution as Combat_Resolution
 from resolution.Challenge_Rating import calculate_challenge_rating, calculate_party_challenge_rating, skill_rating
-from dm.DM_ActionOutcome import DamageEffect, MovementOutcome, rolled_outcome_from_roll
+from dm.DM_ActionOutcome import DamageEffect, MovementOutcome, TransferOutcome, rolled_outcome_from_roll
+from dm.DM_Inventory import SIGNIFICANT_VALUE
 from dm.DM_Types import DMCoreProtocol
 
 # Reserved [[entity.behavior]] action names -- resolve_behavior_action routes these straight to
 # move_toward_or_away (DM_Movement.py) instead of resolve_named_ability, so no real ability may
 # ever be named "advance"/"retreat".
 MOVEMENT_ACTIONS = {"advance", "retreat"}
+
+# Reserved [[entity.behavior]] action names for an autonomous item transfer -- routed straight
+# to _resolve_transfer_behavior instead of resolve_named_ability, so no real ability may ever be
+# named "steal"/"gift" either. Mirrors DM_Inventory.py's own player-driven "take"/"give", just
+# entity-initiated: "steal" moves the behavior entry's own "item" from target_name's inventory
+# to entity_name's; "gift" moves it the other way.
+TRANSFER_ACTIONS = {"steal", "gift"}
 
 
 class CombatMixin(DMCoreProtocol):
@@ -23,9 +31,13 @@ class CombatMixin(DMCoreProtocol):
         wrapper too) to reuse the same {field, operator, value} requirement engine [[status]]
         uses; resolve_behavior_action calls self.move_toward_or_away (MovementMixin) for a
         deliberate `action = "advance"`/`"retreat"` behavior entry, or as its own fallback
-        when a chosen attack can't currently reach its target. Inherits DMCoreProtocol
-        purely so type checkers can resolve these shared attributes/cross-mixin methods --
-        see DM_Types.py.
+        when a chosen attack can't currently reach its target; self.is_action_prevented
+        (StatusMixin) to skip its turn entirely when it can't act at all; and, for a
+        deliberate `action = "steal"`/`"gift"` behavior entry, self.transfer_item
+        (InventoryMixin) plus self.nudge_attitude_from_event (SocialMixin) to fire the same
+        "theft"/"favor" nudge the player's own "take"/"give" already fires. Inherits
+        DMCoreProtocol purely so type checkers can resolve these shared attributes/cross-mixin
+        methods -- see DM_Types.py.
     """
 
     def resolve_bonus(self, attacker_name, bonus):
@@ -315,9 +327,8 @@ class CombatMixin(DMCoreProtocol):
             the shared "which specific thing is entity_name using" lookup for both an attack's
             own damage roll (DM_Core.py's _apply_damage_if_hit, which separately re-checks
             "damage_value" in ability before dealing damage) and its post-roll on_pass/on_fail
-            program lookup (see docs/design/skill_effect_language.md's "Universal (untrained)
-            abilities" -- the "merge the equipped-weapon/owned-ability lookup and the post-roll
-            on_pass/on_fail lookup into one method" note). Deliberately no "damage_value" gate
+            program lookup -- one method covering both the equipped-weapon/owned-ability
+            lookup and the post-roll on_pass/on_fail lookup. Deliberately no "damage_value" gate
             here anymore -- a purely non-damaging owned ability (ex: a trained, non-universal
             maneuver with only an on_pass condition) has to be findable here too, not just a
             weapon. An equipped weapon matching skill_name always wins over an ability/technique
@@ -412,8 +423,7 @@ class CombatMixin(DMCoreProtocol):
             find_attack_ability's equipped-weapon-first priority -- the exact ability is
             already known here, rather than inferred from a skill name afterward.
 
-            Falls back to a *universal* ability (see docs/design/skill_effect_language.md's
-            "Universal (untrained) abilities") if entity_name doesn't own ability_name itself --
+            Falls back to a *universal* ability if entity_name doesn't own ability_name itself --
             any name appearing in some [[skill]]'s own "abilities" field (self.universal_abilities,
             built once at load time -- DM_Rules.py's load_rules) is usable by any entity, no
             ownership check at all, the tabletop "you don't have to be trained to try a combat
@@ -510,7 +520,11 @@ class CombatMixin(DMCoreProtocol):
             declaration-order list choose_behavior already walks -- see arena.toml's
             wolf/crypt.toml's giant spider for the shipped example) or into deliberately
             closing distance
-            regardless of what's in range.
+            regardless of what's in range. `action = "steal"`/`"gift"` are reserved the same
+            way -- routed to _resolve_transfer_behavior instead, an autonomous item transfer
+            (the behavior entry's own "item" field names what moves) that fires the same
+            "theft"/"favor" attitude nudge DM_Inventory.py's player-driven "take"/"give"
+            already fires, just entity-initiated.
 
             Otherwise, range-checked exactly like the player's own attacks (see is_in_range
             in DM_Movement.py) -- but unlike a denied player attack (which just fails with
@@ -522,15 +536,21 @@ class CombatMixin(DMCoreProtocol):
         @param entity_name The name of the acting entity (ex: a wolf).
         @param target_name The name of the entity being acted against (ex: the player).
         @return A MovementOutcome if the chosen behavior was a deliberate move, or was an
-            attack that had to close distance instead; a RolledOutcome (with a DamageEffect
-            on a successful hit) on a normal attack; or None if no behavior currently
-            matches, its named action isn't actually one of the entity's own abilities, or a
+            attack that had to close distance instead; a TransferOutcome if it was a "steal"/
+            "gift"; a RolledOutcome (with a DamageEffect on a successful hit) on a normal
+            attack; or None if entity_name currently can't act at all (is_action_prevented,
+            ex: "pinned"), no behavior currently matches, its named action isn't actually one
+            of the entity's own abilities, a "steal"/"gift" named an item not actually present
+            in the source's own inventory, or a
             move (deliberate or fallback) had nowhere valid to happen (ex: target_name isn't
             a real entity). A successful hit also nudges target_name's own attitude toward
             entity_name (DM_Core.py's _nudge_combat_hit_attitude -- see docs/social-dialogue.md's
             "Action-driven attitude drift"), the same "combat_hit"/"shared_enemy" shape the
             player's own attacks already trigger.
         """
+        if self.is_action_prevented(entity_name):
+            return None
+
         behavior = self.choose_behavior(entity_name, target_name)
         if behavior is None:
             return None
@@ -540,6 +560,11 @@ class CombatMixin(DMCoreProtocol):
         if action_name in MOVEMENT_ACTIONS:
             movement = self.move_toward_or_away(entity_name, target_name, action_name)
             return self._movement_outcome(entity_name, action_name, movement)
+
+        if action_name in TRANSFER_ACTIONS:
+            return self._resolve_transfer_behavior(
+                entity_name, target_name, action_name, behavior.get("item"), behavior.get("amount"),
+            )
 
         ability = self.resolve_named_ability(entity_name, action_name)
         if ability is None:
@@ -585,6 +610,58 @@ class CombatMixin(DMCoreProtocol):
             entity=entity_name, direction=direction,
             opponent=movement.get("opponent"), before=movement.get("before"), after=movement.get("after"),
         )
+
+    def _resolve_transfer_behavior(self, entity_name, target_name, direction, item_name, amount=None):
+        """!
+        @brief Resolves a behavior entry's own "steal"/"gift" action -- an NPC autonomously
+            moving one named item (or currency) between itself and target_name, via the same
+            transfer_item/transfer_currency primitives DM_Inventory.py's own player-driven
+            "take"/"give" already use (_resolve_transfer_intent), just entity-initiated
+            instead of player-initiated. "steal" moves item_name from target_name's own
+            inventory to entity_name's; "gift" moves it the other way. item_name == "currency"
+            (the same reserved sentinel _resolve_transfer_intent already uses) moves currency
+            instead of an inventory item -- amount (from the behavior entry's own "amount"
+            field) caps how much, same as transfer_currency's own default (None moves
+            everything the source has, which a hand-authored pickpocket-style behavior should
+            usually override with a modest number rather than cleaning the target out in one
+            swipe). Fires the same "theft"/"favor" attitude nudge the player-driven path fires
+            too -- target_name's own attitude toward entity_name, scaled by the moved item's
+            own TOML "value" (or the currency amount actually moved) against
+            SIGNIFICANT_VALUE, the identical reference scale (DM_Inventory.py) -- an NPC
+            pickpocketing the player should sour the player's opinion of *them* exactly the
+            way the reverse already would.
+        @param entity_name The acting entity (ex: a pickpocket NPC).
+        @param target_name The other party (ex: the player).
+        @param direction "steal" or "gift".
+        @param item_name The item entity's own name, or "currency", from the behavior entry's
+            own "item" field.
+        @param amount Only meaningful for item_name == "currency" -- how much to move; None
+            moves everything the source has.
+        @return A TransferOutcome once something actually moved; None (the same "nothing valid
+            to happen" precedent move_toward_or_away's own fallback shares) if item_name is
+            missing entirely, isn't actually present in the source's own inventory, or the
+            source has no currency to move -- a "gift" naming something this entity doesn't
+            have, or a "steal" naming something target_name doesn't have, simply does nothing
+            rather than erroring.
+        """
+        if not item_name:
+            return None
+        source_name = target_name if direction == "steal" else entity_name
+        destination_name = entity_name if direction == "steal" else target_name
+
+        if item_name == "currency":
+            if self.entities.get(source_name, {}).get("currency", 0) <= 0:
+                return None
+            value = self.transfer_currency(source_name, destination_name, amount)
+        else:
+            if item_name not in self.entities.get(source_name, {}).get("inventory", []):
+                return None
+            self.transfer_item(source_name, destination_name, item_name)
+            value = self.entities.get(item_name, {}).get("value", 0)
+
+        event_name = "theft" if direction == "steal" else "favor"
+        self.nudge_attitude_from_event(target_name, entity_name, event_name, min(1.0, value / SIGNIFICANT_VALUE))
+        return TransferOutcome(entity=entity_name, direction=direction, item_name=item_name, target=target_name)
 
     def _best_damage_dice_pips(self, entity_name):
         """!

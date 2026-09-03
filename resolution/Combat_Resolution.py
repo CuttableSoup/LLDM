@@ -194,9 +194,9 @@ def get_comparable_value(entities, entity_name, field, opponent_name=None):
         condition_name = field[len("opponent_has_condition:"):]
         return has_condition(entities, opponent_name, condition_name)
     if field in Social_Resolution.ATTITUDE_AXES:
-        # entity_name's own attitude *toward* opponent_name -- ex:
-        # docs/design/skill_effect_language.md's own "target.threat < -50" reads how the
-        # checked entity feels about whoever it's being checked against, re-derived live (not
+        # entity_name's own attitude *toward* opponent_name -- ex: a program condition like
+        # "target.threat < -50" reads how the checked entity feels about whoever it's being
+        # checked against, re-derived live (not
         # cached) so an earlier step's own "attitude" op in the same program is already
         # reflected here. None with no opponent_name -- there's no one for this entity to have
         # an attitude toward in that case.
@@ -292,8 +292,7 @@ def evaluate_statuses(entities, rules, event_bus, entity_name, trigger):
 def apply_damage(entities, rules, event_bus, entity_name, amount, actor_name=None):
     """!
     @brief Subtracts damage from an entity's current HP, floored at 0, evaluates on_damage
-        statuses, and runs entity_name's own [entity.on_damage] program (see
-        docs/design/skill_effect_language.md's "Attachment points") -- pure-to-pure, right
+        statuses, and runs entity_name's own [entity.on_damage] program -- pure-to-pure, right
         alongside evaluate_statuses, never lifted up to a DMCore wrapper.
     @param entities The live entities dict.
     @param rules The loaded rules dict.

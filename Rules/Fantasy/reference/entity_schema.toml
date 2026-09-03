@@ -546,12 +546,21 @@ difficulty = 4                              # Same resolve_action semantics as [
 # engine [[status]] does (entity_matches_requirements) -- "field" can be derived
 # ("hp_per_remain", "distance_to_target" -- see below) or any direct attribute. "action" is
 # either one of this entity's *own* abilities by name (resolved via resolve_named_ability +
-# select_ability_skill, not a bare skill), or one of two reserved movement words,
+# select_ability_skill, not a bare skill), or one of a handful of reserved words:
 # "advance"/"retreat" (MOVEMENT_ACTIONS, DM_Combat.py), routed to move_toward_or_away
 # (DM_Movement.py) instead -- ex: creatures.toml's wolf/giant spider both check a low-hp
 # "retreat" entry ahead of their own attack entry, the explicit, opt-in way a creature values
 # its own life and flees rather than fights to the death; an undead/construct with no such
-# entry just keeps attacking regardless of its own HP. An entity with no matching behavior (or
+# entry just keeps attacking regardless of its own HP -- or "steal"/"gift" (TRANSFER_ACTIONS,
+# DM_Combat.py), routed to _resolve_transfer_behavior instead -- an autonomous item transfer
+# rather than an attack or a move, firing the same "theft"/"favor" attitude nudge
+# DM_Inventory.py's player-driven "take"/"give" already fires. Two behavior-entry-only fields
+# apply just to these: "item" (a real item entity's own name, or the reserved sentinel
+# "currency" -- the same one map_to_item's own currency-synonym check resolves to) names what
+# moves; "amount" (currency only) caps how much -- absent means transfer_currency's own
+# default, everything the source has, likely too punishing for an ambush the player didn't
+# choose to walk into (ex: creatures.toml's own "pickpocket", the shipped worked example,
+# authors amount = 10). An entity with no matching behavior (or
 # no behavior list at all) simply doesn't act that round -- but an attack entry that *did*
 # match, whose target is currently out of its own range, doesn't just do nothing:
 # resolve_behavior_action falls back to "advance" on its own in that case, no explicit

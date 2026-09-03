@@ -110,11 +110,7 @@ elemental` (used directly by `test_unit.py`'s damage-reduction tests). An entity
 scenario files (ex: `wolf` between `arena.toml`/`field.toml`) is kept in sync by hand — no
 single source of truth, the tradeoff self-containment makes on purpose. Items are out of scope
 for this — a scenario's NPCs can still reference a shared item (ex: `field.toml`'s `bandit`
-names `items.toml`'s `short bow`). One consequence: the rename collision check in
-`apply_character_creation` runs *before* `load_scenario_definition`, so a chosen name colliding
-with a scenario-local entity (ex: naming yourself "wolf" while playing `arena`) is **not**
-caught the way colliding with `gladstone`/`fire elemental` still is —
-`TestCharacterCreationRename`'s collision test picks `fire elemental` for exactly this reason.
+names `items.toml`'s `short bow`).
 
 `DMCore.__init__(event_bus, scenario_name="arena")` loads via `load_scenario_definition`, which
 raises `FileNotFoundError` for an unknown name (fatal on purpose — an empty `self.scenario`
@@ -169,10 +165,17 @@ re-instancing for this reason (see "Saving and loading").
 ## Random encounters
 
 `[[location.encounter]]` (or `[[location.room.encounter]]`, same shape) is a weighted-choice
-table resolved once, `on_enter`, every time its own location/room is entered —
-`DM_Encounters.py`'s `EncounterMixin`, called from `_enter_location`. `trigger` is always
-`"on_enter"` today (a repeating per-turn `"ambient"` roll is a deferred, undesigned extension).
-`encounter` is the exact same `[ { "choice" = weight }, ... ]` shape `NPC_Generation.py`'s
+table, gated by its own `trigger`: `"on_enter"` resolves once, every time its own location/room
+is entered — `DM_Encounters.py`'s `EncounterMixin`, called from `_enter_location`.
+`"ambient"` instead re-rolls once every real player turn for as long as the player stays there
+(`_resolve_ambient_encounter`, called from `DM_Core.py`'s `_on_turn_detected` before that
+turn's own action(s) resolve) — never while a hostile is already present
+(`_any_hostile_present`), since an ambient beat piling a second, uninvited fight on top of an
+active one would be nonsensical. There's no separate probability gate layered on top of an
+`"ambient"` table beyond its own weighted choices — keep `"nothing"` heavily weighted, or it'll
+fire far more often than a one-off `"on_enter"` table ever would (see
+`reference/location_schema.toml`'s own worked example). `encounter` is the exact same
+`[ { "choice" = weight }, ... ]` shape `NPC_Generation.py`'s
 `resolve_varied_value` already resolves for an `[[entity_template]]`'s own `hint`/
 `qualities.race` (see "NPC generation") — reused directly, not a new probability mechanism, and
 rolled fresh every visit rather than instanced-once-and-cached the way `visited_rooms` treats
@@ -187,6 +190,7 @@ reserved key `"nothing"` — a deliberate no-op, no entity, no narration; (3) ot
 string itself is a flavor narration beat, no entity created (same shape ad hoc generation's own
 `describe_scenery` already produces). Publishes `encounter_triggered` either way (skipped
 entirely for a `"nothing"` result), narrated by `LLMCore.generate_encounter_response` — the one
-narration trigger that's never a response to something the player did; it fires as a side effect
-of simply arriving somewhere.
+narration trigger that's never a direct response to something the player *typed*; an
+`"on_enter"` roll fires as a side effect of simply arriving somewhere, an `"ambient"` one as a
+side effect of simply taking a turn while already there.
 

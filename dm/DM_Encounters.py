@@ -29,8 +29,9 @@ class EncounterMixin(DMCoreProtocol):
     def _resolve_location_encounter(self, table):
         """!
         @brief Resolves every [[location.encounter]]/[[location.room.encounter]] entry on
-            table whose own "trigger" is "on_enter" -- the only trigger this v1 shape supports
-            ("ambient", a repeating per-turn roll, is deferred -- see location_schema.toml).
+            table whose own "trigger" is "on_enter" -- checked once, the moment this location/
+            room is entered. See _resolve_ambient_encounter for the "ambient" (repeating
+            per-turn) trigger this table can carry instead.
         @param table The now-active location's own table (freeform) or its now-active room's
             own table (room-based) -- whichever _enter_location just populated. A no-op if
             table is falsy (ex: a brand-new location with no [[location.room]] entered before
@@ -40,6 +41,29 @@ class EncounterMixin(DMCoreProtocol):
             return
         for entry in table.get("encounter", []):
             if entry.get("trigger") == "on_enter":
+                self._resolve_one_encounter(entry)
+
+    def _resolve_ambient_encounter(self):
+        """!
+        @brief Rolls every [[location.encounter]]/[[location.room.encounter]] entry on the
+            *current* location/room's own table whose own "trigger" is "ambient" -- a
+            repeating per-turn roll, unlike "on_enter"'s own once-per-arrival check
+            (_resolve_location_encounter). Called once per real player turn
+            (_on_turn_detected, DM_Core.py, right after clauses are confirmed non-empty),
+            never while a hostile is already present (_any_hostile_present) -- an ambient
+            flavor beat piling a second, uninvited fight on top of an already-active one would
+            be nonsensical, the same "don't interrupt what's already happening" reasoning
+            grid travel/rest's own hostile-block pause already follows elsewhere for a
+            different kind of interruption. Frequency control is entirely the authored
+            table's own job (ex: "nothing" at a heavy weight) -- no separate probability gate
+            layered on top, the same "the weighted-choice table already decides how often"
+            precedent [[location.encounter]] already sets for "on_enter".
+        """
+        table = self._current_room() or self.locations.get(self.current_location_key, {})
+        if not table or self._any_hostile_present():
+            return
+        for entry in table.get("encounter", []):
+            if entry.get("trigger") == "ambient":
                 self._resolve_one_encounter(entry)
 
     def _resolve_one_encounter(self, entry):

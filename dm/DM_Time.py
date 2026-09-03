@@ -8,8 +8,9 @@ class TimeMixin(DMCoreProtocol):
         self.scenario_entities/self.event_bus/self.roll_dice/self.apply_healing/
         self.pending_downtime/self._is_party_member/self.get_current_hp/
         self._current_environment/self._resolve_environment_block/
-        self._any_hostile_present/self._resume_pending_downtime, set up by DMCore.__init__ or
-        implemented by DM_Travel.py/DM_Core.py). See docs/downtime.md for the design this
+        self._any_hostile_present/self._resume_pending_downtime/self.apply_downtime_upkeep,
+        set up by DMCore.__init__ or implemented by DM_Travel.py/DM_Core.py/DM_Status.py). See
+        docs/downtime.md for the design this
         implements: self.current_block is a single monotonic counter of every 8-hour (by
         default) "block" elapsed since the scenario started -- round-tripped through
         save_game/load_game the same way round_number already is (see DM_Persistence.py) --
@@ -63,12 +64,39 @@ class TimeMixin(DMCoreProtocol):
         @brief Advances the block clock by blocks (floored at 0 -- there's no such thing as
             time moving backward). The one and only place self.current_block is ever
             mutated, mirroring round_number's own single incrementing site
-            (_resolve_combat_round, DM_Combat.py).
+            (_resolve_combat_round, DM_Combat.py). Also expires any planted prompt_directive
+            whose own countdown runs out this many blocks (_expire_prompt_directives) -- the
+            one other piece of state that ticks against this same clock.
         @param blocks How many blocks elapse.
         @return The resulting get_time_state().
         """
-        self.current_block += max(0, blocks)
+        blocks = max(0, blocks)
+        self.current_block += blocks
+        self._expire_prompt_directives(blocks)
         return self.get_time_state()
+
+    def _expire_prompt_directives(self, blocks):
+        """!
+        @brief Decrements every entity's own planted prompt_directive's "expires_in_blocks"
+            (if it has one) by blocks elapsed, clearing the directive entirely once it reaches
+            0 or below. Social_Resolution.py's set_prompt_directive plants a directive with no
+            expiry at all by default (persists until overwritten or manually cleared, exactly
+            as before this existed); an authored "inject_directive" program op can instead give
+            it a real "duration" in blocks -- the same bespoke-countdown idiom
+            "summon_expires_in"/"surprised" already use, rather than the (never-enforced)
+            "duration" field a [[condition]] itself carries (see docs/combat.md's "Status and
+            conditions").
+        @param blocks How many blocks just elapsed.
+        """
+        if blocks <= 0:
+            return
+        for entity in self.entities.values():
+            directive = entity.get("prompt_directive")
+            if not directive or "expires_in_blocks" not in directive:
+                continue
+            directive["expires_in_blocks"] -= blocks
+            if directive["expires_in_blocks"] <= 0:
+                entity["prompt_directive"] = None
 
     def rest(self, blocks=1):
         """!
@@ -145,9 +173,12 @@ class TimeMixin(DMCoreProtocol):
     def _finish_pending_rest(self):
         """!
         @brief Completes a self.pending_downtime rest once every block has cleared without
-            interruption -- the actual healing roll, deferred until now instead of running
-            right after a single bulk advance_blocks call. Clears self.pending_downtime first,
-            same reasoning _finish_pending_travel follows.
+            interruption -- the actual fortitude-scaled party healing roll, plus
+            apply_downtime_upkeep's own condition-driven tick (ex: a regenerating creature's
+            own upkeep_heal, otherwise only ever applied mid-combat) for every living scene
+            entity, deferred until now instead of running right after a single bulk
+            advance_blocks call. Clears self.pending_downtime first, same reasoning
+            _finish_pending_travel follows.
         @return {"interrupted": False, "healed": {...}, "blocks_spent": int, "time": {...}} --
                 exactly the fields intents/rest.py's narrate_rest expects, plus "blocks_spent"
                 for load-bearing use by the resume path (DM_Core.py's _resume_pending_downtime).
@@ -169,4 +200,7 @@ class TimeMixin(DMCoreProtocol):
             )
             remaining_hp = self.apply_healing(entity_name, amount)
             healed[entity_name] = {"healed": amount, "remaining_hp": remaining_hp}
+
+        self.apply_downtime_upkeep(blocks)
+
         return {"interrupted": False, "healed": healed, "blocks_spent": blocks, "time": time_state}

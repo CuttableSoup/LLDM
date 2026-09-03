@@ -1,7 +1,7 @@
 # Universal (untrained) abilities -- standalone [[entity]] catalog entries any entity may
 # attempt via a skill's own "abilities" field (see skills.toml's "athletics"/"intimidation"
-# entries and docs/design/skill_effect_language.md's "Universal (untrained) abilities"), the
-# same catalog shape techniques.toml already uses for "cleave", just not referenced from any
+# entries), the same catalog shape techniques.toml already uses for "cleave", just not
+# referenced from any
 # particular entity's own "abilities" list. Each one's on_pass/on_fail program is what actually
 # closes the "22 dead skills" gap for the skill it's listed under -- a bare, unnamed use of the
 # skill still resolves as a plain effect-less roll (see resolve_named_ability's own exact-name-
@@ -65,7 +65,7 @@ description = "A leg sweep that knocks an opponent off their feet."
 # naming a live wolf target (ex: "I trip the wolf") purely because that spell's own name is
 # saturated with the literal word "wolf" -- the same lexical-magnetism risk blades' own
 # "attack the creature"/"attack the creature with my weapon" keywords (skills.toml) were added
-# to close, and the one docs/design/skill_effect_language.md's own "Open questions" anticipated.
+# to close, and a risk already anticipated for any keyword-driven catalog match.
 keywords = [ "trip", "sweep their legs", "knock them down", "leg sweep", "trip the creature" ]
 skill = [ "athletics" ]
 range = 0
@@ -140,12 +140,11 @@ skill = [ "athletics" ]
 range = 0
 # Only actually lands if the target is already grappled -- the roll itself always happens
 # regardless (this engine has no mechanism to gate an ability *attempt* on the target's own
-# state, only its on_pass/on_fail effect -- see docs/design/skill_effect_language.md's own
-# "Choosing a mechanism"), so attempting to pin someone who isn't grappled just wastes the
-# action; no "else" branch means exactly that -- a quiet no-op, not a wasted roll.
-# "pinned" (rules.toml) is a hard dice penalty, the closest this engine's own condition system
-# (a flat roll modifier, never an action-preventing status -- see CLAUDE.md's "Status and
-# conditions") gets to Pathfinder's own true "helpless" pinned condition.
+# state, only its on_pass/on_fail effect), so attempting to pin someone who isn't grappled
+# just wastes the action; no "else" branch means exactly that -- a quiet no-op, not a wasted roll.
+# "pinned" (rules.toml) is both a hard dice penalty and prevents_action = true -- the target
+# genuinely can't act at all while pinned, matching Pathfinder's own true "helpless"-adjacent
+# pinned condition, not just a penalized roll.
 on_pass = { if = "target.has_condition:grappled == true", then = { do = "condition", entity = "target", name = "pinned", duration = "scene" } }
 
 # Pathfinder's own "Escape Artist" -- the counter-maneuver to "grapple" above, rolled against
@@ -210,8 +209,8 @@ on_pass = { do = "heal", entity = "target", dice = 3, pips = 0, bonus = 0 }
 
 # The positive mirror of "intimidate" above -- charisma's own signature effect, and (unlike
 # intimidate's own on_pass) a real, working attitude nudge: both magnitudes here are flat
-# literals, not "actor.roll_margin" (intimidate's own still-open normalization question -- see
-# docs/design/skill_effect_language.md's "Open questions" -- deliberately not repeated here).
+# literals, not "actor.roll_margin" (intimidate's own still-open normalization question,
+# deliberately not repeated here).
 [[entity]]
 name = "charm"
 supertype = "technique"

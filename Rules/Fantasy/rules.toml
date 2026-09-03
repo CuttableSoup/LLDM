@@ -119,8 +119,8 @@ name = "regenerating"
 upkeep_heal = { dice = 2, pips = 0, bonus = 0 }
 upkeep_blocked_by_tags = [ "fire" ]
 
-# The conditions maneuvers.toml's universal abilities (see docs/design/skill_effect_language.md)
-# apply via their own on_pass programs -- what gives "shaken"/"prone"/"disarmed"/
+# The conditions maneuvers.toml's universal abilities apply via their own on_pass programs --
+# what gives "shaken"/"prone"/"disarmed"/
 # "sundered_weapon" real mechanical teeth rather than narrated-only flavor, the same way
 # "stunned"/"wounded" already work.
 [[condition]]
@@ -158,13 +158,19 @@ modifier = { dice = -1, pips = 0, bonus = 0 }
 name = "flat_footed"
 modifier = { dice = -1, pips = 0, bonus = 0 }
 
-# maneuvers.toml's own "pin" -- only ever applied to an already-"grappled" target. The closest
-# this engine's own flat-roll-modifier condition system (see CLAUDE.md's "Status and
-# conditions") gets to Pathfinder's real "helpless" pinned condition, which actually prevents
-# acting -- no mechanism here stops an entity from taking its turn regardless of condition.
+# maneuvers.toml's own "pin" -- only ever applied to an already-"grappled" target. Pathfinder's
+# real "pinned" condition doesn't just penalize a roll, it stops the target from acting at all
+# (beyond trying to escape) -- prevents_action = true is the generic mechanism for that
+# (is_action_prevented, DM_Status.py), checked by DM_Core.py's _resolve_roll (the player's own
+# turn -- ActionPreventedOutcome, no roll) and DM_Combat.py's resolve_behavior_action (a
+# creature/ally's own turn -- treated exactly like "no behavior currently matches"). "pinned"
+# is the first (and, today, only) [[condition]] to author this; the modifier stays too, in
+# case a future mechanism (ex: an opposed escape attempt) ever rolls against a pinned target
+# directly rather than just skipping their turn outright.
 [[condition]]
 name = "pinned"
 modifier = { dice = -4, pips = 0, bonus = 0 }
+prevents_action = true
 
 # A presence flag only, same "no modifier at all" shape "locked"/"jammed" already use -- being
 # cursed (items.toml's cursed dagger, via its own on_interact.equip) is a narrative/mechanical
@@ -174,8 +180,7 @@ name = "cursed"
 modifier = { dice = 0, pips = 0, bonus = 0 }
 
 # creatures.toml's troll applies this to itself via its own on_damage program once it drops
-# below half HP without having been burned first -- see docs/design/skill_effect_language.md's
-# "A troll's temper" worked example.
+# below half HP without having been burned first -- see creatures.toml's own "A troll's temper".
 [[condition]]
 name = "enraged"
 modifier = { dice = 1, pips = 0, bonus = 0 }
@@ -343,11 +348,17 @@ disposition = -15
 threat = 0
 familiarity = -12
 
+# Mirrors "theft"'s own magnitude exactly (disposition/familiarity), just positive -- restores
+# roughly what this event lost when the six-axis model collapsed to three and "favor" lost its
+# own single largest lever (obligation = 20, folded into neither surviving axis at the time).
+# Give vs. take are the direct positive/negative mirror of the same mechanic
+# (DM_Inventory.py's own "give"/"take" transfer), so there's no principled reason for one to
+# carry noticeably less emotional weight than the other.
 [[attitude_event]]
 name = "favor"
-disposition = 10
+disposition = 15
 threat = 0
-familiarity = 6
+familiarity = 12
 
 # "Bonds made on the battlefield" -- a small, deliberately modest counterpart to combat_hit
 # above, applied not to the entity being struck but to any *other* living entity that already
@@ -360,8 +371,8 @@ disposition = 5
 threat = 0
 familiarity = 0
 
-# Fired by maneuvers.toml's own "intimidate" universal ability (see
-# docs/design/skill_effect_language.md's "attitude" op) -- a successful intimidation scares the
+# Fired by maneuvers.toml's own "intimidate" universal ability (via its own "attitude" op) --
+# a successful intimidation scares the
 # target (threat drops hard) without necessarily earning outright hatred; a failed attempt barely
 # dents disposition and, if anything, leaves the target slightly more confident (threat up) for
 # having stood their ground.

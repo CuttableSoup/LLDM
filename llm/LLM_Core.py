@@ -4,9 +4,10 @@ import urllib.request
 import threading
 
 from dm.DM_ActionOutcome import (
-    CraftEffect, DamageEffect, DefenderDetailsEffect, LanguageBarrierOutcome, LootEffect,
-    MissingMaterialsOutcome, MissingSpellMaterialsOutcome, MissingStationOutcome, MovementOutcome,
-    NotCraftableOutcome, OutOfRangeOutcome, RevealEffect, RolledOutcome, SummonEffect,
+    ActionPreventedOutcome, CraftEffect, DamageEffect, DefenderDetailsEffect, LanguageBarrierOutcome,
+    LootEffect, MissingMaterialsOutcome, MissingSpellMaterialsOutcome, MissingStationOutcome,
+    MovementOutcome, NotCraftableOutcome, OutOfRangeOutcome, RevealEffect, RolledOutcome, SummonEffect,
+    TransferOutcome,
 )
 from intents.registry import HANDLERS as FREE_STANDING_INTENT_HANDLERS
 from llm.LLM_Rag import RagIndex
@@ -72,6 +73,13 @@ def _format_language_barrier_outcome(outcome, actor):
     )
 
 
+def _format_action_prevented_outcome(outcome, actor):
+    return (
+        f"{actor.capitalize()} tries to act, but a condition holding them (ex: pinned) "
+        f"leaves them unable to do anything at all this turn, so no roll is attempted."
+    )
+
+
 def _format_missing_spell_materials_outcome(outcome, actor):
     return (
         f"Skill used: {outcome.skill} -- {actor.capitalize()} lacks the "
@@ -129,6 +137,7 @@ _OUTCOME_FORMATTERS = {
     RolledOutcome: _format_rolled_outcome,
     OutOfRangeOutcome: _format_out_of_range_outcome,
     LanguageBarrierOutcome: _format_language_barrier_outcome,
+    ActionPreventedOutcome: _format_action_prevented_outcome,
     MissingSpellMaterialsOutcome: _format_missing_spell_materials_outcome,
     NotCraftableOutcome: _format_not_craftable_outcome,
     MissingStationOutcome: _format_missing_station_outcome,
@@ -263,6 +272,13 @@ class LLMCore:
             verb = "advances toward" if outcome.direction == "advance" else "retreats from"
             opponent = outcome.opponent or "its target"
             return f"{actor.capitalize()} {verb} {opponent} ({outcome.before} -> {outcome.after} bands away)."
+
+        # An NPC's own autonomous "steal"/"gift" behavior entry -- same "no 'input' at all"
+        # exclusion from _OUTCOME_FORMATTERS as MovementOutcome above.
+        if isinstance(outcome, TransferOutcome):
+            item_text = "some coin" if outcome.item_name == "currency" else outcome.item_name
+            verb = f"steals {item_text} from" if outcome.direction == "steal" else f"gives {item_text} to"
+            return f"{actor.capitalize()} {verb} {outcome.target}."
 
         attempt_line = f"{actor.capitalize()} attempts: \"{outcome.input}\"\n" if outcome.input else ""
         return attempt_line + _OUTCOME_FORMATTERS[type(outcome)](outcome, actor)

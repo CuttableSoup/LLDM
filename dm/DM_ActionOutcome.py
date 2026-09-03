@@ -112,6 +112,16 @@ class LanguageBarrierOutcome:
 
 
 @dataclass
+class ActionPreventedOutcome:
+    """!@brief entity currently carries an active_conditions entry whose own [[condition]]
+        authors prevents_action = true (ex: rules.toml's "pinned") -- no roll, same "can't do
+        it, don't roll" precedent OutOfRangeOutcome/LanguageBarrierOutcome already set."""
+    entity: str
+    skill: str | None
+    input: str | None = None
+
+
+@dataclass
 class MissingSpellMaterialsOutcome:
     """!@brief A named ability's own "materials" weren't fully present -- no roll."""
     entity: str
@@ -143,6 +153,18 @@ class MissingMaterialsOutcome:
     item_name: str
     materials: list
     input: str | None = None
+
+
+@dataclass
+class TransferOutcome:
+    """!@brief A creature/ally's own behavior-driven turn was an autonomous item transfer
+        ("steal"/"gift", DM_Combat.py's resolve_behavior_action) rather than an attack or a
+        move -- enemy/ally-turn only; the player's own "take"/"give" never reaches this
+        pipeline at all (DM_Inventory.py's own _resolve_transfer_intent)."""
+    entity: str
+    direction: str
+    item_name: str
+    target: str
 
 
 @dataclass
@@ -187,9 +209,11 @@ ActionOutcome = (
     RolledOutcome
     | OutOfRangeOutcome
     | LanguageBarrierOutcome
+    | ActionPreventedOutcome
     | MissingSpellMaterialsOutcome
     | NotCraftableOutcome
     | MissingStationOutcome
     | MissingMaterialsOutcome
     | MovementOutcome
+    | TransferOutcome
 )

@@ -8,8 +8,9 @@
     DM_Improvisation.py, and NPC_Generation.py is to DM_NpcGeneration.py.
 
     IntentClassifier.classify() replaces NLP_Core.py's old _on_user_input -- see that method's
-    former docstring (still recorded in CLAUDE.md's "Multiple actions"/"Ad hoc entity creation"
-    sections) for why five unrelated whole-input concerns (save/load, ADaM, room direction,
+    former docstring (still recorded in docs/action-resolution.md's "Multiple actions" and
+    docs/adam-improvisation.md's "Ad hoc entity creation and removal" sections) for why five
+    unrelated whole-input concerns (save/load, ADaM, room direction,
     item-vs-dialogue-vs-skill classification, improvisation fallback) resolve in this exact
     priority order. This module makes that order the *interface*: IntentMatcher is the one
     seam a caller has to satisfy (real embedding matching in production, a canned stub in
@@ -83,7 +84,8 @@ CLOSE_KEYWORDS = ("close the ", "close it", "shut the ", "shut it")
 # and would swallow it as a "close" intent instead.
 ADVANCE_KEYWORDS = ("advance", "move closer", "approach", "move toward", "move in", "step closer")
 RETREAT_KEYWORDS = ("retreat", "back away", "back off", "fall back", "step back", "withdraw", "move away")
-# Party positioning (see DM_Core._resolve_formation_intent / CLAUDE.md's "Party formation") --
+# Party positioning (see DM_Core._resolve_formation_intent / docs/movement-scenarios.md's
+# "Party formation") --
 # like advance/retreat above, these act on the scene (specifically, whichever party member is
 # named, or the whole party if none is) rather than a named item, so no map_to_item lookup ever
 # runs for them either; unlike advance/retreat, DMCore -- not this module -- is what figures out
@@ -429,9 +431,10 @@ def _phrase_matches(phrase, processed_text):
         substring test every keyword tuple in this file used to be checked with. A short
         phrase (ex: DIALOGUE_KEYWORDS' "ask ") could otherwise false-positive against a
         longer, unrelated word that merely happens to end the same way (ex: "mask", a real
-        skill's own keyword -- see CLAUDE.md's "Known gaps" and this file's own
+        skill's own keyword -- see this file's own
         test_item_and_dialogue_keywords_never_collide_with_a_real_skill_keyword in
-        test_unit.py, which is what caught this live). Every internal space in a multi-word
+        test_unit.py, which is what caught this live and is what still enforces it). Every
+        internal space in a multi-word
         phrase (ex: "close the ") stays literal; only the phrase's own two outer edges get a
         \\b boundary -- the leading/trailing whitespace most phrases in this file are
         authored with is stripped first so it doesn't end up inside that boundary.
@@ -543,8 +546,9 @@ class IntentClassifier:
     def classify(self, raw_input):
         """!
         @brief Classifies one whole turn of raw player input. See this class's own docstring
-            for the two-level gate order; see CLAUDE.md's "Multiple actions" and "Ad hoc entity
-            creation and removal" sections for why that order is what it is.
+            for the two-level gate order; see docs/action-resolution.md's "Multiple actions" and
+            docs/adam-improvisation.md's "Ad hoc entity creation and removal" sections for why
+            that order is what it is.
         @param raw_input The raw string from "user_input_submitted".
         @return (processed_text, events) -- processed_text for the caller's own "Processing
             player input" log line, and events a list of one or more {"event", "payload"}

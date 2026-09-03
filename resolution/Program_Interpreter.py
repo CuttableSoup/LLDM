@@ -1,7 +1,7 @@
 """!
 @file Program_Interpreter.py
-@brief The pure `do`/`if` engine behind the skill & entity effect language (see
-    docs/design/skill_effect_language.md) -- run_program(node, ctx, entities, rules, event_bus)
+@brief The pure `do`/`if` engine behind the skill & entity effect language --
+    run_program(node, ctx, entities, rules, event_bus)
     walks a TOML-authored program (a list of steps, or a single inline step) and performs
     whatever it says, entirely through the same pure primitives Combat_Resolution.py/
     Social_Resolution.py already expose. Never a DMCore mixin -- callers reach in from both
@@ -256,7 +256,9 @@ def _op_inject_directive(step, ctx, entities, rules, event_bus):
         _run_ability_outcome_program threads it in specifically for this op), so the actual
         planted content is always whatever the player actually typed, not a fixed line. A quiet
         no-op if neither resolves to anything, same as every other op's "nothing to act on"
-        convention.
+        convention. `duration` (optional int, in block-clock blocks -- DM_Time.py) expires the
+        directive automatically once that many blocks elapse (DMCore.advance_blocks's own
+        _expire_prompt_directives); absent means no expiry at all, the original behavior.
     """
     entity_name = resolve_role(_require(step, "entity"), ctx)
     if entity_name is None:
@@ -264,7 +266,9 @@ def _op_inject_directive(step, ctx, entities, rules, event_bus):
     text = step.get("text") or ctx.get("input")
     if not text:
         return
-    Social_Resolution.set_prompt_directive(entities, entity_name, text, ctx.get("actor"))
+    Social_Resolution.set_prompt_directive(
+        entities, entity_name, text, ctx.get("actor"), duration_blocks=step.get("duration"),
+    )
 
 
 def _op_transfer_item(step, ctx, entities, rules, event_bus):

@@ -51,6 +51,23 @@ encounter = [
     { "nothing" = 30 },
 ]
 
+# "ambient" -- re-rolled once every real player turn (_resolve_ambient_encounter,
+# DM_Encounters.py; called from DM_Core.py's _on_turn_detected, before that turn's own
+# action(s) resolve), for as long as the player stays here, rather than only once on arrival.
+# Never rolled while a hostile is already present -- an ambient beat piling a second, uninvited
+# fight on top of an active one would be nonsensical. No separate probability gate beyond the
+# weighted table itself -- keep "nothing" heavily weighted (as below) so this doesn't fire every
+# single turn; a table meant only for "on_enter" should never also carry an "ambient" entry with
+# a light "nothing" weight, or it'll roll far more often than a one-off encounter table expects.
+[[location.encounter]]
+name = "town square ambience"
+trigger = "ambient"
+encounter = [
+    { "A gull wheels overhead, shrieking." = 10 },
+    { "Someone haggles loudly over the price of fish two stalls down." = 10 },
+    { "nothing" = 80 },
+]
+
 # Exits -- a named-destination graph edge BETWEEN LOCATIONS, not a [[room.exit]]: no band gate,
 # no fixed direction word. Reachability is by naming where you want to go -- NLPCore spots the
 # destination's own "name" (or an "aliases" entry) whole-word/case-insensitive in the input, the

@@ -28,10 +28,14 @@ quick-boot pass a bare `{"name": ...}` through this same method rather than need
 rename-only path). `"name"`, if non-blank and different from the current `player_name`, renames
 the player entity: `self.entities[self.player_name]` is popped and re-inserted under the new
 key, and `self.player_name` repoints at it. A name colliding with any other already-loaded
-entity is rejected outright (`log_error`, not raised) — since this runs *before*
-`load_scenario_definition`, a scenario file's own local entities don't exist yet, a known,
-accepted gap. Renaming doesn't touch any other entity's `[[entity.attitudes.name]]` override
-keyed to the old name. `character=None` (every caller that omits it) is a complete no-op.
+entity is rejected outright (`log_error`, not raised) — `DMCore.__init__` runs
+`load_scenario_definition` *before* `apply_character_creation` specifically so this check also
+sees a scenario file's own local entities, not just the shared `Rules/<setting>/*.toml`
+catalog. Renaming also rewrites any other entity's own `[[entity.attitudes.name]]` override
+still keyed to the old name (`_rekey_attitude_overrides`) — a hand-authored disposition toward
+the player's original template name (ex: `crypt.toml`'s own `anne`, keyed to `gladstone`) keeps
+applying to whoever they were actually renamed to. `character=None` (every caller that omits
+it) is a complete no-op.
 
 **Training (spending XP on skills).** `Character_Creation.py`'s `spend_pip(dice, pips, exp)`
 raises one skill by a single pip, costing XP equal to its own *current* dice count — pips roll

@@ -27,10 +27,16 @@ class CharacterCreationMixin(DMCoreProtocol):
             no-op), which is what DM_Dialogue.py's language-barrier check reads to decide
             whether the player shares a tongue with whoever they're addressing -- and -- if
             character carries a non-blank "name" different
-            from self.player_name -- renames the player entity itself, re-keying self.entities
-            and updating self.player_name to match. Called from DMCore.__init__ right after
-            _resolve_player_name() resolves self.player_name, and before
-            load_scenario_definition()/load_scenario() run -- so both the skill override and
+            from self.player_name -- renames the player entity itself, re-keying self.entities,
+            updating self.player_name to match, and rewriting any other entity's own
+            [[entity.attitudes.name]] override still keyed to the old name (_rekey_attitude_
+            overrides, below) so a hand-authored disposition toward the player's original
+            template name (ex: characters.toml's own "anne" override keyed to "gladstone")
+            keeps applying to whoever they were actually renamed to. Called from
+            DMCore.__init__ right after load_scenario_definition() loads the scenario's own
+            TOML data (so the rename's own collision check below sees scenario-local entity
+            names too, not just the shared Rules/<setting>/*.toml catalog), but before
+            load_scenario() actually instances anything -- so both the skill override and
             any rename are what _instance_entities later deep-copies into the live scenario
             instance (via PLAYER_PLACEHOLDER, DM_Rules.py), not the original TOML-authored
             template.
@@ -118,12 +124,35 @@ class CharacterCreationMixin(DMCoreProtocol):
                     "another entity.",
                 )
             else:
+                old_name = self.player_name
                 del self.entities[self.player_name]
                 player["name"] = new_name
                 self.entities[new_name] = player
                 self.player_name = new_name
+                self._rekey_attitude_overrides(old_name, new_name)
 
         suffix = f" is now a {race_name}." if allocation else "."
         self.event_bus.publish(
             "log_info", f"Character creation applied: {self.player_name}{suffix}"
         )
+
+    def _rekey_attitude_overrides(self, old_name, new_name):
+        """!
+        @brief Rewrites every other entity's own [[entity.attitudes.name]] override still keyed
+            to old_name so it keeps applying after a character-creation rename -- get_attitude's
+            own name-keyed lookup (DM_Social.py) matches by literal string against toward_name,
+            so a hand-authored override written against the player's original template name
+            (ex: characters.toml's own "anne" -- attitudes.name.gladstone = [100, 100, 100])
+            would otherwise silently stop resolving to whoever the player actually renamed
+            themselves to, reverting to that entity's own "default"/supertype tier instead with
+            no error or narration hinting why.
+        @param old_name The player's own name before the rename.
+        @param new_name The player's own name after the rename.
+        """
+        for entity in self.entities.values():
+            overrides = entity.get("attitudes", {}).get("name")
+            if not overrides:
+                continue
+            for override in overrides:
+                if old_name in override:
+                    override[new_name] = override.pop(old_name)

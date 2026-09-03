@@ -5,9 +5,8 @@
     primitive it and DM_Social.py's own dialogue-tone nudge_attitude both build on -- as plain
     functions over an explicit entities/rules dict rather than DMCore instance methods. Mirrors
     Combat_Resolution.py's own "pure module, DMCore reaches in" shape (see that module's own
-    docstring): built specifically so Program_Interpreter.py's own "attitude" op (see
-    docs/design/skill_effect_language.md) can call this without a DMCore instance -- the same
-    reason Combat_Resolution.py exists at all.
+    docstring): built specifically so Program_Interpreter.py's own "attitude" op can call this
+    without a DMCore instance -- the same reason Combat_Resolution.py exists at all.
 
     DM_Social.py's own nudge_attitude_from_event/_apply_capped_drift keep their existing method
     names/signatures -- both become thin wrappers forwarding self.entities/self.rules, so no
@@ -70,7 +69,7 @@ def get_attitude(entities, entity_name, toward_name):
         Pure mirror of DM_Social.py's own SocialMixin.get_attitude (needs only entities, never
         self.rules) -- extracted so Combat_Resolution.py's own get_comparable_value can resolve
         a one-line condition string's own "disposition"/"threat"/"familiarity" field (ex:
-        docs/design/skill_effect_language.md's own "target.threat < -50") with no DMCore
+        a program condition like "target.threat < -50") with no DMCore
         instance in hand, the same reason nudge_attitude_from_event lives here at all. DM_Social.py's
         own method becomes a thin wrapper forwarding self.entities, so no caller anywhere else
         in the codebase changes.
@@ -108,7 +107,7 @@ def get_attitude(entities, entity_name, toward_name):
     return result
 
 
-def set_prompt_directive(entities, entity_name, text, source_name=None):
+def set_prompt_directive(entities, entity_name, text, source_name=None, duration_blocks=None):
     """!
     @brief Plants (or overwrites) entity_name's own persistent prompt_directive -- free text
         later read back by DM_Social.py's own describe_character, so a successfully-cast effect
@@ -125,13 +124,20 @@ def set_prompt_directive(entities, entity_name, text, source_name=None):
     @param source_name Who planted it, if known (ctx's own "actor") -- attributed in the stored
         record so narration can credit the right party, but never required (ex: a
         scenario-authored on_enter program with no "actor" in its own ctx).
+    @param duration_blocks How many block-clock blocks (DM_Time.py) the directive lasts before
+        DMCore.advance_blocks's own _expire_prompt_directives clears it automatically. None (the
+        default) plants a directive with no expiry at all -- persists until overwritten or
+        manually cleared, exactly as before this parameter existed.
     """
     entity = entities.get(entity_name)
     if entity is None or entity.get("supertype") == "object":
         return
     if Combat_Resolution.get_current_hp(entities, entity_name) <= 0:
         return
-    entity["prompt_directive"] = {"text": text, "source": source_name}
+    directive = {"text": text, "source": source_name}
+    if duration_blocks is not None:
+        directive["expires_in_blocks"] = duration_blocks
+    entity["prompt_directive"] = directive
 
 
 def nudge_attitude_from_event(entities, rules, entity_name, toward_name, event_name, magnitude):

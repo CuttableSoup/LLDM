@@ -4,9 +4,9 @@
     transfer_item/place_new_item -- plain functions over an explicit entities dict rather than
     DMCore instance methods, mirroring Combat_Resolution.py/Social_Resolution.py's own "pure
     module, DMCore reaches in" shape. Built so Program_Interpreter.py's own transfer_item/
-    transfer_currency ops (see docs/design/skill_effect_language.md's own op reference table,
-    "deferred until a real authored program needs them" -- maneuvers.toml's own "sleight of
-    hand" is that real caller) can move currency/items with no DMCore instance in hand, the same
+    transfer_currency ops -- deferred until a real authored program needed them; maneuvers.toml's
+    own "sleight of hand" is that real caller -- can move currency/items with no DMCore instance
+    in hand, the same
     reason Combat_Resolution.py/Social_Resolution.py exist at all.
 
     DM_Inventory.py's own transfer_currency/transfer_item/place_new_item keep their existing

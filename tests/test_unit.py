@@ -38,10 +38,10 @@ from resolution.AdHoc_Generation import (
 from gui.Character_Creation_GUI import CharacterCreationDialog
 from resolution.Challenge_Rating import calculate_challenge_rating, calculate_party_challenge_rating, skill_rating
 from dm.DM_ActionOutcome import (
-    ActionOutcome, CraftEffect, DamageEffect, DefenderDetailsEffect, LanguageBarrierOutcome,
-    LootEffect, MissingMaterialsOutcome, MissingSpellMaterialsOutcome, MissingStationOutcome,
-    MovementOutcome, NotCraftableOutcome, OutOfRangeOutcome, RevealEffect, RolledOutcome,
-    SummonEffect,
+    ActionOutcome, ActionPreventedOutcome, CraftEffect, DamageEffect, DefenderDetailsEffect,
+    LanguageBarrierOutcome, LootEffect, MissingMaterialsOutcome, MissingSpellMaterialsOutcome,
+    MissingStationOutcome, MovementOutcome, NotCraftableOutcome, OutOfRangeOutcome, RevealEffect,
+    RolledOutcome, SummonEffect, TransferOutcome,
 )
 from dm.DM_Core import DMCore
 from dm.DM_Rules import list_available_scenarios
@@ -287,6 +287,44 @@ class TestGameBoot(unittest.TestCase):
         self.assertGreaterEqual(warm_score, nlp_core.matcher.sentiment_confidence_threshold)
         self.assertIsNone(informational_label)
         self.assertIsNone(another_informational_label)
+
+    def test_threat_classification_reads_something_genuinely_different_from_disposition(self):
+        # The actual point of this axis: a line can be admiring in *tone* (positive sentiment)
+        # while still reading as physically threatening -- the deliberately valence-crossed
+        # case NLP_Core.py's own module comment names as proof threat isn't just a relabeled
+        # copy of disposition (see docs/social-dialogue.md's "Dialogue sentiment").
+        nlp_core = NLPCore(EventBus())
+
+        admiring_but_threatening_label, _score = nlp_core.matcher.classify_threat(
+            "your skill with that blade is terrifying, truly the deadliest fighter I've ever seen",
+        )
+        reassuring_label, reassuring_score = nlp_core.matcher.classify_threat(
+            "you're safe here with me, nothing is going to hurt you, I promise",
+        )
+        informational_label, _score = nlp_core.matcher.classify_threat("how far is it to the next town")
+
+        self.assertEqual(admiring_but_threatening_label, "negative")  # "physically threatened"
+        self.assertEqual(reassuring_label, "positive")  # "physically safe"
+        self.assertGreaterEqual(reassuring_score, nlp_core.matcher.sentiment_confidence_threshold)
+        self.assertIsNone(informational_label)
+
+    def test_familiarity_classification_reads_something_genuinely_different_from_disposition(self):
+        # Same "genuinely separate axis" proof as threat above, for emotional closeness --
+        # NLP_Core.py's own module comment names familiarity as the other axis validated this way.
+        nlp_core = NLPCore(EventBus())
+
+        close_label, close_score = nlp_core.matcher.classify_familiarity(
+            "I've known you my whole life -- you're like family to me",
+        )
+        distant_label, _score = nlp_core.matcher.classify_familiarity(
+            "I don't know you, and frankly I don't care to",
+        )
+        informational_label, _score = nlp_core.matcher.classify_familiarity("how far is it to the next town")
+
+        self.assertEqual(close_label, "positive")  # "emotionally close to the speaker"
+        self.assertEqual(distant_label, "negative")  # "emotionally distant from the speaker"
+        self.assertGreaterEqual(close_score, nlp_core.matcher.sentiment_confidence_threshold)
+        self.assertIsNone(informational_label)
 
 
 class TestNlpConfidenceThreshold(unittest.TestCase):
@@ -756,10 +794,11 @@ class TestClarificationResponse(LLMTestCase):
         # A future ActionOutcome variant with no matching _OUTCOME_FORMATTERS entry would only
         # surface as a live KeyError mid-narration -- this catches it as a fast, obvious unit
         # test instead, the same "one new variant per commit" pattern this table exists to keep
-        # up with. MovementOutcome is the one deliberate exception -- it has no "input" at all,
-        # so it never reaches _OUTCOME_FORMATTERS (see _describe_outcome's own early return).
+        # up with. MovementOutcome/TransferOutcome are the two deliberate exceptions -- neither
+        # carries "input" at all, so neither ever reaches _OUTCOME_FORMATTERS (see
+        # _describe_outcome's own two early-return isinstance checks, ahead of the dict dispatch).
         for variant in get_args(ActionOutcome):
-            if variant is MovementOutcome:
+            if variant in (MovementOutcome, TransferOutcome):
                 continue
             self.assertIn(variant, _OUTCOME_FORMATTERS)
 
@@ -1188,9 +1227,9 @@ class TestActionDrivenAttitudeDrift(DMTestCase):
         disposition, threat, familiarity = (
             value - starting for value, starting in zip(after, base)
         )
-        self.assertAlmostEqual(disposition, 6.0)
+        self.assertAlmostEqual(disposition, 9.0)
         self.assertEqual(threat, 0)
-        self.assertAlmostEqual(familiarity, 3.6)
+        self.assertAlmostEqual(familiarity, 7.2)
 
     def test_action_drift_is_capped_independently_of_talk_drift(self):
         # Push both accumulators toward the same axis (disposition) as far as they'll go --
@@ -3050,6 +3089,95 @@ class TestEntityBehavior(DMTestCase):
         self.assertEqual(self.dm_core.current_target, "wolf_2")
 
 
+class TestTransferBehavior(DMTestCase):
+    """!
+    @brief [[entity.behavior]]'s own "steal"/"gift" action (DM_Combat.py's TRANSFER_ACTIONS/
+        _resolve_transfer_behavior) -- an NPC autonomously moving an item or currency, the
+        same "theft"/"favor" attitude nudge DM_Inventory.py's player-driven "take"/"give"
+        already fires, just entity-initiated. creatures.toml's "pickpocket" is the shipped
+        worked example.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.dm_core.entities["wolf"]["behavior"] = [
+            {"requirements": [], "action": "steal", "item": "health potion"},
+        ]
+
+    def test_steal_moves_a_named_item_from_target_to_actor(self):
+        result = self.dm_core.resolve_behavior_action("wolf", "gladstone")
+
+        self.assertIsInstance(result, TransferOutcome)
+        self.assertEqual(result.direction, "steal")
+        self.assertEqual(result.item_name, "health potion")
+        self.assertIn("health potion", self.dm_core.entities["wolf"]["inventory"])
+        self.assertEqual(self.dm_core.entities["gladstone"]["inventory"].count("health potion"), 2)
+
+    def test_steal_nudges_the_victims_attitude_toward_the_thief(self):
+        # gladstone's own attitudes table (characters.toml) starts at a flat [0, 0, 0] default.
+        base_familiarity = self.dm_core.get_attitude("gladstone", "wolf")[2]
+
+        self.dm_core.resolve_behavior_action("wolf", "gladstone")
+
+        # health potion's own TOML value against SIGNIFICANT_VALUE (25) -- "theft" fires on
+        # gladstone's own attitude *toward* wolf, the thief, not the reverse.
+        value = self.dm_core.entities["health potion"]["value"]
+        familiarity = self.dm_core.get_attitude("gladstone", "wolf")[2]
+        self.assertNotEqual(familiarity, base_familiarity)
+        self.assertAlmostEqual(familiarity, 0 + -12 * min(1.0, value / 25))
+
+    def test_gift_moves_a_named_item_from_actor_to_target(self):
+        self.dm_core.entities["wolf"]["behavior"] = [
+            {"requirements": [], "action": "gift", "item": "longsword"},
+        ]
+        self.dm_core.entities["wolf"]["inventory"] = ["longsword"]
+
+        result = self.dm_core.resolve_behavior_action("wolf", "gladstone")
+
+        self.assertEqual(result.direction, "gift")
+        self.assertIn("longsword", self.dm_core.entities["gladstone"]["inventory"])
+        self.assertNotIn("longsword", self.dm_core.entities["wolf"]["inventory"])
+
+    def test_steal_is_a_no_op_when_the_target_doesnt_actually_have_the_item(self):
+        self.dm_core.entities["wolf"]["behavior"] = [
+            {"requirements": [], "action": "steal", "item": "iron dagger"},
+        ]
+        self.assertIsNone(self.dm_core.resolve_behavior_action("wolf", "gladstone"))
+
+    def test_steal_currency_moves_a_capped_amount_via_the_reserved_sentinel(self):
+        self.dm_core.entities["wolf"]["behavior"] = [
+            {"requirements": [], "action": "steal", "item": "currency", "amount": 10},
+        ]
+        self.dm_core.entities["gladstone"]["currency"] = 100
+
+        result = self.dm_core.resolve_behavior_action("wolf", "gladstone")
+
+        self.assertEqual(result.item_name, "currency")
+        self.assertEqual(self.dm_core.entities["gladstone"]["currency"], 90)
+        self.assertEqual(self.dm_core.entities["wolf"]["currency"], 10)
+
+    def test_steal_currency_is_a_no_op_when_the_target_is_broke(self):
+        self.dm_core.entities["wolf"]["behavior"] = [
+            {"requirements": [], "action": "steal", "item": "currency"},
+        ]
+        self.dm_core.entities["gladstone"]["currency"] = 0
+        self.assertIsNone(self.dm_core.resolve_behavior_action("wolf", "gladstone"))
+
+    def test_pickpocket_steals_a_modest_sum_then_flees_once_actually_hit(self):
+        [name] = self.dm_core._instance_entities([{"name": "pickpocket", "band": 1}])
+        self.dm_core.scenario_entities.append(name)
+        self.dm_core.entities["gladstone"]["currency"] = 100
+
+        result = self.dm_core.resolve_behavior_action(name, "gladstone")
+        self.assertIsInstance(result, TransferOutcome)
+        self.assertEqual(self.dm_core.entities["gladstone"]["currency"], 90)
+
+        self.dm_core.apply_damage(name, 1)  # any hit at all crosses its own 0.90 threshold
+        fled = self.dm_core.resolve_behavior_action(name, "gladstone")
+        self.assertIsInstance(fled, MovementOutcome)
+        self.assertEqual(fled.direction, "retreat")
+
+
 class TestRoundUpkeep(DMTestCase):
     """!
     @brief The generic per-round upkeep hook (run_round_upkeep/apply_round_upkeep/
@@ -3125,11 +3253,45 @@ class TestRoundUpkeep(DMTestCase):
         self.dm_core._resolve_combat_round({"actions": []})
         self.assertEqual(self.dm_core.get_current_hp("troll"), 26)  # suppressed this round
 
+    @patch("random.randint", return_value=3)
+    def test_apply_downtime_upkeep_scales_the_roll_by_blocks_spent(self, mock_randint):
+        # One aggregate roll over the whole span, not one per block -- 2D * 3 blocks = 6D @ 3
+        # each = 18, matching rest()'s own fortitude-scaling precedent.
+        self.dm_core.apply_damage("troll", 30)  # 40 -> 10
+        self.dm_core.apply_downtime_upkeep(3)
+        self.assertEqual(self.dm_core.get_current_hp("troll"), 28)  # 10 + 18
+
+    def test_apply_downtime_upkeep_is_a_no_op_for_zero_blocks(self):
+        self.dm_core.apply_damage("troll", 30)
+        self.dm_core.apply_downtime_upkeep(0)
+        self.assertEqual(self.dm_core.get_current_hp("troll"), 10)
+
+    @patch("random.randint", return_value=3)
+    def test_apply_downtime_upkeep_is_still_suppressed_by_a_matching_recent_damage_tag(self, mock_randint):
+        self.dm_core.apply_damage("troll", 30)
+        self.dm_core.entities["troll"]["recent_damage_tags"] = {"fire"}
+        self.dm_core.apply_downtime_upkeep(3)
+        self.assertEqual(self.dm_core.get_current_hp("troll"), 10)  # no heal at all
+
+    @patch("random.randint", return_value=3)
+    def test_resting_regenerates_the_troll_alongside_the_partys_own_fortitude_healing(self, mock_randint):
+        # The real entry point (DM_Time.py's rest -> _finish_pending_rest), not
+        # apply_downtime_upkeep called directly -- confirms the hook is actually wired in.
+        self.dm_core.apply_damage("gladstone", 10)
+        self.dm_core.apply_damage("troll", 30)  # 40 -> 10, not a party member
+
+        result = self.dm_core.rest(2)
+
+        self.assertFalse(result["interrupted"])
+        self.assertIn("gladstone", result["healed"])  # party's own fortitude healing
+        self.assertNotIn("troll", result["healed"])  # not a party member, no fortitude entry
+        self.assertEqual(self.dm_core.get_current_hp("troll"), 22)  # 10 + (2D*2 blocks @ 3 = 12)
+
 
 class TestProgramInterpreter(unittest.TestCase):
     """!
     @brief Program_Interpreter.py's own pure do/if engine -- direct, bare-dict tests, no
-        EventBus/DMCore needed (see docs/design/skill_effect_language.md's own "Module shape").
+        EventBus/DMCore needed.
     """
 
     def setUp(self):
@@ -3265,8 +3427,9 @@ class TestProgramInterpreter(unittest.TestCase):
 class TestSocialResolutionPure(unittest.TestCase):
     """!
     @brief Social_Resolution.py's own pure nudge_attitude_from_event/apply_capped_drift --
-        direct, bare-dict tests (see docs/design/skill_effect_language.md's own "Prerequisite:
-        pure cores for attitude and transfer"). DM_Social.py's own thin-wrapper behavior is
+        direct, bare-dict tests, no DMCore instance needed (see this file's own module-shape
+        precedent, Combat_Resolution.py/Inventory_Resolution.py). DM_Social.py's own
+        thin-wrapper behavior is
         already covered indirectly by every existing attitude-drift test in this file (ex:
         TestCombatLoop's combat_hit/shared_enemy assertions), which never changed shape.
     """
@@ -3314,8 +3477,7 @@ class TestUniversalAbilities(DMTestCase):
     """!
     @brief Universal (untrained) abilities -- maneuvers.toml's trip/disarm/sunder (listed under
         athletics' own "abilities" field) and intimidate (under intimidation's), plus
-        resolve_named_ability's own skill-list fallback (DM_Combat.py) -- see
-        docs/design/skill_effect_language.md's "Universal (untrained) abilities".
+        resolve_named_ability's own skill-list fallback (DM_Combat.py).
     """
 
     def test_athletics_lists_its_own_cmb_style_maneuvers(self):
@@ -3370,8 +3532,7 @@ class TestUniversalAbilities(DMTestCase):
 class TestAbilityOutcomeProgram(DMTestCase):
     """!
     @brief DM_Core.py's own _run_ability_outcome_program -- the attachment point that runs a
-        resolved ability's own on_pass/on_fail once a real roll happens (see
-        docs/design/skill_effect_language.md's "Attachment points"). Exercised directly against
+        resolved ability's own on_pass/on_fail once a real roll happens. Exercised directly against
         a constructed RolledOutcome rather than a full _on_turn_detected pass, so these stay
         deterministic without depending on wolf's own (nonexistent) opposing skill/dice rolls.
     """
@@ -3411,8 +3572,7 @@ class TestAbilityOutcomeProgram(DMTestCase):
         self.assertIn("shaken", self.dm_core.entities["target_dummy"]["active_conditions"])
 
     def test_intimidate_on_pass_step_one_is_a_no_op_since_roll_margin_is_not_yet_a_real_field(self):
-        # Step 1's own magnitude ("actor.roll_margin") is exactly the design doc's own
-        # acknowledged open question (docs/design/skill_effect_language.md's "Open questions") --
+        # Step 1's own magnitude ("actor.roll_margin") is a still-open normalization question --
         # "roll_margin" resolves to None (no such field on any entity), so nudge_attitude_from_event's
         # own falsy-magnitude no-op applies. Documented here as current, honest behavior rather
         # than silently assumed to work.
@@ -3508,7 +3668,7 @@ class TestAbilityOutcomeProgram(DMTestCase):
 
         self.assertEqual(
             self.dm_core.entities["target_dummy"]["prompt_directive"],
-            {"text": "tell him to open the gate", "source": "gladstone"},
+            {"text": "tell him to open the gate", "source": "gladstone", "expires_in_blocks": 1},
         )
 
     def test_suggestion_on_a_failed_roll_plants_nothing(self):
@@ -3618,6 +3778,41 @@ class TestPromptDirective(DMTestCase):
             {"text": "open the gate", "source": "an unseen voice"},
         )
 
+    def test_a_duration_less_directive_never_expires_no_matter_how_many_blocks_pass(self):
+        self.dm_core.entities["target_dummy"]["prompt_directive"] = {
+            "text": "open the gate", "source": "gladstone",
+        }
+        self.dm_core.advance_blocks(100)
+        self.assertEqual(
+            self.dm_core.entities["target_dummy"]["prompt_directive"]["text"], "open the gate",
+        )
+
+    def test_a_timed_directive_survives_until_its_own_block_countdown_runs_out(self):
+        Social_Resolution.set_prompt_directive(
+            self.dm_core.entities, "target_dummy", "open the gate", "gladstone", duration_blocks=2,
+        )
+        self.dm_core.advance_blocks(1)
+        self.assertIsNotNone(self.dm_core.entities["target_dummy"]["prompt_directive"])
+        self.dm_core.advance_blocks(1)
+        self.assertIsNone(self.dm_core.entities["target_dummy"]["prompt_directive"])
+
+    def test_a_timed_directive_expires_in_one_bulk_advance_past_its_own_countdown(self):
+        Social_Resolution.set_prompt_directive(
+            self.dm_core.entities, "target_dummy", "open the gate", "gladstone", duration_blocks=2,
+        )
+        self.dm_core.advance_blocks(5)
+        self.assertIsNone(self.dm_core.entities["target_dummy"]["prompt_directive"])
+
+    def test_inject_directive_op_forwards_duration_into_the_planted_directive(self):
+        run_program(
+            {"do": "inject_directive", "entity": "target", "text": "flee", "duration": 3},
+            {"actor": "gladstone", "target": "target_dummy"},
+            self.dm_core.entities, self.dm_core.rules, self.dm_core.event_bus,
+        )
+        self.assertEqual(
+            self.dm_core.entities["target_dummy"]["prompt_directive"]["expires_in_blocks"], 3,
+        )
+
 
 class TestMorePathfinderManeuvers(DMTestCase):
     """!
@@ -3706,8 +3901,7 @@ class TestMorePathfinderManeuvers(DMTestCase):
 class TestEntityTestOutcomeProgram(DMTestCase):
     """!
     @brief DM_Core.py's own _run_test_outcome_program -- [entity.test]'s own on_pass/on_fail,
-        sibling to its existing flat pass/fail tables (see
-        docs/design/skill_effect_language.md's "Attachment points"). No shipped [entity.test]
+        sibling to its existing flat pass/fail tables. No shipped [entity.test]
         authors on_pass/on_fail yet, so this exercises the wiring directly against a synthetic
         test table.
     """
@@ -3740,7 +3934,7 @@ class TestEntityTestOutcomeProgram(DMTestCase):
 class TestOnInteractProgram(DMTestCase):
     """!
     @brief The cursed dagger's own [entity.on_interact.equip] -- items.toml's shipped worked
-        example for docs/design/skill_effect_language.md's "The cursed dagger, actually cursed".
+        example of making a curse real, not just flavor.
     """
 
     def setUp(self):
@@ -3774,8 +3968,8 @@ class TestOnInteractProgram(DMTestCase):
 
 class TestOnDamageProgram(DMTestCase):
     """!
-    @brief The troll's own [entity.on_damage] -- creatures.toml's shipped worked example for
-        docs/design/skill_effect_language.md's "A troll's temper".
+    @brief The troll's own [entity.on_damage] -- creatures.toml's shipped worked example of
+        "A troll's temper".
     """
 
     def setUp(self):
@@ -4051,6 +4245,59 @@ class TestConditionModifiers(DMTestCase):
         with patch("random.randint", return_value=3):
             result = self.dm_core.resolve_opposed_action("gladstone", "blades", "test_defender")
         self.assertEqual(result["difficulty"], 15)  # (6 - 1) * 3
+
+
+class TestActionPrevented(DMTestCase):
+    """!
+    @brief is_action_prevented (DM_Status.py) and rules.toml's own "pinned" -- the first
+        [[condition]] to author prevents_action = true, closing the gap this engine's own
+        flat-roll-modifier condition system used to have against Pathfinder's real "pinned"
+        (which stops a character from acting at all, not just penalizes the roll).
+    """
+
+    def test_is_action_prevented_true_once_a_prevents_action_condition_is_active(self):
+        self.dm_core.apply_condition("gladstone", "pinned", duration="scene", dismiss="")
+        self.assertTrue(self.dm_core.is_action_prevented("gladstone"))
+
+    def test_is_action_prevented_false_for_an_ordinary_dice_penalty_condition(self):
+        # "wounded" is a real [[condition]] entry (a modifier), but never authors
+        # prevents_action -- only carrying a penalty must not also block acting outright.
+        self.dm_core.apply_condition("gladstone", "wounded", duration="permanent", dismiss="")
+        self.assertFalse(self.dm_core.is_action_prevented("gladstone"))
+
+    def test_is_action_prevented_false_with_no_conditions_at_all(self):
+        self.assertFalse(self.dm_core.is_action_prevented("gladstone"))
+
+    def test_players_own_turn_is_denied_outright_with_no_roll_while_pinned(self):
+        round_events = self._capture("round_resolved")
+        self.dm_core.apply_condition("gladstone", "pinned", duration="scene", dismiss="")
+
+        self.dm_core._on_turn_detected({"clauses": [{"kind": "action", "skill": "blades"}], "input": "I attack the wolf"})
+
+        action = round_events[-1]["actions"][0]
+        self.assertIsInstance(action, ActionPreventedOutcome)
+        self.assertEqual(action.skill, "blades")
+
+    def test_resolve_behavior_action_returns_none_when_the_actor_is_pinned(self):
+        # wolf's own [[entity.behavior]] would otherwise resolve "bite" against gladstone --
+        # pinned pre-empts that entirely, the same "doesn't act" outcome an entity with no
+        # matching behavior at all already gets.
+        self.dm_core.apply_condition("wolf", "pinned", duration="scene", dismiss="")
+        self.assertIsNone(self.dm_core.resolve_behavior_action("wolf", "gladstone"))
+
+    def test_pin_maneuver_actually_stops_its_target_from_acting_next(self):
+        # End-to-end: pin lands on an already-grappled target, and the resulting "pinned"
+        # condition genuinely prevents that target's own next action, not just a penalized one.
+        self.dm_core.entities["wolf"]["active_conditions"] = {
+            "grappled": {"duration": "scene", "dismiss": None},
+        }
+        pin = self.dm_core.entities["pin"]
+        result = RolledOutcome(entity="gladstone", skill="athletics", roll=15, difficulty=5, success=True)
+        self.dm_core._run_ability_outcome_program(result, "athletics", None, pin, "wolf", via_test=False)
+
+        self.assertIn("pinned", self.dm_core.entities["wolf"]["active_conditions"])
+        self.assertTrue(self.dm_core.is_action_prevented("wolf"))
+        self.assertIsNone(self.dm_core.resolve_behavior_action("wolf", "gladstone"))
 
 
 class TestScenarioLoading(DMTestCase):
@@ -5319,6 +5566,82 @@ class TestPlaceNewEntity(DMTestCase):
         self.assertEqual(entity["active_conditions"], {})
 
 
+class TestAmbientEncounter(DMTestCase):
+    """!
+    @brief [[location.encounter]]'s own "ambient" trigger (_resolve_ambient_encounter,
+        DM_Encounters.py) -- a repeating per-turn roll, called from DM_Core.py's
+        _on_turn_detected, as opposed to "on_enter"'s own once-per-arrival check. Uses arena's
+        own room ("grounds", under location "arena_grounds") to attach a synthetic "encounter"
+        list directly, the same way TestGridTravel's own _stub_encounter_roll fakes
+        DM_Encounters.resolve_varied_value rather than depending on real randomness.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.encounter_events = self._capture("encounter_triggered")
+
+    def _stub_encounter_roll(self, result):
+        original = DM_Encounters.resolve_varied_value
+        DM_Encounters.resolve_varied_value = lambda choices: result
+        self.addCleanup(setattr, DM_Encounters, "resolve_varied_value", original)
+
+    def _set_room_encounter(self, trigger, choices):
+        room = self.dm_core.rooms[self.dm_core.current_room_key]
+        room["encounter"] = [{"name": "test ambience", "trigger": trigger, "encounter": choices}]
+
+    def _take_an_ordinary_turn(self):
+        self.dm_core._on_turn_detected({
+            "clauses": [{"kind": "action", "skill": "blades"}], "input": "I attack the wolf",
+        })
+
+    def _kill_both_wolves(self):
+        # arena's own room lists "wolf" twice (see TestScenarioLoading) -- both have to be
+        # down for _any_hostile_present to actually go false.
+        self.dm_core.apply_damage("wolf", 999)
+        self.dm_core.apply_damage("wolf_2", 999)
+
+    def test_ambient_encounter_fires_on_an_ordinary_turn_and_narrates_a_flavor_beat(self):
+        self._set_room_encounter("ambient", [{"a distant howl echoes off the stone": 100}])
+        self._stub_encounter_roll("a distant howl echoes off the stone")
+        self._kill_both_wolves()  # no hostile present, so ambient can actually fire
+
+        self._take_an_ordinary_turn()
+
+        self.assertEqual(self.encounter_events[-1]["description"], "a distant howl echoes off the stone")
+
+    def test_ambient_encounter_never_fires_while_a_hostile_is_already_present(self):
+        self._set_room_encounter("ambient", [{"a distant howl echoes off the stone": 100}])
+        self._stub_encounter_roll("a distant howl echoes off the stone")
+        # arena's own wolves are alive and hostile by default -- _any_hostile_present is True.
+
+        self._take_an_ordinary_turn()
+
+        self.assertEqual(self.encounter_events, [])
+
+    def test_an_on_enter_only_entry_is_never_rolled_by_the_ambient_check(self):
+        self._set_room_encounter("on_enter", [{"should never fire from a turn": 100}])
+        self._stub_encounter_roll("should never fire from a turn")
+        self._kill_both_wolves()
+
+        self._take_an_ordinary_turn()
+
+        self.assertEqual(self.encounter_events, [])
+
+    def test_ambient_encounter_can_instance_a_hostile_creature_and_claim_it_as_current_target(self):
+        # "fire elemental" -- creatures.toml's own shared, hostile-by-default entity (no
+        # [entity.attitudes] table of its own), not scenario-local, so it's guaranteed loaded
+        # regardless of which scenario this test runs against.
+        self._set_room_encounter("ambient", [{"fire elemental": 100}])
+        self._stub_encounter_roll("fire elemental")
+        self._kill_both_wolves()
+        self.dm_core.current_target = None  # nothing currently claimed
+
+        self._take_an_ordinary_turn()
+
+        self.assertIn("fire elemental", self.dm_core.scenario_entities)
+        self.assertEqual(self.dm_core.current_target, "fire elemental")
+
+
 class TestReachableEntityNames(DMTestCase):
     """!
     @brief ImprovisationMixin._reachable_entity_names (DM_Improvisation.py) -- the shared
@@ -5718,11 +6041,9 @@ class TestCharacterCreationRename(unittest.TestCase):
         character = {
             "race": "elf",
             "allocation": {"arcane": 5, "stealth": 5, "observation": 5},
-            # Collides with creatures.toml's own "fire elemental" -- has to be an entity
-            # loaded via load_rules, not character_test.toml's own local "wolf": the rename
-            # collision check (apply_character_creation) runs before load_scenario_definition,
-            # so a scenario-local entity isn't visible to it yet (see CLAUDE.md's "Character
-            # creation").
+            # A load_rules-level collision (creatures.toml's own "fire elemental") --
+            # test_renaming_to_a_scenario_local_entitys_name_is_also_rejected below covers the
+            # scenario-local case (character_test.toml's own "wolf").
             "name": "fire elemental",
         }
 
@@ -5733,6 +6054,44 @@ class TestCharacterCreationRename(unittest.TestCase):
         # untouched, not clobbered
         self.assertEqual(dm.entities["fire elemental"]["supertype"], "creature")
         self.assertTrue(any("rename rejected" in message for message in errors))
+
+    def test_renaming_to_a_scenario_local_entitys_name_is_also_rejected(self):
+        # apply_character_creation now runs after load_scenario_definition specifically so
+        # this collision (against character_test.toml's own local "wolf", not anything in the
+        # shared Rules/Fantasy/*.toml catalog) is caught too -- previously it wasn't, since
+        # the scenario's own entities hadn't been loaded into self.entities yet at the point
+        # the rename's collision check ran.
+        errors = []
+        bus = EventBus()
+        bus.subscribe("log_error", errors.append)
+        character = {
+            "race": "elf",
+            "allocation": {"arcane": 5, "stealth": 5, "observation": 5},
+            "name": "wolf",
+        }
+
+        dm = DMCore(bus, scenario_name="character_test", character=character)
+
+        self.assertEqual(dm.player_name, "gladstone")  # rename rejected
+        self.assertEqual(dm.entities["gladstone"]["skills"]["arcane"], {"dice": 8, "pips": 0})
+        self.assertEqual(dm.entities["wolf"]["supertype"], "creature")  # untouched, not clobbered
+        self.assertTrue(any("rename rejected" in message for message in errors))
+
+    def test_renaming_rekeys_another_entitys_attitude_override_to_the_new_name(self):
+        # crypt.toml's own "anne" authors [[entity.attitudes.name]] gladstone = [100, 100, 100]
+        # -- a rename has to carry that override forward or anne's own scripted warmth toward
+        # the player silently stops applying the moment they're renamed.
+        character = {
+            "race": "elf",
+            "allocation": {"arcane": 5, "stealth": 5, "observation": 5},
+            "name": "Aria",
+        }
+        dm = DMCore(EventBus(), scenario_name="crypt", character=character)
+
+        anne_overrides = dm.entities["anne"]["attitudes"]["name"]
+        self.assertNotIn({"gladstone": [100, 100, 100]}, anne_overrides)
+        self.assertIn({"Aria": [100, 100, 100]}, anne_overrides)
+        self.assertEqual(dm.get_attitude("anne", "Aria"), [100, 100, 100])
 
     def test_name_only_character_renames_without_touching_skills(self):
         # LLDM.py's CLI quick-boot path (a scenario + a bare character name, no interactive
@@ -6411,7 +6770,9 @@ class TestGiveAndTrade(DMTestCase):
         # -- magnitude scaled by the gift's own TOML value (health potion = 15) against
         # DM_Inventory.py's SIGNIFICANT_VALUE (25): 15/25 = 0.6. A gift reads as increased
         # closeness now, not a formal debt -- obligation was dropped as an axis entirely (see
-        # CLAUDE.md's "Social and attitudes").
+        # docs/social-dialogue.md's "Social and attitudes"); rules.toml's own "favor"
+        # [[attitude_event]] restores roughly that lost weight into disposition/familiarity
+        # instead, mirroring "theft"'s own magnitude.
         base_familiarity = self.dm_core.entities["innkeeper"]["attitudes"]["default"][2]
 
         self.dm_core._on_item_interaction_detected({
@@ -6419,13 +6780,13 @@ class TestGiveAndTrade(DMTestCase):
         })
 
         familiarity = self.dm_core.get_attitude("innkeeper", self.dm_core.player_name)[2]
-        self.assertAlmostEqual(familiarity, base_familiarity + 6 * (15 / 25))
+        self.assertAlmostEqual(familiarity, base_familiarity + 12 * (15 / 25))
 
     def test_taking_currency_from_a_living_entity_nudges_a_theft_attitude(self):
         # "theft" (same wiring, currency branch) -- magnitude scaled by however much moved
         # against SIGNIFICANT_VALUE, capped at 1.0 (the innkeeper's own 40 currency exceeds it).
         # Stealing reads as reduced closeness now, not reduced trust -- trust was dropped as an
-        # axis entirely (see CLAUDE.md's "Social and attitudes").
+        # axis entirely (see docs/social-dialogue.md's "Social and attitudes").
         base_familiarity = self.dm_core.entities["innkeeper"]["attitudes"]["default"][2]
 
         self.dm_core._on_item_interaction_detected({

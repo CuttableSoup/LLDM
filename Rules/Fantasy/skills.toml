@@ -4,7 +4,7 @@ description = "Physical movement and sports activities."
 keywords = ["movement", "exertion", "physical", "climb", "jump", "swim", "run", "sprint"]
 opposes = ["athletics", "observation"]
 # Combat maneuvers any entity may attempt via athletics, no training implied -- see
-# maneuvers.toml and docs/design/skill_effect_language.md's "Universal (untrained) abilities".
+# maneuvers.toml's own "Universal (untrained) abilities".
 abilities = [ "trip", "disarm", "sunder", "bull rush", "grapple", "pin" ]
 
 [[skill]]
@@ -14,9 +14,8 @@ description = "Using swords and knives in close combat."
 # not bare words, alongside the single-word keywords below: a plain "attack"/"sword" already
 # loses to spells.toml's own "summon spectral wolf" on a sentence naming a live wolf target
 # (ex: "I attack the wolf with my sword") purely because that spell's own name/description are
-# saturated with the literal word "wolf" -- the same lexical-magnetism risk
-# docs/design/skill_effect_language.md's own "Open questions" already flags for any ability
-# whose name happens to share a word with the scene. A fuller, sentence-shaped phrase mirroring
+# saturated with the literal word "wolf" -- the same lexical-magnetism risk any ability
+# whose name happens to share a word with the scene runs into. A fuller, sentence-shaped phrase mirroring
 # real attack-a-creature input structure closes that gap without renaming/thinning the spell's
 # own established identity.
 keywords = [
@@ -101,7 +100,7 @@ description = "Deceptive physical actions or misdirection."
 keywords = ["misdirection", "sleight of hand", "distract", "feint", "fake", "bluff"]
 opposes = ["observation", "willpower"]
 # Combat maneuvers any entity may attempt via trickery, no training implied -- see
-# maneuvers.toml and docs/design/skill_effect_language.md's "Universal (untrained) abilities".
+# maneuvers.toml's own "Universal (untrained) abilities".
 abilities = [ "dirty trick", "feint" ]
 
 [[skill]]
@@ -234,8 +233,7 @@ name = "intimidation"
 description = "Frightening others to gain compliance."
 keywords = ["social", "coercion", "threat", "scare", "frighten", "bully", "menace", "force", "threaten", "intimidation", "scaring"]
 opposes = ["willpower", "intimidation"]
-# See maneuvers.toml's own "intimidate" and docs/design/skill_effect_language.md's "Universal
-# (untrained) abilities" -- any entity may attempt this, no training implied.
+# See maneuvers.toml's own "intimidate" -- any entity may attempt this, no training implied.
 abilities = [ "intimidate" ]
 
 [[skill]]

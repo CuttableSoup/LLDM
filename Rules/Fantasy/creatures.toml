@@ -10,7 +10,10 @@
 # "coyote" are here for the same reason environments.toml's "plains" environment references
 # them from its own day/night encounter tables (see docs/downtime.md's "Travel") -- a shared,
 # setting-wide environment table needs shared, setting-wide creatures to resolve to, regardless
-# of which scenario the player is actually in when the roll happens. "horse" is here for the
+# of which scenario the player is actually in when the roll happens. "pickpocket" is here for the
+# same reason -- a generic archetype any scenario/encounter table can reference, the shipped
+# worked example for [[entity.behavior]]'s own "steal"/"gift" action (see
+# DM_Combat.py's TRANSFER_ACTIONS/_resolve_transfer_behavior). "horse" is here for the
 # same "not owned by any one scenario" reason -- it's meant to be addable to any party, in any
 # scenario, as overland transport, not tied to wherever it happens to first show up. It's the
 # first entity to actually author "travel_speed" (see reference/entity_schema.toml and
@@ -132,8 +135,7 @@ max_hp = 40
 [entity.conditions.regenerating]
 duration = "permanent"
 
-# A troll's temper -- see docs/design/skill_effect_language.md's own "A troll's temper" worked
-# example. Dropping under half HP without having been burned first (recent_damage_tags, the
+# A troll's temper. Dropping under half HP without having been burned first (recent_damage_tags, the
 # same set "regenerating"'s own upkeep_blocked_by_tags already reads) makes it lash out harder;
 # "enraged" (rules.toml) is what actually gives that real teeth (a +1D bonus), not just flavor.
 [entity.on_damage]
@@ -316,3 +318,49 @@ requirements = [
     { field = "hp_per_remain", operator = ">=", value = 0.01 },
 ]
 action = "kick"
+
+[[entity]]
+name = "pickpocket"
+supertype = "creature"
+subtype = "humanoid"
+description = "A quick-fingered street thief, eyes darting for an opening -- not looking for a fight, just an opportunity."
+
+max_hp = 8
+
+# Wary, not hostile -- a pickpocket wants your coin, not a fight, so it authors no attack
+# ability at all, only "steal"/"retreat" below. A real (if mild) positive disposition, unlike
+# wild boar/coyote's unauthored hostile default, is what actually keeps is_hostile false here.
+[entity.attitudes]
+default = [ 10, -20, 0 ]
+
+[entity.skills]
+stealth = { dice = 4, pips = 0 }
+dodge = { dice = 3, pips = 0 }
+fortitude = { dice = 1, pips = 0 }
+
+# The shipped worked example for [[entity.behavior]]'s own "steal" action
+# (DM_Combat.py's TRANSFER_ACTIONS/_resolve_transfer_behavior) -- "item" = "currency" is the
+# same reserved sentinel DM_Inventory.py's player-driven "take"/"trade" already use for money
+# rather than a named inventory item; "amount" caps it at a modest sum rather than the
+# transfer_currency default of "everything the target has" (too punishing for an ambush a
+# player didn't choose to walk into, unlike the player's own deliberate "take"). Retreats the
+# instant it's actually hit (hp_per_remain drops below 0.90 on an 8-HP creature -- just about
+# any landed blow at all) rather than fighting on, the self-preservation instinct wild boar/
+# coyote/the horse above all share, just triggered far earlier -- a pickpocket that gets caught
+# runs, it doesn't stick around to trade blows. Declaration order means it only ever tries to
+# steal while still fully unengaged; nothing here stops it from trying again next round if the
+# player keeps missing -- a persistent thief pressing its luck is the point, not a bug.
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+    { field = "hp_per_remain", operator = "<", value = 0.90 },
+]
+action = "retreat"
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "steal"
+item = "currency"
+amount = 10

@@ -1,4 +1,4 @@
-from dm.DM_Combat import MOVEMENT_ACTIONS
+from dm.DM_Combat import MOVEMENT_ACTIONS, TRANSFER_ACTIONS
 from dm.DM_Rules import PLAYER_PLACEHOLDER
 from dm.DM_Types import DMCoreProtocol
 
@@ -135,8 +135,9 @@ class ValidationMixin(DMCoreProtocol):
 
     def _validate_ability_references(self):
         """!
-        @brief Cross-checks every [[entity.behavior]] entry's "action" -- skipping the two
-            reserved movement words (MOVEMENT_ACTIONS) -- against _resolves_as_named_ability, so
+        @brief Cross-checks every [[entity.behavior]] entry's "action" -- skipping the reserved
+            movement words (MOVEMENT_ACTIONS) and the reserved transfer words (TRANSFER_ACTIONS)
+            -- against _resolves_as_named_ability, so
             this can never drift out of sync with what resolve_named_ability actually does the
             moment this entity gets a real turn. template_schema.toml notes every entity field
             (including behavior) applies to an entity_template the same way it does a real
@@ -146,7 +147,7 @@ class ValidationMixin(DMCoreProtocol):
             for name, entity in namespace.items():
                 for behavior in entity.get("behavior", []):
                     action_name = behavior.get("action")
-                    if not isinstance(action_name, str) or action_name in MOVEMENT_ACTIONS:
+                    if not isinstance(action_name, str) or action_name in MOVEMENT_ACTIONS or action_name in TRANSFER_ACTIONS:
                         continue
                     if not self._resolves_as_named_ability(entity, action_name):
                         self.event_bus.publish(

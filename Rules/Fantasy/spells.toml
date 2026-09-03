@@ -63,7 +63,11 @@ language_dependent = true
 # "text" is deliberately omitted here -- Program_Interpreter.py's own inject_directive op falls
 # back to ctx's own "input" (the caster's raw turn text) when absent, so the actual suggested
 # course of action is always whatever the player actually typed, never a fixed scripted line.
-on_pass = { do = "inject_directive", entity = "target" }
+# "duration" (in block-clock blocks, DM_Time.py) is this op's own optional expiry -- one block
+# (8 hours by rules.toml's own default [time] table) matching the source rule's own "a short
+# while" flavor much better than the old no-expiry-at-all default (persisting for the rest of
+# the playthrough) did.
+on_pass = { do = "inject_directive", entity = "target", duration = 1 }
 
 [[entity]]
 name = "summon spectral wolf"

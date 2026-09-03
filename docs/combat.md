@@ -152,6 +152,27 @@ track's own conditions (`stunned`/`wounded`/`severe`/`incapacitated`/`mortal`, e
 `[[condition]]` entry already authored in `rules.toml`) mechanically real rather than narration
 flavor — a wounded character is measurably worse at everything, not just described as hurt.
 
+**A `[[condition]]` entry can also carry `prevents_action = true`** — unlike `modifier` (a
+penalized roll), this stops the entity from acting on its own turn at all.
+`is_action_prevented(entity_name)` (`DM_Status.py`) is true if any of the entity's own
+`active_conditions` has a matching `[[condition]]` entry authoring this flag.
+`DM_Core.py`'s `_resolve_roll` checks it first, ahead of even a spell's own `materials` gate —
+the player's own turn, if prevented, returns an `ActionPreventedOutcome` (no roll, same
+"can't do it, don't roll" shape `OutOfRangeOutcome`/`LanguageBarrierOutcome` already use).
+`DM_Combat.py`'s `resolve_behavior_action` checks it too, for a creature/ally's own turn —
+treated exactly like "no `[[entity.behavior]]` entry currently matches" (`None`, no action this
+round), rather than a new outcome type on that side. `rules.toml`'s `"pinned"`
+(`maneuvers.toml`'s `"pin"`, only landable on an already-`"grappled"` target) is the first
+(and, today, only) condition to author this, matching Pathfinder's real "pinned" — which stops
+a character from acting at all, not just penalizing the roll — more honestly than the modifier
+alone ever did; it keeps its own `-4` `modifier` too, in case a future mechanism (ex: an opposed
+escape attempt) ever rolls *against* a pinned entity directly rather than just skipping their
+turn. Note this is a different question from a creature's own `[[entity.behavior]]` choosing
+*not* to act while a condition holds (ex: `{field = "has_condition:paralyzed", operator = "==",
+value = false}` gating every entry off, mentioned above) — that's an authored opt-in per
+creature, still lets the roll happen at all if some behavior entry didn't gate on it; `prevents_
+action` is unconditional and covers the player's own turn too, which no behavior list ever does.
+
 **A `[[condition]]` entry can also carry a per-round `upkeep_heal`/`upkeep_damage`
 (`{dice, pips, bonus}`) instead of (or alongside) `modifier`** — a periodic effect rather than a
 roll modifier, ex: `rules.toml`'s `"regenerating"` (`upkeep_heal = {dice = 2, pips = 0, bonus =
@@ -171,9 +192,15 @@ fire. `recent_damage_tags` is cleared at the end of every `apply_round_upkeep` c
 ever reflects damage taken since the *previous* tick. `creatures.toml`'s `troll` is the shipped
 example, seeding `"regenerating"` permanently via `[entity.conditions.regenerating]` (see
 "Scenarios, locations, and rooms" for how a template's own `conditions` table becomes a live
-instance's `active_conditions` at instancing time). This mechanism is scoped to actual combat
-rounds only — there's no equivalent "per turn" concept outside one, so a regenerating creature
-doesn't heal between scenes or during freeform (non-combat) play.
+instance's `active_conditions` at instancing time). `run_round_upkeep`/`apply_round_upkeep`
+themselves stay scoped to actual combat rounds — but `DM_Status.py`'s `apply_downtime_upkeep`
+(see `docs/downtime.md`'s "Rest") is the same `get_condition_upkeep` math applied outside one:
+called from `_finish_pending_rest` once a rest actually completes, it rolls each entity's own
+heal/damage totals *once*, dice/pips/bonus scaled by the whole rest's block count (not once per
+block — the same "avoid swinginess from rolling repeatedly" reasoning rest's own fortitude
+healing already follows), so a regenerating creature genuinely heals while camped, not just
+mid-fight. It still checks `"recent_damage_tags"` the same way — a troll that took fire damage
+right before making camp still doesn't regenerate through that rest.
 
 
 ## Damage and healing

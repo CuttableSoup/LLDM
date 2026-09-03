@@ -32,8 +32,7 @@ class StatusMixin(DMCoreProtocol):
     def apply_damage(self, entity_name, amount, actor_name=None):
         """!
         @brief Subtracts damage from an entity's current HP, floored at 0, evaluates
-            on_damage statuses, and runs the entity's own [entity.on_damage] program (see
-            docs/design/skill_effect_language.md).
+            on_damage statuses, and runs the entity's own [entity.on_damage] program.
         @param entity_name The name of the entity taking damage.
         @param amount The amount of damage to apply.
         @param actor_name The entity that dealt the damage, if known -- ctx's own "actor" for
@@ -157,6 +156,29 @@ class StatusMixin(DMCoreProtocol):
         """
         return Combat_Resolution.get_condition_modifier(self.entities, self.rules, entity_name)
 
+    def is_action_prevented(self, entity_name):
+        """!
+        @brief Whether entity_name is currently unable to act on its own turn at all -- true
+            if any of its own active_conditions has a matching rules.toml [[condition]] entry
+            authoring prevents_action = true. Distinct from get_condition_modifier's own flat
+            dice penalty: rules.toml's own "pinned" (maneuvers.toml's "pin", only ever applied
+            to an already-grappled target) carries both a modifier -4 *and*
+            prevents_action = true, matching Pathfinder's real "pinned" condition -- a pinned
+            character can take essentially no physical action beyond trying to escape, not
+            just a penalized one. Checked by DM_Core.py's _resolve_roll (the player's own
+            turn -- ActionPreventedOutcome, no roll attempted) and DM_Combat.py's
+            resolve_behavior_action (a creature/ally's own turn -- treated exactly like "no
+            behavior currently matches", the same "doesn't act" outcome an entity with no
+            matching [[entity.behavior]] entry already gets).
+        @param entity_name The entity to check.
+        @return True if entity_name cannot act this turn.
+        """
+        condition_defs = {c.get("name"): c for c in self.rules.get("condition", [])}
+        return any(
+            condition_defs.get(name, {}).get("prevents_action")
+            for name in self.get_active_conditions(entity_name)
+        )
+
     def get_condition_upkeep(self, entity_name):
         """!
         @brief Sums the per-round upkeep effect of every one of entity_name's own
@@ -219,6 +241,42 @@ class StatusMixin(DMCoreProtocol):
         if damage_total > 0:
             self.apply_damage(entity_name, damage_total)
 
+    def apply_downtime_upkeep(self, blocks):
+        """!
+        @brief The downtime counterpart to apply_round_upkeep -- condition-driven upkeep (ex:
+            "regenerating"'s own upkeep_heal, creatures.toml's troll) previously only ever
+            ticked during an active combat round (run_round_upkeep), so a regenerating
+            creature never actually healed between scenes or during freeform (non-combat)
+            play, no matter how much in-fiction time passed. Called from DM_Time.py's own
+            _finish_pending_rest once a rest actually completes, against every living scene
+            entity (not just is_player/is_party -- a creature's own regeneration isn't a party
+            privilege, the same scope run_round_upkeep already uses). One aggregate roll per
+            entity over the whole span (dice/pips/bonus scaled by blocks before a single roll,
+            not one roll per block) -- the same "avoid swinginess from rolling repeatedly"
+            reasoning rest()'s own fortitude healing already follows. Deliberately doesn't
+            touch "recent_damage_tags" the way apply_round_upkeep does -- nothing takes fresh
+            damage during rest, so whatever it already held (ex: fire damage from a fight right
+            before making camp) correctly keeps suppressing a tag-blocked condition through the
+            rest too, not just the round it happened in.
+        @param blocks How many blocks this upkeep spans.
+        """
+        if blocks <= 0:
+            return
+        for entity_name in list(self.scenario_entities):
+            if self.get_current_hp(entity_name) <= 0:
+                continue
+            upkeep = self.get_condition_upkeep(entity_name)
+            heal_total = self.roll_dice(
+                upkeep["heal"]["dice"] * blocks, upkeep["heal"]["pips"] * blocks,
+            ) + upkeep["heal"]["bonus"] * blocks
+            if heal_total > 0:
+                self.apply_healing(entity_name, heal_total)
+            damage_total = self.roll_dice(
+                upkeep["damage"]["dice"] * blocks, upkeep["damage"]["pips"] * blocks,
+            ) + upkeep["damage"]["bonus"] * blocks
+            if damage_total > 0:
+                self.apply_damage(entity_name, damage_total)
+
     def run_round_upkeep(self):
         """!
         @brief Applies one round's worth of upkeep (see apply_round_upkeep) to every living
@@ -253,8 +311,7 @@ class StatusMixin(DMCoreProtocol):
 
     def _run_round_upkeep_program(self, entity_name):
         """!
-        @brief Runs entity_name's own [entity.on_round_upkeep] program (see
-            docs/design/skill_effect_language.md's "Attachment points"), alongside the ordinary
+        @brief Runs entity_name's own [entity.on_round_upkeep] program, alongside the ordinary
             per-condition upkeep loop above -- no "actor" role for this trigger, same as
             on_enter, since a per-round tick isn't "done by" anyone.
         @param entity_name The entity ticking over this round.

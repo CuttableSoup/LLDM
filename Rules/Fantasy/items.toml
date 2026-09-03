@@ -246,8 +246,7 @@ blocks_if_condition = "identified"
 [entity.test.pass]
 reveal = true
 
-# Makes the curse real, not just flavor -- see docs/design/skill_effect_language.md's own
-# "The cursed dagger, actually cursed" worked example. "target" here is the dagger itself (the
+# Makes the curse real, not just flavor. "target" here is the dagger itself (the
 # entity this program lives on); "actor" is whoever just equipped it. Equipping an
 # *unidentified* cursed dagger actually curses the wearer -- the [entity.test] above (an arcane
 # check) becomes something worth doing before putting the thing on, not just flavor text.

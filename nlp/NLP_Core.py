@@ -35,7 +35,7 @@ NLI_MODEL_NAME = "facebook/bart-large-mnli"
 # misread plain informational dialogue ("do you know where the blacksmith is") as
 # negative/positive at sentiment_confidence_threshold's own 0.5 floor -- exactly the "purely
 # informational dialogue" case classify_sentiment's own contract has to get right (see
-# CLAUDE.md's "Dialogue sentiment"). This richer label phrasing plus a hypothesis template framed
+# docs/social-dialogue.md's "Dialogue sentiment"). This richer label phrasing plus a hypothesis template framed
 # around dialogue (rather than the library's generic "this example is...") was tuned against a
 # 20-line held-out set spanning hostile/warm/informational/sarcastic dialogue and cleared it
 # without needing to raise the confidence threshold at all.
@@ -48,7 +48,7 @@ SENTIMENT_HYPOTHESIS_TEMPLATE = "The speaker's tone toward the listener is {}."
 # admiring in general tone but physically threatening) to confirm these two read something
 # genuinely different from disposition, not just a relabeled copy of it. Of the three axes this
 # was tried against beyond disposition (threat/esteem/familiarity), esteem never reliably
-# separated from disposition (see CLAUDE.md's "Extended goals") and was dropped; threat and
+# separated from disposition (see docs/extended-goals.md) and was dropped; threat and
 # familiarity did. Both share one hypothesis template -- unlike disposition's own dialogue-tone
 # framing, "This statement leaves the listener feeling {}." tested equally well for both without
 # needing separate wording.
@@ -157,8 +157,7 @@ class SentenceTransformerMatcher(IntentMatcher):
         skill_indices = []
 
         # Named abilities (techniques/spells/inline abilities like gladstone's "punch", plus
-        # skill-listed universal maneuvers like "trip"/"disarm"/"sunder" -- see
-        # docs/design/skill_effect_language.md's "Universal (untrained) abilities") are matched
+        # skill-listed universal maneuvers like "trip"/"disarm"/"sunder") are matched
         # in this same embedding space, so a player naming one directly (ex: "I cleave through
         # them") can resolve to that exact ability instead of only the skill it happens to share
         # with a plain weapon -- see DMCore.resolve_named_ability, which gates an *owned* match
@@ -502,7 +501,7 @@ class SentenceTransformerMatcher(IntentMatcher):
         """!
         @brief Classifies a dialogue line's overall tone (drives the disposition axis) -- see
             _classify_polarity for the shared mechanics. Only called from
-            Intent_Classification.py's own dialogue branch (see CLAUDE.md's "Dialogue"), never
+            Intent_Classification.py's own dialogue branch (see docs/social-dialogue.md's "Dialogue"), never
             for skill/item/target matching.
         @param processed_text The cleaned and processed player input.
         @return See _classify_polarity's own @return.

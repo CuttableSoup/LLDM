@@ -48,6 +48,14 @@ actually would, the same "avoid swinginess from rolling repeatedly" reasoning cr
 of those blocks turned out hostile: resting through an ambush still heals exactly as much as an
 uneventful rest of the same length would.
 
+Alongside that party-only fortitude heal, `apply_downtime_upkeep` (`DM_Status.py`) ticks
+condition-driven upkeep (ex: `"regenerating"`'s own `upkeep_heal` — see `docs/combat.md`'s
+"Status and conditions") for *every* living scene entity, not just the party — a creature's own
+regeneration isn't a party privilege. Same one-aggregate-roll-scaled-by-blocks shape as the
+fortitude heal, and the same `"recent_damage_tags"` gating `run_round_upkeep` already applies
+mid-combat. This is what actually made `"regenerating"` mean something outside a fight at all —
+previously the only tick was `run_round_upkeep`, called once per combat round and nowhere else.
+
 Reachable in play as the free-text `"rest"` intent (`Intent_Classification.py`'s `REST_KEYWORDS` —
 `"rest"`, `"make camp"`, `"set up camp"`, `"sleep"`, `"camp for the night"`), one of
 `EXEMPT_ITEM_INTENTS` alongside every other free-standing intent (see `CONTEXT.md`): diceless,

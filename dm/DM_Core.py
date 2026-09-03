@@ -2,7 +2,7 @@ import os
 import re
 
 from dm.DM_ActionOutcome import (
-    DamageEffect, DefenderDetailsEffect, LanguageBarrierOutcome, LootEffect,
+    ActionPreventedOutcome, DamageEffect, DefenderDetailsEffect, LanguageBarrierOutcome, LootEffect,
     MissingSpellMaterialsOutcome, OutOfRangeOutcome, RevealEffect, RolledOutcome, SummonEffect,
     rolled_outcome_from_roll,
 )
@@ -90,7 +90,9 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         @param character An optional finished character-creation result
             ({"race": race_name, "allocation": {skill_name: dice_int}}), applied to the
             player entity via apply_character_creation (DM_CharacterCreation.py) right
-            after self.player_name is resolved, before any scenario is loaded. None (the
+            after self.player_name is resolved and the scenario's own TOML data is loaded
+            (load_scenario_definition), but before any of it is actually instanced
+            (load_scenario) -- see that method's own docstring for why. None (the
             default) leaves the player template's own hand-authored skills untouched --
             every existing caller that doesn't pass this keeps working exactly as before.
         @param setting Which Rules/ subdirectory to load everything from (skills/entities/
@@ -178,8 +180,13 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         # ad-hoc test scenarios that omit gladstone entirely still keep the same player_name
         # they booted with.
         self.player_name = self._resolve_player_name()
-        self.apply_character_creation(character)
+        # load_scenario_definition before apply_character_creation (reversed from this
+        # project's earlier ordering) so a character-creation rename's own collision check
+        # sees scenario-local entities too, not just the shared Rules/<setting>/*.toml
+        # catalog -- see DM_CharacterCreation.py's own docstring for why the rename still
+        # has to land before load_scenario() itself (the actual instancing step) either way.
         self.load_scenario_definition(scenario_name)
+        self.apply_character_creation(character)
         self.validate_loaded_data()
         self.load_scenario()
         self.event_bus.publish("log_info", "DMCore initialized.")
@@ -270,6 +277,13 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         clauses = data.get("clauses")
         if not clauses:
             return
+        # Once per real player turn, regardless of whether it turns out to be item-only,
+        # action-only, or mixed -- the current location/room's own "ambient" [[location.
+        # encounter]] entries (DM_Encounters.py), if any, get their repeating per-turn roll
+        # before anything else this turn resolves, the same "encounter resolves, then the
+        # player's own action proceeds against whatever state now exists" timing an "on_enter"
+        # roll already has relative to the very first action taken in a freshly-entered room.
+        self._resolve_ambient_encounter()
         input_text = data.get("input")
         # Every clause this turn -- item interaction or skill/ability action alike -- shares
         # the same cumulative -1D economy (see this method's own "Multiple actions" note). 0
@@ -582,6 +596,12 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             roll, if any, needed again by _apply_damage_if_hit; via_test is True if this was a
             flat [entity.test] check, which must never also roll bonus weapon damage.
         """
+        # Checked ahead of even materials -- an entity unable to act at all this turn (ex: a
+        # "pinned" condition, prevents_action = true) can't cast/attack/anything, the most
+        # fundamental "can't do it, don't roll" gate of all.
+        if self.is_action_prevented(self.player_name):
+            return ActionPreventedOutcome(self.player_name, skill_name), None, False
+
         # A spell/technique/innate ability's own "materials" (same {item, quantity} shape a
         # craft recipe's own "materials" uses -- DM_Crafting.py's _has_materials, reused
         # directly) gates every roll path below uniformly -- checked ahead of the entity-test/
@@ -711,9 +731,8 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
 
     def _run_ability_outcome_program(self, result, skill_name, named_ability, ability, target_name, via_test, input_text=None):
         """!
-        @brief Runs the resolved ability's own on_pass/on_fail program (see
-            docs/design/skill_effect_language.md's "Universal (untrained) abilities" and
-            "Attachment points") once a real ability-based roll has resolved -- closes the "22
+        @brief Runs the resolved ability's own on_pass/on_fail program once a real
+            ability-based roll has resolved -- closes the "22
             dead skills" gap: a skill whose only mechanical effect is a condition/attitude nudge
             (ex: intimidate, trip/disarm/sunder) now actually does something on a pass/fail,
             without a new Python branch per skill. Never fires for a flat [entity.test] check
@@ -758,8 +777,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
 
     def _run_test_outcome_program(self, test, success, entity_name):
         """!
-        @brief Runs an [entity.test]'s own on_pass/on_fail program (see
-            docs/design/skill_effect_language.md's "Attachment points") -- sibling to the
+        @brief Runs an [entity.test]'s own on_pass/on_fail program -- sibling to the
             test's existing flat "pass"/"fail" outcome tables, for a consequence that needs a
             conditional the flat table can't express. actor is the checking entity (always the
             player today -- entity tests are player-initiated); target is the entity the test
@@ -1157,9 +1175,9 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
 
     def _run_interact_program(self, intent, item_name, target_name):
         """!
-        @brief Runs the interacted-with entity's own [entity.on_interact.<intent>] program (see
-            docs/design/skill_effect_language.md's "Attachment points" -- the cursed dagger's
-            own on_interact.equip is the shipped worked example) -- the single shared funnel
+        @brief Runs the interacted-with entity's own [entity.on_interact.<intent>] program (the
+            cursed dagger's own on_interact.equip is the shipped worked example) -- the single
+            shared funnel
             every intent already resolves through (resolved(), above), right before its one
             item_interaction_resolved publish, so this only ever fires once per intent
             regardless of which branch resolved it. Only on success (found -- resolved()'s own
