@@ -12,6 +12,8 @@
 """
 from intents.advance_retreat import narrate_advance_retreat, resolve_advance_retreat
 from intents.formation import narrate_formation, resolve_formation
+from intents.hitch import narrate_hitch, narrate_unhitch, resolve_hitch, resolve_unhitch
+from intents.mount import narrate_dismount, narrate_mount, resolve_dismount, resolve_mount
 from intents.move import narrate_move, resolve_move
 from intents.rest import narrate_rest, resolve_rest
 from intents.speak_language import narrate_speak_language, resolve_speak_language
@@ -27,4 +29,8 @@ HANDLERS = {
     "rest": (resolve_rest, narrate_rest),
     "move": (resolve_move, narrate_move),
     "travel": (resolve_travel, narrate_travel),
+    "mount": (resolve_mount, narrate_mount),
+    "dismount": (resolve_dismount, narrate_dismount),
+    "hitch": (resolve_hitch, narrate_hitch),
+    "unhitch": (resolve_unhitch, narrate_unhitch),
 }

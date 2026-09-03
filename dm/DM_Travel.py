@@ -15,7 +15,8 @@ class TravelMixin(DMCoreProtocol):
         instantiated on its own; relies on self.rules/self.entities/self.locations/
         self.scenario_entities/self.current_location_key/self.known_locations/self.event_bus/
         self.rooms/self.player_name/self.watch_rotation_index/self.pending_downtime/
-        self._is_party_member/self.is_hostile/self.get_current_hp/self._enter_location/
+        self._is_party_member/self.is_hostile/self.get_current_hp/self._resolve_mount_targets/
+        self._enter_location/
         self._current_room/self._describe_scenario_characters/self.advance_blocks/
         self.is_daytime/self._resolve_one_encounter/self.resolve_action/
         self.apply_condition/self._any_hostile_present/self._resume_pending_downtime, set up
@@ -74,18 +75,49 @@ class TravelMixin(DMCoreProtocol):
         """
         return self.rules.get("travel", {"default_speed": 4})
 
+    def _resolve_travel_speed(self, entity_name, _visited=None):
+        """!
+        @brief entity_name's own effective overland speed -- its own authored "travel_speed"
+            directly if it has one (a leaf provider, ex: creatures.toml's own "horse", a car),
+            else the *minimum* _resolve_travel_speed across every currently-present entity
+            named in its own "mount" field (see entity_schema.toml's own "mount" comment) --
+            ex: a rider defers to their cart, which in turn defers to whichever horse(s)
+            currently pull it, so a rider's own effective speed walks that whole chain rather
+            than needing to name the team directly. Falls back to [travel]'s own default_speed
+            if entity_name has neither a travel_speed nor a live mount to defer to.
+            _visited guards against a malformed cyclic "mount" chain (never authored in
+            shipped data).
+        @param entity_name The entity to resolve.
+        @param _visited Internal recursion guard; never pass explicitly.
+        @return The resolved travel speed -- always a real number, never None.
+        """
+        default_speed = self._travel_rules().get("default_speed", 4)
+        visited = _visited or set()
+        if entity_name in visited:
+            return default_speed
+        visited = visited | {entity_name}
+
+        entity = self.entities.get(entity_name, {})
+        if "travel_speed" in entity:
+            return entity["travel_speed"]
+        mounts = self._resolve_mount_targets(entity_name)
+        if not mounts:
+            return default_speed
+        return min(self._resolve_travel_speed(name, visited) for name in mounts)
+
     def _party_travel_speed(self):
         """!
         @brief The whole party's travel speed for grid distance/block math -- the slowest
-            currently-present is_player/is_party member's own "travel_speed" field (an
-            entity/race-level override), falling back to [travel]'s own default_speed for
-            anyone who doesn't author one.
+            currently-present is_player/is_party member's own effective travel speed
+            (_resolve_travel_speed -- their own "travel_speed" field, or whatever they're
+            currently mounted on), falling back to [travel]'s own default_speed for anyone
+            who has neither.
         @return The lowest travel speed among present party members (default_speed if somehow
             none are present at all).
         """
         default_speed = self._travel_rules().get("default_speed", 4)
         speeds = [
-            self.entities.get(name, {}).get("travel_speed", default_speed)
+            self._resolve_travel_speed(name)
             for name in self.scenario_entities
             if self._is_party_member(name)
         ]
@@ -228,11 +260,15 @@ class TravelMixin(DMCoreProtocol):
         """!
         @brief Handles "travel" from a gridded current location -- see this class's own
             docstring for the full model. Denied (reason "no_exit") if input_text doesn't name
-            a known, gridded destination, or (reason "blocked_by_enemies") under the exact same
-            room-occupant gate DM_Movement.py's own exit-graph path already runs. The
-            "downtime_interrupted" denial/opportunistic-resume check lives one level up, in
-            DM_Movement.py's own _resolve_travel_intent -- see that method's own docstring for
-            why it has to run before the grid/non-grid branch decision, not here.
+            a known, gridded destination, (reason "blocked_by_enemies") under the exact same
+            room-occupant gate DM_Movement.py's own exit-graph path already runs, or (reason
+            "mount_overloaded") if the player's own mount is currently carrying more than it
+            can bear (_is_mount_overloaded, DM_Rules.py) -- checked fresh here, not just once
+            at mount/hitch time, same reasoning DM_Movement.py's own advance_or_retreat
+            applies to band movement. The "downtime_interrupted" denial/opportunistic-resume
+            check lives one level up, in DM_Movement.py's own _resolve_travel_intent -- see
+            that method's own docstring for why it has to run before the grid/non-grid branch
+            decision, not here.
         @param input_text The raw (lowercased, prefix-stripped) player input.
         @param resolved The item_interaction_resolved publisher closure from
             DMCore._on_item_interaction_detected.
@@ -245,6 +281,11 @@ class TravelMixin(DMCoreProtocol):
 
         if self.rooms and self._any_hostile_present():
             resolved(False, reason="blocked_by_enemies")
+            return
+
+        mounts = self._resolve_mount_targets(self.player_name)
+        if mounts and self._is_mount_overloaded(mounts[0]):
+            resolved(False, reason="mount_overloaded")
             return
 
         destination_grid = self.locations[destination_key]["grid"]

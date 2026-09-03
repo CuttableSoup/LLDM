@@ -46,21 +46,31 @@ trap/scythe trap are the shipped example, both pairing `xp = true` with their ow
 
 ## Carry capacity (bulk)
 
-`get_max_bulk(entity_name)` (`DM_Rules.py`) resolves an entity's own carrying capacity from
-`rules.toml`'s `[bulk]` table — `min_bulk` plus that entity's own `skill` dice times
-`mod_multiplier` (Fantasy: `min_bulk = 3`, `skill = "strength"`, `mod_multiplier = 2`, so a 2D
-strength character carries `3 + 2*2 = 7`). Unlike every other rules.toml-backed formula, this is
-never an authored `[[entity]]` field — `entity_schema.toml` documents only `bulk` (an object's own
-carry weight); there is no `max_bulk` entity field at all. A setting that authors no `[bulk]`
-table (ex: `Rules/Zombie/`) gets `None` back and the cap is never enforced.
+`get_max_bulk(entity_name)` (`DM_Rules.py`) is an entity's own authored `max_bulk` field if it has
+one (a flat override, no formula involved — ex: `Rules/Zombie/`'s `riley`/`car`), else `rules.toml`'s
+`[bulk]` table — `min_bulk` plus that entity's own `skill` dice times `mod_multiplier` (Fantasy:
+`min_bulk = 3`, `skill = "strength"`, `mod_multiplier = 2`, so a 2D strength character carries
+`3 + 2*2 = 7`). An authored `max_bulk` always wins over the formula when both are available. A
+setting that authors no `[bulk]` table and whose entity authors no `max_bulk` of its own either
+(most of `Rules/Zombie/`) gets `None` back and the cap is never enforced for that entity.
 
 `get_current_bulk(entity_name)` sums the `bulk` field of everything in an entity's own
-`inventory` (an equipped item is always also listed there, so it's never double-counted).
+`inventory` (an equipped item is always also listed there, so it's never double-counted), plus —
+now that `bulk` also means something on a creature, not just an object — the load contributed by
+any currently-present entity whose own `mount` field names entity_name (their own flat `bulk`,
+their body weight, plus their own carried gear too if `rules.toml`'s `[bulk]` table opts in via
+`count_rider_gear`, default true). See `docs/downtime.md`'s "Mounts and conveyance" for the full
+mount/rider design and `DM_Rules.py`'s `get_carrying_capacity` (a *team*-aware capacity, summed
+across whatever an entity like a cart itself defers to via its own `mount`, used instead of a
+flat `get_max_bulk` wherever a mount's capacity is checked).
+
 `DM_Inventory.py`'s `_bulk_would_be_exceeded(item_name)` checks whether adding that item's own
 bulk to the player's current load would exceed `get_max_bulk` — `"take"`/`"trade"` (against a
 target's inventory) and `"take"` off the ground are all denied `reason: "bulk_exceeded"` when it
 would. Only ever checked against the player — no other entity's inventory is capacity-checked,
-and `"give"` is never bulk-gated either way.
+and `"give"` is never bulk-gated either way. Mounting an entity is checked separately
+(`DM_Rules.py`'s `_would_exceed_mount_capacity`, `DM_Movement.py`'s `_resolve_mount_intent`)
+against that entity's own `get_carrying_capacity`, not this player-only check.
 
 
 ## Items and movement as intents

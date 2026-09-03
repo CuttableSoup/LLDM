@@ -89,7 +89,8 @@ class RulesMixin(DMCoreProtocol):
         composed into DMCore, never instantiated on its own; relies on
         self.skills/self.entities/self.rules/self.scenario/self.scenario_entities/
         self.event_bus/self.player_name, set up by DMCore.__init__).
-        _describe_scenario_characters calls self.describe_character (SocialMixin). Inherits
+        _describe_scenario_characters calls self.describe_character (SocialMixin);
+        _enter_location/enter_room call self._sync_mount_bands (MovementMixin). Inherits
         DMCoreProtocol purely so type checkers can resolve these shared attributes/
         cross-mixin methods -- see DM_Types.py.
     """
@@ -218,36 +219,199 @@ class RulesMixin(DMCoreProtocol):
 
         return supertype_only_slots if supertype_only_slots is not None else []
 
-    def get_current_bulk(self, entity_name):
+    def get_current_bulk(self, entity_name, _visited=None):
         """!
         @brief Sums the "bulk" field of every item entity_name is currently carrying (its own
             "inventory" list -- an equipped item is always also listed there, see
-            entity_schema.toml's own [entity.equipped] comment, so it's never double-counted).
+            entity_schema.toml's own [entity.equipped] comment, so it's never double-counted),
+            plus, now that "bulk" also means something on a creature (see entity_schema.toml's
+            own "bulk"/"mount" comments), the load contributed by every currently-present
+            entity whose own "mount" currently names entity_name -- each rider's own flat
+            "bulk" (body weight), plus their own get_current_bulk (their carried gear) too if
+            rules.toml's [bulk] table opts in via "count_rider_gear" (default true). A rider
+            mounted on a rider mounted on entity_name is handled the same recursive way (their
+            own get_current_bulk already folds in whoever's mounted on *them*); _visited
+            guards against a malformed cyclic "mount" chain (never authored in shipped data).
         @param entity_name The name of the entity to total.
+        @param _visited Internal recursion guard; never pass explicitly.
         @return The summed bulk, 0 if entity_name carries nothing or is unknown.
         """
+        visited = _visited or set()
+        if entity_name in visited:
+            return 0
+        visited = visited | {entity_name}
+
         entity = self.entities.get(entity_name, {})
-        return sum(self.entities.get(item_name, {}).get("bulk", 0) for item_name in entity.get("inventory", []))
+        own_cargo = sum(self.entities.get(item_name, {}).get("bulk", 0) for item_name in entity.get("inventory", []))
+
+        count_rider_gear = self.rules.get("bulk", {}).get("count_rider_gear", True)
+        rider_load = 0
+        for rider_name in self.scenario_entities:
+            if rider_name == entity_name or entity_name not in self._resolve_mount_targets(rider_name):
+                continue
+            rider = self.entities.get(rider_name, {})
+            rider_load += rider.get("bulk", 0)
+            if count_rider_gear:
+                rider_load += self.get_current_bulk(rider_name, visited)
+
+        return own_cargo + rider_load
+
+    def _resolve_mount_targets(self, entity_name):
+        """!
+        @brief entity_name's own currently-present, still-living "mount" entries (see
+            entity_schema.toml's own "mount") -- a bare string or a list, normalized to a
+            list here. An absent "mount" field, or one naming something no longer in the
+            scene or reduced to 0 HP, is silently dropped rather than raising -- losing a
+            mount, by any means, just unwinds the relationship with no error (see
+            entity_schema.toml's own "mount" comment).
+        @param entity_name The entity whose own "mount" field to resolve.
+        @return A list of zero or more real, present, living entity names.
+        """
+        raw = self.entities.get(entity_name, {}).get("mount")
+        if not raw:
+            return []
+        names = [raw] if isinstance(raw, str) else list(raw)
+        return [name for name in names if name in self.scenario_entities and self.get_current_hp(name) > 0]
+
+    def get_carrying_capacity(self, entity_name, _visited=None):
+        """!
+        @brief entity_name's own real-time load-bearing capacity -- get_max_bulk directly if
+            it has no live "mount" of its own (a leaf provider, ex: a horse, a car), else the
+            *sum* of every currently-present mount's own get_carrying_capacity (ex: a cart's
+            own capacity is whatever its currently-hitched team can bear, never a number
+            authored on the cart itself) -- see entity_schema.toml's own "mount" comment for
+            why capacity aggregates by sum where _resolve_travel_speed (DM_Travel.py)
+            aggregates by minimum. A provider that itself resolves to None (uncapped)
+            contributes 0 rather than making the whole sum unknown. _visited guards against a
+            malformed cyclic "mount" chain (never authored in shipped data).
+        @param entity_name The entity to check.
+        @param _visited Internal recursion guard; never pass explicitly.
+        @return The summed capacity, or get_max_bulk's own None if entity_name has no live
+                mount and no capacity of its own either.
+        """
+        visited = _visited or set()
+        if entity_name in visited:
+            return 0
+        visited = visited | {entity_name}
+
+        mounts = self._resolve_mount_targets(entity_name)
+        if not mounts:
+            return self.get_max_bulk(entity_name)
+        return sum(self.get_carrying_capacity(name, visited) or 0 for name in mounts)
+
+    def _would_exceed_mount_capacity(self, mount_name, rider_name):
+        """!
+        @brief Checks whether rider_name mounting (or loading cargo onto) mount_name would
+            push mount_name's own current load past its own get_carrying_capacity -- the same
+            "would this exceed capacity" shape _bulk_would_be_exceeded already checks for the
+            player's own personal inventory, just against a mount's own team-aware capacity
+            instead of a flat get_max_bulk. rider_name's own contribution is computed exactly
+            the way get_current_bulk already folds in a live rider (their own "bulk" plus,
+            if opted in, their own carried gear) -- calling this ahead of actually setting
+            "mount" previews the same number get_current_bulk(mount_name) would report the
+            instant afterward.
+        @param mount_name The entity being mounted/loaded.
+        @param rider_name The entity that would newly be mounted on it.
+        @return True if this would exceed capacity; always False if get_carrying_capacity
+                returns None (uncapped).
+        """
+        capacity = self.get_carrying_capacity(mount_name)
+        if capacity is None:
+            return False
+        rider = self.entities.get(rider_name, {})
+        added = rider.get("bulk", 0)
+        if self.rules.get("bulk", {}).get("count_rider_gear", True):
+            added += self.get_current_bulk(rider_name)
+        return self.get_current_bulk(mount_name) + added > capacity
+
+    def _is_mount_overloaded(self, mount_name):
+        """!
+        @brief Whether mount_name is *currently* carrying more than it can bear
+            (get_current_bulk > get_carrying_capacity) -- unlike _would_exceed_mount_capacity
+            (a one-time preview checked only at the moment of mounting/hitching), this is
+            re-checked every time movement is attempted, so gear picked up mid-ride, a second
+            rider mounting after the first, or a puller dying out of a team can all ground an
+            already-underway trip, not just block a fresh one. DM_Movement.py's
+            advance_or_retreat and DM_Travel.py's _resolve_grid_travel_intent both refuse to
+            move at all while this is true.
+        @param mount_name The entity to check.
+        @return True if overloaded; always False for an uncapped mount
+                (get_carrying_capacity returns None).
+        """
+        capacity = self.get_carrying_capacity(mount_name)
+        if capacity is None:
+            return False
+        return self.get_current_bulk(mount_name) > capacity
+
+    def _mount_chain(self, entity_name, _visited=None):
+        """!
+        @brief Every entity reachable by walking entity_name's own "mount" field forward --
+            whatever it currently defers to, and whatever *that* in turn defers to. Unlike
+            _resolve_mount_targets, not filtered by current scene presence or liveness: this
+            is used to decide who should be *carried along* into a new location/room
+            (_carry_mounts_into_scene), not to resolve a live stat off someone already known
+            to be there -- a mount that's between scenes (ex: about to be re-added by the very
+            call this feeds into) still needs to be found by name here.
+        @param entity_name The entity whose own mount chain to walk.
+        @param _visited Internal recursion guard; never pass explicitly.
+        @return A set of entity names (never includes entity_name itself).
+        """
+        visited = _visited if _visited is not None else {entity_name}
+        raw = self.entities.get(entity_name, {}).get("mount")
+        names = [] if not raw else ([raw] if isinstance(raw, str) else list(raw))
+        chain = set()
+        for name in names:
+            if name in visited:
+                continue
+            visited.add(name)
+            chain.add(name)
+            chain |= self._mount_chain(name, visited)
+        return chain
+
+    def _carry_mounts_into_scene(self):
+        """!
+        @brief Ensures whatever the player currently rides/is hitched to (walked
+            transitively via _mount_chain) is actually present in self.scenario_entities --
+            called everywhere that list gets rebuilt from scratch on a location/room change
+            (_populate_room, _enter_location's freeform branch), since neither of those
+            otherwise has any notion of "this ad hoc entity was tagging along" the way an
+            authored is_party member (named directly in that location/room's own "entities"
+            list) does. Without this, a mounted horse would just vanish the moment the player
+            actually arrived anywhere new -- present for the one grid-travel leg whose
+            block/speed math already ran, gone for the next. A mount never needs
+            re-instancing here -- it already has a live, mutable copy in self.entities from
+            whenever it was first mounted/hitched -- this only ever appends a reference.
+            Deliberately scoped to the player alone, not every present is_party member, since
+            "mount"/"dismount" are themselves player-only intents today (DM_Movement.py) --
+            nothing else can actually have a "mount" field set through ordinary play yet.
+        """
+        for name in self._mount_chain(self.player_name):
+            if name not in self.scenario_entities:
+                self.scenario_entities.append(name)
 
     def get_max_bulk(self, entity_name):
         """!
-        @brief Resolves entity_name's own carrying capacity from rules.toml's [bulk] table --
-            min_bulk plus this entity's own "skill" dice times mod_multiplier (ex: Fantasy's
-            min_bulk = 3, mod_multiplier = 2, so a 2D strength character carries 3 + 2*2 = 7
-            bulk before DM_Inventory.py's own _bulk_would_be_exceeded starts refusing
-            "take"/"trade" with reason "bulk_exceeded"). Unlike every other rules.toml-backed
-            formula in this file, max_bulk is never itself an authored [[entity]] field --
-            it's always computed here, the same "decided by a rules entry" the [bulk] table's
-            own comment describes.
+        @brief entity_name's own carrying capacity -- its own authored "max_bulk" field if it
+            has one (ex: Rules/Zombie's "riley"/"car", a flat number with no formula behind it),
+            else resolves rules.toml's own [bulk] table -- min_bulk plus this entity's own
+            "skill" dice times mod_multiplier (ex: Fantasy's min_bulk = 3, mod_multiplier = 2,
+            so a 2D strength character carries 3 + 2*2 = 7 bulk before DM_Inventory.py's own
+            _bulk_would_be_exceeded starts refusing "take"/"trade" with reason
+            "bulk_exceeded"). An authored field always wins over the formula when both are
+            available -- an explicit number is a deliberate override, not something a generic
+            rule should second-guess.
         @param entity_name The name of the entity to look up.
-        @return The max bulk this entity can carry, or None if the current setting authors no
-                [bulk] table at all (ex: Rules/Zombie/) -- callers treat None as "uncapped",
-                never as zero.
+        @return The max bulk this entity can carry, or None if it authors no "max_bulk" field
+                of its own and the current setting authors no [bulk] table either (ex: most of
+                Rules/Zombie/) -- callers treat None as "uncapped", never as zero.
         """
+        entity = self.entities.get(entity_name, {})
+        if "max_bulk" in entity:
+            return entity["max_bulk"]
         formula = self.rules.get("bulk")
         if not formula:
             return None
-        skill_stats = self.entities.get(entity_name, {}).get("skills", {}).get(formula.get("skill"), {})
+        skill_stats = entity.get("skills", {}).get(formula.get("skill"), {})
         return formula.get("min_bulk", 0) + skill_stats.get("dice", 0) * formula.get("mod_multiplier", 1)
 
     def _validate_equipped_slots(self):
@@ -642,6 +806,7 @@ class RulesMixin(DMCoreProtocol):
             self.visited_rooms[room_key] = list(room_entities)
             self.entity_instancing_order.append(("room", self.current_location_key, room_key))
         self.scenario_entities = list(self.persistent_entities) + room_entities
+        self._carry_mounts_into_scene()
 
     def load_scenario(self, skip_llm_generation=False):
         """!
@@ -755,6 +920,7 @@ class RulesMixin(DMCoreProtocol):
             self.current_room_key = None
             self.visited_rooms = {}
             self.scenario_entities = list(self.persistent_entities)
+            self._carry_mounts_into_scene()
             # No bands to speak of in a freeform location -- pinning everyone (the player
             # included) to band 1 is what keeps is_in_range/get_distance_between correct with
             # zero special-casing (see DM_Movement.py's _clamp_band).
@@ -767,6 +933,10 @@ class RulesMixin(DMCoreProtocol):
         # somewhere other than band 1 doesn't leave the party visibly out of formation before
         # anyone's taken a single action.
         self._apply_party_formation()
+        # A carried-along mount needs its own band snapped to the player's too -- their own
+        # TOML-authored "entities" list obviously never mentions it (see
+        # _carry_mounts_into_scene above), so nothing else here would ever place it correctly.
+        self._sync_mount_bands(self.player_name)
 
         # Keeps current_target in sync with scenario_entities on every location entry -- covers
         # __init__, load_game, and every later travel/room move alike.
@@ -825,6 +995,7 @@ class RulesMixin(DMCoreProtocol):
         self.entities[self.player_name]["band"] = arrival_band
         self._populate_room(room_key, skip_llm_generation=skip_llm_generation)
         self._apply_party_formation()
+        self._sync_mount_bands(self.player_name)
 
         self.current_target = self._choose_combat_target()
         self.event_bus.publish("log_info", f"Entered room '{room_key}': {self.scenario_entities}")

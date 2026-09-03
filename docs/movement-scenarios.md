@@ -13,7 +13,7 @@ moves via `advance_or_retreat(direction)` (`DM_Movement.py`): shifts the player'
 their `speed` (default 1) toward or away from `current_target`. A creature/ally moves the same
 way via `move_toward_or_away(entity_name, opponent_name, direction)`, relative to whichever
 opponent `resolve_behavior_action` resolved for it. Only the one entity that moved has its band
-changed (aside from party formation, below), but because gaps are computed from both sides'
+changed (aside from party formation and mount syncing, below), but because gaps are computed from both sides'
 bands, one move can change its distance to every other entity at once — not always in the
 expected direction, since retreating from one opponent can carry an entity toward something
 else. At a zero-gap tie, "advance" is a no-op; "retreat" prefers a higher band number, falling
@@ -35,6 +35,13 @@ player can override `follow_offset` in play: "stay behind me"/"walk beside me" r
 (`DMCore._resolve_formation_intent`) — a party member's name either is or isn't literally
 present in the input (whole-word, case-insensitive), so naming one addresses only them; naming
 none addresses the whole party.
+
+**Mounts.** `_sync_mount_bands` (`DM_Movement.py`) keeps a rider and whatever they're mounted on
+(`entity_schema.toml`'s own `mount` field) on the same band after either one moves under its own
+power — called from both `advance_or_retreat` and `move_toward_or_away`, in both directions (a
+rider's own move carries their mount along; a mount's own behavior-driven move carries its rider
+along too). See `docs/downtime.md`'s "Mounts and conveyance" for the full design, including the
+`"mount"`/`"dismount"` free-standing intents themselves.
 
 `range` (int, in bands) lives on the weapon/spell/ability itself, absent/`0` meaning melee —
 usable only in the target's own band. A reach weapon extends that by one band; a ranged

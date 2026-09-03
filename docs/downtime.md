@@ -84,10 +84,95 @@ neither could otherwise ever be named before being visited once).
 **Distance and speed.** Blocks for a trip are Euclidean distance between the two locations' own
 `grid` coordinates, divided by the party's travel speed, rounded up (`_resolve_grid_travel_intent`)
 — no fractional blocks, the same rounding rule HP/dice/bands already follow. `_party_travel_speed`
-paces to the *slowest* currently-present `is_player`/`is_party` member's own `travel_speed` field,
-falling back to `rules.toml`'s `[travel]` table (`default_speed`, 4 by default) for whoever doesn't
-author one — a stat fully distinct from combat's own per-band `speed` (`DM_Movement.py`), which
-never applies outside a room's own band line.
+paces to the *slowest* currently-present `is_player`/`is_party` member's own **effective** travel
+speed (`_resolve_travel_speed`, `DM_Travel.py`) — a stat fully distinct from combat's own per-band
+`speed` (`DM_Movement.py`), which never applies outside a room's own band line.
+
+**Mounts and conveyance.** An entity can author `travel_speed` directly (`Rules/Fantasy/creatures.
+toml`'s `horse`, `Rules/Zombie/items.toml`'s `car`) or defer to another entity via its own `mount`
+field (a string, or a list for something with more than one provider) — `_resolve_travel_speed`
+walks that reference recursively: a rider names their cart, the cart names its own team, so a
+rider's effective speed resolves through the whole chain without needing to name the team
+directly. Speed aggregates a multi-entry `mount` by **minimum** (paced to the slowest puller);
+`DM_Rules.py`'s `get_carrying_capacity` mirrors this for load instead of speed, aggregating by
+**sum** (every additional puller helps) — see `entity_schema.toml`'s own `mount` comment for why
+the two use opposite operators. `get_current_bulk` folds a mounted rider's own weight (their flat
+`bulk` field, plus their own carried gear if `[bulk]`'s `count_rider_gear` — default true — is set)
+into whatever they're currently mounted on, so mounting is denied (`"bulk_exceeded"`) the same way
+an over-full inventory is (`DM_Rules.py`'s `_would_exceed_mount_capacity`).
+
+Reachable in play via the free-standing `"mount"`/`"dismount"` intents (`DM_Movement.py`'s
+`_resolve_mount_intent`/`_resolve_dismount_intent`) — the player climbs onto a named,
+currently-present, living, non-hostile entity, found by the same "search the raw input for a
+known name" pattern formation uses; denied `"already_mounted"`/`"not_present"`/`"target_down"`/
+`"target_hostile"`/`"bulk_exceeded"` as appropriate. Mounting snaps the player's band to the
+mount's; `_sync_mount_bands` then keeps the pair together afterward in both directions — the
+player's own `advance`/`retreat` carries their mount along, and a mount's own behavior-driven
+move (ex: the horse's own skittish `retreat` below 60% HP) carries its rider along too, no check
+against being thrown. Losing a mount by any means (it dies, it's left behind) just silently
+unwinds the relationship — `_resolve_travel_speed`/`get_carrying_capacity` both skip a stale
+reference to something no longer present or alive, and dismounting/re-mounting carries no bespoke
+penalty of its own; a deliberate choice against hardcoding a narrative consequence into the
+actor/target-only trigger system (`resolution/Program_Interpreter.py`) that has no generic way to
+reach "whoever currently has `mount` pointing at me."
+
+**Persistence.** A mount is meant to survive both a save/load round-trip and an ordinary
+location/room change mid-session — two originally-separate gaps, fixed independently:
+`DM_Persistence.py`'s `save_game`/`load_game` round-trip `"mount"` as an ordinary per-instance
+field now (same unconditional treatment `current_language`/`prompt_directive` already get), so
+reloading no longer silently unmounts the player. Surviving an in-session location/room change is
+a different problem, since `self.scenario_entities` gets rebuilt from scratch on every one of
+those (`_populate_room`, `_enter_location`'s freeform branch) from whatever's *authored* in the
+destination's own `"entities"` list — a dynamically-mounted horse was never part of that and would
+otherwise just vanish the instant the player actually arrived anywhere new, even though grid
+travel's own block/speed math (computed *before* `_enter_location` runs) already benefited from it
+for that one leg. `DM_Rules.py`'s `_carry_mounts_into_scene` fixes this directly: called from both
+`self.scenario_entities`-rebuilding sites, it walks the player's own live `"mount"` chain
+(`_mount_chain` — like `_resolve_mount_targets`, but not filtered by presence/liveness, since it's
+finding who to carry *into* the new scene, not resolving a stat off someone already confirmed to be
+there) and appends anyone missing — no re-instancing needed, since a mount already has a live,
+mutable copy in `self.entities` from whenever it was first mounted/hitched. `_sync_mount_bands` is
+then also called from `_enter_location`/`enter_room` (on top of its existing `advance_or_retreat`/
+`move_toward_or_away` call sites) once the player's own arrival band is finalized, so a carried-along
+mount doesn't just appear in the new scene at some stale leftover band. Deliberately scoped to the
+player alone (not every present `is_party` member) — "mount"/"dismount"/"hitch"/"unhitch" are
+player-only intents today, so nothing else can actually have a `"mount"` field set through ordinary
+play yet.
+
+**Overload blocks movement, continuously.** `_would_exceed_mount_capacity` (checked once, at the
+moment of mounting/hitching) isn't the whole story — gear picked up mid-ride, a second rider
+mounting after the first, or a puller dying out of a team can all push a mount past capacity
+*after* departure. `DM_Rules.py`'s `_is_mount_overloaded` (`get_current_bulk(mount) >
+get_carrying_capacity(mount)`, always `False` for an uncapped mount) is re-checked on every actual
+movement attempt, not just once: `DM_Movement.py`'s `advance_or_retreat` refuses to move at all
+(returning `None`, a sentinel distinct from the legitimate empty-`moved`-list "no one else here"
+case) while the player's own mount is overloaded, denied by `intents/advance_retreat.py` as reason
+`"mount_overloaded"`; `DM_Travel.py`'s `_resolve_grid_travel_intent` runs the identical check ahead
+of its own distance/block math, denied the same way. Both read `_resolve_mount_targets(player)[0]`
+— the player's *immediate* mount (a horse, or a cart) — since `get_current_bulk`/
+`get_carrying_capacity` are already fully recursive at that one node (a cart's own current load
+already folds in its riders' riders; its own capacity already sums its whole pulling team), so
+there's never a need to walk the chain again just to check for an overload somewhere in it.
+
+**Hitching a vehicle.** A rider's own `mount` is always written by `"mount"`/`"dismount"`, but
+nothing about *that* pair could ever populate a cart's own `mount` field — without a separate
+mechanism, only a scenario/test author hand-writing one directly onto a cart's own data could ever
+give it a team to defer to (a cart could only "mount" itself onto a horse, never the reverse). The
+free-standing `"hitch"`/`"unhitch"` intents (`DM_Movement.py`'s `_resolve_hitch_intent`/
+`_resolve_unhitch_intent`) are the player-facing way that gets built up during play instead:
+`_named_present_entities_in_order` finds every currently-present entity named in the input, in
+left-to-right reading order — for `"hitch"`, the first-named entity is the **puller**, the
+second-named is the **vehicle** ("hitch the horse to the cart"), a fixed reading-order convention
+rather than a guess based on either entity's own stats (ex: whether it happens to author its own
+`travel_speed`). The puller's name is then promoted onto the vehicle's own `mount` (absent → a
+bare string; already a string or list → appended), the exact shape `_resolve_mount_targets` already
+expects. Denied `"not_present"`/`"target_down"`/`"target_hostile"`/`"already_hitched"` as
+appropriate — the same hostility/liveness gates `"mount"` applies to the puller, since hitching up
+something actively trying to kill you makes no more sense than climbing onto it. No bulk/capacity
+check of any kind: hitching only ever *adds* pulling capacity, never something loading actual
+weight that would need gating the way mounting a rider does. `"unhitch"` only needs the puller
+named — every present entity's own `mount` is searched for a match, since there's normally only
+one vehicle to find it in.
 
 **Environments and the world map.** `Rules/Fantasy/environments.toml` is a flat, shared catalog
 (`[[environment]]`, referenced by name) — each entry owns a `day_encounter`/`night_encounter`

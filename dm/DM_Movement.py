@@ -9,7 +9,9 @@ class MovementMixin(DMCoreProtocol):
     @brief Band positioning, player-issued advance/retreat, and range gating (DMCore mixin --
         only ever composed into DMCore, never instantiated on its own; relies on
         self.entities/self.rules/self.scenario/self.scenario_entities/self.player_name/
-        self.current_target/self.event_bus, set up by DMCore.__init__).
+        self.current_target/self.event_bus/self.get_current_hp/self.is_hostile/
+        self._resolve_mount_targets/self._would_exceed_mount_capacity, set up by
+        DMCore.__init__ or implemented by DM_Status.py/DM_Social.py/DM_Rules.py).
 
         **Objective bands, not distance-from-player.** Every scenario entity -- the player
         included -- carries its own "band": a 1-indexed position in the scenario's own
@@ -214,11 +216,20 @@ class MovementMixin(DMCoreProtocol):
         @param direction "advance" (closes the gap to current_target) or "retreat" (opens it).
         @return A list of {entity, before, after} dicts -- the gap to each living non-player
                 scenario entity that actually changed, before/after in bands. Not what moved
-                (only the player and the party formation did); what changed as a result.
+                (only the player and the party formation did); what changed as a result. None
+                (a distinct sentinel from the legitimate empty-list "no one else here to react"
+                case) if the player is currently mounted on something overloaded
+                (_is_mount_overloaded, DM_Rules.py) -- checked fresh every attempt, not just
+                once at mount/hitch time, so gear picked up mid-ride can ground an
+                already-underway trip too.
         """
         target_name = self.current_target
         if not target_name or target_name == self.player_name:
             return []
+
+        mounts = self._resolve_mount_targets(self.player_name)
+        if mounts and self._is_mount_overloaded(mounts[0]):
+            return None
 
         before_gaps = {
             entity_name: self.get_distance_between(self.player_name, entity_name)
@@ -228,6 +239,7 @@ class MovementMixin(DMCoreProtocol):
 
         self.move_entity(self.player_name, self._resolve_move_delta(self.player_name, target_name, direction))
         self._apply_party_formation()
+        self._sync_mount_bands(self.player_name)
 
         moved = []
         for entity_name, before in before_gaps.items():
@@ -262,8 +274,227 @@ class MovementMixin(DMCoreProtocol):
 
         before = self.get_distance_between(entity_name, opponent_name)
         self.move_entity(entity_name, self._resolve_move_delta(entity_name, opponent_name, direction))
+        self._sync_mount_bands(entity_name)
         after = self.get_distance_between(entity_name, opponent_name)
         return {"opponent": opponent_name, "before": before, "after": after}
+
+    def _sync_mount_bands(self, mover_name):
+        """!
+        @brief Keeps a mount/rider pair on the same band after either one moves under its own
+            power -- called after every band change advance_or_retreat/move_toward_or_away
+            themselves drive. Syncs in both directions: whatever mover_name itself currently
+            rides (_resolve_mount_targets(mover_name)) is snapped to mover_name's own new
+            band -- a rider's own advance/retreat carries their mount along -- and whoever
+            currently rides mover_name (the reverse relationship: any scene entity whose own
+            "mount" resolves to mover_name) is snapped the same way -- a mount's own
+            behavior-driven advance/retreat (ex: creatures.toml's horse fleeing once spooked)
+            carries its rider along too, "no check" against being thrown, the same
+            entity_schema.toml "mount" comment this whole design settled on. A stale/dead
+            mount reference is silently skipped either way (_resolve_mount_targets' own
+            liveness filter), never an error.
+
+            Deliberately scoped to mover_name alone, not every entity transitively linked to
+            it -- ex: _apply_party_formation's own snap of a non-player party member doesn't
+            separately re-sync *that* member's own mount. "Only the player really moves under
+            their own power today" (this file's own module docstring) already accepts that
+            simplification for party formation itself; this follows the same precedent rather
+            than building out multi-hop party-wide mount chains no shipped scenario needs yet.
+        @param mover_name The entity whose band just changed.
+        """
+        new_band = self.get_band(mover_name)
+        for ridden_name in self._resolve_mount_targets(mover_name):
+            self.entities[ridden_name]["band"] = new_band
+        for name in self.scenario_entities:
+            if name != mover_name and mover_name in self._resolve_mount_targets(name):
+                self.entities[name]["band"] = new_band
+
+    def _resolve_mount_intent(self, input_text, resolved):
+        """!
+        @brief Handles "mount"/"ride" -- the player climbs onto a named, currently-present,
+            living, non-hostile entity (ex: creatures.toml's own "horse"), taking on its own
+            effective travel_speed/carrying capacity from that point on (DM_Travel.py's
+            _resolve_travel_speed, DM_Rules.py's get_carrying_capacity) until dismounted.
+            Which entity is named is resolved the same "search the raw input for a
+            currently-present entity's own name" way _resolve_formation_intent already uses
+            for a party member's own name -- no embedding match, since a mount either is or
+            isn't literally named.
+
+            Denied "already_mounted" if the player already has a *live* mount
+            (_resolve_mount_targets -- a stale reference to something that's since died or
+            left the scene doesn't block a fresh attempt); "not_present" if no
+            currently-present entity's name appears in the input at all; "target_down" if the
+            named entity is present but at 0 HP; "target_hostile" if is_hostile(target,
+            player) is true (can't just climb onto something actively trying to kill you);
+            "bulk_exceeded" if mounting would push the target's own current load past its own
+            carrying capacity (DM_Rules.py's _would_exceed_mount_capacity). On success, snaps
+            the player's own band to the mount's -- mounting happens wherever the mount
+            currently stands, not the other way around. No dice rolled either way.
+        @param input_text The raw (lowercased, prefix-stripped) player input, searched for a
+            currently-present entity's own name.
+        @param resolved The item_interaction_resolved publisher closure from
+            DMCore._on_item_interaction_detected.
+        """
+        if self._resolve_mount_targets(self.player_name):
+            resolved(False, reason="already_mounted")
+            return
+
+        candidates = [
+            name for name in self.scenario_entities
+            if name != self.player_name
+            and re.search(rf"\b{re.escape(name.lower())}\b", input_text or "")
+        ]
+        if not candidates:
+            resolved(False, reason="not_present")
+            return
+        target_name = candidates[0]
+
+        if self.get_current_hp(target_name) <= 0:
+            resolved(False, reason="target_down")
+            return
+        if self.is_hostile(target_name, self.player_name):
+            resolved(False, reason="target_hostile")
+            return
+        if self._would_exceed_mount_capacity(target_name, self.player_name):
+            resolved(False, reason="bulk_exceeded")
+            return
+
+        self.entities[self.player_name]["mount"] = target_name
+        self.entities[self.player_name]["band"] = self._clamp_band(self.get_band(target_name))
+        resolved(True, target=target_name)
+
+    def _resolve_dismount_intent(self, resolved):
+        """!
+        @brief Handles "dismount" -- clears the player's own "mount" field, whether it still
+            names something alive and present or is left over from something that's since
+            died or left. No band change (the player stays exactly where they were riding)
+            and no penalty of any kind on dismounting deliberately -- see entity_schema.toml's
+            own "mount" comment for why losing a mount, by any means, never carries a bespoke
+            consequence in this design.
+        @param resolved The item_interaction_resolved publisher closure from
+            DMCore._on_item_interaction_detected.
+        """
+        player = self.entities.get(self.player_name, {})
+        mount_name = player.pop("mount", None)
+        if not mount_name:
+            resolved(False, reason="not_mounted")
+            return
+        resolved(True, target=mount_name)
+
+    def _named_present_entities_in_order(self, input_text):
+        """!
+        @brief Every currently-present scene entity whose own name appears in input_text,
+            ordered by where it first appears (left to right) -- the shared "which entities
+            did the player actually name, and in what order" primitive behind
+            _resolve_hitch_intent/_resolve_unhitch_intent. Same whole-word, case-insensitive
+            search _resolve_formation_intent/_resolve_mount_intent already use for a single
+            name; this just does it for every present entity at once and keeps reading order,
+            since hitch/unhitch care about *which* name came first.
+        @param input_text The raw (lowercased, prefix-stripped) player input.
+        @return A list of distinct entity names, in the order they were first named.
+        """
+        positions = []
+        for name in self.scenario_entities:
+            match = re.search(rf"\b{re.escape(name.lower())}\b", input_text or "")
+            if match:
+                positions.append((match.start(), name))
+        positions.sort(key=lambda pair: pair[0])
+        return [name for _, name in positions]
+
+    def _resolve_hitch_intent(self, input_text, resolved):
+        """!
+        @brief Handles "hitch" -- attaches one currently-present entity (the puller, ex:
+            creatures.toml's own "horse") onto another's own "mount" field (the vehicle, ex: a
+            cart), promoting an absent field to a bare string or appending onto an existing
+            string/list as needed (see entity_schema.toml's own "mount" comment). Without
+            this, only a scenario/test author hand-writing a "mount" field directly onto a
+            cart's own data could ever populate it -- this is the player-facing way that same
+            relationship gets built up during play (ex: only a cart mounting itself onto a
+            horse otherwise, since nothing else would ever write to the cart's own field).
+
+            Which named entity is the puller and which is the vehicle is a deliberate
+            left-to-right reading-order convention -- whichever currently-present entity is
+            named *first* in the input is the puller, whichever is named *second* is the
+            vehicle ("hitch the horse to the cart") -- resolved via
+            _named_present_entities_in_order, not a guess based on either entity's own stats
+            (ex: whether it happens to author its own "travel_speed"), so behavior stays
+            predictable regardless of what either entity's data looks like.
+
+            Denied "not_present" if fewer than two distinct present entities are named at all;
+            "target_down" if either is at 0 HP; "target_hostile" if is_hostile(puller, player)
+            is true (the same "can't just walk up and hitch something actively trying to kill
+            you" reasoning _resolve_mount_intent already applies); "already_hitched" if the
+            puller is already in the vehicle's own "mount". No bulk/capacity check of any kind
+            -- hitching only ever *adds* pulling capacity (DM_Rules.py's get_carrying_capacity
+            sums a vehicle's whole team), never something that needs gating the way loading
+            actual cargo/a rider does.
+        @param input_text The raw (lowercased, prefix-stripped) player input, searched for two
+            currently-present entities' own names.
+        @param resolved The item_interaction_resolved publisher closure from
+            DMCore._on_item_interaction_detected.
+        """
+        named = self._named_present_entities_in_order(input_text)
+        if len(named) < 2:
+            resolved(False, reason="not_present")
+            return
+        puller_name, vehicle_name = named[0], named[1]
+
+        if self.get_current_hp(puller_name) <= 0 or self.get_current_hp(vehicle_name) <= 0:
+            resolved(False, reason="target_down")
+            return
+        if self.is_hostile(puller_name, self.player_name):
+            resolved(False, reason="target_hostile")
+            return
+
+        vehicle = self.entities[vehicle_name]
+        existing = vehicle.get("mount")
+        if existing == puller_name or (isinstance(existing, list) and puller_name in existing):
+            resolved(False, reason="already_hitched")
+            return
+
+        if existing is None:
+            vehicle["mount"] = puller_name
+        elif isinstance(existing, str):
+            vehicle["mount"] = [existing, puller_name]
+        else:
+            existing.append(puller_name)
+
+        resolved(True, puller=puller_name, vehicle=vehicle_name)
+
+    def _resolve_unhitch_intent(self, input_text, resolved):
+        """!
+        @brief Handles "unhitch" -- removes a single named, currently-present entity from
+            whichever other entity's own "mount" field currently references it, the reverse
+            of _resolve_hitch_intent. Only the puller needs naming ("unhitch the horse") --
+            every present entity's own "mount" is searched for a match rather than requiring
+            the vehicle to be named too, since there's normally only one. Denied
+            "not_present" if no present entity is named at all; "not_hitched" if the named
+            entity isn't currently in anything's own "mount".
+        @param input_text The raw (lowercased, prefix-stripped) player input, searched for a
+            currently-present entity's own name.
+        @param resolved The item_interaction_resolved publisher closure from
+            DMCore._on_item_interaction_detected.
+        """
+        named = self._named_present_entities_in_order(input_text)
+        if not named:
+            resolved(False, reason="not_present")
+            return
+        puller_name = named[0]
+
+        for vehicle_name in self.scenario_entities:
+            vehicle = self.entities.get(vehicle_name, {})
+            existing = vehicle.get("mount")
+            if existing == puller_name:
+                del vehicle["mount"]
+                resolved(True, puller=puller_name, vehicle=vehicle_name)
+                return
+            if isinstance(existing, list) and puller_name in existing:
+                existing.remove(puller_name)
+                if not existing:
+                    del vehicle["mount"]
+                resolved(True, puller=puller_name, vehicle=vehicle_name)
+                return
+
+        resolved(False, reason="not_hitched")
 
     def is_in_range(self, attacker_name, defender_name, ability):
         """!

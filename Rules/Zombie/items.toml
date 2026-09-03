@@ -5,6 +5,19 @@
 # health potion's own [entity.skills] comment in Rules/Fantasy/items.toml) -- the engine has
 # no ammo mechanic for any setting today, so a firearm here is exactly as "unlimited" as
 # Fantasy's own longbow/short bow are with their own arrows.
+#
+# "car" (below) is the Zombie counterpart to Rules/Fantasy/creatures.toml's own "horse" --
+# both author "travel_speed" (nothing else in either setting does but those two), the
+# still-unwired field a mounted/driven party member's own effective overland pace would read
+# instead of rules.toml's [travel] default_speed, once that wiring exists (see the horse's own
+# comment). A car has no team to be paced by the way a carriage's horses would be -- its own
+# engine is the whole story -- so it authors travel_speed directly, same as the horse does.
+# Unlike the horse, it also authors "max_bulk" directly rather than deriving one from a
+# strength skill (Rules/Fantasy's [bulk] formula) -- matching characters.toml's own riley
+# (max_bulk = 5), not Fantasy's convention; Rules/Zombie/rules.toml authors no [bulk] table at
+# all, so this is the only way either entity's own carrying capacity is enforced in this
+# setting (get_max_bulk checks for an authored "max_bulk" override before ever falling back to
+# a [bulk]-table formula -- see DM_Rules.py).
 
 [[entity]]
 name = "pistol"
@@ -139,3 +152,44 @@ bulk = 0
 value = 8
 [entity.skills]
 healing = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "car"
+supertype = "object"
+subtype = "vehicle"
+description = "A dented sedan abandoned half up on the curb, one door hanging open. No keys in the ignition -- whoever left it in a hurry took those with them."
+
+# A structure, not a wound track -- what it takes to actually disable it (a Tank's fists, a
+# molotov, sustained gunfire), not damage a person could shrug off. No [entity.abilities]/
+# [entity.behavior]/[entity.attitudes] -- an object never acts on its own turn or has a
+# disposition of its own (entity_schema.toml's supertype comment: "object" is never treated as
+# hostile regardless).
+max_hp = 40
+
+# See this file's header comment above.
+travel_speed = 20
+max_bulk = 20
+
+[entity.skills]
+fortitude = { dice = 4, pips = 0 }
+
+# No key in the ignition -- needs mechanics (skills.toml's own "hotwire" keyword) to get
+# moving. Same [entity.test]/requires_condition shape items.toml's own chest lock uses, just
+# gating "drive" instead of "open": "no_keys" starts active, a pass dismisses it permanently,
+# a fail floods the engine (mirroring the chest's own "jammed") so a botched attempt can't just
+# be retried forever in place.
+[entity.conditions.no_keys]
+duration = "permanent"
+
+[entity.test]
+difficulty = 11
+skill = [ "mechanics" ]
+requires_condition = "no_keys"
+blocks_if_condition = "flooded"
+
+[entity.test.pass]
+dismiss_condition = "no_keys"
+
+[entity.test.fail]
+condition = "flooded"
+duration = "permanent"

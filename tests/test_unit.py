@@ -55,12 +55,15 @@ from nlp.Intent_Classification import (
     CLOSE_KEYWORDS,
     CRAFT_KEYWORDS,
     DIALOGUE_KEYWORDS,
+    DISMOUNT_KEYWORDS,
     DROP_KEYWORDS,
     EQUIP_KEYWORDS,
     EXAMINE_KEYWORDS,
     FORMATION_ABREAST_KEYWORDS,
     FORMATION_BEHIND_KEYWORDS,
     GIVE_KEYWORDS,
+    HITCH_KEYWORDS,
+    MOUNT_KEYWORDS,
     OPEN_KEYWORDS,
     REST_KEYWORDS,
     RETREAT_KEYWORDS,
@@ -69,6 +72,7 @@ from nlp.Intent_Classification import (
     TRADE_KEYWORDS,
     TRAVEL_KEYWORDS,
     UNEQUIP_KEYWORDS,
+    UNHITCH_KEYWORDS,
     USE_KEYWORDS,
     IntentClassifier,
     _phrase_matches,
@@ -684,6 +688,10 @@ class TestIntentClassification(unittest.TestCase):
             "TRAVEL_KEYWORDS": TRAVEL_KEYWORDS,
             "SPEAK_LANGUAGE_KEYWORDS": SPEAK_LANGUAGE_KEYWORDS,
             "REST_KEYWORDS": REST_KEYWORDS,
+            "MOUNT_KEYWORDS": MOUNT_KEYWORDS,
+            "DISMOUNT_KEYWORDS": DISMOUNT_KEYWORDS,
+            "HITCH_KEYWORDS": HITCH_KEYWORDS,
+            "UNHITCH_KEYWORDS": UNHITCH_KEYWORDS,
         }
         # No known exceptions remain: appraise's own skills.toml keywords deliberately exclude
         # "examine" (EXAMINE_KEYWORDS' own item-detection word, checked first) precisely so this
@@ -1568,6 +1576,360 @@ class TestMovementAndRange(DMTestCase):
         self.assertIsInstance(action, RolledOutcome)
 
 
+class TestMount(DMTestCase):
+    # arena: bands=4, enclosed=true, gladstone/wolf/wolf_2 all start band 1, current_target
+    # is "wolf" -- wolf is hostile by default (no [entity.attitudes] table of its own).
+
+    def setUp(self):
+        super().setUp()
+        self.resolved = self._capture("item_interaction_resolved")
+
+    def _add_horse(self, band=1):
+        [name] = self.dm_core._instance_entities([{"name": "horse", "band": band}])
+        self.dm_core.scenario_entities.append(name)
+        return name
+
+    def test_mount_sets_the_players_own_mount_field(self):
+        self._add_horse()
+        self.dm_core._on_item_interaction_detected({
+            "intent": "mount", "item_name": None, "input": "i mount the horse",
+        })
+        result = self.resolved[-1]
+        self.assertTrue(result["found"])
+        self.assertEqual(result["target"], "horse")
+        self.assertEqual(self.dm_core.entities["gladstone"]["mount"], "horse")
+
+    def test_mount_snaps_the_players_band_to_the_mounts_own_band(self):
+        self._add_horse(band=3)
+        self.dm_core.entities["gladstone"]["band"] = 1
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "mount", "item_name": None, "input": "i mount the horse",
+        })
+
+        self.assertEqual(self.dm_core.get_band("gladstone"), 3)
+
+    def test_mount_denied_when_no_present_entity_is_named(self):
+        self.dm_core._on_item_interaction_detected({
+            "intent": "mount", "item_name": None, "input": "i mount the nonexistent thing",
+        })
+        result = self.resolved[-1]
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "not_present")
+
+    def test_mount_denied_against_a_downed_target(self):
+        self._add_horse()
+        self.dm_core.apply_damage("horse", 999)
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "mount", "item_name": None, "input": "i mount the horse",
+        })
+
+        result = self.resolved[-1]
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "target_down")
+
+    def test_mount_denied_against_a_hostile_target(self):
+        # wolf is hostile by default -- can't just climb onto something trying to kill you.
+        self.dm_core._on_item_interaction_detected({
+            "intent": "mount", "item_name": None, "input": "i mount the wolf",
+        })
+        result = self.resolved[-1]
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "target_hostile")
+
+    def test_mount_denied_once_already_mounted(self):
+        self._add_horse()
+        self.dm_core.entities["gladstone"]["mount"] = "horse"
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "mount", "item_name": None, "input": "i mount the horse",
+        })
+
+        result = self.resolved[-1]
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "already_mounted")
+
+    def test_mount_ignores_a_stale_reference_to_a_since_dead_mount(self):
+        # A previous mount died mid-scene without an explicit "dismount" -- shouldn't block a
+        # fresh mount attempt (see entity_schema.toml's own "mount" comment: losing a mount,
+        # by any means, just unwinds the relationship, no bespoke penalty or lingering block).
+        self._add_horse()
+        self.dm_core.entities["gladstone"]["mount"] = "horse"
+        self.dm_core.apply_damage("horse", 999)
+        [name] = self.dm_core._instance_entities([{"name": "horse", "band": 1}])
+        self.dm_core.scenario_entities.append(name)
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "mount", "item_name": None, "input": f"i mount the {name}",
+        })
+
+        result = self.resolved[-1]
+        self.assertTrue(result["found"])
+        self.assertEqual(self.dm_core.entities["gladstone"]["mount"], name)
+
+    def test_mount_denied_when_it_would_exceed_the_mounts_own_carrying_capacity(self):
+        # gladstone's own carried gear (longsword + chain mail) is 2 bulk -- capping the horse
+        # below that denies the mount even though the horse's own body contributes nothing.
+        self._add_horse()
+        self.dm_core.entities["horse"]["max_bulk"] = 1
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "mount", "item_name": None, "input": "i mount the horse",
+        })
+
+        result = self.resolved[-1]
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "bulk_exceeded")
+        self.assertNotIn("mount", self.dm_core.entities["gladstone"])
+
+    def test_dismount_clears_the_mount_field(self):
+        self._add_horse()
+        self.dm_core.entities["gladstone"]["mount"] = "horse"
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "dismount", "item_name": None, "input": "i dismount",
+        })
+
+        result = self.resolved[-1]
+        self.assertTrue(result["found"])
+        self.assertEqual(result["target"], "horse")
+        self.assertNotIn("mount", self.dm_core.entities["gladstone"])
+
+    def test_dismount_denied_when_not_mounted(self):
+        self.dm_core._on_item_interaction_detected({
+            "intent": "dismount", "item_name": None, "input": "i dismount",
+        })
+        result = self.resolved[-1]
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "not_mounted")
+
+    def test_advance_carries_the_mounted_players_own_horse_along(self):
+        self._add_horse(band=1)
+        self.dm_core.entities["gladstone"]["mount"] = "horse"
+        self.dm_core.entities["gladstone"]["band"] = 1
+        self.dm_core.entities["wolf"]["band"] = 4
+
+        self.dm_core.advance_or_retreat("advance")
+
+        self.assertEqual(self.dm_core.get_band("gladstone"), 2)
+        self.assertEqual(self.dm_core.get_band("horse"), 2)  # dragged along, no separate check
+
+    def test_a_mounts_own_retreat_behavior_carries_its_rider_along(self):
+        # The reverse direction from advance_or_retreat: the horse moves under its own
+        # initiative (move_toward_or_away, the same primitive its "retreat" [[entity.behavior]]
+        # entry uses), and the player -- currently mounted on it -- comes along too.
+        self._add_horse(band=2)
+        self.dm_core.entities["gladstone"]["mount"] = "horse"
+        self.dm_core.entities["gladstone"]["band"] = 2
+        self.dm_core.entities["wolf"]["band"] = 1
+
+        self.dm_core.move_toward_or_away("horse", "wolf", "retreat")
+
+        self.assertEqual(self.dm_core.get_band("horse"), 3)
+        self.assertEqual(self.dm_core.get_band("gladstone"), 3)
+
+    def test_mount_round_trips_through_save_and_load(self):
+        slot_name = "test_mount_round_trip_slot"
+        self.addCleanup(shutil.rmtree, self.dm_core._save_slot_dir(slot_name), ignore_errors=True)
+        self._add_horse()
+        self.dm_core.entities["gladstone"]["mount"] = "horse"
+
+        self.dm_core.save_game(slot_name)
+        self.dm_core.entities["gladstone"]["mount"] = None  # prove load actually restores it
+        self.dm_core.load_game(slot_name)
+
+        self.assertEqual(self.dm_core.entities["gladstone"].get("mount"), "horse")
+
+    def test_advance_is_denied_while_the_mount_is_overloaded(self):
+        self._add_horse()
+        self.dm_core.entities["horse"]["max_bulk"] = 0  # gladstone's own gear alone overflows it
+        self.dm_core.entities["gladstone"]["mount"] = "horse"
+        self.dm_core.entities["gladstone"]["band"] = 1
+        self.dm_core.entities["wolf"]["band"] = 4
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "advance", "item_name": None, "input": "i advance",
+        })
+
+        result = self.resolved[-1]
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "mount_overloaded")
+        self.assertEqual(self.dm_core.get_band("gladstone"), 1)  # never moved
+
+    def test_advance_is_allowed_again_once_the_overload_clears(self):
+        self._add_horse()
+        self.dm_core.entities["horse"]["max_bulk"] = 0
+        self.dm_core.entities["gladstone"]["mount"] = "horse"
+        self.dm_core.entities["gladstone"]["band"] = 1
+        self.dm_core.entities["wolf"]["band"] = 4
+
+        self.dm_core.entities["horse"]["max_bulk"] = 100  # dropped the cargo, room to move again
+        self.dm_core._on_item_interaction_detected({
+            "intent": "advance", "item_name": None, "input": "i advance",
+        })
+
+        result = self.resolved[-1]
+        self.assertTrue(result["found"])
+        self.assertEqual(self.dm_core.get_band("gladstone"), 2)
+
+
+class TestHitch(DMTestCase):
+    # arena: bands=4, enclosed=true, gladstone/wolf/wolf_2 all start band 1 -- wolf is
+    # hostile by default (no [entity.attitudes] table of its own).
+
+    def setUp(self):
+        super().setUp()
+        self.resolved = self._capture("item_interaction_resolved")
+
+    def _add_horse(self, band=1):
+        [name] = self.dm_core._instance_entities([{"name": "horse", "band": band}])
+        self.dm_core.scenario_entities.append(name)
+        return name
+
+    def _add_cart(self):
+        self.dm_core.entities["cart"] = {
+            "name": "cart", "supertype": "object", "description": "A rickety cart.", "max_hp": 20,
+        }
+        self.dm_core.scenario_entities.append("cart")
+
+    def test_hitch_promotes_an_absent_mount_field_to_a_bare_string(self):
+        self._add_horse()
+        self._add_cart()
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "hitch", "item_name": None, "input": "i hitch the horse to the cart",
+        })
+
+        result = self.resolved[-1]
+        self.assertTrue(result["found"])
+        self.assertEqual(result["puller"], "horse")
+        self.assertEqual(result["vehicle"], "cart")
+        self.assertEqual(self.dm_core.entities["cart"]["mount"], "horse")
+
+    def test_hitching_a_second_horse_promotes_the_field_to_a_list(self):
+        first = self._add_horse()
+        second = self._add_horse()
+        self._add_cart()
+        self.dm_core.entities["cart"]["mount"] = first
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "hitch", "item_name": None, "input": f"i hitch the {second} to the cart",
+        })
+
+        result = self.resolved[-1]
+        self.assertTrue(result["found"])
+        self.assertEqual(self.dm_core.entities["cart"]["mount"], [first, second])
+
+    def test_hitch_direction_is_first_named_pulls_second_named_regardless_of_phrasing(self):
+        self._add_horse()
+        self._add_cart()
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "hitch", "item_name": None, "input": "i hitch the cart to the horse",
+        })
+
+        # "cart" is named first here -- the puller/vehicle roles follow reading order, not
+        # which real-world noun is doing the pulling, so this deliberately hitches "backward".
+        result = self.resolved[-1]
+        self.assertTrue(result["found"])
+        self.assertEqual(result["puller"], "cart")
+        self.assertEqual(result["vehicle"], "horse")
+        self.assertEqual(self.dm_core.entities["horse"]["mount"], "cart")
+
+    def test_hitch_denied_when_fewer_than_two_entities_are_named(self):
+        self._add_horse()
+        self.dm_core._on_item_interaction_detected({
+            "intent": "hitch", "item_name": None, "input": "i hitch the horse up",
+        })
+        result = self.resolved[-1]
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "not_present")
+
+    def test_hitch_denied_against_a_downed_puller(self):
+        self._add_horse()
+        self._add_cart()
+        self.dm_core.apply_damage("horse", 999)
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "hitch", "item_name": None, "input": "i hitch the horse to the cart",
+        })
+
+        result = self.resolved[-1]
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "target_down")
+
+    def test_hitch_denied_against_a_hostile_puller(self):
+        self._add_cart()
+        self.dm_core._on_item_interaction_detected({
+            "intent": "hitch", "item_name": None, "input": "i hitch the wolf to the cart",
+        })
+        result = self.resolved[-1]
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "target_hostile")
+
+    def test_hitch_denied_when_already_hitched(self):
+        self._add_horse()
+        self._add_cart()
+        self.dm_core.entities["cart"]["mount"] = "horse"
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "hitch", "item_name": None, "input": "i hitch the horse to the cart",
+        })
+
+        result = self.resolved[-1]
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "already_hitched")
+
+    def test_a_hitched_cart_gains_the_horses_own_travel_speed(self):
+        # The actual payoff: get_carrying_capacity/_resolve_travel_speed already walk any
+        # "mount" chain (see TestGridTravel/TestBulk in this file) -- hitching is just the
+        # player-facing way that chain gets built during play instead of being hand-authored.
+        self._add_horse()
+        self._add_cart()
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "hitch", "item_name": None, "input": "i hitch the horse to the cart",
+        })
+
+        self.assertEqual(self.dm_core._resolve_travel_speed("cart"), 8)
+
+    def test_unhitch_removes_a_bare_string_mount_field_entirely(self):
+        self._add_horse()
+        self._add_cart()
+        self.dm_core.entities["cart"]["mount"] = "horse"
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "unhitch", "item_name": None, "input": "i unhitch the horse",
+        })
+
+        result = self.resolved[-1]
+        self.assertTrue(result["found"])
+        self.assertEqual(result["vehicle"], "cart")
+        self.assertNotIn("mount", self.dm_core.entities["cart"])
+
+    def test_unhitch_removes_one_entry_from_a_multi_horse_team(self):
+        first = self._add_horse()
+        second = self._add_horse()
+        self._add_cart()
+        self.dm_core.entities["cart"]["mount"] = [first, second]
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "unhitch", "item_name": None, "input": f"i unhitch the {first}",
+        })
+
+        self.assertEqual(self.dm_core.entities["cart"]["mount"], [second])
+
+    def test_unhitch_denied_when_not_hitched_to_anything(self):
+        self._add_horse()
+        self.dm_core._on_item_interaction_detected({
+            "intent": "unhitch", "item_name": None, "input": "i unhitch the horse",
+        })
+        result = self.resolved[-1]
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "not_hitched")
+
+
 class TestDowntime(DMTestCase):
     # arena.toml authors no [time] table, so DM_Time.py's own default (24 hours/day, 16
     # daylight, 3 blocks/day -- an 8-hour block) is what every test here exercises.
@@ -1759,6 +2121,83 @@ class TestGridTravel(DMTestCase):
     def test_party_travel_speed_uses_an_entitys_own_override_when_present(self):
         self.dm_core.entities["gladstone"]["travel_speed"] = 2
         self.assertEqual(self.dm_core._party_travel_speed(), 2)
+
+    def _add_horse(self):
+        [name] = self.dm_core._instance_entities([{"name": "horse", "band": 1}])
+        self.dm_core.scenario_entities.append(name)
+        return name
+
+    def test_party_travel_speed_uses_a_mounted_players_own_horse(self):
+        self._add_horse()
+        self.dm_core.entities["gladstone"]["mount"] = "horse"
+        self.assertEqual(self.dm_core._party_travel_speed(), 8)  # creatures.toml's own horse
+
+    def test_party_travel_speed_walks_a_mount_chain_through_a_cart(self):
+        # A rider defers to their cart, which in turn defers to whichever horse pulls it --
+        # see entity_schema.toml's own "mount" comment.
+        self._add_horse()
+        self.dm_core.entities["cart"] = {
+            "name": "cart", "supertype": "object", "description": "A rickety cart.",
+            "max_hp": 20, "mount": "horse",
+        }
+        self.dm_core.scenario_entities.append("cart")
+        self.dm_core.entities["gladstone"]["mount"] = "cart"
+
+        self.assertEqual(self.dm_core._party_travel_speed(), 8)
+
+    def test_party_travel_speed_paces_a_cart_to_its_slowest_horse(self):
+        first = self._add_horse()
+        self.dm_core.entities[first]["travel_speed"] = 10
+        second = self._add_horse()
+        self.dm_core.entities[second]["travel_speed"] = 6
+        self.dm_core.entities["cart"] = {
+            "name": "cart", "supertype": "object", "description": "A rickety cart.",
+            "max_hp": 20, "mount": [first, second],
+        }
+        self.dm_core.scenario_entities.append("cart")
+        self.dm_core.entities["gladstone"]["mount"] = "cart"
+
+        self.assertEqual(self.dm_core._party_travel_speed(), 6)  # paced to the slower horse
+
+    def test_party_travel_speed_ignores_a_dead_mount_and_falls_back_to_default(self):
+        self._add_horse()
+        self.dm_core.apply_damage("horse", 999)
+        self.dm_core.entities["gladstone"]["mount"] = "horse"
+
+        self.assertEqual(self.dm_core._party_travel_speed(), 4)  # rules.toml's own default_speed
+
+    def test_a_mounted_horse_survives_traveling_to_a_new_location(self):
+        # Unlike an ordinary ally (see _add_party_member's own comment below, and
+        # test_unit.py's TestMount), a mount doesn't need seeding into every location's own
+        # persistent_names by hand -- DM_Rules.py's _carry_mounts_into_scene does this
+        # automatically off the player's own live "mount" field, every time.
+        self._stub_encounter_roll("nothing")
+        self._add_horse()
+        self.dm_core.entities["gladstone"]["mount"] = "horse"
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "travel", "item_name": None, "input": "i travel to the border stones",
+        })
+
+        self.assertEqual(self.dm_core.current_location_key, "border_stones")
+        self.assertIn("horse", self.dm_core.scenario_entities)
+        self.assertEqual(self.dm_core.entities["gladstone"]["mount"], "horse")
+        self.assertEqual(self.dm_core.get_band("horse"), self.dm_core.get_band("gladstone"))
+
+    def test_grid_travel_denied_while_the_mount_is_overloaded(self):
+        self._add_horse()
+        self.dm_core.entities["horse"]["max_bulk"] = 0
+        self.dm_core.entities["gladstone"]["mount"] = "horse"
+        resolved_events = self._capture("item_interaction_resolved")
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "travel", "item_name": None, "input": "i travel to the border stones",
+        })
+
+        result = resolved_events[-1]
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "mount_overloaded")
+        self.assertEqual(self.dm_core.current_location_key, "trailhead")  # never moved
 
     def _add_party_member(self, name):
         # Both of plains.toml's locations author an empty "entities" list, so a freeform
@@ -2249,6 +2688,64 @@ class TestFreeStandingIntentHandlers(unittest.TestCase):
             with self.subTest(reason=reason):
                 prompt = self._narrate("travel", {
                     "intent": "travel", "found": False, "reason": reason, "input": "i travel to nowhere",
+                })
+                self.assertIn(expected_phrase, prompt)
+
+    def test_narrate_mount_reports_the_real_target(self):
+        prompt = self._narrate("mount", {"intent": "mount", "found": True, "target": "horse"})
+        self.assertIn("climbs onto horse", prompt)
+
+    def test_narrate_mount_explains_each_failure_reason(self):
+        for reason, expected_phrase in (
+            ("already_mounted", "already mounted"),
+            ("not_present", "nothing here matches"),
+            ("target_down", "is down"),
+            ("target_hostile", "is hostile"),
+            ("bulk_exceeded", "no room for another rider"),
+        ):
+            with self.subTest(reason=reason):
+                prompt = self._narrate("mount", {
+                    "intent": "mount", "found": False, "reason": reason, "input": "mount the horse",
+                })
+                self.assertIn(expected_phrase, prompt)
+
+    def test_narrate_dismount_reports_the_real_target(self):
+        prompt = self._narrate("dismount", {"intent": "dismount", "found": True, "target": "horse"})
+        self.assertIn("dismounts from horse", prompt)
+
+    def test_narrate_dismount_explains_not_being_mounted(self):
+        prompt = self._narrate("dismount", {"intent": "dismount", "found": False, "input": "dismount"})
+        self.assertIn("aren't mounted on anything", prompt)
+
+    def test_narrate_hitch_reports_the_real_puller_and_vehicle(self):
+        prompt = self._narrate("hitch", {"intent": "hitch", "found": True, "puller": "horse", "vehicle": "cart"})
+        self.assertIn("hitches horse to cart", prompt)
+
+    def test_narrate_hitch_explains_each_failure_reason(self):
+        for reason, expected_phrase in (
+            ("not_present", "two things here"),
+            ("target_down", "is down"),
+            ("target_hostile", "is hostile"),
+            ("already_hitched", "already hitched"),
+        ):
+            with self.subTest(reason=reason):
+                prompt = self._narrate("hitch", {
+                    "intent": "hitch", "found": False, "reason": reason, "input": "hitch the horse to the cart",
+                })
+                self.assertIn(expected_phrase, prompt)
+
+    def test_narrate_unhitch_reports_the_real_puller_and_vehicle(self):
+        prompt = self._narrate("unhitch", {"intent": "unhitch", "found": True, "puller": "horse", "vehicle": "cart"})
+        self.assertIn("unhitches horse from cart", prompt)
+
+    def test_narrate_unhitch_explains_each_failure_reason(self):
+        for reason, expected_phrase in (
+            ("not_present", "nothing here matches"),
+            ("not_hitched", "isn't actually hitched"),
+        ):
+            with self.subTest(reason=reason):
+                prompt = self._narrate("unhitch", {
+                    "intent": "unhitch", "found": False, "reason": reason, "input": "unhitch the horse",
                 })
                 self.assertIn(expected_phrase, prompt)
 
@@ -5827,6 +6324,67 @@ class TestBulk(DMTestCase):
         result = self.resolved[-1]
         self.assertTrue(result["found"])
 
+    def _add_horse(self):
+        [name] = self.dm_core._instance_entities([{"name": "horse", "band": 1}])
+        self.dm_core.scenario_entities.append(name)
+        return name
+
+    def test_get_carrying_capacity_is_max_bulk_for_a_leaf_provider(self):
+        self._add_horse()
+        # creatures.toml's own horse: strength 4D -> Fantasy's [bulk] formula, 3 + 4*2 = 11.
+        self.assertEqual(self.dm_core.get_carrying_capacity("horse"), 11)
+
+    def test_get_carrying_capacity_sums_a_carts_own_pulling_team(self):
+        first = self._add_horse()
+        second = self._add_horse()
+        self.dm_core.entities["cart"] = {
+            "name": "cart", "supertype": "object", "description": "A rickety cart.",
+            "max_hp": 20, "mount": [first, second],
+        }
+        self.dm_core.scenario_entities.append("cart")
+
+        self.assertEqual(self.dm_core.get_carrying_capacity("cart"), 22)  # 11 + 11
+
+    def test_get_carrying_capacity_drops_a_dead_puller_from_the_sum(self):
+        first = self._add_horse()
+        second = self._add_horse()
+        self.dm_core.apply_damage(second, 999)
+        self.dm_core.entities["cart"] = {
+            "name": "cart", "supertype": "object", "description": "A rickety cart.",
+            "max_hp": 20, "mount": [first, second],
+        }
+        self.dm_core.scenario_entities.append("cart")
+
+        self.assertEqual(self.dm_core.get_carrying_capacity("cart"), 11)  # only the live one
+
+    def test_get_current_bulk_folds_in_a_mounted_riders_own_body_and_gear(self):
+        self._add_horse()
+        self.dm_core.entities["gladstone"]["mount"] = "horse"
+        self.dm_core.entities["gladstone"]["bulk"] = 5  # body weight as cargo
+
+        # gladstone's own gear (longsword + chain mail = 2, see
+        # test_get_current_bulk_sums_the_inventorys_own_bulk_fields) counts too by default
+        # (rules.toml's own [bulk] table: count_rider_gear = true).
+        self.assertEqual(self.dm_core.get_current_bulk("horse"), 5 + 2)
+
+    def test_get_current_bulk_excludes_rider_gear_when_count_rider_gear_is_false(self):
+        self.dm_core.rules["bulk"]["count_rider_gear"] = False
+        self._add_horse()
+        self.dm_core.entities["gladstone"]["mount"] = "horse"
+        self.dm_core.entities["gladstone"]["bulk"] = 5
+
+        self.assertEqual(self.dm_core.get_current_bulk("horse"), 5)
+
+    def test_would_exceed_mount_capacity_true_once_a_riders_own_load_overflows_it(self):
+        self._add_horse()
+        self.dm_core.entities["horse"]["max_bulk"] = 1
+        self.assertTrue(self.dm_core._would_exceed_mount_capacity("horse", "gladstone"))
+
+    def test_would_exceed_mount_capacity_false_when_uncapped(self):
+        self._add_horse()
+        del self.dm_core.rules["bulk"]  # horse authors no "max_bulk" override of its own
+        self.assertFalse(self.dm_core._would_exceed_mount_capacity("horse", "gladstone"))
+
 
 class TestGiveAndTrade(DMTestCase):
     # tavern.toml's innkeeper -- a living recipient, unlike the dungeon's chest, so give
@@ -6813,6 +7371,7 @@ class TestSaveLoad(DMTestCase):
             {
                 "hp", "active_conditions", "currency", "exp", "inventory", "equipped", "band",
                 "attitude_deltas", "action_attitude_deltas", "current_language", "prompt_directive",
+                "mount",
             },
         )
 

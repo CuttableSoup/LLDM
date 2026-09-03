@@ -10,7 +10,13 @@
 # "coyote" are here for the same reason environments.toml's "plains" environment references
 # them from its own day/night encounter tables (see docs/downtime.md's "Travel") -- a shared,
 # setting-wide environment table needs shared, setting-wide creatures to resolve to, regardless
-# of which scenario the player is actually in when the roll happens.
+# of which scenario the player is actually in when the roll happens. "horse" is here for the
+# same "not owned by any one scenario" reason -- it's meant to be addable to any party, in any
+# scenario, as overland transport, not tied to wherever it happens to first show up. It's the
+# first entity to actually author "travel_speed" (see reference/entity_schema.toml and
+# DM_Travel.py's _party_travel_speed) -- that field alone doesn't do anything yet just by sitting
+# in the scene or a party's own roster; wiring an owned/ridden horse into the player's own
+# effective travel_speed is a follow-up, not part of this entity definition.
 
 [[entity]]
 name = "fire elemental"
@@ -262,3 +268,51 @@ reflexes = { dice = 3, pips = 0 }
 dodge = { dice = 4, pips = 0 }
 strength = { dice = 2, pips = 0 }
 brawling = { dice = 3, pips = 0 }
+
+[[entity]]
+name = "horse"
+supertype = "creature"
+subtype = "animal"
+description = "A broad-backed saddle horse, ears flicking toward every sound -- calm around a steady hand, quick to bolt from a fight."
+
+max_hp = 24
+
+# Doubles the default overland pace (rules.toml's own [travel] default_speed = 4) -- see this
+# file's header comment above.
+travel_speed = 8
+
+# Skittish, not vicious: a positive disposition (won't attack unprovoked, unlike wild boar/
+# coyote's unauthored hostile default) paired with a fearful threat axis -- see its own
+# "retreat" behavior entry below, which triggers far earlier than a wild predator's.
+[entity.attitudes]
+default = [ 20, -30, 10 ]
+
+[entity.skills]
+strength = { dice = 4, pips = 0 }
+fortitude = { dice = 3, pips = 0 }
+reflexes = { dice = 2, pips = 0 }
+dodge = { dice = 2, pips = 0 }
+brawling = { dice = 2, pips = 0 }
+
+[[entity.abilities]]
+name = "kick"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "bludgeoning" ]
+damage_value = { dice = 1, pips = 0, bonus = "user.strength_damage" }
+
+# Bolts well before it's in real danger -- a wild boar/coyote fights until under 30-50%
+# hp_per_remain; a horse breaks and runs at anything less than a clean majority of its health.
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+    { field = "hp_per_remain", operator = "<", value = 0.60 },
+]
+action = "retreat"
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "kick"

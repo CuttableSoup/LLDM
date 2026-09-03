@@ -18,7 +18,7 @@ has no request/response mechanism, so each core owns and persists its own slice.
 (every visited location's own `{persistent_names, visited_rooms}` cache — see "Scenarios,
 locations, and rooms"), `scenario_entities`, `ground`, and per-instance `{hp, active_conditions,
 currency, exp, inventory, equipped, band, attitude_deltas, action_attitude_deltas,
-current_language}`. `load_game` re-runs `load_rules()`, then re-instances
+current_language, prompt_directive, mount}`. `load_game` re-runs `load_rules()`, then re-instances
 every location the save file's own `location_runtime` says was ever visited (each location's own
 `entities` once, each of its visited rooms' own entities once — mirroring exactly how a single
 room's own instance list was already re-derived from the room's static entities rather than

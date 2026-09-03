@@ -196,6 +196,12 @@ divisor = 2
 skill = "strength"
 min_bulk = 3
 mod_multiplier = 2
+# Whether a mounted rider's own carried inventory bulk (get_current_bulk(rider)) also counts
+# against their mount's own load, on top of the rider's own flat "bulk" (body weight) --
+# see entity_schema.toml's own "mount"/"bulk" comments and DM_Rules.py's get_current_bulk.
+# Absent defaults to true. A setting that wants a mount to only ever answer for rider bodies,
+# never gear, sets this false.
+count_rider_gear = true
 
 # XP award formula -- _award_xp_for_defeat (DM_Combat.py) reads this once per kill, the moment a
 # hostile-to-the-player entity's HP first reaches 0 (calculate_damage's own "previous_hp > 0,

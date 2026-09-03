@@ -119,6 +119,27 @@ SPEAK_LANGUAGE_KEYWORDS = ("speak in ", "switch to speaking ", "start speaking "
 # here would have. Deliberately no "take a rest" -- TAKE_KEYWORDS' own "take " is checked
 # well ahead of this tuple and would swallow it as an item "take" first.
 REST_KEYWORDS = ("rest", "make camp", "set up camp", "sleep", "camp for the night")
+# Climbing onto/off of a named, currently-present entity to take on its own travel_speed/
+# carrying capacity (see entity_schema.toml's own "mount", DM_Movement.py's
+# _resolve_mount_intent/_resolve_dismount_intent) -- like rest/formation above, this acts on
+# the player's own state rather than a named item, so no map_to_item lookup ever runs for it
+# either; DMCore, not this module, is what figures out *which* entity is being mounted, by
+# searching the raw input for a currently-present entity's own name (same "search input for a
+# known name" pattern _resolve_formation_intent already uses). Deliberately multi-word
+# phrases, not bare "mount"/"climb"/"ride" -- athletics' own "climb" keyword and husbandry's
+# own "ride" keyword (skills.toml) would otherwise be swallowed as this intent before skill
+# matching ever got a chance to run, the same collision-avoidance reason every other keyword
+# tuple in this file follows. "dismount" alone is safe -- no skill keyword is that literal word.
+MOUNT_KEYWORDS = ("mount the ", "climb onto the ", "climb on the ", "get on the ", "hop on the ", "ride the ")
+DISMOUNT_KEYWORDS = ("dismount", "get off the ", "climb off the ", "hop off the ")
+# Attaching one currently-present entity to another's own "mount" field (see
+# entity_schema.toml's own "mount", DM_Movement.py's _resolve_hitch_intent/
+# _resolve_unhitch_intent) -- ex: "hitch the horse to the cart". Like mount/dismount above,
+# DMCore (not this module) resolves *which* two entities are named and in what order; no
+# skills.toml keyword is the bare word "hitch"/"unhitch", so neither risks the collision
+# MOUNT_KEYWORDS' own comment describes for "climb"/"ride".
+HITCH_KEYWORDS = ("hitch ",)
+UNHITCH_KEYWORDS = ("unhitch",)
 # Free-form conversational address -- bypasses the skill/dice system entirely, the same as
 # every item/movement intent above (see DM_Core.py's "Items and movement as intents"), but
 # checked only after item-interaction detection has already had its shot, so a genuine item
@@ -228,6 +249,7 @@ ACTION_CLAUSE_PATTERN = re.compile(r"--|[,;:?]|\band\b|\bthen\b")
 # DM_Core.py) despite needing no item lookup, the same way "give"/"take"/etc. do.
 EXEMPT_ITEM_INTENTS = frozenset({
     "advance", "retreat", "formation_behind", "formation_abreast", "speak_language", "rest",
+    "mount", "dismount", "hitch", "unhitch",
 })
 NO_ITEM_LOOKUP_INTENTS = frozenset({"open", "close"})
 
@@ -344,7 +366,7 @@ def detect_item_intent(processed_text):
     @param processed_text The cleaned and processed player input.
     @return "examine", "equip", "unequip", "drop", "take", "give", "trade", "use", "craft",
         "open", "close", "advance", "retreat", "formation_behind", "formation_abreast",
-        "speak_language", "rest", or None.
+        "speak_language", "rest", "mount", "dismount", "hitch", "unhitch", or None.
     """
     if _keyword_gate(processed_text, EXAMINE_KEYWORDS):
         return "examine"
@@ -384,6 +406,16 @@ def detect_item_intent(processed_text):
         return "speak_language"
     if _keyword_gate(processed_text, REST_KEYWORDS):
         return "rest"
+    # Checked ahead of ADVANCE_KEYWORDS for the same reason FORMATION_*_KEYWORDS is -- "mount
+    # the horse" shouldn't ever be swallowed as a plain "advance".
+    if _keyword_gate(processed_text, MOUNT_KEYWORDS):
+        return "mount"
+    if _keyword_gate(processed_text, DISMOUNT_KEYWORDS):
+        return "dismount"
+    if _keyword_gate(processed_text, HITCH_KEYWORDS):
+        return "hitch"
+    if _keyword_gate(processed_text, UNHITCH_KEYWORDS):
+        return "unhitch"
     if _keyword_gate(processed_text, ADVANCE_KEYWORDS):
         return "advance"
     if _keyword_gate(processed_text, RETREAT_KEYWORDS):

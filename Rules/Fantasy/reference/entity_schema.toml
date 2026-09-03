@@ -77,15 +77,34 @@ bulk = 0                                    # An object's own carry weight -- ge
                                             # _bulk_would_be_exceeded) refuse with reason
                                             # "bulk_exceeded" the moment that sum would rise
                                             # past get_max_bulk. No cap enforced on any entity
-                                            # other than the player. There is no "max_bulk"
-                                            # entity field -- carrying capacity is never
-                                            # authored per-entity. It's always computed by
-                                            # get_max_bulk from rules.toml's own [bulk] table:
-                                            # min_bulk plus this entity's own "skill" dice (ex:
-                                            # "strength") times mod_multiplier. A setting that
-                                            # authors no [bulk] table at all (ex: Rules/Zombie/)
-                                            # simply never gets the cap enforced (get_max_bulk
-                                            # returns None).
+                                            # other than the player this way. Also meaningful on
+                                            # a *creature* now, not just an object -- its own
+                                            # body weight as cargo, counted against whatever it's
+                                            # currently mounted on (see "mount", above, and
+                                            # get_current_bulk's own reverse-lookup over every
+                                            # entity currently deferring to a given mount) --
+                                            # the same field, same "how much of someone else's
+                                            # capacity do I eat" meaning, just now also asked of
+                                            # a rider instead of only an item.
+                                            # Carrying capacity is computed by get_max_bulk from
+                                            # rules.toml's own [bulk] table: min_bulk plus this
+                                            # entity's own "skill" dice (ex: "strength") times
+                                            # mod_multiplier -- unless this entity authors its
+                                            # own "max_bulk" field directly (see below), which
+                                            # always wins over the formula. A setting that
+                                            # authors no [bulk] table and whose entity authors no
+                                            # "max_bulk" of its own either simply never gets the
+                                            # cap enforced (get_max_bulk returns None).
+max_bulk = 20                               # Optional flat override for get_max_bulk, read
+                                            # directly with no formula involved -- lets a
+                                            # setting with no [bulk] table at all (ex:
+                                            # Rules/Zombie/) still cap specific entities (ex:
+                                            # "riley"/"car") without having to opt every entity
+                                            # into a shared strength-derived formula. Also wins
+                                            # over the formula in a setting that *does* author
+                                            # [bulk] -- an explicit number is a deliberate
+                                            # override, not something the generic rule should
+                                            # second-guess.
 value = 0                                   # An object's price -- read by "trade"
                                             # (item_interaction_resolved's "price"; denied
                                             # "cant_afford" if the buyer's own currency is
@@ -113,6 +132,42 @@ speed = 1                                   # Only ever read off the player's ow
                                             # nothing but the player currently moves.
 # "band" is never set in a template -- it's assigned per-instance at scenario-load time from
 # the scenario/room's own "entities" list ({name, band}), not authored here.
+#
+# ---------------------------------------------------------------------------------------------
+# Overland conveyance -- travel_speed/mount/pulled entities (see docs/downtime.md's "Travel"
+# and creatures.toml's own "horse"). Never authored in a template ahead of time; a runtime-only
+# field written by whichever free-standing intent actually applies -- a rider's own single
+# entry via "mount"/"dismount" (DM_Movement.py's _resolve_mount_intent/_resolve_dismount_
+# intent), or a vehicle's own entry (promoted to/appended onto a list, ex: a cart gaining a
+# second hitched horse) via "hitch"/"unhitch" (_resolve_hitch_intent/_resolve_unhitch_intent)
+# -- the latter is the only in-play way something *other* than a rider (ex: a cart with no
+# rider of its own yet) ever gets a "mount" field at all; without it, only a scenario/test
+# author hand-writing one directly onto a cart's own data could ever populate it.
+mount = "horse"                             # The name of a currently-present, living entity
+                                            # this one currently defers to for its own
+                                            # effective travel_speed and, if the deferred-to
+                                            # entity itself has no capacity-generating skill of
+                                            # its own (ex: a cart), carrying capacity too -- a
+                                            # string, or a list of names for something with more
+                                            # than one provider (ex: a cart's own "mount" naming
+                                            # every horse hitched to it). Resolved recursively
+                                            # (_resolve_travel_speed, DM_Travel.py; get_carrying_
+                                            # capacity, DM_Rules.py) -- a rider names their cart,
+                                            # the cart names its own team, so a rider's effective
+                                            # speed/capacity walks that whole chain rather than
+                                            # requiring them to name the team directly. Speed
+                                            # aggregates a multi-entry "mount" by the *minimum*
+                                            # across every named entity (paced to the slowest
+                                            # puller); capacity aggregates by the *sum* (every
+                                            # additional puller helps). A "mount" naming a dead
+                                            # or no-longer-present entity is simply ignored --
+                                            # this entity falls back to its own travel_speed/
+                                            # max_bulk instead, no error, the same "getting
+                                            # thrown just silently unwinds the relationship, no
+                                            # extra penalty" precedent this design deliberately
+                                            # settled on (see docs/downtime.md's "Travel" or the
+                                            # module docstring on _resolve_mount_intent for the
+                                            # full reasoning).
 #
 # NPC-generation stubs are a different top-level table entirely -- [[entity_template]], loaded
 # into self.entity_templates, never self.entities -- with their own field reference,

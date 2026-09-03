@@ -103,7 +103,8 @@ class PersistenceMixin(DMCoreProtocol):
             see DM_Time.py/docs/downtime.md, a fully separate axis from round_number),
             scenario_entities, and each
             instance's hp/active_conditions/currency/exp/inventory/equipped/band/
-            attitude_deltas/action_attitude_deltas/current_language/prompt_directive), not a raw dump
+            attitude_deltas/action_attitude_deltas/current_language/prompt_directive/mount),
+            not a raw dump
             of self.entities, which also holds every static template. Loading re-instantiates
             fresh from Rules/Fantasy TOML and overlays this diff on top, so a save doesn't
             freeze stale stats if templates are edited between sessions. LLMCore
@@ -195,6 +196,13 @@ class PersistenceMixin(DMCoreProtocol):
                 # actually plants one, same unconditional per-instance treatment current_language
                 # gets.
                 "prompt_directive": entity.get("prompt_directive"),
+                # Who/what this entity is currently mounted on/hitched to (DM_Movement.py's
+                # "mount"/"dismount"/"hitch"/"unhitch" -- see entity_schema.toml's own "mount"),
+                # a string or list, absent (None) until something actually sets one -- same
+                # unconditional per-instance treatment current_language/prompt_directive get.
+                # Without this, reloading a save would silently unmount the player with no
+                # explanation (see docs/downtime.md's "Mounts and conveyance").
+                "mount": entity.get("mount"),
             }
             if entity.get("generated"):
                 state["generated"] = True
@@ -524,6 +532,7 @@ class PersistenceMixin(DMCoreProtocol):
             entity["action_attitude_deltas"] = state.get("action_attitude_deltas", {})
             entity["current_language"] = state.get("current_language")
             entity["prompt_directive"] = state.get("prompt_directive")
+            entity["mount"] = state.get("mount")
             entity["currency"] = state.get("currency", entity.get("currency", 0))
             entity["exp"] = state.get("exp", entity.get("exp", 0))
             entity["inventory"] = state.get("inventory", entity.get("inventory", []))

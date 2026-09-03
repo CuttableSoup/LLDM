@@ -104,6 +104,14 @@ modifier = { dice = 0, pips = 0, bonus = 0 }
 name = "jammed"
 modifier = { dice = 0, pips = 0, bonus = 0 }
 
+[[condition]]
+name = "no_keys"
+modifier = { dice = 0, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "flooded"
+modifier = { dice = 0, pips = 0, bonus = 0 }
+
 [strength_damage]
 skill = "strength"
 divisor = 2

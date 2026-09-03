@@ -11,6 +11,7 @@ _REASON_TEXT = {
     "no_exit": "there's no way through in that direction",
     "blocked_by_enemies": "something hostile is still standing in the way",
     "downtime_interrupted": "an unresolved threat from earlier is still keeping the party in place",
+    "mount_overloaded": "whatever they're riding/hitched to is carrying more than it can bear and refuses to budge",
 }
 
 
@@ -20,8 +21,10 @@ def resolve_travel(core, data, resolved):
         location travel, branching to grid-based travel first if the current location carries
         one. Denied (reason "no_exit") if no destination is named/known and no "return_to"
         applies, (reason "blocked_by_enemies") if a living hostile remains in the current
-        room, or (reason "downtime_interrupted") if a previously-paused trip/rest hasn't
-        cleared yet (see docs/downtime.md's "Pausing for a fight").
+        room, (reason "downtime_interrupted") if a previously-paused trip/rest hasn't cleared
+        yet (see docs/downtime.md's "Pausing for a fight"), or (reason "mount_overloaded", a
+        gridded destination only) if the player's own mount is currently overloaded (see
+        docs/downtime.md's "Mounts and conveyance").
     @param core The DMCore instance.
     @param data The item_interaction_detected payload ({input, ...}).
     @param resolved The item_interaction_resolved publisher closure from

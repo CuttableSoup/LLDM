@@ -383,7 +383,7 @@ class LLMCore:
     def generate_item_interaction_response(self, data):
         """!
         @brief Narrates an "examine"/"take"/"give"/"trade"/"open"/"close" attempt against a
-            named item or the scene target, or one of the eight free-standing intents (see
+            named item or the scene target, or one of the twelve free-standing intents (see
             CONTEXT.md's "Free-standing intent") -- each resolved with no dice roll (see
             DMCore._on_item_interaction_detected) and, for the free-standing group, narrated
             entirely by its own module under intents/ (intents/registry.py's own HANDLERS

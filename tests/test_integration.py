@@ -263,6 +263,84 @@ class TestArenaCombatConversation(_LivePipelineTestCase):
 
 
 @unittest.skipUnless(_ollama_reachable(), "Ollama not reachable at http://127.0.0.1:11434")
+class TestMountingConversation(_LivePipelineTestCase):
+    """!
+    @brief Live-pipeline proof for the "mount"/"dismount" free-standing intents (see
+        docs/downtime.md's "Mounts and conveyance") -- real NLPCore parsing free-text "mount
+        the horse"/"dismount" input into the right intent (rather than, say, an ordinary
+        attack or a husbandry skill check -- "ride"/"climb" are both real skills.toml
+        keywords this could otherwise collide with), real DMCore state (the player's own
+        "mount" field, band sync, _party_travel_speed), and a real LLM narrating a successful
+        mount, a denied attempt while already mounted, a dismount, and a denied attempt
+        against a hostile target. The mechanics themselves (gating, band sync, the recursive
+        speed/bulk resolvers) are already exhaustively unit-tested with no LLM involved at all
+        (TestMount/TestGridTravel/TestBulk, test_unit.py); this only checks the whole chain --
+        NLP parsing, DMCore state, and LLM narration -- is wired together correctly end to
+        end, the same reasoning every other class in this file gives for earning a
+        live-Ollama test.
+
+        Uses "plains" (gladstone alone, no other party member) rather than "arena" --
+        _party_travel_speed paces to the *slowest present party member*, so arena's own
+        "thane" (an unmounted ally) would keep the whole party at the default speed even
+        after gladstone mounts up, masking the very effect this test exists to prove.
+    """
+    scenario_name = "plains"
+
+    def setUp(self):
+        self._boot()
+        # creatures.toml's own "horse"/"wild boar" -- neither is owned by any scenario, so
+        # both are instanced here the same way TestEntityBehavior's own troll/spectral wolf
+        # are in test_unit.py. "wild boar" (hostile by default, no [entity.attitudes] table
+        # of its own) stands in for arena's own "wolf" as the denied-hostile-mount target.
+        [self.horse_name] = self.dm_core._instance_entities([{"name": "horse", "band": 1}])
+        self.dm_core.scenario_entities.append(self.horse_name)
+        [self.boar_name] = self.dm_core._instance_entities([{"name": "wild boar", "band": 1}])
+        self.dm_core.scenario_entities.append(self.boar_name)
+
+    def test_mount_dismount_and_a_denied_hostile_attempt_through_the_real_pipeline(self):
+        resolved_events = []
+        self.event_bus.subscribe("item_interaction_resolved", resolved_events.append)
+        player_name = self.dm_core.player_name
+
+        transcript = []
+
+        def say(player_input):
+            response = self._say(player_input)
+            transcript.append((player_input, response))
+            self.assertTrue(response.strip())
+            self.assertNotIn("Could not connect to the local LLM", response)
+            return response
+
+        say(f"I mount the {self.horse_name}")
+        self.assertTrue(resolved_events[-1]["found"])
+        self.assertEqual(resolved_events[-1]["target"], self.horse_name)
+        self.assertEqual(self.dm_core.entities[player_name]["mount"], self.horse_name)
+        self.assertEqual(self.dm_core._party_travel_speed(), 8)  # creatures.toml's own horse
+
+        # Already mounted -- denied outright before the boar is even considered as a target.
+        say(f"I try to mount the {self.boar_name}")
+        self.assertFalse(resolved_events[-1]["found"])
+        self.assertEqual(resolved_events[-1]["reason"], "already_mounted")
+
+        say("I dismount")
+        self.assertTrue(resolved_events[-1]["found"])
+        self.assertEqual(resolved_events[-1]["target"], self.horse_name)
+        self.assertNotIn("mount", self.dm_core.entities[player_name])
+        self.assertEqual(self.dm_core._party_travel_speed(), 4)  # rules.toml's own default_speed
+
+        # Nothing mounted now, so this reaches the boar itself -- hostile by default (no
+        # [entity.attitudes] table of its own), so it's still denied, just for a different
+        # reason than the "already_mounted" attempt above.
+        say(f"I try to mount the {self.boar_name}")
+        self.assertFalse(resolved_events[-1]["found"])
+        self.assertEqual(resolved_events[-1]["reason"], "target_hostile")
+
+        print("\n=== Mounting conversation transcript ===")
+        for player_input, response in transcript:
+            print(f"> {player_input}\n{response}\n")
+
+
+@unittest.skipUnless(_ollama_reachable(), "Ollama not reachable at http://127.0.0.1:11434")
 class TestGridTravelAmbushConversation(_LivePipelineTestCase):
     """!
     @brief Live-pipeline proof for "pausing the block clock for a mid-block hostile encounter"

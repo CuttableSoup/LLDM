@@ -10,15 +10,19 @@ def resolve_advance_retreat(core, data, resolved):
     """!
     @brief Resolves "advance"/"retreat" (see DM_Movement.py's advance_or_retreat) -- shifts the
         player's own band toward/away from current_target by up to their own speed, snapping
-        party formation back into place. Always succeeds (there's no failure reason this can
-        report) -- an empty "moved" list, when nothing else is present to react, is itself a
-        valid outcome, not a denial.
+        party formation back into place. An empty "moved" list, when nothing else is present
+        to react, is itself a valid outcome, not a denial -- but advance_or_retreat returns
+        None instead (a distinct sentinel) when the player's own mount is currently overloaded,
+        denied here as reason "mount_overloaded".
     @param core The DMCore instance.
     @param data The item_interaction_detected payload ({intent, ...}).
     @param resolved The item_interaction_resolved publisher closure from
         DMCore._on_item_interaction_detected.
     """
     moved = core.advance_or_retreat(data.get("intent"))
+    if moved is None:
+        resolved(False, reason="mount_overloaded")
+        return
     resolved(True, moved=moved)
 
 
@@ -32,10 +36,16 @@ def narrate_advance_retreat(llm_core, data):
         else entirely, which is why this doesn't claim a uniform "moves away from everyone".
     @param llm_core The LLMCore instance -- unused; this intent narrates no ongoing scene
         grounding, unlike move/narrate_travel.
-    @param data The "item_interaction_resolved" payload ({intent, moved, input}).
+    @param data The "item_interaction_resolved" payload ({intent, reason?, moved?, input}).
     @return The narration prompt.
     """
     intent = data.get("intent")
+    if data.get("reason") == "mount_overloaded":
+        return (
+            f"The player tries to {intent}, but whatever they're riding/hitched to is "
+            f"carrying more than it can bear and refuses to budge -- no roll involved.\n"
+            f"Narrate a brief, in-character explanation in 1-2 sentences as the Game Master."
+        )
     moved = data.get("moved") or []
     if moved:
         movement_text = "; ".join(

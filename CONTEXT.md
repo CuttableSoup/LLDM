@@ -17,9 +17,9 @@ _Avoid_: item intent, diceless action.
 **Free-standing intent**:
 An item-interaction intent that acts on the scene, the party, or the block clock directly,
 rather than a named item — advance, retreat, formation_behind, formation_abreast,
-speak_language, rest, move, and travel. Resolved with no dependency on the scene target or the
-locked-container gate, unlike every item-named intent.
-_Avoid_: scene intent, movement intent (move/travel are only two of the eight).
+speak_language, rest, move, travel, mount, dismount, hitch, and unhitch. Resolved with no
+dependency on the scene target or the locked-container gate, unlike every item-named intent.
+_Avoid_: scene intent, movement intent (move/travel are only two of the twelve).
 
 **Scene target**:
 The entity a non-free-standing item-interaction intent implicitly acts against when no item
