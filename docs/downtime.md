@@ -1,9 +1,9 @@
 # LLDM — Downtime: The Block Clock, Rest, and Travel
 
 Part of the [LLDM](../CLAUDE.md) docs — the coarse time-of-day clock underlying travel/rest, and
-what's actually built of it so far. See `docs/extended-goals.md`'s own "Downtime" section for the
-full design (crafting's day-extension, training reopening, night watch/surprise) this is built
-from; read it before extending anything here further.
+what's actually built of it so far. See "Not yet built" at the end for what's still open
+(crafting's day-extension, training's reopening question, ad hoc destination generation, impassable
+terrain) and the reasoning behind each — read it before extending anything here further.
 
 ## The block clock
 
@@ -288,6 +288,37 @@ rare edge case.
 
 ## Not yet built
 
-Crafting's `days_required` day-extension and reopening character creation mid-game for training
-stay exactly as undesigned-in-code as `extended-goals.md`'s own "Downtime" section left them — read
-that section before starting either; it was fully grilled as a design pass, not just sketched.
+**Crafting's day-extension.** Crafting already exists as an instant single-roll check (see
+`docs/inventory-items.md`) — the downtime extension gives a recipe a `days_required` field, gating
+completion on spending that many days, resolved as one roll at completion rather than a periodic
+per-day roll (avoiding the swinginess a roll-every-day approach would add, the same reasoning the
+one-aggregate-roll shape "Rest" above already follows). Scoped to locations with no active
+environment for a first pass — crafting while camped somewhere dangerous is a real combination,
+just not designed yet.
+
+**Reopening character creation for training.** `spend_pip`/`spend_exp_on_skills`
+(`Character_Creation.py`, see `docs/character-creation.md`'s "Training") already do the actual
+mechanics — raising a skill by a pip costs XP equal to its own current dice count, rolling over
+into an extra die at 3 pips — but the only door onto them is the character-creation screen, which
+today only ever opens once, before a session's first game (see `docs/character-creation.md`'s
+"Booting the game"). What's still genuinely undecided: **when** that screen (or an equivalent) can
+reopen mid-game so accumulated post-chargen XP is actually spendable — a clock/downtime-adjacent
+question in its own right — plus quest-driven XP (only defeating a hostile or surviving/disarming
+a trap awards any today; see `docs/combat.md`'s "Experience (XP)").
+
+**Ad hoc destination generation.** `known_locations` (see "Travel" above) gates travel on
+knowledge, not a hand-authored connection — the natural extension is ADaM ad hoc-generating an
+unknown destination on request, the same `tool_choice="auto"`/decline-biased shape
+`docs/adam-improvisation.md`'s "Ad hoc entity creation and removal" already uses for items/
+creatures. Not designed yet beyond that shape; other in-fiction ways to learn a location short of
+ADaM generating one outright (dialogue, a sign) are equally still undesigned.
+
+**Impassable terrain.** Terrain never blocks travel today — a straight line can cross an
+unauthored gap, an ocean, or a mountain range exactly as easily as a plain, since a region (see
+"Environments and the world map" above) only changes what gets rolled, not whether the trip is
+possible. A real, explicitly deferred feature on top of this, not designed here.
+
+**Build order.** Crafting's day-extension and training's reopening question are natural
+fast-follows, independent of each other and of everything else in this document; ad hoc
+destination generation is a fast-follow on top of `known_locations` specifically, independent of
+watch/pausing entirely.

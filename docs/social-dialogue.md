@@ -39,9 +39,10 @@ turn narration (the `scenario_loaded` roster, `DefenderDetailsEffect` on every r
 and free-form dialogue's own `persona` field, `DM_Dialogue.py`'s `_resolve_dialogue`), a planted
 directive reaches the very turn it lands *and* every later dialogue turn with that NPC, for free.
 One directive at a time (a later plant overwrites, never stacks). `duration_blocks` (in
-block-clock blocks, see "Downtime") is optional — an authored `inject_directive`'s own
-`"duration"` field sets it (`suggestion`'s own `duration = 1` matches its source rule's "a short
-while" flavor); absent means no expiry at all, persisting until overwritten or manually cleared
+block-clock blocks, see `docs/downtime.md`'s "The block clock") is optional — an authored
+`inject_directive`'s own `"duration"` field sets it (`suggestion`'s own `duration = 1` matches its
+source rule's "a short while" flavor); absent means no expiry at all, persisting until overwritten
+or manually cleared
 (ADaM's own ad hoc entity-edit path already can, incidentally). `DMCore.advance_blocks`'s own
 `_expire_prompt_directives` (`DM_Time.py`) decrements every planted directive's countdown by
 however many blocks just elapsed and clears it once that reaches zero — the same bespoke,

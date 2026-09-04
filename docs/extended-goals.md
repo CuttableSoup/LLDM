@@ -27,7 +27,8 @@ math alone: a location/environment can optionally hint archetype/CR-multiplier v
 `resolve_varied_value` shape `[[entity_template]]`'s own `hint`/`qualities` already use, so a swamp
 skews toward low-CR beasts and a crypt toward undead rather than either rolling anything at any CR
 by pure chance. This reserved kind works unchanged inside an environment's own day/night tables too
-(see "Downtime"), since both are the same underlying weighted-choice mechanism.
+(see `docs/downtime.md`'s "Environments and the world map"), since both are the same underlying
+weighted-choice mechanism.
 
 **Scenario, quest, NPC, item, and location generators** — procedurally author the TOML data
 itself rather than every scenario/entity being hand-written. Distinct in kind from every other
@@ -77,9 +78,9 @@ richness the way CR budgets creature power.
 **Location generation**, at its eventual full scope, generates a location's complete internal
 structure — the whole `[[location.room]]` graph: multiple rooms, their exits/bands/connectivity,
 each room's own `entities`/encounter table — a whole `crypt.toml`-shaped location in one authoring
-pass, not just the single named point on the overworld grid "Downtime"'s own ad hoc destination
-stub produces. Runs deterministic post-generation validation — every exit references a real
-room/band, every room is reachable from the start room — flagging breakage for the reviewer rather
+pass, not just the single named point on the overworld grid `docs/downtime.md`'s own "Not yet
+built" ad hoc destination generation idea produces. Runs deterministic post-generation
+validation — every exit references a real room/band, every room is reachable from the start room — flagging breakage for the reviewer rather
 than shipping it silently: offline-and-reviewed means skipping the runtime-safety-critical
 unsupervised guardrails, not skipping cheap programmatic sanity checks a human shouldn't have to
 manually trace for. Each room is populated with concrete, named, already-existing entities/
@@ -137,158 +138,3 @@ resolve phase ADaM's own calls already happen in — the engine's strict resolve
 ordering (see "Action resolution") is preserved rather than letting the text-generating call
 itself mutate state mid-stream, which would make narration the one call in the entire engine that
 both writes prose and mutates world state at once.
-
-## Downtime: travel time, rest, crafting, training
-
-Design for a coarse time-of-day clock underlying travel, rest, and (eventually) crafting/
-training — inspired by Pathfinder's downtime rules. Fully grilled (see the design-tree interview
-this section was built from); recorded here as the target shape, not a plan that was ever meant to
-build in one pass — see "Suggested build order" at the end.
-
-**Built**: the block clock primitive, grid-based travel with environments/world map, night
-watch/surprise, rest (sharing the same per-block environment/watch check travel uses), and pausing
-the block clock for a real fight (see `docs/downtime.md` for what's actually shipped and exactly
-where it diverges from the sketch below -- day/night is read off real elapsed hours against a
-`daylight_hours` tunable, not fixed block-index parity, since the clock's own `[time]` rules.toml
-table exposes `daylight_hours` as a real, load-bearing value rather than pure flavor). Still
-unbuilt: crafting's day-extension and training's reopening question.
-
-**The block clock.** An 8-hour "block" (three per day) is the atomic time unit — fine enough for
-meaningful travel/rest granularity, coarse enough that a multi-day journey doesn't mean
-turn-by-turn play. A day is just three blocks, the unit a longer downtime task (crafting, training)
-would consume instead of spending blocks directly. This clock is a new, persistent, top-level
-`DMCore` field (round-tripped through `save_game`/`load_game` the same way `current_room_key`/
-`location_runtime` already are — a downtime system that forgot elapsed time on reload would let a
-save-scum trivially dodge a bad watch roll, undermining the whole mechanic) and a fully separate
-axis from combat's own `round_number` — no shared upkeep hook with `run_round_upkeep`
-(`DM_Status.py`), since one is tactical/per-turn and the other strategic/per-watch.
-
-**Entering combat mid-block, pausing the block clock, and auto-resuming travel toward the same
-destination once combat resolves — built.** See `docs/downtime.md`'s "Pausing for a fight" for the
-shipped mechanics (`DMCore.pending_downtime`, `_resume_pending_downtime`, the ephemeral
-`ROAD_ENCOUNTER_KEY` scratch scene for a mid-journey ambush). Mirrors how the existing hostile gate
-already blocked a *room* transition rather than canceling the player's stated intent, extended into
-genuinely resumable state — the gate alone had nothing to resume *from*, since it was a stateless
-re-deny with no memory of what the player had tried.
-
-**Overworld locations get grid coordinates; the grid *defines* connectivity for them — built.**
-See `docs/downtime.md`'s "Travel" for the shipped mechanics (`DM_Travel.py`). An optional
-`grid = {x, y}` field applies only to `[[location]]` entries meant as overworld travel endpoints —
-a dungeon's own internal `[[location.room]]` graph never needs one, the same way rooms already opt
-into band positioning only when it matters. For this coordinate-bearing subset, the grid itself
-replaces the authored `[[location.exit]]` graph: any two known locations are reachable directly,
-with no exit to author — a genuinely different connectivity model from non-gridded locations,
-which keep resolving through the existing exit graph completely unchanged.
-**Travel is still gated, just on knowledge instead of a hand-authored connection**: naming a
-destination only resolves if it's in the player's own `known_locations` (populated by having
-visited it, or a scenario's own `[scenario].known_locations` seeding starting knowledge ahead of
-time — `plains.toml`'s shipped worked example), denied the same way an unrecognized name is today
-otherwise. **Extended goal on top of this, still not built**: ADaM ad hoc-generating an unknown
-destination on request, the same `tool_choice="auto"`/decline-biased shape "Ad hoc entity creation
-and removal" already uses for items/creatures — not designed yet, just the natural next step now
-that `known_locations` is a real concept to insert into (dialogue/a sign as other in-fiction ways
-to learn a location, short of ADaM generating one outright, are equally still undesigned).
-
-**Distance and travel speed — built.** A new stat, distinct from combat's own band-movement
-`speed` — authored as a `rules.toml` `[travel]` default (`default_speed`) with an optional
-per-entity/per-race `travel_speed` override. A party paces to its *slowest* `is_party` member, not
-just the player's own value (`_party_travel_speed`). Block count for a journey is Euclidean
-(Pythagorean) distance between the two locations' `grid` coordinates, divided by the party's
-travel speed, rounded up — no such thing as arriving a fraction of a block early, the same
-"no fractional units" rounding rule HP/dice/bands already follow.
-
-**Environments — built.** `Rules/Fantasy/environments.toml` — the same "shared catalog referenced
-by key" shape `npc_keywords.toml` already is. Each named environment (`plains`, shipped, is the
-only one authored so far) owns a day encounter table, a night encounter table, and its own watch
-difficulty (authored already, not yet read by anything — see "Night watch and surprise," still
-unbuilt, below). The tables themselves are the exact same weighted-choice/`resolve_varied_value`
-machinery and three-way outcome (real `[[entity]]`/`[[entity_template]]` name / reserved
-`"nothing"` / flavor-only string) `[[location.encounter]]` already uses, unchanged — "some travel
-is uneventful" is just weighting `"nothing"` heavily, no new mechanism.
-
-**Placing environments on the world — built.** `Rules/Fantasy/world_map.toml` — named *regions*
-(a rectangle, naming one environment) rather than a per-tile dict, matching how every other table
-in this codebase stays hand-sized rather than combinatorial. A coordinate resolves to whichever
-region contains it (`resolve_region_environment`); a gap between authored regions defaults to "no
-environment," which is what "safe" looks like everywhere in this design — there's deliberately no
-separate safe flag anywhere (not on rest, not on crafting): absence of an environment already
-means no watch check and no encounter roll, full stop. Terrain never *blocks* travel in this
-design — a straight line can currently cross an unauthored gap, an ocean, or a mountain range
-exactly as easily as a plain, since a region only changes what gets rolled, not whether the trip
-is possible. Impassable terrain is a real, explicitly deferred feature on top of this, not
-designed here.
-
-**Per-block environment sampling — built.** True per-block sampling along the straight line
-between origin and destination — one sample point per block (its own leg's midpoint), each
-resolved against `world_map.toml` independently — not a coarser "first half is the origin's
-environment, second half is the destination's" approximation. A journey crossing three regions
-rolls from all three, proportional to how much of the line each covers; the coarser split was
-considered and rejected once the region lookup's own "defaults to safe" fallback made it clear
-every sample point always resolves to *something* — the two-bucket split would only have thrown
-away information the map actually contains. `plains.toml`'s own shipped map is single-region, so
-this hasn't yet been exercised by a real multi-region journey, but the sampling math itself doesn't
-special-case the single-region case at all.
-
-**Night watch and surprise — built, for both travel and rest (see `docs/downtime.md`'s "Night
-watch and surprise" for the shipped mechanics and exactly what still diverges from this sketch).**
-On a night block, whichever `is_party` member is next up in a fixed
-rotation (not player-chosen, not always the same member) rolls `observation` against that block's
-*current* environment's own watch difficulty — the same flat-difficulty check `[entity.test]`
-locks/traps already use, not a new check type; `observation` was picked over introducing a new
-skill specifically because it's already the game's established notice/perception skill
-(`[entity.notice]` on hidden traps, the `dodge + observation` initiative pool in `rules.toml`).
-Success, or a non-hostile roll, changes nothing. Failure paired with a hostile encounter that
-block tags the party with a new `surprised` `[[condition]]` entry (`rules.toml`) carrying a heavy
-`modifier` and `duration = 1 round` — reusing the exact condition/modifier/duration machinery that
-already makes `wounded`/`stunned` mechanically real (see "Status and conditions") rather than
-inventing a turn-skip: initiative here only orders narration, so there's no "first turn" to deny
-the way a true turn-order game would deny one. **A solo player never stands watch at all** — with
-nobody to rotate to, any hostile night result always applies `surprised` unconditionally, no
-`observation` roll attempted. (The alternative — resting suppresses the encounter roll entirely
-for a solo traveler, the same as an absent environment — was rejected: it would make solo travel
-strictly *safer* than traveling with a party, inverting the usual "safety in numbers" logic.)
-
-**Rest — built.** Rest consumes one or more blocks, consulting the current location's own
-environment (if any -- a location with no `grid` field, or an unmapped `world_map.toml` gap, both
-still mean "safe" by the same absence-of-an-environment default as everywhere else) and rolling its
-day/night encounter table (plus a night watch check on a hostile roll) once per block via the same
-`_resolve_environment_block` grid travel's own per-block loop uses, against a single fixed point
-rather than a line of travel. Once every block has elapsed, heals via the ordinary `apply_healing`
-call (so the existing wound-tier condition dismiss-sweep applies for free), scaled by `fortitude` —
-picked over `medicine` because this is the body's own recovery, not a caregiver treating someone
-else's wound; `medicine` stays free for some other future check that actually wants a
-caregiving/treatment framing. One aggregate heal roll over the whole rest, not per-block, unaffected
-by whatever the per-block environment rolls above turned up — resting through an ambush heals
-exactly as much as an uneventful rest of the same length would. See `docs/downtime.md` for the
-shipped mechanics (the `"rest"` free-text intent).
-
-**Crafting.** Already exists as an instant single-roll check (see "Inventory and items"). The
-downtime extension: a recipe gains a `days_required`, and completion gates on spending that many
-days, resolved as one roll at completion rather than a periodic per-day roll (avoids Pathfinder's
-own swinginess) — scoped to locations with no active environment for a first pass, since crafting
-while camped somewhere dangerous is a real combination but not designed yet.
-
-**Training.** The core mechanics now exist — raising a skill by a pip costs XP equal to its own
-current dice count, rolling over into an extra die at 3 pips (`spend_pip`/`spend_exp_on_skills`,
-`Character_Creation.py`; see `docs/character-creation.md`'s "Training") — but only reachable from
-the character-creation screen, which today only ever opens once, before the first game a session
-has (see "Booting the game" above). What's still genuinely deferred: **when** that screen (or an
-equivalent) can be reopened mid-game so accumulated post-chargen XP is actually spendable — a
-clock/downtime-adjacent design question in its own right, not yet decided — and quest-driven XP
-(only defeating a hostile entity, or surviving/disarming a trap, awards any today; see
-`docs/combat.md`'s "Experience (XP)").
-
-**Data conventions.** `environments.toml` and `world_map.toml` are now real sibling files alongside
-the existing `Rules/Fantasy/*.toml` catalogs (see `docs/downtime.md`'s "Travel"); each environment
-authors a `watch_difficulty` field, read by night watch (above) for both travel and rest. Block
-length/blocks-per-day/daylight-hours and travel speed are folded into `rules.toml`'s own
-`[time]`/`[travel]` tables (see `docs/downtime.md`) — mirroring exactly how `[[status]]`/
-`[[condition]]`/`[[initiative]]` already centralize tunables there rather than living as Python
-constants; the heal formula needed no table of its own beyond `[time]`, since it reads straight
-off the resting entity's own `fortitude` skill.
-
-**Suggested build order.** Clock primitive, grid/environment/distance travel, night watch/surprise,
-rest, and pausing the block clock for a real fight are all done (see `docs/downtime.md`). Crafting's
-day-extension and training's whole design are natural fast-follows, independent of all of the
-above; `known_locations`-gated ad hoc destination generation is a fast-follow on top of travel,
-independent of watch/pausing entirely.

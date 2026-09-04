@@ -259,7 +259,7 @@ Spending `exp` — training a skill up by a pip at a time — is `Character_Crea
 `spend_pip`/`spend_exp_on_skills`, wired into the character-creation screen today (see
 `docs/character-creation.md`'s "Training"); quest-driven XP (as opposed to defeating an enemy),
 and reopening that screen mid-game rather than only once at first boot, are both still open —
-see `docs/extended-goals.md`.
+see `docs/downtime.md`'s "Not yet built".
 
 
 ## Tags vs. conditions

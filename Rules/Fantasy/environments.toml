@@ -10,10 +10,9 @@
 # location entry. Neither table carries a "trigger"/"name" field the way [[location.encounter]]
 # does -- travel is the only thing that ever rolls these, so there's nothing to gate on.
 #
-# watch_difficulty is authored now for the future night-watch/surprise mechanic
-# (docs/extended-goals.md's "Downtime" -- a flat-difficulty "observation" check on a hostile
-# night block) -- not read by anything yet; travel today rolls day_encounter/night_encounter
-# with no watch check at all, exactly like basic rest skips the same gate.
+# watch_difficulty is the flat-difficulty "observation" check rolled against a hostile night
+# block -- see docs/downtime.md's "Night watch and surprise" for the shipped mechanic
+# (DM_Travel.py's _roll_night_watch, shared by both travel and rest).
 [[environment]]
 name = "plains"
 watch_difficulty = 9
