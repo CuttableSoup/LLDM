@@ -19,7 +19,9 @@ Rules, Damage Reduction/Energy Resistance/Vulnerability, Magic Items, core Magic
 D6 canon via `Settings/d6 Fantasy.pdf` (core rulebook), `Settings/d6 Fantasy Creatures.pdf`
 (bestiary), `Settings/d6 Magic.pdf` (Vade Mecum of Magic supplement). Engine behavior verified
 directly against `DM_Status.py`/`DM_Combat.py`/`rules.toml` as of 2026-08-22, not just inferred
-from CLAUDE.md's prose.
+from CLAUDE.md's prose. §3/§4 additionally surveyed against aonprd.com's own Core Rulebook spell
+list and magic-item category pages (Wondrous Items, Rings, Rods, Staves, Artifacts, Cursed
+Items) as of 2026-09-04, looking specifically for mechanic categories the original pass missed.
 
 ---
 
@@ -139,6 +141,14 @@ is directly a `[[condition]]` modifier; Staggered/Disabled's "one action only" h
 analog and is better left as a flavor condition (narration says the creature is staggered) than
 forced into a mechanic that doesn't fit.
 
+**The mirror case — action-economy-*increasing* buffs** (*Haste*'s extra attack on a full-attack
+action, *Time Stop*'s free-action window) hits the identical wall for the identical reason: "one
+clause = one turn slot" (see CLAUDE.md's "Multiple actions") has no notion of *more* slots than
+normal either, only fewer. *Haste*'s dice/AC/speed component (`+1 attack/AC/Reflex, +30 ft.
+speed`) is ordinary Pattern C content (a `[[condition]]` with a positive modifier, same shape as
+`enraged`); the extra-attack grant itself has no analog and reaches the same "not authorable"
+verdict Pattern B already gives Staggered/Disabled. Found via the 2026-09-04 survey (§3/§4).
+
 ### Pattern C — flat dice-pool/roll penalty while active
 Pathfinder: Shaken/Frightened/Panicked (fear ladder, -2/-2/-2 plus fleeing), Sickened/Nauseated's
 milder cousin, Fatigued/Exhausted, Dazzled (-1 to sight-based rolls only), Deafened (-4 specific
@@ -155,11 +165,23 @@ name = "sickened"
 modifier = { dice = -2, pips = 0, bonus = 0 }
 ```
 
-A condition whose penalty only applies to *specific* rolls (Dazzled: sight-only; Deafened:
+A condition whose effect only applies to *specific* rolls (Dazzled: sight-only; Deafened:
 initiative/sound-Perception only) can't be expressed today — `[[condition]]`'s modifier is
-global once wired in. Authoring it as a global (but smaller) penalty is the honest
-simplification; a skill-scoped modifier would need a new field (ex: `applies_to = ["observation"]`)
-on the condition entry.
+global once wired in (`get_condition_modifier`, `DM_Status.py`, sums it into every roll the
+entity makes, no matter which skill). Authoring a *penalty* as a global (but smaller) one is
+the honest simplification; a skill-scoped modifier would need a new field (ex: `applies_to =
+["observation"]`) on the condition entry, read by `get_condition_modifier` alongside `modifier`
+itself.
+
+**This cuts both ways — it's a buff-scoping gap too, not just a penalty one, and the 2026-09-04
+spell survey (§3/§4) found the live content category it blocks.** Pathfinder's own ability-score
+buffs (*Bull's Strength* `+4 Str`, *Cat's Grace* `+4 Dex`, *Fox's Cunning* `+4 Int`, ...) are
+each meant to raise only *that one ability's own rolls*. Authoring one today as an ordinary
+global `[[condition]]` modifier — the same shape `creatures.toml`'s `enraged` already uses for a
+flat, deliberately-everywhere +1D — makes it far stronger than Pathfinder intends: a blanket
++4D/+4 to literally every roll the entity makes, not just Strength-based ones. `applies_to` is
+the same fix on both sides of the ledger; until it exists, a scoped buff/debuff has no honest
+conversion the way an unscoped one (`shaken`/`sickened`) already does.
 
 ### Pattern D — no-defense / helpless-to-hit
 Pathfinder: Flat-Footed, Prone, Grappled, Pinned all key off AC, which the engine has no
@@ -314,6 +336,7 @@ items are pure data — no new mechanism needed, just an item entity with the ri
 | **Ring/belt/wondrous stat bonus** | A flat bonus to a named skill — either `damage_value.bonus` for an offensive item, or (no current field for a passive skill-dice buff from a *worn, non-weapon* item) would need equipped items to be able to modify skill dice the way `resistance_value`/`armor_value` already let equipped items modify defense. Currently only weapons/armor equipped items are read by combat math (`get_equipped_weapon`/`get_damage_reduction`); a ring granting +1D to `observation` has no mechanism to apply that bonus to `resolve_action` today. Worth flagging as a scoped extension: an `equipped_skill_bonus = { skill = "observation", dice = 1 }` field, read by `resolve_action` alongside the entity's own base skill dice. |
 | **Potions/scrolls** | Already fully supported — `usable`/`charges`/`[entity.skills].healing`/`.poison` is a potion; a scroll with a one-shot spell effect is really just a usable item whose "use" *is* casting — model it as `usable = true`, `charges = 1`, with the actual effect authored as a real ability the item's use resolves (not currently generic — `_resolve_use_intent` only knows healing/poison, so a scroll that casts an arbitrary spell effect would need `_resolve_use_intent` extended past its two hardcoded effect types). |
 | **Wands/staves** (multi-charge, spell-slot item) | `charges` already covers "N uses, then gone/replaced" — a wand is mechanically identical to a health potion with more charges, same caveat as scrolls above (effect variety). |
+| **Bag of Holding / Handy Haversack / Portable Hole** (a container with its own capacity, independent of the carrier's own load) | No engine equivalent — `[bulk]`/`get_max_bulk`/`get_current_bulk` (`DM_Rules.py`) compute one flat carry cap for an entity; nothing lets a *container item* hold its own nested bulk pool that doesn't count against the carrier's own total. A scoped, additive fix: a `container_capacity` field on an item, with `get_current_bulk` special-casing anything stored "inside" such an item (distinguishing carried-directly vs. carried-in-container inventory) as exempt from the carrier's own total. Found via the 2026-09-04 survey. |
 
 ---
 
@@ -337,6 +360,12 @@ mechanic-for-mechanic either. What *does* transfer directly:
 | Spell Resistance | — | Skip (see §3's spell-resistance-item row — already redundant with the existing opposed roll). |
 | Metamagic (Empower/Maximize/Quicken/etc.) | — | No engine equivalent — spells are static TOML entities, not built at cast-time from a base spell + modifiers. A "quickened fireball" would just be authored as a second, separate spell entity with adjusted numbers; there's no mechanism for the player to apply a metamagic-style modifier at the point of casting. |
 | Area of effect | `targets = {number, aoe, side}` | `DM_Combat.py`'s `resolve_targets` widens the roll from `target_name` alone to every living entity within `aoe` bands of it (nearest-first), filtered by `side` (`"enemies"`/`"allies"` via `is_hostile`, or `"all"` for an indiscriminate blast) and capped at `number` (`0` = unlimited). `fireball`'s own `{aoe = 5, side = "all", number = 0}` is the shipped indiscriminate-blast example; `techniques.toml`'s `cleave` (`{number = 3, aoe = 0}`) is the discriminating multi-target case (no radius, just a cap on how many enemies sharing `target_name`'s own band get hit). A Pathfinder-style ally-only area effect (ex: channeling) authors `{aoe = <radius>, side = "allies"}`. |
+| Teleportation / movement-warping (*Teleport*, *Dimension Door*, *Fly*, *Spider Climb*) | — | No engine equivalent — the band model (`DM_Movement.py`) has no "jump past intervening bands" op and no elevation axis for flight/climbing; `advance_or_retreat`/`move_toward_or_away` only ever step through adjacent bands. A missing verb in the movement system itself, not a missing field on an existing one. Found via the 2026-09-04 survey. |
+| Pure divination / information spells (*Identify*, *Scrying*, *Discern Location*) | — | Most of these don't resolve through a roll in Pathfinder either (no save, just reveals a fact). The real gap isn't mechanical — it's a structured "reveal X to the player" hook distinct from ordinary narration; closer to an ADaM (`docs/adam-improvisation.md`) authoring question than an engine primitive worth adding. Found via the 2026-09-04 survey. |
+| Delayed/triggered magic (*Magic Mouth*, *Contingency*, *Glyph of Warding*) | — | No engine equivalent — nothing lets an effect lie dormant and fire later on an arbitrary future turn. Distinct from `[[status]]`'s `on_damage` trigger (only fires from damage already being dealt to a live combat participant) and from §5's still-open Frightful Presence gap (assumes an active creature in the current scene) — trap/glyph magic needs a standing world object that persists across rooms/blocks/scenes, well past combat's own round-scoped lifetime. Out of scope — would need a new "world trigger" entity type, not a condition or ability field. Found via the 2026-09-04 survey. |
+| Mind-affecting control (*Charm Person*, *Dominate Person* — `Suggestion` itself is already shipped, `spells.toml`) | — | Distinct from the existing attitude system (`docs/social-dialogue.md`) — attitude drift changes disposition, which feeds into behavior *selection*; it never overrides whose input drives a given turn. Dominate-tier control needs to hijack an NPC's behavior choice (or, worse, the player's own free-text action) for N rounds — no hook for that at all. Charm-tier "make them like me" is already fine via ordinary attitude nudges (`maneuvers.toml`'s `charm`); it's specifically the *forced-action* tier that's the gap. Found via the 2026-09-04 survey. |
+| Polymorph / shapeshifting (*Baleful Polymorph*, the Polymorph line) | — | No engine equivalent — nothing swaps an entity's own skill dice/abilities/`supertype`/`subtype` mid-scene and reverts it later. `[[condition]]`'s modifier is a flat delta on an unchanged base, not a stat-block replacement; would need a new "form override" mechanism (snapshot + later restore), a structurally different operation from anything conditions do today. Found via the 2026-09-04 survey. |
+| Persistent terrain/obstacle spells (*Wall of Fire*, *Web*, *Wall of Stone*) | — | Distinct from the `targets = {number, aoe, side}` row above, which widens a single roll to multiple targets once, at cast time. This is a standing scene feature — something occupies a band after the spell resolves, persists across rounds, and affects whoever later enters/leaves that space (recurring damage, blocked movement, forced checks). Plausible as a scoped extension (a band-tagged temporary hazard object with its own duration and an on-entry hook) — but doesn't exist today. Found via the 2026-09-04 survey. |
 
 ---
 
