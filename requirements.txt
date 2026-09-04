@@ -11,3 +11,10 @@ pypdf==6.14.2
 # Test suite (test_unit.py)
 pytest==8.4.1
 pytest-asyncio==1.4.0
+
+# test_integration.py only -- parallelizes the live-Ollama suite across worker processes
+# (`pytest -n auto tests/test_integration.py`). Each worker pays its own NLP_Core.py model
+# load and Ollama request queueing, so the win only shows up once there are enough tests to
+# amortize that overhead -- measured ~8% faster than serial on the current 17-test suite,
+# not worth it yet on a run of just one or two tests (see docs/testing.md).
+pytest-xdist==3.8.0

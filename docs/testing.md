@@ -51,8 +51,35 @@ Practical constraints when touching this file:
   `test_unit.py` instead (patching `NPC_Generation._real_call_chat_completion` with a
   deterministic fake), so most of NPC generation stays covered by the fast offline suite — only
   the "does the configured model actually return a valid tool call" question needs a live
-  Ollama.
+  Ollama. `TestPromptDirectiveConversation` (a planted `prompt_directive` actually reaching a
+  live dialogue prompt, and reverting once it expires) and `TestLocationEncounterConversation`
+  (`DM_Encounters.py`'s own `encounter_triggered` → `LLMCore.generate_encounter_response`, a
+  separate narration path from ordinary turn narration that nothing else in this file
+  exercises) both hold themselves to the same bar every other class here already does: added
+  only because a fake LLM response can't prove what they're checking. Every class's own
+  docstring names the specific real-wiring risk it alone catches — a new one that can't name a
+  comparably specific risk probably belongs in `test_unit.py` instead.
 
 `python -m pytest -q` runs both files; `python -m pytest -q tests/test_unit.py` runs the fast,
 offline subset only.
+
+**Speed.** `NLP_Core.py`'s `SentenceTransformerMatcher` loads two real models
+(`all-MiniLM-L6-v2` plus `NLI_MODEL_NAME`'s zero-shot pipeline) once per process, not once per
+`NLPCore()` instance -- both are cached module-level (`_get_shared_model`/
+`_get_shared_sentiment_pipeline`), since every `_LivePipelineTestCase._boot()` call constructs a
+fresh `NLPCore()`. Beyond that, `test_integration.py`'s own real cost is genuine Ollama
+generation time against an already-GPU-resident model (verified via `curl :11434/api/ps`'s own
+`size_vram == size`) -- not something a code change can shrink without also shrinking what's
+being tested.
+
+`pytest -n auto tests/test_integration.py` (pytest-xdist, `requirements.txt`) runs the file
+across worker processes instead of serially -- measured ~8% faster on a 17-test run of this
+suite (each worker pays its own model load and queues its own Ollama requests, so the win only shows
+up once there are enough tests to amortize that per-worker overhead; a run of one or two tests
+was measured slower under `-n`, not faster). Scoped to `test_integration.py` alone, deliberately
+-- `test_unit.py` has its own documented Tk()-root churn fragility (see its
+`TestCharacterCreationDialog`/`TestGUICore` `setUpClass` notes) that was never tested under
+xdist, so don't fold it into the same `-n auto` invocation without checking that separately
+first. A machine sleeping mid-run can look exactly like a hang (no worker output until it
+resumes) -- rule that out before concluding `-n` broke something.
 

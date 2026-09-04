@@ -35,6 +35,7 @@ from Event_Bus import EventBus
 from llm.LLM_Core import LLMCore
 from llm.Ollama_Launcher import ensure_ollama_running
 from nlp.NLP_Core import NLPCore
+from resolution.Social_Resolution import set_prompt_directive
 from gui.Textual_Core import TextualCore
 from textual.widgets import RichLog
 
@@ -167,6 +168,63 @@ class TestInnkeeperConversation(_LivePipelineTestCase):
         # convey her grief ("a deep, painful sadness... vague sigh") without ever using those
         # words, so a keyword check on live LLM output is just flaky, not a real regression
         # signal. The printed transcript above is how this actually gets verified.
+
+
+@unittest.skipUnless(_ollama_reachable(), "Ollama not reachable at http://127.0.0.1:11434")
+class TestPromptDirectiveConversation(_LivePipelineTestCase):
+    """!
+    @brief Live-pipeline proof for a planted prompt_directive (Social_Resolution.py's
+        set_prompt_directive, injected into every dialogue prompt by DM_Social.py's
+        describe_character -- see that method's own module note) and its expiry
+        (DM_Time.py's _expire_prompt_directives, added alongside the rest of the block clock).
+        test_unit.py already proves the field itself gets set/cleared correctly and that
+        describe_character renders it as a string -- nothing anywhere proves a real model
+        actually reads a directive spliced into an NPC's own persona and that the persona
+        genuinely reverts once it expires, which is the whole reason this dynamic (not
+        author-set TOML) runtime text exists at all. Plants the directive directly via
+        set_prompt_directive rather than by casting the real "suggestion" spell that would
+        normally set one -- spellcasting itself is already unit-tested, and doing it for real
+        here would just add an unrelated, unseeded dice roll to a test that has nothing to do
+        with whether the spell lands.
+    """
+    scenario_name = "tavern"
+
+    def setUp(self):
+        self._boot()
+        set_prompt_directive(
+            self.dm_core.entities, "innkeeper",
+            "convinced she must give the player a free drink immediately, no questions asked",
+            source_name="a strange compulsion", duration_blocks=1,
+        )
+
+    def test_directive_shapes_dialogue_then_reverts_once_it_expires(self):
+        transcript = []
+
+        def say(player_input):
+            response = self._say(player_input)
+            transcript.append((player_input, response))
+            self.assertTrue(response.strip())
+            self.assertNotIn("Could not connect to the local LLM", response)
+            return response
+
+        # A deterministic check alongside the live one -- proves the directive text actually
+        # reached describe_character's own output (what the real request's persona is built
+        # from), not just that set_prompt_directive set a field in isolation.
+        self.assertIn("free drink", self.dm_core.describe_character("innkeeper"))
+        say("what's on the menu today")
+
+        self.dm_core.advance_blocks(1)
+        self.assertNotIn("free drink", self.dm_core.describe_character("innkeeper"))
+        say("what's on the menu today")
+
+        print("\n=== Prompt directive conversation transcript ===")
+        for player_input, response in transcript:
+            print(f"> {player_input}\n{response}\n")
+        # Deliberately NOT asserting the reply text itself mentions/stops mentioning a free
+        # drink -- same reasoning TestInnkeeperConversation gives for never keyword-matching
+        # live LLM output. The printed transcript above is how a real compliance regression
+        # would actually be caught; the two describe_character assertions above are what
+        # mechanically prove the plumbing (injection + expiry) is wired correctly either way.
 
 
 @unittest.skipUnless(_ollama_reachable(), "Ollama not reachable at http://127.0.0.1:11434")
@@ -430,6 +488,69 @@ class TestGridTravelAmbushConversation(_LivePipelineTestCase):
 
 
 @unittest.skipUnless(_ollama_reachable(), "Ollama not reachable at http://127.0.0.1:11434")
+class TestLocationEncounterConversation(_LivePipelineTestCase):
+    """!
+    @brief Live-pipeline proof for DM_Encounters.py's own "on_enter"-triggered
+        [[location.encounter]] table -- a wholly separate narration path from ordinary turn
+        narration, firing its own "encounter_triggered" -> LLMCore.generate_encounter_response
+        request (llm/LLM_Core.py's own subscription). Unlike TestGridTravelAmbushConversation
+        (which drives DM_Travel.py's own per-block environment roll, a different code path
+        entirely), nothing anywhere else in this file ever loads a scenario with a
+        [[location.encounter]] table or exercises this event at all -- "town" (town.toml) is
+        the only ruleset scenario that has one. Forces the roll to a flavor-only string result
+        (an authored choice already in town.toml's own town-square table), not
+        "generated_beggar" (also authored there), so this stays scoped to the
+        encounter-narration pipeline alone rather than also dragging in NPC generation's own
+        already-covered (TestNpcGenerationLive) tool-calling round trip.
+    """
+    scenario_name = "town"
+    FORCED_ENCOUNTER = "A ragged child tugs at your sleeve, asking if you've seen their missing cat."
+
+    def setUp(self):
+        original_resolve_varied_value = DM_Encounters.resolve_varied_value
+        DM_Encounters.resolve_varied_value = lambda choices: self.FORCED_ENCOUNTER
+        self.addCleanup(setattr, DM_Encounters, "resolve_varied_value", original_resolve_varied_value)
+
+        self.encounter_events = []
+        self.event_bus = EventBus()
+        self.event_bus.subscribe("encounter_triggered", self.encounter_events.append)
+        # Not self._boot() -- that subscribes "llm_response_ready" first, but self.event_bus has
+        # to exist and already be subscribed to "encounter_triggered" before it, since
+        # town_square's own on_enter encounter fires synchronously during DMCore.__init__
+        # (RulesMixin.load_scenario calls _enter_location(start_location) directly), before
+        # _boot() would otherwise get a chance to wire this up.
+        self.responses = []
+        self.event_bus.subscribe("llm_response_ready", self.responses.append)
+        self.nlp_core = NLPCore(self.event_bus)
+        self.llm_core = LLMCore(self.event_bus)
+        self.dm_core = DMCore(self.event_bus, scenario_name=self.scenario_name)
+
+    def test_on_enter_encounter_narrates_through_a_real_llm_call(self):
+        # Deterministic first -- proves the encounter actually fired and rolled the forced
+        # result, independent of anything the LLM does with it.
+        self.assertEqual(len(self.encounter_events), 1)
+        self.assertEqual(self.encounter_events[0]["description"], self.FORCED_ENCOUNTER)
+        self.assertIsNone(self.encounter_events[0]["entity_name"])
+
+        # The scene intro and the encounter beat are two independent LLM calls queued during
+        # the same DMCore.__init__ -- wait for both rather than assuming which one lands first.
+        self._wait_for_responses(2)
+        for response in self.responses:
+            self.assertTrue(response.strip())
+            self.assertNotIn("Could not connect to the local LLM", response)
+
+        print("\n=== Location encounter transcript ===")
+        for response in self.responses:
+            print(f"{response}\n")
+        # Deliberately NOT asserting the encounter narration's own wording reflects "a child"/
+        # "a cat" -- same reasoning every other class in this file gives for never keyword-
+        # matching live LLM output. This test's job is proving generate_encounter_response's
+        # own wiring actually works against a real model at all, which the assertions above
+        # already do mechanically (the forced description) and structurally (a real, non-error
+        # response came back).
+
+
+@unittest.skipUnless(_ollama_reachable(), "Ollama not reachable at http://127.0.0.1:11434")
 class TestMultiActionCombatConversation(_LivePipelineTestCase):
     """!
     @brief The West End Games multi-action rule's own live-pipeline proof (see DM_Core.py's
@@ -477,26 +598,13 @@ class TestMultiActionCombatConversation(_LivePipelineTestCase):
         self.assertEqual(len(actions), 2)
         self.assertEqual([a.skill for a in actions], ["blades", "blades"])
 
-    def test_a_multi_action_turn_does_not_leak_state_into_the_next_ordinary_turn(self):
-        round_events = []
-        self.event_bus.subscribe("round_resolved", round_events.append)
-
-        first = self._say("I attack the wolf and attack it again")
-        second = self._say("I attack the wolf")
-
-        for response in (first, second):
-            self.assertTrue(response.strip())
-            self.assertNotIn("Could not connect to the local LLM", response)
-
-        # The batch machinery is entirely local to one _on_turn_detected call (dice_penalty
-        # is recomputed fresh from len(clauses) every time) -- this is the live-pipeline check
-        # that nothing about resolving a 2-action round leaves any stray state (an inflated
-        # penalty, an extra queued action, ...) behind for the very next, perfectly ordinary
-        # single-action turn.
-        self.assertEqual(len(round_events), 2)
-        self.assertEqual([r["round"] for r in round_events], [1, 2])
-        self.assertEqual(len(round_events[0]["actions"]), 2)
-        self.assertEqual(len(round_events[1]["actions"]), 1)
+        # Deliberately no second test here for "a multi-action turn doesn't leak state into the
+        # next ordinary turn" -- that's a pure DMCore-state concern (dice_penalty recomputed
+        # fresh from len(clauses) every call, engaged_combat_target not sticking around), already
+        # exhaustively proven with no LLM at all by test_unit.py's own TestMultipleActions. A
+        # live version of it would cost a second full Ollama round trip for zero narration-
+        # specific signal beyond what this test already establishes -- below this file's own bar
+        # for what earns a live-Ollama test (see CLAUDE.md's testing notes).
 
 
 @unittest.skipUnless(_ollama_reachable(), "Ollama not reachable at http://127.0.0.1:11434")

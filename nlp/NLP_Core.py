@@ -11,6 +11,7 @@
 """
 
 import re
+import threading
 
 import numpy as np
 import torch
@@ -57,6 +58,46 @@ FAMILIARITY_CANDIDATE_LABELS = [
     "emotionally distant from the speaker", "neither close to nor distant from the speaker",
     "emotionally close to the speaker",
 ]
+
+# Process-wide cache for the two models SentenceTransformerMatcher.__init__ loads -- both are
+# read-only inference engines (only ever .encode()'d/pipeline-called, never mutated once built),
+# so every SentenceTransformerMatcher instance in this process can safely share one of each
+# instead of reloading identical weights from disk. Guarded by a lock, not a bare "is None"
+# check, since NLPCore/LLMCore boot NLPCore's matcher and RagIndex's own background build
+# thread (LLM_Rag.py) close together -- without it, two near-simultaneous first constructions
+# could each start their own redundant load before either finishes populating the cache.
+# Load-bearing for test_integration.py in particular: _boot() constructs a fresh NLPCore() per
+# test method, and reloading both models from scratch every time (bart-large-mnli especially)
+# used to be the single largest fixed cost in that suite, independent of and on top of the real
+# per-turn Ollama round trip each test is actually there to exercise.
+_shared_model_lock = threading.Lock()
+_shared_model = None
+_shared_sentiment_pipeline = None
+
+
+def _get_shared_model():
+    """!
+    @brief Lazily loads and caches the module's own 'all-MiniLM-L6-v2' SentenceTransformer --
+        see the module-level cache comment above for why this is safe to share.
+    """
+    global _shared_model
+    with _shared_model_lock:
+        if _shared_model is None:
+            _shared_model = SentenceTransformer('all-MiniLM-L6-v2')
+        return _shared_model
+
+
+def _get_shared_sentiment_pipeline():
+    """!
+    @brief Lazily loads and caches NLI_MODEL_NAME's own zero-shot-classification pipeline --
+        see the module-level cache comment above for why this is safe to share. The larger of
+        the two cached models (facebook/bart-large-mnli vs. the embedding model's own MiniLM).
+    """
+    global _shared_sentiment_pipeline
+    with _shared_model_lock:
+        if _shared_sentiment_pipeline is None:
+            _shared_sentiment_pipeline = pipeline("zero-shot-classification", model=NLI_MODEL_NAME)
+        return _shared_sentiment_pipeline
 DIALOGUE_HYPOTHESIS_TEMPLATE = "This statement leaves the listener feeling {}."
 
 # map_to_action's alternate-phrasing candidates: markers that introduce a topic clause rather
@@ -81,7 +122,7 @@ class SentenceTransformerMatcher(IntentMatcher):
 
     def __init__(self, event_bus):
         self.event_bus = event_bus
-        self.model = SentenceTransformer('all-MiniLM-L6-v2')
+        self.model = _get_shared_model()
         self.skills_data = {}
         self.skill_names = []
         self.skill_indices = []
@@ -104,7 +145,7 @@ class SentenceTransformerMatcher(IntentMatcher):
         # semantic-similarity embedding model, so there's no shared weights or shared encode()
         # call to reuse here. Local, CPU inference (no device= override) -- consistent with
         # everything else in this class, never a network call.
-        self.sentiment_pipeline = pipeline("zero-shot-classification", model=NLI_MODEL_NAME)
+        self.sentiment_pipeline = _get_shared_sentiment_pipeline()
         # The winning class's own softmax probability has to clear this before classify_sentiment
         # commits to a label -- for a 3-way split, chance alone sits around 0.33, so this is
         # "meaningfully more confident than chance," not an arbitrary tone-strength cutoff the
