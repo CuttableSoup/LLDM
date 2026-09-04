@@ -170,6 +170,16 @@ mount = "horse"                             # The name of a currently-present, l
                                             # settled on (see docs/downtime.md's "Travel" or the
                                             # module docstring on _resolve_mount_intent for the
                                             # full reasoning).
+terrain_tags = [ "aquatic" ]                 # See docs/downtime.md's "Terrain, roads, and
+                                            # polities" -- what impassable terrain.toml terrain
+                                            # (ex: "water") this entity itself can cross,
+                                            # unioned with the recursively-resolved tags of
+                                            # everything in its own live "mount" chain
+                                            # (_resolve_conveyance_tags, DM_Travel.py) -- a
+                                            # rider inherits a boat's/griffon's own tags the
+                                            # same way they already inherit its travel_speed.
+                                            # Absent means no special passability of its own
+                                            # (the default for everything shipped today).
 #
 # NPC-generation stubs are a different top-level table entirely -- [[entity_template]], loaded
 # into self.entity_templates, never self.entities -- with their own field reference,

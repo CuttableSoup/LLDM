@@ -373,7 +373,7 @@ class TestMountingConversation(_LivePipelineTestCase):
         self.assertTrue(resolved_events[-1]["found"])
         self.assertEqual(resolved_events[-1]["target"], self.horse_name)
         self.assertEqual(self.dm_core.entities[player_name]["mount"], self.horse_name)
-        self.assertEqual(self.dm_core._party_travel_speed(), 8)  # creatures.toml's own horse
+        self.assertEqual(self.dm_core._party_travel_speed(), 48)  # creatures.toml's own horse
 
         # Already mounted -- denied outright before the boar is even considered as a target.
         say(f"I try to mount the {self.boar_name}")
@@ -384,7 +384,7 @@ class TestMountingConversation(_LivePipelineTestCase):
         self.assertTrue(resolved_events[-1]["found"])
         self.assertEqual(resolved_events[-1]["target"], self.horse_name)
         self.assertNotIn("mount", self.dm_core.entities[player_name])
-        self.assertEqual(self.dm_core._party_travel_speed(), 4)  # rules.toml's own default_speed
+        self.assertEqual(self.dm_core._party_travel_speed(), 24)  # rules.toml's own default_speed
 
         # Nothing mounted now, so this reaches the boar itself -- hostile by default (no
         # [entity.attitudes] table of its own), so it's still denied, just for a different

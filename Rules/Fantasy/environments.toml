@@ -27,3 +27,23 @@ night_encounter = [
     { "A distant howl carries across the dark grassland." = 20 },
     { "nothing" = 55 },
 ]
+
+# Golarion's Lost Coast -- referenced only by world_map.toml's own "the Lost Coast" region, which
+# in turn is only ever reached from lost_coast.toml (see that scenario's own docstring). "goblin"
+# is that scenario's own local entity, the same "environment names a scenario-local encounter"
+# precedent "plains" above already sets with wild boar/coyote, just scoped to one scenario instead
+# of shared across every scenario in the setting.
+[[environment]]
+name = "lost_coast_wilds"
+watch_difficulty = 9
+day_encounter = [
+    { "goblin" = 20 },
+    { "wild boar" = 10 },
+    { "Gulls wheel and shriek over the tideline, indifferent to your passing." = 20 },
+    { "nothing" = 50 },
+]
+night_encounter = [
+    { "goblin" = 25 },
+    { "A cook-fire's cackling laughter drifts from somewhere in the scrub, then cuts off." = 15 },
+    { "nothing" = 60 },
+]

@@ -1,0 +1,13 @@
+# Shared polity catalog (see docs/downtime.md's "Terrain, roads, and polities") -- a flat
+# Rules/Fantasy/*.toml file like environments.toml/terrain.toml, referenced by name from
+# world_map.toml's own [[region]] "polity" field. A third, independent axis alongside that same
+# region's "environment" (encounter tables) and "terrain" (travel speed/passability): "polity"
+# only ever seeds a freshly-instanced entity's own default "languages" (DM_Rules.py's
+# _instance_entities, only when the entity's own template author left "languages" unset entirely
+# -- never overriding an explicit choice) and names itself in arrival narration. No currency field
+# here on purpose -- the engine has one flat scalar "currency" per entity and no named-currency
+# subsystem at all, so a per-polity currency would be flavor text with no mechanic behind it.
+[[polity]]
+name = "Varisia"
+language = "varisian"
+description = "A rugged, sparsely settled frontier region on Golarion's northwest coast, its scattered towns overshadowed by the ruins of a much older empire."

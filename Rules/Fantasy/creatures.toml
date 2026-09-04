@@ -279,9 +279,9 @@ description = "A broad-backed saddle horse, ears flicking toward every sound -- 
 
 max_hp = 24
 
-# Doubles the default overland pace (rules.toml's own [travel] default_speed = 4) -- see this
+# Doubles the default overland pace (rules.toml's own [travel] default_speed = 24) -- see this
 # file's header comment above.
-travel_speed = 8
+travel_speed = 40
 
 # Skittish, not vicious: a positive disposition (won't attack unprovoked, unlike wild boar/
 # coyote's unauthored hostile default) paired with a fearful threat axis -- see its own

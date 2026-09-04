@@ -1,0 +1,26 @@
+# Shared terrain catalog (see docs/downtime.md's "Terrain, roads, and polities") -- a flat
+# Rules/Fantasy/*.toml file like environments.toml, referenced by name from world_map.toml's own
+# [[region]] "terrain" field. A genuinely separate axis from that same region's "environment"
+# field: "environment" only ever picks an encounter table (DM_Travel.py's
+# _resolve_environment_block); "terrain" only ever governs how fast a block of travel crosses that
+# ground, and whether it can be crossed at all. A region authoring no "terrain" field resolves to
+# no entry here at all, which DM_Travel.py treats as speed_multiplier = 1.0, impassable = false --
+# exactly today's math, unchanged, the same "absence means the plain default" precedent every
+# other optional rules.toml/*.toml table already follows.
+[[terrain]]
+name = "plains"
+speed_multiplier = 1.0
+
+[[terrain]]
+name = "coastal_forest"
+speed_multiplier = 0.6
+
+# Impassable terrain (see DM_Travel.py's _route_is_passable) -- crossing it at all requires the
+# traveling party's own resolved conveyance tags (_resolve_conveyance_tags: an entity's own
+# "terrain_tags" field, unioned with its live "mount" chain's, the same recursive shape
+# _resolve_travel_speed already walks for speed) to include "requires_tag". No shipped entity
+# authors "aquatic" yet -- a future boat/ship entity is what would actually make this crossable.
+[[terrain]]
+name = "water"
+impassable = true
+requires_tag = "aquatic"

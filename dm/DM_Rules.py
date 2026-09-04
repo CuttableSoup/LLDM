@@ -91,7 +91,8 @@ class RulesMixin(DMCoreProtocol):
         self.skills/self.entities/self.rules/self.scenario/self.scenario_entities/
         self.event_bus/self.player_name, set up by DMCore.__init__).
         _describe_scenario_characters calls self.describe_character (SocialMixin);
-        _enter_location/enter_room call self._sync_mount_bands (MovementMixin). Inherits
+        _enter_location/enter_room call self._sync_mount_bands (MovementMixin);
+        _instance_entities calls self._current_polity_language (TravelMixin). Inherits
         DMCoreProtocol purely so type checkers can resolve these shared attributes/
         cross-mixin methods -- see DM_Types.py.
     """
@@ -676,6 +677,20 @@ class RulesMixin(DMCoreProtocol):
                 continue
 
             instance = copy.deepcopy(template)
+            # A template authoring no "languages" of its own at all defaults to whichever
+            # polity (if any) contains the *current* location's own grid point (self.
+            # current_location_key is already the destination by the time _instance_entities
+            # ever runs -- see _enter_location) -- DM_Travel.py's _current_polity_language,
+            # world_map.toml's own "polity" region field. Never overrides an explicit
+            # "languages" list a template really did author (ex: characters.toml's own
+            # entries) -- the same "only fill in when genuinely absent" precedent every other
+            # optional rules.toml table already follows (see docs/downtime.md's "Terrain,
+            # roads, and polities"). Falls back to entity_schema.toml's own documented
+            # ["common"] default when no polity applies here, same as before this existed.
+            if "languages" not in instance:
+                polity_language = self._current_polity_language()
+                if polity_language:
+                    instance["languages"] = [polity_language]
             # Defaults to band 1 for any entry that doesn't specify one.
             self._place_new_entity(instance_name, instance, entry.get("band", 1))
             if is_generated_template:

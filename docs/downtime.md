@@ -217,15 +217,74 @@ proportional to how much of the line it covers. `_resolve_environment_block` fac
 of this per-block loop so rest (a single fixed point, not a line) can reuse it unchanged.
 
 Shipped worked example: `Rules/Fantasy/scenarios/plains.toml`'s `trailhead` (grid `0,0`) and
-`border_stones` (grid `4,0`), both inside `world_map.toml`'s `"the open plains"` region (naming the
-`"plains"` environment, whose day table includes `environments.toml`'s two new shared
+`border_stones` (grid `24,0`), both inside `world_map.toml`'s `"the open plains"` region (naming
+the `"plains"` environment, whose day table includes `environments.toml`'s two new shared
 `creatures.toml` wildlife entries, `"wild boar"`/`"coyote"`) — exactly far enough apart, at the
-default travel speed of 4, to cost exactly one block.
+default travel speed of 24 (1 grid unit = 1 mile — see the "Terrain, roads, and polities"
+subsection below), to cost exactly one block.
 
 **Arrival is deferred, not up front.** `_enter_location(destination_key)` no longer runs before the
 per-block loop — it's the very last step, run only once every block has cleared without a hostile
 interruption (`_finish_pending_travel`). A hostile block instead pauses the whole trip — see
 "Pausing for a fight" below.
+
+**Terrain, roads, and polities.** A `[[region]]` carries two more independent, all-optional fields
+alongside its own `environment`: `terrain` (a name into the new flat `Rules/Fantasy/terrain.toml`
+catalog) and `polity` (a name into `Rules/Fantasy/polities.toml`) — three separate axes on the same
+table, resolved off one shared `_resolve_region(x, y)` lookup (`resolve_region_environment`/
+`_resolve_region_terrain`/`_resolve_region_polity` are thin wrappers over it). A region authoring
+neither of the two new fields (every region shipped before they existed) behaves exactly as it
+always did — this was the one hard constraint the whole design had to preserve, verified directly
+by `plains.toml`'s own shipped trip still costing exactly one block.
+
+`terrain.toml`'s own `speed_multiplier` (default `1.0`) scales how far one block of travel actually
+covers: `_advance_pending_travel`'s per-block loop no longer computes a fixed block count up front
+from raw distance/speed the way it once did — each iteration samples `_effective_speed_multiplier`
+at the party's *current* leading-edge position (a `[[road]]` entry's own multiplier if the point
+falls within its `width` of that road's line segment, else the containing region's own terrain,
+else the unmodified `1.0` default) and advances by `speed * multiplier` (floored at `0.1`, since
+nothing about this design can pathfind around a stretch of slow ground once a trip is already
+underway — a route is checked passable *before* committing to it, never abandoned partway through).
+A road's own multiplier always overrides terrain rather than compounding with it — the whole point
+of building one is to counteract whatever ground it crosses.
+
+`terrain.toml`'s own `impassable`/`requires_tag` pair is what actually blocks a trip outright,
+closing the gap the rest of this section used to leave open ("Terrain never blocks travel today").
+An entity's own `terrain_tags` field (`entity_schema.toml`), unioned with the recursively-resolved
+tags of everything in its live `mount` chain exactly the way `_resolve_travel_speed` already walks
+that chain for speed (`_resolve_conveyance_tags`), is what a traveling party needs to cross it — a
+rider inherits a boat's/griffon's own passability the same way they already inherit its speed.
+`_route_is_passable` checks the *entire* straight-line route once, up front, alongside the existing
+`mount_overloaded`/`blocked_by_enemies` gates in `_resolve_grid_travel_intent`, denying
+(`reason="impassable_terrain"`) the whole attempt before any `pending_downtime` is ever created —
+there's still no pathfinding to route *around* an impassable stretch, only a hard yes/no on the
+line as authored.
+
+`polities.toml`'s own `language` is the one thing a `polity` region field actually changes
+mechanically: `DM_Rules.py`'s `_instance_entities` seeds a freshly-instanced entity's `languages`
+from it whenever that entity's own template author left `languages` unset entirely (never
+overriding an explicit choice) — the same "only fill in when genuinely absent" precedent every
+other optional table already follows. Everything else about a polity (its own `description`, and
+the fact that it carries no `currency` field at all — the engine has one flat scalar `currency` per
+entity and no named-currency subsystem to hang a per-polity one off of) is narrative only, surfaced
+by naming itself once in arrival narration (`_finish_pending_travel`'s own `"polity"` field,
+`intents/travel.py`'s `narrate_travel`).
+
+Every gridded coordinate in `Rules/Fantasy/` (region bounds, `[[location]]`'s own `grid`,
+`[[road]]` endpoints/`width`) shares one real-world scale: `rules.toml`'s own `default_speed = 24`
+is chosen specifically so 1 grid unit reads as 1 literal mile — Pathfinder's own core rule is 3
+miles/hour of normal (x1) overland movement, and an 8-hour block is 24 miles at that pace.
+
+Shipped worked example: `Rules/Fantasy/scenarios/lost_coast.toml`'s `sandpoint`/`magnimar` (real
+Golarion place names, `docs/movement-scenarios.md`-adjacent geography rather than any imported GIS
+data — see that scenario's own docstring), placed at their real ~60-mile separation along the Lost
+Coast Road, inside `world_map.toml`'s `"the Lost Coast"` region (`terrain = "coastal_forest"`, a
+`0.6` multiplier; `polity = "Varisia"`). A `[[road]]` running the exact Sandpoint-to-Magnimar line
+at `speed_multiplier = 1.0` overrides that slowdown back to the plain default, so the trip still
+costs exactly 3 blocks — a single day — the same real mileage always implied, proof the mechanism
+ran rather than a change to the shipped travel time. Magnimar's own `dockhand` authors no
+`languages` field of
+her own, so she speaks Varisian by the polity default rather than falling back to `["common"]`.
 
 ## Night watch and surprise
 
@@ -328,11 +387,6 @@ unknown destination on request, the same `tool_choice="auto"`/decline-biased sha
 `docs/adam-improvisation.md`'s "Ad hoc entity creation and removal" already uses for items/
 creatures. Not designed yet beyond that shape; other in-fiction ways to learn a location short of
 ADaM generating one outright (dialogue, a sign) are equally still undesigned.
-
-**Impassable terrain.** Terrain never blocks travel today — a straight line can cross an
-unauthored gap, an ocean, or a mountain range exactly as easily as a plain, since a region (see
-"Environments and the world map" above) only changes what gets rolled, not whether the trip is
-possible. A real, explicitly deferred feature on top of this, not designed here.
 
 **Build order.** Crafting's day-extension and training's reopening question are natural
 fast-follows, independent of each other and of everything else in this document; ad hoc

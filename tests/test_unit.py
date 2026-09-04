@@ -1981,7 +1981,7 @@ class TestHitch(DMTestCase):
             "intent": "hitch", "item_name": None, "input": "i hitch the horse to the cart",
         })
 
-        self.assertEqual(self.dm_core._resolve_travel_speed("cart"), 8)
+        self.assertEqual(self.dm_core._resolve_travel_speed("cart"), 48)
 
     def test_unhitch_removes_a_bare_string_mount_field_entirely(self):
         self._add_horse()
@@ -2110,11 +2110,11 @@ class TestDowntime(DMTestCase):
 
 
 class TestGridTravel(DMTestCase):
-    # plains.toml: "trailhead" (grid 0,0, start_location) and "border_stones" (grid 4,0), both
+    # plains.toml: "trailhead" (grid 0,0, start_location) and "border_stones" (grid 24,0), both
     # seeded into known_locations by the scenario's own [scenario].known_locations, both inside
-    # world_map.toml's "the open plains" region (-10..20 x, -10..10 y) naming the "plains"
-    # environment. rules.toml's [travel] default_speed is 4, so this 4-unit hop costs exactly
-    # one block.
+    # world_map.toml's "the open plains" region (-60..120 x, -60..60 y) naming the "plains"
+    # environment. rules.toml's [travel] default_speed is 24 (1 grid unit = 1 mile -- see that
+    # file's own comment), so this 24-mile hop costs exactly one block.
     scenario_name = "plains"
 
     def _stub_encounter_roll(self, result):
@@ -2146,7 +2146,7 @@ class TestGridTravel(DMTestCase):
         result = resolved_events[-1]
         self.assertTrue(result["found"])
         self.assertEqual(result["blocks_spent"], 1)
-        self.assertEqual(result["distance"], 4.0)
+        self.assertEqual(result["distance"], 24.0)
         self.assertEqual(result["time"], self.dm_core.get_time_state())
 
     def test_grid_travel_denies_a_destination_that_isnt_known(self):
@@ -2201,11 +2201,11 @@ class TestGridTravel(DMTestCase):
 
     def test_resolve_region_environment_matches_inside_the_map_and_none_outside_it(self):
         self.assertEqual(self.dm_core.resolve_region_environment(0, 0), "plains")
-        self.assertEqual(self.dm_core.resolve_region_environment(4, 0), "plains")
+        self.assertEqual(self.dm_core.resolve_region_environment(24, 0), "plains")
         self.assertIsNone(self.dm_core.resolve_region_environment(1000, 1000))
 
     def test_party_travel_speed_falls_back_to_rules_toml_default(self):
-        self.assertEqual(self.dm_core._party_travel_speed(), 4)  # rules.toml's [travel] table
+        self.assertEqual(self.dm_core._party_travel_speed(), 24)  # rules.toml's [travel] table
 
     def test_party_travel_speed_uses_an_entitys_own_override_when_present(self):
         self.dm_core.entities["gladstone"]["travel_speed"] = 2
@@ -2219,7 +2219,7 @@ class TestGridTravel(DMTestCase):
     def test_party_travel_speed_uses_a_mounted_players_own_horse(self):
         self._add_horse()
         self.dm_core.entities["gladstone"]["mount"] = "horse"
-        self.assertEqual(self.dm_core._party_travel_speed(), 8)  # creatures.toml's own horse
+        self.assertEqual(self.dm_core._party_travel_speed(), 48)  # creatures.toml's own horse
 
     def test_party_travel_speed_walks_a_mount_chain_through_a_cart(self):
         # A rider defers to their cart, which in turn defers to whichever horse pulls it --
@@ -2232,7 +2232,7 @@ class TestGridTravel(DMTestCase):
         self.dm_core.scenario_entities.append("cart")
         self.dm_core.entities["gladstone"]["mount"] = "cart"
 
-        self.assertEqual(self.dm_core._party_travel_speed(), 8)
+        self.assertEqual(self.dm_core._party_travel_speed(), 48)
 
     def test_party_travel_speed_paces_a_cart_to_its_slowest_horse(self):
         first = self._add_horse()
@@ -2253,7 +2253,7 @@ class TestGridTravel(DMTestCase):
         self.dm_core.apply_damage("horse", 999)
         self.dm_core.entities["gladstone"]["mount"] = "horse"
 
-        self.assertEqual(self.dm_core._party_travel_speed(), 4)  # rules.toml's own default_speed
+        self.assertEqual(self.dm_core._party_travel_speed(), 24)  # rules.toml's own default_speed
 
     def test_a_mounted_horse_survives_traveling_to_a_new_location(self):
         # Unlike an ordinary ally (see _add_party_member's own comment below, and
@@ -2643,6 +2643,145 @@ class TestGridTravel(DMTestCase):
         fresh_dm.load_game(slot)
 
         self.assertEqual(fresh_dm.watch_rotation_index, 3)
+
+
+class TestWorldMapExpansion(DMTestCase):
+    # lost_coast.toml: "sandpoint" (grid 150,0, start_location) and "magnimar" (grid 210,0) --
+    # a real ~60-mile separation (1 grid unit = 1 mile, rules.toml's own [travel] comment) --
+    # both inside world_map.toml's "the Lost Coast" region (terrain = "coastal_forest",
+    # speed_multiplier 0.6; polity = "Varisia") -- see docs/downtime.md's "Terrain, roads, and
+    # polities". A [[road]] running the exact Sandpoint-Magnimar line at speed_multiplier = 1.0
+    # overrides that slowdown back to the plain default_speed of 24, so the shipped trip still
+    # costs exactly 3 blocks (distance 60 / speed 24), a single day.
+    scenario_name = "lost_coast"
+
+    def _stub_encounter_roll(self, result):
+        original = DM_Encounters.resolve_varied_value
+        DM_Encounters.resolve_varied_value = lambda choices: result
+        self.addCleanup(setattr, DM_Encounters, "resolve_varied_value", original)
+
+    def test_resolve_region_terrain_matches_inside_the_map_and_none_outside_it(self):
+        self.assertEqual(self.dm_core._resolve_region_terrain(150, 0), "coastal_forest")
+        self.assertIsNone(self.dm_core._resolve_region_terrain(1000, 1000))
+
+    def test_effective_speed_multiplier_is_1_0_with_nothing_authored(self):
+        # plains.toml's own region authors no "terrain" at all -- the regression guard that
+        # "nothing authored" still behaves exactly as it did before terrain/roads existed.
+        self.assertEqual(self.dm_core._effective_speed_multiplier(1000, 1000), 1.0)
+
+    def test_effective_speed_multiplier_uses_terrain_off_the_road(self):
+        # y=5 is more than the road's own width (2) away from its y=0 line -- pure terrain.
+        self.assertEqual(self.dm_core._effective_speed_multiplier(180, 5), 0.6)
+
+    def test_effective_speed_multiplier_overrides_terrain_on_the_road(self):
+        self.assertEqual(self.dm_core._effective_speed_multiplier(180, 0), 1.0)
+
+    def test_resolve_road_multiplier_is_none_off_the_roads_own_width(self):
+        self.assertIsNone(self.dm_core._resolve_road_multiplier(180, 5))
+
+    def test_grid_travel_costs_the_same_3_blocks_the_road_always_promised(self):
+        self._stub_encounter_roll("nothing")
+        resolved_events = self._capture("item_interaction_resolved")
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "travel", "item_name": None, "input": "i travel to magnimar",
+        })
+
+        result = resolved_events[-1]
+        self.assertTrue(result["found"])
+        self.assertEqual(result["blocks_spent"], 3)
+        self.assertEqual(result["distance"], 60.0)
+
+    def test_grid_travel_arrival_names_its_own_polity(self):
+        self._stub_encounter_roll("nothing")
+        resolved_events = self._capture("item_interaction_resolved")
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "travel", "item_name": None, "input": "i travel to magnimar",
+        })
+
+        self.assertEqual(resolved_events[-1]["polity"], "Varisia")
+
+    def test_instanced_entity_with_no_authored_languages_inherits_the_polity_default(self):
+        self.dm_core.entities["test_no_lang"] = {
+            "name": "test_no_lang", "supertype": "creature", "max_hp": 5,
+        }
+        self.dm_core.current_location_key = "magnimar"  # already inside "the Lost Coast"
+
+        [instance_name] = self.dm_core._instance_entities([{"name": "test_no_lang", "band": 1}])
+
+        self.assertEqual(self.dm_core.entities[instance_name]["languages"], ["varisian"])
+
+    def test_instanced_entity_with_authored_languages_is_left_untouched(self):
+        self.dm_core.entities["test_with_lang"] = {
+            "name": "test_with_lang", "supertype": "creature", "max_hp": 5,
+            "languages": ["elvish"],
+        }
+        self.dm_core.current_location_key = "magnimar"
+
+        [instance_name] = self.dm_core._instance_entities([{"name": "test_with_lang", "band": 1}])
+
+        self.assertEqual(self.dm_core.entities[instance_name]["languages"], ["elvish"])
+
+    def test_magnimars_own_dockhand_speaks_varisian_by_the_polity_default(self):
+        self._stub_encounter_roll("nothing")
+        self.dm_core._on_item_interaction_detected({
+            "intent": "travel", "item_name": None, "input": "i travel to magnimar",
+        })
+        self.assertEqual(self.dm_core.entities["dockhand"]["languages"], ["varisian"])
+
+    def _add_synthetic_impassable_water(self):
+        # A synthetic region/terrain/destination disjoint from "the Lost Coast" itself (whose
+        # own bounds run through x=240 -- see world_map.toml), injected directly rather than
+        # shipped -- lost_coast.toml's own real geography has no water crossing to test
+        # against, so this exercises the general impassable-terrain mechanism on its own terms
+        # instead. _resolve_region matches the first region whose bounds contain a point, so
+        # this has to sit strictly past "the Lost Coast" own max_x or it would never be reached.
+        self.dm_core.rules["region"].append({
+            "name": "test water", "terrain": "water", "min_x": 300, "max_x": 350,
+            "min_y": -5, "max_y": 5,
+        })
+        self.dm_core.locations["far_island"] = {
+            "key": "far_island", "name": "Far Island", "description": "",
+            "grid": {"x": 350, "y": 0}, "entities": [],
+        }
+        self.dm_core.known_locations.add("far_island")
+
+    def test_route_is_passable_denies_impassable_water_without_the_aquatic_tag(self):
+        self._add_synthetic_impassable_water()
+        self.assertFalse(self.dm_core._route_is_passable(
+            {"x": 150, "y": 0}, {"x": 350, "y": 0},
+        ))
+
+    def test_route_is_passable_allows_impassable_water_with_the_aquatic_tag(self):
+        self._add_synthetic_impassable_water()
+        self.dm_core.entities["gladstone"]["terrain_tags"] = ["aquatic"]
+        self.assertTrue(self.dm_core._route_is_passable(
+            {"x": 150, "y": 0}, {"x": 350, "y": 0},
+        ))
+
+    def test_grid_travel_denies_impassable_terrain_without_the_right_conveyance(self):
+        self._add_synthetic_impassable_water()
+        resolved_events = self._capture("item_interaction_resolved")
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "travel", "item_name": None, "input": "i travel to far island",
+        })
+
+        result = resolved_events[-1]
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "impassable_terrain")
+        self.assertEqual(self.dm_core.current_location_key, "sandpoint")  # never moved
+
+    def test_resolve_conveyance_tags_walks_a_mount_chain(self):
+        self.dm_core.entities["rowboat"] = {
+            "name": "rowboat", "supertype": "object", "description": "A rowboat.",
+            "max_hp": 10, "terrain_tags": ["aquatic"],
+        }
+        self.dm_core.scenario_entities.append("rowboat")
+        self.dm_core.entities["gladstone"]["mount"] = "rowboat"
+
+        self.assertEqual(self.dm_core._resolve_conveyance_tags("gladstone"), {"aquatic"})
 
 
 class TestFreeStandingIntentHandlers(unittest.TestCase):

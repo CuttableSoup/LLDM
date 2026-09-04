@@ -240,8 +240,14 @@ blocks_per_day = 3
 # "travel_speed" field (ex: a race with a slower or faster gait), else falls back to
 # default_speed here. A party paces to its slowest is_player/is_party member currently present
 # (see DM_Travel.py's _party_travel_speed), not just the player's own value.
+#
+# 24 -- not an arbitrary round number, but the one that lets a grid unit read as a literal mile:
+# Pathfinder's own core rule is 3 miles/hour of normal (x1) overland movement, and an 8-hour
+# block (see [time] above, blocks_per_day = 3) is 24 miles at that pace. Every gridded
+# [[location]]/[[region]]/[[road]] in Rules/Fantasy/ is placed under this same "1 unit = 1 mile"
+# convention (see docs/downtime.md's "Terrain, roads, and polities").
 [travel]
-default_speed = 4
+default_speed = 24
 
 # Point-buy constants for character creation (Character_Creation.py/DM_CharacterCreation.py).
 # A new character's starting dice come entirely from whichever race is picked -- every race

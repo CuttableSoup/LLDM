@@ -5,10 +5,48 @@
 # overlapped, though none do here. A gap between authored regions has no environment at all,
 # which is what "safe" looks like everywhere in this design: no watch check, no encounter roll,
 # full stop, the same "absence means safe" default basic rest already follows.
+#
+# Every grid coordinate in this file (and every gridded [[location]] across Rules/Fantasy/) uses
+# "1 grid unit = 1 mile" -- rules.toml's own [travel] default_speed = 24 is chosen specifically so
+# that reads as literal Pathfinder mileage (3 miles/hour of normal overland pace x an 8-hour
+# block). "the open plains" below is a wholly invented location with no real-world distance to
+# match, so its own bounds/locations are just placed comfortably far apart in mile terms; "the
+# Lost Coast" below is real Golarion geography, sized to its own canonical mileage instead.
 [[region]]
 name = "the open plains"
 environment = "plains"
-min_x = -10
-max_x = 20
-min_y = -10
-max_y = 10
+min_x = -60
+max_x = 120
+min_y = -60
+max_y = 60
+
+# Golarion's Lost Coast (Pathfinder's Rise of the Runelords region) -- real region/settlement
+# names and their well-documented relative geography, hand-placed here rather than imported from
+# pf-wikis' GIS map data (a real-world-scale vector dataset with no meaningful translation onto
+# this engine's single-digit-scale abstract grid -- see lost_coast.toml's own docstring). Given a
+# disjoint x-range from "the open plains" above on purpose, so the two regions' bounds never
+# overlap on this shared grid. "terrain"/"polity" are the two newer, independent axes alongside
+# "environment" (see docs/downtime.md's "Terrain, roads, and polities" and terrain.toml/
+# polities.toml's own docstrings) -- scrubby coastal woods slow cross-country travel here, inside
+# the borders of Varisia.
+[[region]]
+name = "the Lost Coast"
+environment = "lost_coast_wilds"
+terrain = "coastal_forest"
+polity = "Varisia"
+min_x = 150
+max_x = 240
+min_y = -20
+max_y = 20
+
+# The coast road between Sandpoint and Magnimar (lost_coast.toml's own two locations, grid
+# (150,0) and (210,0) -- a real ~60-mile separation, matching their canonical distance along the
+# Lost Coast Road) -- a speed_multiplier of 1.0 exactly cancels "coastal_forest"'s own 0.6
+# cross-country penalty back to the plain default_speed, so this trip still costs exactly 3
+# blocks (a single day), now demonstrably because of the road rather than by having no terrain at
+# all. width is a perpendicular tolerance in grid units (miles), not a lane count.
+[[road]]
+from = { x = 150, y = 0 }
+to = { x = 210, y = 0 }
+speed_multiplier = 1.0
+width = 2

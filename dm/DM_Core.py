@@ -160,7 +160,10 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         # A paused downtime action (grid travel or rest) waiting on a hostile encounter to
         # clear before it resumes -- see docs/downtime.md's "Pausing for a fight". None
         # whenever nothing is interrupted (the overwhelmingly common case). Shape while set:
-        # {"kind": "travel"|"rest", "blocks_total", "blocks_done", ...kind-specific fields}
+        # {"kind": "travel"|"rest", "blocks_done", ...kind-specific fields} -- "rest" also
+        # carries "blocks_total" (fixed up front, nothing moves during a rest); "travel"
+        # instead carries "distance"/"distance_covered" (DM_Travel.py's _advance_pending_travel),
+        # since terrain/roads can make its own block count vary along the route.
         # -- plain JSON-safe data only, no live object references, so it round-trips through
         # save_game/load_game exactly like current_block.
         self.pending_downtime = None

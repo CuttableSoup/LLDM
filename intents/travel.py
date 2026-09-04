@@ -12,6 +12,7 @@ _REASON_TEXT = {
     "blocked_by_enemies": "something hostile is still standing in the way",
     "downtime_interrupted": "an unresolved threat from earlier is still keeping the party in place",
     "mount_overloaded": "whatever they're riding/hitched to is carrying more than it can bear and refuses to budge",
+    "impassable_terrain": "the route crosses ground nothing in the party can actually get across",
 }
 
 
@@ -22,9 +23,11 @@ def resolve_travel(core, data, resolved):
         one. Denied (reason "no_exit") if no destination is named/known and no "return_to"
         applies, (reason "blocked_by_enemies") if a living hostile remains in the current
         room, (reason "downtime_interrupted") if a previously-paused trip/rest hasn't cleared
-        yet (see docs/downtime.md's "Pausing for a fight"), or (reason "mount_overloaded", a
+        yet (see docs/downtime.md's "Pausing for a fight"), (reason "mount_overloaded", a
         gridded destination only) if the player's own mount is currently overloaded (see
-        docs/downtime.md's "Mounts and conveyance").
+        docs/downtime.md's "Mounts and conveyance"), or (reason "impassable_terrain", a
+        gridded destination only) if the straight-line route crosses terrain no currently-
+        present party member can cross (see docs/downtime.md's "Terrain, roads, and polities").
     @param core The DMCore instance.
     @param data The item_interaction_detected payload ({input, ...}).
     @param resolved The item_interaction_resolved publisher closure from
@@ -43,13 +46,16 @@ def narrate_travel(llm_core, data):
         present for a grid-based hop (DM_Travel.py) -- an ordinary exit-graph hop carries none
         of them, since it's instant. Any creature a travel block's own encounter table rolled up
         already narrates separately via its own "encounter_triggered", so this prompt only ever
-        covers elapsed time, never invents what happened along the way.
+        covers elapsed time, never invents what happened along the way. "polity" (a gridded
+        destination only -- see docs/downtime.md's "Terrain, roads, and polities") is folded
+        into the same journey sentence when present, never a separate fact the LLM has to
+        invent on its own.
     @param llm_core The LLMCore instance -- its own scenario_description/scenario_characters
         are updated here on success, read by every later narration prompt until the next move/
         travel.
     @param data The "item_interaction_resolved" payload ({found, reason?, room_name?,
         room_description?, location_name?, location_description?, characters?, blocks_spent?,
-        distance?, time?, input}).
+        distance?, time?, polity?, input}).
     @return The narration prompt.
     """
     if not data.get("found"):
@@ -78,8 +84,10 @@ def narrate_travel(llm_core, data):
         )
     else:
         journey_text = ""
+    polity = data.get("polity")
+    polity_text = f" They've crossed into the borders of {polity}." if polity else ""
     return (
-        f"The player travels to: \"{scene_name}\".{journey_text}\n"
+        f"The player travels to: \"{scene_name}\".{journey_text}{polity_text}\n"
         f"{llm_core.scenario_description}{characters_text}\n"
         f"Narrate arriving in this new place in 2-3 sentences as the Game Master."
     )
