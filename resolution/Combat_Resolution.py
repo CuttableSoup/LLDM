@@ -107,22 +107,70 @@ def has_condition(entities, entity_name, condition_name):
     return condition_name in get_active_conditions(entities, entity_name)
 
 
-def apply_condition(entities, event_bus, entity_name, condition_name, duration=None, dismiss=None):
+# The five denominations a condition's own "duration" may be authored as -- "rounds"/"rooms"/
+# "blocks" are real, live countdowns (see tick_condition_durations, below, and its own callers:
+# DM_Status.py's run_round_upkeep, DM_Time.py's advance_blocks, DM_Rules.py's enter_room);
+# "days" is authoring-only sugar apply_condition itself converts to "blocks" (below) the moment
+# it's applied, so it never actually exists as a stored value; "permanent" carries no length at
+# all, cleared only by an explicit dismiss_condition call.
+CONDITION_DURATIONS = ("rounds", "rooms", "blocks", "permanent")
+
+
+def apply_condition(entities, event_bus, entity_name, condition_name, duration=None, length=None, dismiss=None, rules=None):
     """!
     @brief Marks a condition as active on an entity.
     @param entities The live entities dict.
     @param event_bus The EventBus to publish a log_info line to.
     @param entity_name The name of the entity gaining the condition.
     @param condition_name The name of the condition, as defined in the [[condition]] table.
-    @param duration How long the condition lasts (ex: "fleeting", "scene", "permanent").
+    @param duration Which clock the condition counts down against -- one of
+        CONDITION_DURATIONS, or the authoring-only "days" (converted here, if rules was passed,
+        to "blocks" -- length * that setting's own [time].blocks_per_day, TimeMixin's own
+        get_time_state default if a setting authors no [time] table at all); "permanent" for a
+        duration with no live countdown at all, cleared only by an explicit dismiss_condition
+        call.
+    @param length How many of "duration"'s own unit remain (unused/ignored for "permanent").
     @param dismiss What removes the condition (ex: "healing", "resurrection").
+    @param rules The loaded rules dict, needed only to convert a "days" duration to "blocks" --
+        every caller that can ever author "days" (DM_Status.py's own apply_condition wrapper,
+        Program_Interpreter.py's `condition` op, evaluate_statuses below) already has self.rules/
+        rules in reach and passes it through; a caller that only ever applies "permanent"/
+        "rounds"/"rooms"/"blocks" conditions (ex: DM_Travel.py's "surprised") can omit it.
     """
+    if duration == "days":
+        blocks_per_day = (rules or {}).get("time", {}).get("blocks_per_day", 3)
+        duration, length = "blocks", length * blocks_per_day
     entity = entities.get(entity_name)
     if entity is None:
         return
     active_conditions = entity.setdefault("active_conditions", {})
-    active_conditions[condition_name] = {"duration": duration, "dismiss": dismiss}
+    active_conditions[condition_name] = {"duration": duration, "length": length, "dismiss": dismiss}
     event_bus.publish("log_info", f"{entity_name} gains condition '{condition_name}'.")
+
+
+def tick_condition_durations(entities, event_bus, entity_name, unit, amount=1):
+    """!
+    @brief Decrements entity_name's own active_conditions entries whose "duration" matches unit
+        by amount, dismissing any that reach 0 or below -- the one shared countdown every
+        clock-backed duration ticks against (DM_Status.py's run_round_upkeep calls this with
+        unit="rounds" once per combat round; DM_Time.py's advance_blocks with unit="blocks",
+        amount=blocks elapsed; DM_Rules.py's enter_room with unit="rooms" once per room left).
+        An entry with no "length" set (ex: "permanent", or a malformed apply site) is left
+        alone -- there's nothing to count down. Iterates a snapshot of active_conditions'
+        own keys, since dismissing one mutates the same dict mid-loop.
+    @param entities The live entities dict.
+    @param event_bus The EventBus, forwarded to dismiss_condition.
+    @param entity_name The entity to tick.
+    @param unit Which duration denomination just elapsed ("rounds"/"rooms"/"blocks").
+    @param amount How many of that unit elapsed (blocks only -- rounds/rooms always tick by 1).
+    """
+    active_conditions = get_active_conditions(entities, entity_name)
+    for condition_name, entry in list(active_conditions.items()):
+        if entry.get("duration") != unit or entry.get("length") is None:
+            continue
+        entry["length"] -= amount
+        if entry["length"] <= 0:
+            dismiss_condition(entities, event_bus, entity_name, condition_name)
 
 
 def dismiss_condition(entities, event_bus, entity_name, condition_name):
@@ -270,7 +318,9 @@ def evaluate_statuses(entities, rules, event_bus, entity_name, trigger):
                 entities, event_bus, entity_name,
                 apply_block["condition"],
                 duration=apply_block.get("duration"),
+                length=apply_block.get("length"),
                 dismiss=apply_block.get("dismiss"),
+                rules=rules,
             )
             matched_conditions.add(apply_block["condition"])
 

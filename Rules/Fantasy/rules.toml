@@ -14,7 +14,7 @@ requirements = [
     { field = "hp_per_remain", operator = ">=", value = 0.60 },
     { field = "hp_per_remain", operator = "<=", value = 0.80 },
 ]
-apply = { condition = "stunned", duration = "fleeting", dismiss = "" }
+apply = { condition = "stunned", duration = "rounds", length = 1, dismiss = "" }
 description = "Moderate bruise or minor sprain; laceration; muscle tear; minor dislocation of joint."
 
 [[status]]
@@ -54,7 +54,7 @@ requirements = [
     { field = "hp_per_remain", operator = ">=", value = 0.01 },
     { field = "hp_per_remain", operator = "<=", value = 0.09 },
 ]
-apply = { condition = "unconscious", duration = "scene", dismiss = "" }
+apply = { condition = "unconscious", duration = "permanent", dismiss = "" }
 description = "Multiple internal injuries."
 
 [[status]]
@@ -70,12 +70,12 @@ description = "Broken neck; punctured lung; eviscerated."
 name = "stunned"
 modifier = { dice = -1, pips = 0, bonus = 0 }
 
-# Applied by DM_Travel.py's own _roll_night_watch (docs/extended-goals.md's "Night watch and
+# Applied by DM_Travel.py's own _roll_night_watch (docs/downtime.md's "Night watch and
 # surprise") to every is_party member when a night block's own hostile encounter catches a
 # failed (or unattempted, for a solo traveler) watch -- a heavier penalty than "stunned" since
-# it represents being caught asleep/unprepared, not just dazed mid-fight. Cleared the round
-# after it's applied by _expire_surprised_if_due (DM_Status.py's run_round_upkeep), the bespoke
-# stand-in for a real "duration" countdown -- see that method's own docstring.
+# it represents being caught asleep/unprepared, not just dazed mid-fight. Applied with
+# duration = "rounds", length = 1, so run_round_upkeep's own generic condition tick
+# (Combat_Resolution.tick_condition_durations) clears it the first round it's carried into.
 [[condition]]
 name = "surprised"
 modifier = { dice = -2, pips = 0, bonus = 0 }
@@ -120,9 +120,8 @@ upkeep_heal = { dice = 2, pips = 0, bonus = 0 }
 upkeep_blocked_by_tags = [ "fire" ]
 
 # The conditions maneuvers.toml's universal abilities apply via their own on_pass programs --
-# what gives "shaken"/"prone"/"disarmed"/
-# "sundered_weapon" real mechanical teeth rather than narrated-only flavor, the same way
-# "stunned"/"wounded" already work.
+# what gives "shaken"/"prone"/"sundered_weapon" real mechanical teeth rather than
+# narrated-only flavor, the same way "stunned"/"wounded" already work.
 [[condition]]
 name = "shaken"
 modifier = { dice = -1, pips = 0, bonus = 0 }
@@ -131,9 +130,10 @@ modifier = { dice = -1, pips = 0, bonus = 0 }
 name = "prone"
 modifier = { dice = -1, pips = 0, bonus = 0 }
 
-[[condition]]
-name = "disarmed"
-modifier = { dice = -2, pips = 0, bonus = 0 }
+# "disarmed" is deliberately NOT a [[condition]] -- being disarmed is dropping your weapon, an
+# instantaneous equipment change (unequip + place in the room), not a lasting debuff to model as
+# a condition. maneuvers.toml's own "disarm" maneuver is commented out until that unequip/drop
+# program op actually exists; no [[condition]] entry is needed until it applies one again.
 
 [[condition]]
 name = "sundered_weapon"

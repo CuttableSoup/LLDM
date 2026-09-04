@@ -1,3 +1,4 @@
+import resolution.Combat_Resolution as Combat_Resolution
 from dm.DM_Types import DMCoreProtocol
 
 
@@ -73,7 +74,24 @@ class TimeMixin(DMCoreProtocol):
         blocks = max(0, blocks)
         self.current_block += blocks
         self._expire_prompt_directives(blocks)
+        self._tick_conditions_by_block(blocks)
         return self.get_time_state()
+
+    def _tick_conditions_by_block(self, blocks):
+        """!
+        @brief Ticks every entity's own active_conditions whose "duration" is "blocks" down by
+            however many blocks just elapsed (Combat_Resolution.tick_condition_durations),
+            dismissing any that reach 0 -- blocks' own counterpart to run_round_upkeep's
+            "rounds" tick and enter_room's "rooms" tick. Same global "every entity, regardless
+            of presence in the current scene" scope _expire_prompt_directives already uses,
+            since a block-scale duration (measured in hours, not the current fight) isn't tied
+            to who's actually on-screen the way a round-scale one is.
+        @param blocks How many blocks just elapsed.
+        """
+        if blocks <= 0:
+            return
+        for entity_name in list(self.entities):
+            Combat_Resolution.tick_condition_durations(self.entities, self.event_bus, entity_name, "blocks", blocks)
 
     def _expire_prompt_directives(self, blocks):
         """!
@@ -82,10 +100,9 @@ class TimeMixin(DMCoreProtocol):
             0 or below. Social_Resolution.py's set_prompt_directive plants a directive with no
             expiry at all by default (persists until overwritten or manually cleared, exactly
             as before this existed); an authored "inject_directive" program op can instead give
-            it a real "duration" in blocks -- the same bespoke-countdown idiom
-            "summon_expires_in"/"surprised" already use, rather than the (never-enforced)
-            "duration" field a [[condition]] itself carries (see docs/combat.md's "Status and
-            conditions").
+            it a real "duration" in blocks -- its own bespoke field, distinct from (and ticked
+            separately from -- see _tick_conditions_by_block, below) a [[condition]]'s own
+            "duration"/"length" pair, since a prompt_directive isn't a condition at all.
         @param blocks How many blocks just elapsed.
         """
         if blocks <= 0:

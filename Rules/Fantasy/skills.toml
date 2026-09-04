@@ -4,8 +4,10 @@ description = "Physical movement and sports activities."
 keywords = ["movement", "exertion", "physical", "climb", "jump", "swim", "run", "sprint"]
 opposes = ["athletics", "observation"]
 # Combat maneuvers any entity may attempt via athletics, no training implied -- see
-# maneuvers.toml's own "Universal (untrained) abilities".
-abilities = [ "trip", "disarm", "sunder", "bull rush", "grapple", "pin" ]
+# maneuvers.toml's own "Universal (untrained) abilities". "disarm" is temporarily missing --
+# maneuvers.toml's own [[entity]] is commented out until it applies a real unequip/drop effect
+# instead of the removed "disarmed" condition; re-add it here once that lands.
+abilities = [ "trip", "sunder", "bull rush", "grapple", "pin" ]
 
 [[skill]]
 name = "blades"

@@ -193,7 +193,8 @@ def _op_condition(step, ctx, entities, rules, event_bus):
         return
     Combat_Resolution.apply_condition(
         entities, event_bus, entity_name, _require(step, "name"),
-        duration=step.get("duration"), dismiss=step.get("dismiss"),
+        duration=step.get("duration"), length=step.get("length"), dismiss=step.get("dismiss"),
+        rules=rules,
     )
 
 

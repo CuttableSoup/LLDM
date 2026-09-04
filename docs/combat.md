@@ -94,7 +94,7 @@ filtering, above).
 - `requirements` — a list of `{field, operator, value}` comparisons (`COMPARATORS` in
   `DM_Status.py`: `>`, `<`, `>=`, `<=`, `==`, `!=`, `in`, `not_in`), ALL of which must hold.
   `field` is either derived (`"hp_per_remain"`) or a direct entity attribute.
-- `apply` — `{condition, duration, dismiss}`, naming an entry in `[[condition]]`.
+- `apply` — `{condition, duration, length, dismiss}`, naming an entry in `[[condition]]`.
 
 The actual roll/condition computation below (`resolve_action`, `get_condition_modifier`,
 `apply_condition`, `evaluate_statuses`, ...) lives in `Combat_Resolution.py`, a pure module
@@ -129,6 +129,21 @@ meaningful inside `[[entity.behavior]]`.
 `evaluate_statuses` finds every status matching a trigger whose requirements the entity
 currently meets and calls `apply_condition`, storing it in the entity's own `active_conditions`.
 `dismiss_condition(entity_name, condition_name)` is the general-purpose removal primitive.
+
+**`duration`/`length` are a real, live countdown**, not flavor text. `duration` is one of
+`Combat_Resolution.CONDITION_DURATIONS` — `"rounds"`, `"rooms"`, `"blocks"`, or `"permanent"`
+(no countdown at all, cleared only by an explicit `dismiss_condition` call or a matching
+`dismiss` trigger) — plus the authoring-only `"days"`, which `apply_condition` itself converts
+to `"blocks"` the moment it's applied (`length * rules.toml`'s own `[time].blocks_per_day`, see
+`docs/downtime.md`'s "The block clock") and so never exists as a stored value. `length` is how
+many of that unit remain, decremented by `Combat_Resolution.tick_condition_durations` — called
+once per living scene entity per combat round for `"rounds"` (`run_round_upkeep`, `DM_Status.py`
+— ex: `"surprised"`, applied with `length = 1` by night watch, `docs/downtime.md`'s "Night watch
+and surprise"), once per room left for `"rooms"` (`enter_room`, `DM_Rules.py` — scoped to a
+same-dungeon room-to-room move only, not grid travel's own location-to-location one), and once
+per block elapsed for `"blocks"` (`advance_blocks`, `DM_Time.py`, alongside its own unrelated
+`prompt_directive` expiry). A condition applied with `duration = "permanent"` (or no `duration`
+at all) needs no `length` and is left alone by every one of those ticks.
 
 `evaluate_statuses` also sweeps the *other* direction: after applying whatever matches now, it
 dismisses any active condition (from the same trigger) whose requirements no longer hold — ex:

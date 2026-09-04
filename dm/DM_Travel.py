@@ -238,7 +238,8 @@ class TravelMixin(DMCoreProtocol):
             A failed (or skipped) watch applies "surprised" (rules.toml's own [[condition]]) to
             every present is_party member -- the whole party was caught off guard, not just
             whoever stood watch -- cleared after that fight's own first round of upkeep
-            (_expire_surprised_if_due, DM_Status.py).
+            (Combat_Resolution.tick_condition_durations, called from run_round_upkeep,
+            DM_Status.py).
         @param environment The night block's own environments.toml entry, read for its
             "watch_difficulty".
         @return True if the party was surprised.
@@ -253,7 +254,7 @@ class TravelMixin(DMCoreProtocol):
             surprised = not result["success"]
         if surprised:
             for name in roster:
-                self.apply_condition(name, "surprised", duration="1 round", dismiss="")
+                self.apply_condition(name, "surprised", duration="rounds", length=1, dismiss="")
         return surprised
 
     def _resolve_grid_travel_intent(self, input_text, resolved):

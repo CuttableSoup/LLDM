@@ -119,15 +119,21 @@ class StatusMixin(DMCoreProtocol):
         """
         return Combat_Resolution.get_applicable_statuses(self.entities, self.rules, self.event_bus, entity_name, trigger)
 
-    def apply_condition(self, entity_name, condition_name, duration=None, dismiss=None):
+    def apply_condition(self, entity_name, condition_name, duration=None, length=None, dismiss=None):
         """!
         @brief Marks a condition as active on an entity.
         @param entity_name The name of the entity gaining the condition.
         @param condition_name The name of the condition, as defined in the [[condition]] table.
-        @param duration How long the condition lasts (ex: "fleeting", "scene", "permanent").
+        @param duration Which clock the condition counts down against -- one of
+            Combat_Resolution.CONDITION_DURATIONS, or the authoring-only "days" (Combat_
+            Resolution.apply_condition's own conversion to "blocks", via self.rules below).
+        @param length How many of "duration"'s own unit remain (unused/ignored for "permanent").
         @param dismiss What removes the condition (ex: "healing", "resurrection").
         """
-        Combat_Resolution.apply_condition(self.entities, self.event_bus, entity_name, condition_name, duration, dismiss)
+        Combat_Resolution.apply_condition(
+            self.entities, self.event_bus, entity_name, condition_name, duration, length, dismiss,
+            rules=self.rules,
+        )
 
     def dismiss_condition(self, entity_name, condition_name):
         """!
@@ -296,10 +302,11 @@ class StatusMixin(DMCoreProtocol):
             self.scenario_entities directly), since a summon expiring this same call removes
             itself from that live list mid-iteration.
 
-            Also dismisses "surprised" the first time it's carried into an upkeep call
-            (_expire_surprised_if_due, below) -- night watch's own stand-in for a real
-            "duration = 1 round" (docs/extended-goals.md's "Night watch and surprise"), since
-            nothing here interprets a condition's own "duration" field as an actual countdown.
+            Also ticks every active_conditions entry whose own "duration" is "rounds" by one
+            (Combat_Resolution.tick_condition_durations) -- ex: "surprised", applied by night
+            watch (DM_Travel.py's _roll_night_watch) with length=1, expiring the first time this
+            same entity's upkeep runs after gaining it, docs/downtime.md's "Night watch and
+            surprise".
         """
         for entity_name in list(self.scenario_entities):
             if self.get_current_hp(entity_name) <= 0:
@@ -307,7 +314,7 @@ class StatusMixin(DMCoreProtocol):
             self.apply_round_upkeep(entity_name)
             self._run_round_upkeep_program(entity_name)
             self._expire_summon_if_due(entity_name)
-            self._expire_surprised_if_due(entity_name)
+            Combat_Resolution.tick_condition_durations(self.entities, self.event_bus, entity_name, "rounds")
 
     def _run_round_upkeep_program(self, entity_name):
         """!
@@ -319,22 +326,6 @@ class StatusMixin(DMCoreProtocol):
         program = self.entities.get(entity_name, {}).get("on_round_upkeep")
         if program:
             run_program(program, {"actor": None, "target": entity_name}, self.entities, self.rules, self.event_bus)
-
-    def _expire_surprised_if_due(self, entity_name):
-        """!
-        @brief Dismisses "surprised" (DM_Travel.py's _roll_night_watch -- see
-            docs/extended-goals.md's "Night watch and surprise") the first time this entity's
-            own upkeep runs after gaining it. "Surprised" is applied before any of that round's
-            rolls happen (the moment a night block's failed watch places a hostile encounter),
-            so clearing it here -- once that same round's own upkeep has run -- gives it
-            exactly the one round of penalty "duration = 1 round" calls for, the same bespoke,
-            per-condition expiry _expire_summon_if_due (DM_Summoning.py) already uses for
-            "summon_expires_in" rather than a generic duration countdown no condition here
-            actually has.
-        @param entity_name The name of the entity to check.
-        """
-        if self.has_condition(entity_name, "surprised"):
-            self.dismiss_condition(entity_name, "surprised")
 
     def is_locked(self, entity_name):
         """!
@@ -409,8 +400,8 @@ class StatusMixin(DMCoreProtocol):
             lock check, a trap's disarm/dodge attempt, or an item's own hidden-property
             check), dispatching purely on which keys are present in outcome -- no "action"
             enum needed. A key of "dismiss_condition" removes that condition; a key of
-            "condition" applies a new one (the same {condition, duration, dismiss} shape
-            [[status]]'s own "apply" block already uses); a truthy "reveal" key applies the
+            "condition" applies a new one (the same {condition, duration, length, dismiss}
+            shape [[status]]'s own "apply" block already uses); a truthy "reveal" key applies the
             permanent "identified" condition (ex: the cursed dagger's arcane check) -- it
             doesn't say *what* was revealed, that's read back off the entity's own data (ex:
             its "tags" field) by whoever narrates it, once is_identified is true; a truthy
@@ -452,7 +443,8 @@ class StatusMixin(DMCoreProtocol):
         if condition_name:
             self.apply_condition(
                 entity_name, condition_name,
-                duration=outcome.get("duration"), dismiss=outcome.get("dismiss"),
+                duration=outcome.get("duration"), length=outcome.get("length"),
+                dismiss=outcome.get("dismiss"),
             )
         if outcome.get("reveal"):
             self.apply_condition(entity_name, "identified", duration="permanent", dismiss="")

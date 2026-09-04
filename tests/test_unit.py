@@ -2986,7 +2986,7 @@ class TestEntityBehavior(DMTestCase):
         # Pattern A recipe.
         self.dm_core.entities["paralyzed_dummy"] = {
             "name": "paralyzed_dummy", "max_hp": 20, "skills": {},
-            "active_conditions": {"paralyzed": {"duration": "fleeting", "dismiss": ""}},
+            "active_conditions": {"paralyzed": {"duration": "permanent", "dismiss": ""}},
             "behavior": [
                 {
                     "requirements": [{"field": "has_condition:paralyzed", "operator": "==", "value": False}],
@@ -3017,7 +3017,7 @@ class TestEntityBehavior(DMTestCase):
         }
         self.assertEqual(self.dm_core.choose_behavior("predator_dummy", "gladstone")["action"], "bite")
 
-        self.dm_core.apply_condition("gladstone", "stunned", duration="fleeting", dismiss="")
+        self.dm_core.apply_condition("gladstone", "stunned", duration="rounds", length=1, dismiss="")
         self.assertEqual(
             self.dm_core.choose_behavior("predator_dummy", "gladstone")["action"], "finishing_blow",
         )
@@ -3287,9 +3287,10 @@ class TestRoundUpkeep(DMTestCase):
         self.assertEqual(self.dm_core.get_current_hp("troll"), 0)
 
     def test_run_round_upkeep_expires_surprised_after_one_round(self):
-        # Night watch's own bespoke "duration = 1 round" stand-in (_expire_surprised_if_due,
-        # DM_Status.py) -- see docs/extended-goals.md's "Night watch and surprise".
-        self.dm_core.apply_condition("gladstone", "surprised", duration="1 round", dismiss="")
+        # Night watch applies "surprised" with duration="rounds", length=1 -- run_round_upkeep's
+        # own generic condition tick (Combat_Resolution.tick_condition_durations) is what
+        # actually expires it. See docs/downtime.md's "Night watch and surprise".
+        self.dm_core.apply_condition("gladstone", "surprised", duration="rounds", length=1, dismiss="")
         self.dm_core.run_round_upkeep()
         self.assertFalse(self.dm_core.has_condition("gladstone", "surprised"))
 
@@ -3528,15 +3529,16 @@ class TestSocialResolutionPure(unittest.TestCase):
 
 class TestUniversalAbilities(DMTestCase):
     """!
-    @brief Universal (untrained) abilities -- maneuvers.toml's trip/disarm/sunder (listed under
-        athletics' own "abilities" field) and intimidate (under intimidation's), plus
+    @brief Universal (untrained) abilities -- maneuvers.toml's trip/sunder (listed under
+        athletics' own "abilities" field, alongside "disarm" -- temporarily missing, see
+        skills.toml's own comment) and intimidate (under intimidation's), plus
         resolve_named_ability's own skill-list fallback (DM_Combat.py).
     """
 
     def test_athletics_lists_its_own_cmb_style_maneuvers(self):
         self.assertEqual(
             set(self.dm_core.skills["athletics"]["abilities"]),
-            {"trip", "disarm", "sunder", "bull rush", "grapple", "pin"},
+            {"trip", "sunder", "bull rush", "grapple", "pin"},
         )
 
     def test_trickery_lists_its_own_maneuvers(self):
@@ -3550,7 +3552,7 @@ class TestUniversalAbilities(DMTestCase):
         self.assertEqual(
             self.dm_core.universal_abilities,
             {
-                "trip", "disarm", "sunder", "bull rush", "grapple", "pin", "intimidate",
+                "trip", "sunder", "bull rush", "grapple", "pin", "intimidate",
                 "dirty trick", "feint", "escape artist", "sleight of hand", "treat wounds", "charm",
             },
         )
@@ -3576,9 +3578,9 @@ class TestUniversalAbilities(DMTestCase):
         self.assertIsNone(self.dm_core.resolve_named_ability("gladstone", "not_a_real_ability_name"))
 
     def test_a_universal_ability_defaults_to_melee_range(self):
-        # trip/disarm/sunder each write range = 0 explicitly; is_in_range's own unconditional
+        # trip/sunder each write range = 0 explicitly; is_in_range's own unconditional
         # default is unchanged either way.
-        for name in ("trip", "disarm", "sunder"):
+        for name in ("trip", "sunder"):
             self.assertEqual(self.dm_core.entities[name].get("range", 0), 0)
 
 
@@ -4048,7 +4050,7 @@ class TestOnDamageProgram(DMTestCase):
         self.dm_core.apply_damage("troll", 1, actor_name="gladstone")
 
         # Still the same marker -- apply_condition would have overwritten it with a fresh
-        # {"duration": "scene", ...} entry if the condition step had fired again.
+        # {"duration": "rounds", "length": 5, ...} entry if the condition step had fired again.
         self.assertEqual(self.dm_core.entities["troll"]["active_conditions"]["enraged"]["duration"], "marker")
 
 
@@ -4264,8 +4266,8 @@ class TestConditionModifiers(DMTestCase):
 
     def test_get_condition_modifier_sums_the_surprised_condition(self):
         # rules.toml's own "surprised" [[condition]] entry is {dice: -2, pips: 0, bonus: 0} --
-        # heavier than "wounded"'s -1, per docs/extended-goals.md's "Night watch and surprise".
-        self.dm_core.apply_condition("gladstone", "surprised", duration="1 round", dismiss="")
+        # heavier than "wounded"'s -1, per docs/downtime.md's "Night watch and surprise".
+        self.dm_core.apply_condition("gladstone", "surprised", duration="rounds", length=1, dismiss="")
         self.assertEqual(
             self.dm_core.get_condition_modifier("gladstone"),
             {"dice": -2, "pips": 0, "bonus": 0},
@@ -4294,7 +4296,7 @@ class TestConditionModifiers(DMTestCase):
         self.dm_core.entities["test_defender"] = {
             "name": "test_defender", "skills": {"dodge": {"dice": 6, "pips": 0}},
         }
-        self.dm_core.apply_condition("test_defender", "stunned", duration="fleeting", dismiss="")
+        self.dm_core.apply_condition("test_defender", "stunned", duration="rounds", length=1, dismiss="")
         with patch("random.randint", return_value=3):
             result = self.dm_core.resolve_opposed_action("gladstone", "blades", "test_defender")
         self.assertEqual(result["difficulty"], 15)  # (6 - 1) * 3
@@ -4309,7 +4311,7 @@ class TestActionPrevented(DMTestCase):
     """
 
     def test_is_action_prevented_true_once_a_prevents_action_condition_is_active(self):
-        self.dm_core.apply_condition("gladstone", "pinned", duration="scene", dismiss="")
+        self.dm_core.apply_condition("gladstone", "pinned", duration="permanent", dismiss="")
         self.assertTrue(self.dm_core.is_action_prevented("gladstone"))
 
     def test_is_action_prevented_false_for_an_ordinary_dice_penalty_condition(self):
@@ -4323,7 +4325,7 @@ class TestActionPrevented(DMTestCase):
 
     def test_players_own_turn_is_denied_outright_with_no_roll_while_pinned(self):
         round_events = self._capture("round_resolved")
-        self.dm_core.apply_condition("gladstone", "pinned", duration="scene", dismiss="")
+        self.dm_core.apply_condition("gladstone", "pinned", duration="permanent", dismiss="")
 
         self.dm_core._on_turn_detected({"clauses": [{"kind": "action", "skill": "blades"}], "input": "I attack the wolf"})
 
@@ -4335,14 +4337,14 @@ class TestActionPrevented(DMTestCase):
         # wolf's own [[entity.behavior]] would otherwise resolve "bite" against gladstone --
         # pinned pre-empts that entirely, the same "doesn't act" outcome an entity with no
         # matching behavior at all already gets.
-        self.dm_core.apply_condition("wolf", "pinned", duration="scene", dismiss="")
+        self.dm_core.apply_condition("wolf", "pinned", duration="permanent", dismiss="")
         self.assertIsNone(self.dm_core.resolve_behavior_action("wolf", "gladstone"))
 
     def test_pin_maneuver_actually_stops_its_target_from_acting_next(self):
         # End-to-end: pin lands on an already-grappled target, and the resulting "pinned"
         # condition genuinely prevents that target's own next action, not just a penalized one.
         self.dm_core.entities["wolf"]["active_conditions"] = {
-            "grappled": {"duration": "scene", "dismiss": None},
+            "grappled": {"duration": "permanent", "dismiss": None},
         }
         pin = self.dm_core.entities["pin"]
         result = RolledOutcome(entity="gladstone", skill="athletics", roll=15, difficulty=5, success=True)

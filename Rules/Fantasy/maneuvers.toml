@@ -33,7 +33,7 @@ magnitude = "actor.roll_margin"
 
 [[entity.on_pass]]
 if = "target.threat < -50"
-then = { do = "condition", entity = "target", name = "shaken", duration = "scene" }
+then = { do = "condition", entity = "target", name = "shaken", duration = "rounds", length = 1 }
 
 [[entity]]
 name = "dirty trick"
@@ -43,7 +43,7 @@ description = "Sand in the eyes, a low blow, anything to throw an opponent off t
 keywords = [ "dirty trick", "cheap shot", "throw sand in their eyes", "low blow" ]
 skill = [ "trickery" ]
 range = 0
-on_pass = { do = "condition", entity = "target", name = "dazzled", duration = "scene" }
+on_pass = { do = "condition", entity = "target", name = "dazzled", duration = "rounds", length = 1 }
 
 [[entity]]
 name = "feint"
@@ -53,7 +53,7 @@ description = "A false opening meant to trick an opponent into dropping their gu
 keywords = [ "feint", "fake them out", "fake an opening" ]
 skill = [ "trickery" ]
 range = 0
-on_pass = { do = "condition", entity = "target", name = "flat_footed", duration = "scene" }
+on_pass = { do = "condition", entity = "target", name = "flat_footed", duration = "rounds", length = 1 }
 
 [[entity]]
 name = "trip"
@@ -69,17 +69,22 @@ description = "A leg sweep that knocks an opponent off their feet."
 keywords = [ "trip", "sweep their legs", "knock them down", "leg sweep", "trip the creature" ]
 skill = [ "athletics" ]
 range = 0
-on_pass = { do = "condition", entity = "target", name = "prone", duration = "scene" }
+on_pass = { do = "condition", entity = "target", name = "prone", duration = "permanent" }
 
-[[entity]]
-name = "disarm"
-supertype = "technique"
-subtype = "maneuver"
-description = "A grab and a twist meant to knock a weapon loose from an opponent's grip."
-keywords = [ "disarm", "knock their weapon", "wrench their weapon loose" ]
-skill = [ "athletics" ]
-range = 0
-on_pass = { do = "condition", entity = "target", name = "disarmed", duration = "scene" }
+# Commented out until there's a real "unequip target's weapon and drop it in the room" program
+# op -- being disarmed is an instantaneous equipment change, not a lasting condition (see
+# rules.toml's own note where the "disarmed" [[condition]] used to live), and this maneuver had
+# no other effect to fall back on in the meantime. A bare "I disarm the goblin" falls through to
+# an ordinary, effect-less athletics roll in the meantime (this file's own opening comment).
+# [[entity]]
+# name = "disarm"
+# supertype = "technique"
+# subtype = "maneuver"
+# description = "A grab and a twist meant to knock a weapon loose from an opponent's grip."
+# keywords = [ "disarm", "knock their weapon", "wrench their weapon loose" ]
+# skill = [ "athletics" ]
+# range = 0
+# on_pass = { do = "condition", entity = "target", name = "disarmed", duration = "scene" }
 
 [[entity]]
 name = "sunder"
@@ -114,7 +119,7 @@ description = "A shoulder-first shove meant to knock an opponent off balance."
 keywords = [ "bull rush", "shove them", "shove them back", "barrel into them" ]
 skill = [ "athletics" ]
 range = 0
-on_pass = { do = "condition", entity = "target", name = "staggered", duration = "scene" }
+on_pass = { do = "condition", entity = "target", name = "staggered", duration = "rounds", length = 1 }
 
 [[entity]]
 name = "grapple"
@@ -124,7 +129,7 @@ description = "Seizing hold of an opponent to wrestle them down and restrict the
 keywords = [ "grapple", "wrestle them down", "seize them", "hold them down" ]
 skill = [ "athletics" ]
 range = 0
-on_pass = { do = "condition", entity = "target", name = "grappled", duration = "scene" }
+on_pass = { do = "condition", entity = "target", name = "grappled", duration = "permanent" }
 
 # Pathfinder's own "pin" -- a follow-up maneuver only meaningful against an opponent "grapple"
 # (above) has already seized. entity = "actor" is deliberately never used here (pinning is
@@ -145,7 +150,7 @@ range = 0
 # "pinned" (rules.toml) is both a hard dice penalty and prevents_action = true -- the target
 # genuinely can't act at all while pinned, matching Pathfinder's own true "helpless"-adjacent
 # pinned condition, not just a penalized roll.
-on_pass = { if = "target.has_condition:grappled == true", then = { do = "condition", entity = "target", name = "pinned", duration = "scene" } }
+on_pass = { if = "target.has_condition:grappled == true", then = { do = "condition", entity = "target", name = "pinned", duration = "permanent" } }
 
 # Pathfinder's own "Escape Artist" -- the counter-maneuver to "grapple" above, rolled against
 # the escape skill (already the "breaking free of restraints or grapples" skill, per its own

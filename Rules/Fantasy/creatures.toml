@@ -140,7 +140,7 @@ duration = "permanent"
 # "enraged" (rules.toml) is what actually gives that real teeth (a +1D bonus), not just flavor.
 [entity.on_damage]
 if = { all = [ "target.hp_per_remain < 0.5", "target.has_condition:enraged == false" ] }
-then = { do = "condition", entity = "target", name = "enraged", duration = "scene" }
+then = { do = "condition", entity = "target", name = "enraged", duration = "rounds", length = 5 }
 
 [entity.skills]
 strength = { dice = 5, pips = 0 }

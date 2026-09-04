@@ -42,6 +42,12 @@ LIST_OF_STRING_FIELDS = (
 # Every field documented as a rollable {dice, pips, bonus} table -- see _check_dice_table.
 DICE_TABLE_FIELDS = ("damage_value", "armor_value", "resistance_value", "vulnerability_value")
 
+# The legal values for a condition apply site's own "duration" -- one more than Combat_
+# Resolution.CONDITION_DURATIONS, since "days" is legal to *author* (apply_condition converts
+# it to "blocks" the moment it's actually applied) even though it never exists as a live,
+# stored value -- see that module's own CONDITION_DURATIONS comment.
+CONDITION_DURATIONS = ("rounds", "rooms", "blocks", "days", "permanent")
+
 
 class ValidationMixin(DMCoreProtocol):
     """!
@@ -102,6 +108,7 @@ class ValidationMixin(DMCoreProtocol):
         self._validate_location_references()
         self._validate_entity_shapes()
         self._validate_location_shapes()
+        self._validate_status_shapes()
 
     # -----------------------------------------------------------------------------------------
     # Skill references
@@ -610,6 +617,58 @@ class ValidationMixin(DMCoreProtocol):
         if "duration" in summon and not isinstance(summon["duration"], (int, float)):
             self._log(owner_label, "summon.duration should be a number.")
 
+    def _check_duration_length(self, owner_label, duration, length, field_label="duration"):
+        """!
+        @brief A condition apply site's own "duration"/"length" pair -- shared by every place
+            one can be authored: [[status]]'s own "apply" block (_validate_status_shapes,
+            below), a "condition" program op (_check_program_condition_durations, below), and
+            an entity's own seeded [entity.conditions.X] starting state
+            (_check_entity_conditions_shape, below). duration must be one of CONDITION_
+            DURATIONS; length must be a positive number for every denomination except
+            "permanent", which carries no countdown at all and so needs none.
+        @param owner_label Human-readable text identifying where this apply site lives.
+        @param duration The apply site's own "duration" value (None if never authored at all --
+            a silent no-op, same as every other optional field this module checks).
+        @param length The apply site's own "length" value.
+        @param field_label What to call "duration" in a logged message, when the field isn't
+            literally named "duration" at this particular apply site (ex: summon.duration).
+        """
+        if duration is None:
+            return
+        if duration not in CONDITION_DURATIONS:
+            self._log(owner_label, f"{field_label} should be one of {CONDITION_DURATIONS}.")
+            return
+        if duration != "permanent" and not (isinstance(length, (int, float)) and length > 0):
+            self._log(owner_label, f'{field_label} "{duration}" requires a positive numeric length.')
+
+    def _walk_program_steps(self, program):
+        """!
+        @brief Yields every step dict inside an authored program -- a single inline step, a
+            flat list of steps, or steps nested under "then"/"else" (Program_Interpreter.py's
+            own "if" branching shape). Narrowly scoped to support
+            _check_program_condition_durations below -- not a general op/arg validator, so it
+            doesn't check "do" names or any other step field.
+        @param program A program value as authored (None, a dict, or a list of dicts).
+        """
+        if program is None:
+            return
+        if isinstance(program, list):
+            for item in program:
+                yield from self._walk_program_steps(item)
+            return
+        if not isinstance(program, dict):
+            return
+        yield program
+        yield from self._walk_program_steps(program.get("then"))
+        yield from self._walk_program_steps(program.get("else"))
+
+    def _check_program_condition_durations(self, owner_label, program):
+        """!@brief Validates every "condition" op's own duration/length inside program (an
+        entity/ability's own on_pass/on_fail/on_round_upkeep/on_enter/on_damage/on_heal)."""
+        for step in self._walk_program_steps(program):
+            if step.get("do") == "condition":
+                self._check_duration_length(f"{owner_label} condition op", step.get("duration"), step.get("length"))
+
     def _check_materials_shape(self, owner_label, materials):
         """!@brief A "materials" list -- [{item, quantity}, ...]. The referential half (does
         "item" actually resolve) already lives in _check_materials, above."""
@@ -650,6 +709,23 @@ class ValidationMixin(DMCoreProtocol):
         self._check_targets_table(owner_label, ability)
         self._check_summon_shape(owner_label, ability.get("summon"))
         self._check_materials_shape(owner_label, ability.get("materials"))
+        self._check_program_condition_durations(owner_label, ability.get("on_pass"))
+        self._check_program_condition_durations(owner_label, ability.get("on_fail"))
+
+    def _check_entity_conditions_shape(self, owner_label, conditions):
+        """!@brief An entity's own seeded [entity.conditions.X] starting state -- copied
+        verbatim into active_conditions at instancing time (DM_Rules.py's _instance_entities),
+        so each entry's own duration/length gets exactly the apply-site shape check."""
+        if conditions is None:
+            return
+        if not isinstance(conditions, dict):
+            self._log(owner_label, "conditions should be a table.")
+            return
+        for condition_name, entry in conditions.items():
+            if not isinstance(entry, dict):
+                self._log(owner_label, f'conditions.{condition_name} should be a table.')
+                continue
+            self._check_duration_length(f"{owner_label} conditions.{condition_name}", entry.get("duration"), entry.get("length"))
 
     def _check_template_generation_fields(self, owner_label, template):
         """!@brief entity_template-only generation-input fields (template_schema.toml's own
@@ -677,7 +753,12 @@ class ValidationMixin(DMCoreProtocol):
             for the flat fields, then one dedicated call per compound shape
             ([entity.skills]/[entity.equipped]/[entity.attitudes]/[[entity.behavior]]), plus
             _check_ability_shape once against the entity's own top-level fields and once per
-            resolved entry in its own "abilities" list. entity_templates additionally get
+            resolved entry in its own "abilities" list (which, alongside on_pass/on_fail,
+            covers every "condition" op's own duration/length -- see
+            _check_program_condition_durations), plus _check_entity_conditions_shape for a
+            seeded [entity.conditions.X] starting state and a direct
+            _check_program_condition_durations pass over the entity's own on_round_upkeep/
+            on_enter/on_damage/on_heal. entity_templates additionally get
             _check_template_generation_fields and allow_varied=True on their own attitudes
             axes (template_schema.toml's own "Varied values").
         """
@@ -698,6 +779,9 @@ class ValidationMixin(DMCoreProtocol):
                 self._check_equipped_table(label, entity)
                 self._check_attitudes_table(label, entity, allow_varied=is_template)
                 self._check_behavior_list(label, entity)
+                self._check_entity_conditions_shape(label, entity.get("conditions"))
+                for program_field in ("on_round_upkeep", "on_enter", "on_damage", "on_heal"):
+                    self._check_program_condition_durations(label, entity.get(program_field))
 
                 for ability in entity.get("abilities", []):
                     resolved = self.resolve_ability(ability)
@@ -708,6 +792,15 @@ class ValidationMixin(DMCoreProtocol):
 
                 if is_template:
                     self._check_template_generation_fields(label, entity)
+
+    def _validate_status_shapes(self):
+        """!@brief [[status]]'s own "apply" block -- {condition, duration, length, dismiss}."""
+        for status in self.rules.get("status", []):
+            apply_block = status.get("apply")
+            if not apply_block:
+                continue
+            label = f"status '{status.get('name', '?')}'"
+            self._check_duration_length(label, apply_block.get("duration"), apply_block.get("length"))
 
     # -----------------------------------------------------------------------------------------
     # Field shape/type -- locations/rooms

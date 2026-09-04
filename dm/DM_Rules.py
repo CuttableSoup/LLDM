@@ -2,6 +2,7 @@ import copy
 import os
 import tomllib
 
+import resolution.Combat_Resolution as Combat_Resolution
 from dm.DM_Types import DMCoreProtocol
 from resolution.Program_Interpreter import run_program
 from paths import PROJECT_ROOT
@@ -989,6 +990,15 @@ class RulesMixin(DMCoreProtocol):
         """
         if room_key not in self.rooms:
             return False
+
+        # Ticks the room being *left* -- everyone who was actually present there (the player,
+        # party, and any NPCs) has their own "rooms"-durationed conditions count down by one,
+        # dismissing any that reach 0 -- before self.scenario_entities gets overwritten by
+        # _populate_room below. Only fires for this same-dungeon room-to-room move, not grid
+        # travel's own location-to-location one (DM_Travel.py's _enter_location) -- "rooms" is
+        # scoped to this one transition point, not every possible scene change.
+        for entity_name in list(self.scenario_entities):
+            Combat_Resolution.tick_condition_durations(self.entities, self.event_bus, entity_name, "rooms")
 
         self.current_room_key = room_key
         self.entities[self.player_name]["band"] = arrival_band

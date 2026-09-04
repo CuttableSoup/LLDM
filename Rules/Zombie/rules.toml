@@ -20,7 +20,7 @@ requirements = [
     { field = "hp_per_remain", operator = ">=", value = 0.60 },
     { field = "hp_per_remain", operator = "<=", value = 0.80 },
 ]
-apply = { condition = "stunned", duration = "fleeting", dismiss = "" }
+apply = { condition = "stunned", duration = "rounds", length = 1, dismiss = "" }
 description = "A real hit -- a raked claw, a solid bite. It stings, and it's bleeding."
 
 [[status]]
@@ -60,7 +60,7 @@ requirements = [
     { field = "hp_per_remain", operator = ">=", value = 0.01 },
     { field = "hp_per_remain", operator = "<=", value = 0.09 },
 ]
-apply = { condition = "unconscious", duration = "scene", dismiss = "" }
+apply = { condition = "unconscious", duration = "permanent", dismiss = "" }
 description = "Down and not getting back up without help -- someone needs to pull you out."
 
 [[status]]

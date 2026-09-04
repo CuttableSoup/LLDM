@@ -243,11 +243,10 @@ safe would invert the usual "safety in numbers" logic.
 
 A failed (or skipped) watch applies `rules.toml`'s new `[[condition]]` `"surprised"` (a heavier
 `-2` dice penalty than `"stunned"`'s `-1`) to every present `is_party` member — the whole party was
-caught off guard, not just whoever stood watch. Nothing in this engine interprets a condition's own
-`duration` field as a real countdown (see `docs/combat.md`'s "Status and conditions"), so
-`"surprised"` uses the same bespoke-expiry shape `"summon_expires_in"` already does:
-`_expire_surprised_if_due` (`DM_Status.py`) dismisses it the first time `run_round_upkeep` runs
-after it was applied, giving it exactly the one round of penalty `"duration = 1 round"` calls for.
+caught off guard, not just whoever stood watch. Applied with `duration = "rounds", length = 1`
+(see `docs/combat.md`'s "Status and conditions" for the full duration/length mechanism), so
+`run_round_upkeep`'s own generic condition tick (`Combat_Resolution.tick_condition_durations`)
+dismisses it the first round it's carried into, the one round of penalty a failed watch calls for.
 
 ## Pausing for a fight
 
