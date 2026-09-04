@@ -35,6 +35,8 @@ def narrate_hitch(llm_core, data):
             "not_present": "there aren't two things here matching what they're trying to hitch together",
             "target_down": "one of them is down, not something to hitch up",
             "target_hostile": "what they're trying to hitch is hostile -- not something to just walk up to",
+            "not_a_puller": "it's not something capable of pulling anything",
+            "not_a_vehicle": "it's not something meant to be hitched to at all",
             "already_hitched": "it's already hitched that way",
         }
         explanation = explanations.get(reason, "it doesn't work")

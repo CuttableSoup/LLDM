@@ -135,14 +135,16 @@ speed = 1                                   # Only ever read off the player's ow
 #
 # ---------------------------------------------------------------------------------------------
 # Overland conveyance -- travel_speed/mount/pulled entities (see docs/downtime.md's "Travel"
-# and creatures.toml's own "horse"). Never authored in a template ahead of time; a runtime-only
-# field written by whichever free-standing intent actually applies -- a rider's own single
-# entry via "mount"/"dismount" (DM_Movement.py's _resolve_mount_intent/_resolve_dismount_
-# intent), or a vehicle's own entry (promoted to/appended onto a list, ex: a cart gaining a
-# second hitched horse) via "hitch"/"unhitch" (_resolve_hitch_intent/_resolve_unhitch_intent)
-# -- the latter is the only in-play way something *other* than a rider (ex: a cart with no
-# rider of its own yet) ever gets a "mount" field at all; without it, only a scenario/test
-# author hand-writing one directly onto a cart's own data could ever populate it.
+# and creatures.toml's own "horse"). A rider's own single entry is runtime-only, written by
+# "mount"/"dismount" (DM_Movement.py's _resolve_mount_intent/_resolve_dismount_intent) --
+# never authored in a template ahead of time. A vehicle's own entry (ex: a cart) is different:
+# "hitch"/"unhitch" (_resolve_hitch_intent/_resolve_unhitch_intent) promote/append onto it at
+# runtime same as a rider's, but _resolve_hitch_intent also requires the *key* to already exist
+# on the vehicle before the first hitch ever succeeds -- an ordinary NPC nothing ever declared
+# hitchable doesn't retroactively become a valid one just because something got hitched to it
+# (see _is_valid_conveyance, DM_Movement.py). A template meant to serve as a vehicle therefore
+# authors this as an empty placeholder (mount = "") ahead of time -- present as a key, but
+# resolving to no live entity yet, exactly like a fresh cart with nothing hitched to it should.
 mount = "horse"                             # The name of a currently-present, living entity
                                             # this one currently defers to for its own
                                             # effective travel_speed and, if the deferred-to

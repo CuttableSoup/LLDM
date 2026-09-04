@@ -308,6 +308,25 @@ class MovementMixin(DMCoreProtocol):
             if name != mover_name and mover_name in self._resolve_mount_targets(name):
                 self.entities[name]["band"] = new_band
 
+    def _is_valid_conveyance(self, entity_name):
+        """!
+        @brief Whether entity_name is actually part of the overland-conveyance system at all --
+            the same two cases _resolve_travel_speed (DM_Travel.py) itself branches on: it
+            authors its own "travel_speed" directly (a leaf provider, ex: creatures.toml's own
+            "horse", a car), or it currently defers to something that does via a live "mount"
+            chain of its own (ex: a cart already hitched to a horse). Gates both
+            _resolve_mount_intent's own target and _resolve_hitch_intent's own puller --
+            without it, an ordinary NPC with neither field has no mechanical effect once
+            "mounted" (everyone without a real travel_speed already falls back to [travel]'s
+            own default_speed regardless), but nothing should let the fiction imply riding or
+            hitching something that was never authored to work that way.
+        @param entity_name The candidate mount ("mount") or puller ("hitch").
+        @return True if entity_name authors travel_speed directly, or already has at least one
+            live entity in its own "mount" chain.
+        """
+        entity = self.entities.get(entity_name, {})
+        return "travel_speed" in entity or bool(self._resolve_mount_targets(entity_name))
+
     def _resolve_mount_intent(self, input_text, resolved):
         """!
         @brief Handles "mount"/"ride" -- the player climbs onto a named, currently-present,
@@ -325,10 +344,14 @@ class MovementMixin(DMCoreProtocol):
             currently-present entity's name appears in the input at all; "target_down" if the
             named entity is present but at 0 HP; "target_hostile" if is_hostile(target,
             player) is true (can't just climb onto something actively trying to kill you);
-            "bulk_exceeded" if mounting would push the target's own current load past its own
-            carrying capacity (DM_Rules.py's _would_exceed_mount_capacity). On success, snaps
-            the player's own band to the mount's -- mounting happens wherever the mount
-            currently stands, not the other way around. No dice rolled either way.
+            "not_a_mount" if the target isn't actually part of the overland-conveyance system
+            at all (_is_valid_conveyance -- ex: a friendly NPC with no authored travel_speed
+            and nothing hitched to it, since nothing should let the fiction imply climbing onto
+            an ordinary person); "bulk_exceeded" if mounting would push the target's own
+            current load past its own carrying capacity (DM_Rules.py's
+            _would_exceed_mount_capacity). On success, snaps the player's own band to the
+            mount's -- mounting happens wherever the mount currently stands, not the other way
+            around. No dice rolled either way.
         @param input_text The raw (lowercased, prefix-stripped) player input, searched for a
             currently-present entity's own name.
         @param resolved The item_interaction_resolved publisher closure from
@@ -353,6 +376,9 @@ class MovementMixin(DMCoreProtocol):
             return
         if self.is_hostile(target_name, self.player_name):
             resolved(False, reason="target_hostile")
+            return
+        if not self._is_valid_conveyance(target_name):
+            resolved(False, reason="not_a_mount")
             return
         if self._would_exceed_mount_capacity(target_name, self.player_name):
             resolved(False, reason="bulk_exceeded")
@@ -415,18 +441,29 @@ class MovementMixin(DMCoreProtocol):
             left-to-right reading-order convention -- whichever currently-present entity is
             named *first* in the input is the puller, whichever is named *second* is the
             vehicle ("hitch the horse to the cart") -- resolved via
-            _named_present_entities_in_order, not a guess based on either entity's own stats
-            (ex: whether it happens to author its own "travel_speed"), so behavior stays
-            predictable regardless of what either entity's data looks like.
+            _named_present_entities_in_order, not a guess based on either entity's own stats,
+            so *direction* stays predictable regardless of what either entity's data looks
+            like. Whether the resulting pairing is actually *allowed* is a separate question,
+            gated below on each entity's own data (_is_valid_conveyance for the puller, an
+            authored "mount" field for the vehicle) -- reading order alone decides which slot
+            each name lands in, never whether the hitch itself is legal.
 
             Denied "not_present" if fewer than two distinct present entities are named at all;
             "target_down" if either is at 0 HP; "target_hostile" if is_hostile(puller, player)
             is true (the same "can't just walk up and hitch something actively trying to kill
-            you" reasoning _resolve_mount_intent already applies); "already_hitched" if the
-            puller is already in the vehicle's own "mount". No bulk/capacity check of any kind
-            -- hitching only ever *adds* pulling capacity (DM_Rules.py's get_carrying_capacity
-            sums a vehicle's whole team), never something that needs gating the way loading
-            actual cargo/a rider does.
+            you" reasoning _resolve_mount_intent already applies); "not_a_puller" if the puller
+            isn't actually part of the overland-conveyance system at all (_is_valid_conveyance
+            -- the same gate _resolve_mount_intent applies to its own target, ex: an ordinary
+            NPC has no travel_speed and pulls nothing); "not_a_vehicle" if the vehicle was never
+            authored with a "mount" field of its own at all (not merely absent right now the
+            way a fresh, never-yet-hitched cart's *value* would be -- the *key* itself has to
+            already exist, ex: a cart authored with `mount = ""` as a placeholder) -- an
+            ordinary NPC that nothing ever declared hitchable doesn't retroactively become one
+            just because something got hitched to it; "already_hitched" if the puller is
+            already in the vehicle's own "mount". No bulk/capacity check of any kind -- hitching
+            only ever *adds* pulling capacity (DM_Rules.py's get_carrying_capacity sums a
+            vehicle's whole team), never something that needs gating the way loading actual
+            cargo/a rider does.
         @param input_text The raw (lowercased, prefix-stripped) player input, searched for two
             currently-present entities' own names.
         @param resolved The item_interaction_resolved publisher closure from
@@ -444,14 +481,24 @@ class MovementMixin(DMCoreProtocol):
         if self.is_hostile(puller_name, self.player_name):
             resolved(False, reason="target_hostile")
             return
+        if not self._is_valid_conveyance(puller_name):
+            resolved(False, reason="not_a_puller")
+            return
 
         vehicle = self.entities[vehicle_name]
+        if "mount" not in vehicle:
+            resolved(False, reason="not_a_vehicle")
+            return
         existing = vehicle.get("mount")
         if existing == puller_name or (isinstance(existing, list) and puller_name in existing):
             resolved(False, reason="already_hitched")
             return
 
-        if existing is None:
+        if not existing:
+            # Covers both an absent field and an authored `mount = ""` placeholder (see
+            # entity_schema.toml's own "mount" comment) -- either way, nothing live to append
+            # to yet, so the first hitch replaces it with a bare string instead of producing a
+            # ["", puller_name] list.
             vehicle["mount"] = puller_name
         elif isinstance(existing, str):
             vehicle["mount"] = [existing, puller_name]

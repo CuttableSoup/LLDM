@@ -34,6 +34,7 @@ def narrate_mount(llm_core, data):
             "not_present": "nothing here matches what they're trying to mount",
             "target_down": "what they're trying to mount is down, not something to climb onto",
             "target_hostile": "what they're trying to mount is hostile -- not something to just climb onto",
+            "not_a_mount": "it's not something meant to be ridden at all",
             "bulk_exceeded": "it's already carrying more than it can bear -- there's no room for another rider",
         }
         explanation = explanations.get(reason, "it doesn't work")

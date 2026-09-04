@@ -113,8 +113,15 @@ Reachable in play via the free-standing `"mount"`/`"dismount"` intents (`DM_Move
 `_resolve_mount_intent`/`_resolve_dismount_intent`) — the player climbs onto a named,
 currently-present, living, non-hostile entity, found by the same "search the raw input for a
 known name" pattern formation uses; denied `"already_mounted"`/`"not_present"`/`"target_down"`/
-`"target_hostile"`/`"bulk_exceeded"` as appropriate. Mounting snaps the player's band to the
-mount's; `_sync_mount_bands` then keeps the pair together afterward in both directions — the
+`"target_hostile"`/`"not_a_mount"`/`"bulk_exceeded"` as appropriate. `"not_a_mount"`
+(`_is_valid_conveyance`) is the eligibility gate that actually keeps this grounded: a target has
+to author `travel_speed` directly, or already have a live `mount` chain of its own, or it's
+denied even when present/alive/non-hostile — a friendly NPC with neither is not a mount just
+because nothing else about it disqualifies it (mounting one would have no mechanical effect
+either way, since anything without a real `travel_speed` already falls back to `[travel]`'s own
+`default_speed`, but the fiction shouldn't imply climbing onto an ordinary person). Mounting
+snaps the player's band to the mount's; `_sync_mount_bands` then keeps the pair together
+afterward in both directions — the
 player's own `advance`/`retreat` carries their mount along, and a mount's own behavior-driven
 move (ex: the horse's own skittish `retreat` below 60% HP) carries its rider along too, no check
 against being thrown. Losing a mount by any means (it dies, it's left behind) just silently
@@ -171,16 +178,26 @@ free-standing `"hitch"`/`"unhitch"` intents (`DM_Movement.py`'s `_resolve_hitch_
 `_named_present_entities_in_order` finds every currently-present entity named in the input, in
 left-to-right reading order — for `"hitch"`, the first-named entity is the **puller**, the
 second-named is the **vehicle** ("hitch the horse to the cart"), a fixed reading-order convention
-rather than a guess based on either entity's own stats (ex: whether it happens to author its own
-`travel_speed`). The puller's name is then promoted onto the vehicle's own `mount` (absent → a
-bare string; already a string or list → appended), the exact shape `_resolve_mount_targets` already
-expects. Denied `"not_present"`/`"target_down"`/`"target_hostile"`/`"already_hitched"` as
-appropriate — the same hostility/liveness gates `"mount"` applies to the puller, since hitching up
-something actively trying to kill you makes no more sense than climbing onto it. No bulk/capacity
-check of any kind: hitching only ever *adds* pulling capacity, never something loading actual
-weight that would need gating the way mounting a rider does. `"unhitch"` only needs the puller
-named — every present entity's own `mount` is searched for a match, since there's normally only
-one vehicle to find it in.
+rather than a guess based on either entity's own stats, so *direction* stays predictable regardless
+of what either entity's data looks like. Whether the resulting pairing is actually *allowed* is a
+separate question, gated on each entity's own data: the puller has to pass the exact same
+`_is_valid_conveyance` eligibility check `"mount"` applies to its own target (`travel_speed`
+directly, or an existing live `mount` chain), denied `"not_a_puller"` otherwise; the vehicle has to
+have already been authored with a `"mount"` *key* at all — present, even if empty (`mount = ""` is
+the shipped placeholder convention for a template meant to serve as a vehicle, ex: a cart with
+nothing hitched to it yet) — denied `"not_a_vehicle"` if the key was never authored, so an ordinary
+NPC nothing ever declared hitchable doesn't retroactively become one just because something got
+hitched to it (closes the two-step version of the same gap `"not_a_mount"` closes for `"mount"`
+directly: hitching a horse onto an arbitrary NPC, then mounting that NPC, would otherwise still
+work). The puller's name is then promoted onto the vehicle's own `mount` (an authored empty string
+→ a bare string; already a non-empty string or list → appended), the exact shape
+`_resolve_mount_targets` already expects. Denied `"not_present"`/`"target_down"`/`"target_hostile"`/
+`"not_a_puller"`/`"not_a_vehicle"`/`"already_hitched"` as appropriate — the liveness/hostility gates
+apply to the puller only, since hitching up something actively trying to kill you makes no more
+sense than climbing onto it. No bulk/capacity check of any kind: hitching only ever *adds* pulling
+capacity, never something loading actual weight that would need gating the way mounting a rider
+does. `"unhitch"` only needs the puller named — every present entity's own `mount` is searched for
+a match, since there's normally only one vehicle to find it in.
 
 **Environments and the world map.** `Rules/Fantasy/environments.toml` is a flat, shared catalog
 (`[[environment]]`, referenced by name) — each entry owns a `day_encounter`/`night_encounter`

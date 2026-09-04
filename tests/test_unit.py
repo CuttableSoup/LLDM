@@ -1677,6 +1677,18 @@ class TestMount(DMTestCase):
         self.assertFalse(result["found"])
         self.assertEqual(result["reason"], "target_hostile")
 
+    def test_mount_denied_against_a_non_conveyance_target(self):
+        # thane -- arena's own friendly ally -- authors no travel_speed and has no live "mount"
+        # chain of his own, so he's present/alive/non-hostile and still not a valid mount:
+        # nothing should let the fiction imply climbing onto an ordinary person.
+        self.dm_core._on_item_interaction_detected({
+            "intent": "mount", "item_name": None, "input": "i mount thane",
+        })
+        result = self.resolved[-1]
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "not_a_mount")
+        self.assertNotIn("mount", self.dm_core.entities["gladstone"])
+
     def test_mount_denied_once_already_mounted(self):
         self._add_horse()
         self.dm_core.entities["gladstone"]["mount"] = "horse"
@@ -1827,8 +1839,13 @@ class TestHitch(DMTestCase):
         return name
 
     def _add_cart(self):
+        # mount = "" -- the shipped placeholder convention (entity_schema.toml) for a template
+        # meant to serve as a vehicle: present as a key, resolving to no live entity yet, so
+        # _resolve_hitch_intent's own "not_a_vehicle" eligibility gate (an ordinary NPC nothing
+        # ever declared hitchable) doesn't also reject a legitimate, not-yet-hitched cart.
         self.dm_core.entities["cart"] = {
             "name": "cart", "supertype": "object", "description": "A rickety cart.", "max_hp": 20,
+            "mount": "",
         }
         self.dm_core.scenario_entities.append("cart")
 
@@ -1861,20 +1878,26 @@ class TestHitch(DMTestCase):
         self.assertEqual(self.dm_core.entities["cart"]["mount"], [first, second])
 
     def test_hitch_direction_is_first_named_pulls_second_named_regardless_of_phrasing(self):
-        self._add_horse()
-        self._add_cart()
+        # Two entities that are both eligible as puller (own travel_speed) *and* as vehicle (an
+        # authored, empty "mount" placeholder) -- either direction is equally legal on paper, so
+        # this isolates that puller/vehicle roles follow pure left-to-right reading order, not a
+        # guess based on either entity's own stats (see _resolve_hitch_intent's own docstring).
+        first = self._add_horse()
+        self.dm_core.entities[first]["mount"] = ""
+        second = self._add_horse()
+        self.dm_core.entities[second]["mount"] = ""
 
         self.dm_core._on_item_interaction_detected({
-            "intent": "hitch", "item_name": None, "input": "i hitch the cart to the horse",
+            "intent": "hitch", "item_name": None, "input": f"i hitch the {second} to the {first}",
         })
 
-        # "cart" is named first here -- the puller/vehicle roles follow reading order, not
-        # which real-world noun is doing the pulling, so this deliberately hitches "backward".
+        # second is named first here -- it becomes the puller precisely because of word order,
+        # not because either horse is somehow more "puller-shaped" than the other.
         result = self.resolved[-1]
         self.assertTrue(result["found"])
-        self.assertEqual(result["puller"], "cart")
-        self.assertEqual(result["vehicle"], "horse")
-        self.assertEqual(self.dm_core.entities["horse"]["mount"], "cart")
+        self.assertEqual(result["puller"], second)
+        self.assertEqual(result["vehicle"], first)
+        self.assertEqual(self.dm_core.entities[first]["mount"], second)
 
     def test_hitch_denied_when_fewer_than_two_entities_are_named(self):
         self._add_horse()
@@ -1906,6 +1929,33 @@ class TestHitch(DMTestCase):
         result = self.resolved[-1]
         self.assertFalse(result["found"])
         self.assertEqual(result["reason"], "target_hostile")
+
+    def test_hitch_denied_when_puller_is_not_a_valid_conveyance(self):
+        # thane -- arena's own friendly ally -- authors no travel_speed and pulls nothing, so
+        # he's present/alive/non-hostile and still can't serve as a puller.
+        self._add_cart()
+        self.dm_core._on_item_interaction_detected({
+            "intent": "hitch", "item_name": None, "input": "i hitch thane to the cart",
+        })
+        result = self.resolved[-1]
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "not_a_puller")
+        self.assertFalse(self.dm_core.entities["cart"]["mount"])  # still the empty placeholder
+
+    def test_hitch_denied_when_vehicle_has_no_authored_mount_field(self):
+        # thane authors no "mount" field at all -- nothing ever declared him hitchable, so he
+        # doesn't retroactively become a valid vehicle just because a horse gets named at him.
+        # Closes the two-step version of the same gap "not_a_mount" closes for "mount" directly:
+        # without this, hitching a horse onto an arbitrary NPC and then mounting that NPC would
+        # otherwise still work.
+        self._add_horse()
+        self.dm_core._on_item_interaction_detected({
+            "intent": "hitch", "item_name": None, "input": "i hitch the horse to thane",
+        })
+        result = self.resolved[-1]
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "not_a_vehicle")
+        self.assertNotIn("mount", self.dm_core.entities["thane"])
 
     def test_hitch_denied_when_already_hitched(self):
         self._add_horse()
@@ -2740,6 +2790,7 @@ class TestFreeStandingIntentHandlers(unittest.TestCase):
             ("not_present", "nothing here matches"),
             ("target_down", "is down"),
             ("target_hostile", "is hostile"),
+            ("not_a_mount", "not something meant to be ridden"),
             ("bulk_exceeded", "no room for another rider"),
         ):
             with self.subTest(reason=reason):
@@ -2765,6 +2816,8 @@ class TestFreeStandingIntentHandlers(unittest.TestCase):
             ("not_present", "two things here"),
             ("target_down", "is down"),
             ("target_hostile", "is hostile"),
+            ("not_a_puller", "not something capable of pulling"),
+            ("not_a_vehicle", "not something meant to be hitched"),
             ("already_hitched", "already hitched"),
         ):
             with self.subTest(reason=reason):
