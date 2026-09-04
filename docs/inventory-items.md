@@ -8,8 +8,13 @@ A `[entity.test]` block is a skill check against an entity itself (ex: `items.to
 lock; see `Rules/Fantasy/reference/entity_schema.toml` for every field it can carry).
 `is_test_available(target, test, skill_name)` gates it: `skill_name` must be in `test["skill"]`;
 `requires_condition` (if set) must currently be active; `blocks_if_condition` (if set) must not
-be. A skill not in `test["skill"]` isn't blocked — it just isn't a test, and falls through to
-ordinary opposed-skill resolution instead.
+be; an optional `requirements` list (if set) must be satisfied by `entity_matches_requirements`
+— the same requirements engine `[[status]]`/`[[entity.behavior]]` use (see `docs/combat.md`'s
+"Status and conditions"), for a test that needs to gate on more than one named condition's
+presence/absence (an HP tier, an attribute, a `between` range, or a nested `all`/`any`/`none`
+combination). All present fields must hold together; most tests only ever need the two simple
+condition fields. A skill not in `test["skill"]` isn't blocked — it just isn't a test, and falls
+through to ordinary opposed-skill resolution instead.
 
 A scene-level test (the target itself, via `self.current_target`) is resolved as a flat
 difficulty check (`resolve_action`), not through `resolve_opposed_action`.

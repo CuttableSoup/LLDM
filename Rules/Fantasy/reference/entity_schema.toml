@@ -618,6 +618,18 @@ requires_condition = "locked"               # If set, this active_conditions ent
 blocks_if_condition = "jammed"              # If set, this active_conditions entry must
                                             # currently be *absent* -- stops a spent/failed test
                                             # from re-rolling forever.
+requirements = [                            # Optional, additive to requires_condition/
+    { field = "hp_per_remain", operator = "between", value = [0.2, 0.8] },
+]                                           # blocks_if_condition above -- the same requirements
+                                            # engine [[status]]/[[entity.behavior]] already use
+                                            # (entity_matches_requirements), for a test that needs
+                                            # to gate on more than one named condition's presence/
+                                            # absence (ex: an HP tier, an attribute, or a
+                                            # nested {"all"|"any"|"none": [...]} boolean
+                                            # combination of several checks). All present fields
+                                            # (requires_condition, blocks_if_condition,
+                                            # requirements) must hold together; most tests still
+                                            # only need the two simple fields above.
 
 [entity.test.pass]
                                             # apply_test_outcome dispatches purely on which of

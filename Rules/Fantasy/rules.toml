@@ -2,8 +2,7 @@
 name = "bruised"
 trigger = "on_damage"
 requirements = [
-    { field = "hp_per_remain", operator = ">=", value = 0.81 },
-    { field = "hp_per_remain", operator = "<=", value = 0.99 },
+    { field = "hp_per_remain", operator = "between", value = [0.81, 0.99] },
 ]
 description = "Absorbed most or all of the attack"
 
@@ -11,8 +10,7 @@ description = "Absorbed most or all of the attack"
 name = "stunned"
 trigger = "on_damage"
 requirements = [
-    { field = "hp_per_remain", operator = ">=", value = 0.60 },
-    { field = "hp_per_remain", operator = "<=", value = 0.80 },
+    { field = "hp_per_remain", operator = "between", value = [0.60, 0.80] },
 ]
 apply = { condition = "stunned", duration = "rounds", length = 1, dismiss = "" }
 description = "Moderate bruise or minor sprain; laceration; muscle tear; minor dislocation of joint."
@@ -21,8 +19,7 @@ description = "Moderate bruise or minor sprain; laceration; muscle tear; minor d
 name = "wounded"
 trigger = "on_damage"
 requirements = [
-    { field = "hp_per_remain", operator = ">=", value = 0.40 },
-    { field = "hp_per_remain", operator = "<=", value = 0.59 },
+    { field = "hp_per_remain", operator = "between", value = [0.40, 0.59] },
 ]
 apply = { condition = "wounded", duration = "permanent", dismiss = "" }
 description = "Severe abrasion or sprain; deep laceration; torn ligaments; major dislocation or minor break."
@@ -31,8 +28,7 @@ description = "Severe abrasion or sprain; deep laceration; torn ligaments; major
 name = "severe"
 trigger = "on_damage"
 requirements = [
-    { field = "hp_per_remain", operator = ">=", value = 0.20 },
-    { field = "hp_per_remain", operator = "<=", value = 0.39 },
+    { field = "hp_per_remain", operator = "between", value = [0.20, 0.39] },
 ]
 apply = { condition = "severe", duration = "permanent", dismiss = "" }
 description = "Broken bone; gaping wound; ripped cartilage and muscle; concussion."
@@ -41,8 +37,7 @@ description = "Broken bone; gaping wound; ripped cartilage and muscle; concussio
 name = "incapacitated"
 trigger = "on_damage"
 requirements = [
-    { field = "hp_per_remain", operator = ">=", value = 0.10 },
-    { field = "hp_per_remain", operator = "<=", value = 0.19 },
+    { field = "hp_per_remain", operator = "between", value = [0.10, 0.19] },
 ]
 apply = { condition = "incapacitated", duration = "permanent", dismiss = "" }
 description = "Multiple fracture; laceration in vital area; heavy concussion."
@@ -51,8 +46,7 @@ description = "Multiple fracture; laceration in vital area; heavy concussion."
 name = "mortal"
 trigger = "on_damage"
 requirements = [
-    { field = "hp_per_remain", operator = ">=", value = 0.01 },
-    { field = "hp_per_remain", operator = "<=", value = 0.09 },
+    { field = "hp_per_remain", operator = "between", value = [0.01, 0.09] },
 ]
 apply = { condition = "unconscious", duration = "permanent", dismiss = "" }
 description = "Multiple internal injuries."

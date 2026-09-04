@@ -4248,6 +4248,80 @@ class TestStatusEvaluation(DMTestCase):
         self.assertIn("dead", self.dm_core.entities["gladstone"]["active_conditions"])
 
 
+class TestRequirementsEngine(DMTestCase):
+    """!
+    @brief The `between` operator, {"all"|"any"|"none"} boolean nesting in
+        entity_matches_requirements, and [entity.test]'s new optional "requirements" field --
+        see docs/combat.md's "Status and conditions"/"Entity tests".
+    """
+
+    def test_between_matches_the_same_wound_tier_the_old_two_requirement_form_did(self):
+        # gladstone: max_hp 36. rules.toml's "wounded" tier is now authored as a single
+        # between = [0.40, 0.59] requirement instead of two chained >=/<= ones.
+        self.dm_core.apply_damage("gladstone", 18)  # -> 50% hp
+        matched_names = [s["name"] for s in self.dm_core.get_applicable_statuses("gladstone", "on_damage")]
+        self.assertIn("wounded", matched_names)
+        self.assertNotIn("severe", matched_names)
+
+    def test_between_is_inclusive_at_both_ends(self):
+        entities = {"gladstone": {"hp": 5, "max_hp": 10}}
+        requirements = [{"field": "hp_per_remain", "operator": "between", "value": [0.5, 0.5]}]
+        self.assertTrue(Combat_Resolution.entity_matches_requirements(entities, self.event_bus, "gladstone", requirements))
+
+    def test_any_matches_if_either_branch_holds(self):
+        entities = {"gladstone": {"hp": 10, "max_hp": 10, "active_conditions": {"prone": {}}}}
+        requirements = [{"any": [
+            {"field": "has_condition:paralyzed", "operator": "==", "value": True},
+            {"field": "has_condition:prone", "operator": "==", "value": True},
+        ]}]
+        self.assertTrue(Combat_Resolution.entity_matches_requirements(entities, self.event_bus, "gladstone", requirements))
+
+    def test_none_fails_when_any_branch_holds(self):
+        entities = {"gladstone": {"hp": 10, "max_hp": 10, "active_conditions": {"prone": {}}}}
+        requirements = [{"none": [
+            {"field": "has_condition:paralyzed", "operator": "==", "value": True},
+            {"field": "has_condition:prone", "operator": "==", "value": True},
+        ]}]
+        self.assertFalse(Combat_Resolution.entity_matches_requirements(entities, self.event_bus, "gladstone", requirements))
+
+    def test_all_and_any_nest_inside_each_other(self):
+        entities = {"gladstone": {"hp": 3, "max_hp": 10, "active_conditions": {"shaken": {}}}}
+        requirements = [{"all": [
+            {"field": "hp_per_remain", "operator": "<", "value": 0.5},
+            {"any": [
+                {"field": "has_condition:shaken", "operator": "==", "value": True},
+                {"field": "has_condition:frightened", "operator": "==", "value": True},
+            ]},
+        ]}]
+        self.assertTrue(Combat_Resolution.entity_matches_requirements(entities, self.event_bus, "gladstone", requirements))
+        entities["gladstone"]["hp"] = 9  # 90% -- fails the "all" branch's own hp_per_remain check now
+        self.assertFalse(Combat_Resolution.entity_matches_requirements(entities, self.event_bus, "gladstone", requirements))
+
+    def test_between_evaluates_in_a_program_if_step(self):
+        entities = {"gladstone": {"hp": 5, "max_hp": 10}}
+        self.assertTrue(evaluate_condition("actor.hp_per_remain between [0.4, 0.6]", {"actor": "gladstone"}, entities))
+        self.assertFalse(evaluate_condition("actor.hp_per_remain between [0.7, 1.0]", {"actor": "gladstone"}, entities))
+
+    def test_entity_test_requirements_field_gates_availability(self):
+        self.dm_core.entities["dummy_test_target"] = {"name": "dummy_test_target", "hp": 3, "max_hp": 10}
+        test = {
+            "skill": ["finesse"],
+            "requirements": [{"field": "hp_per_remain", "operator": "between", "value": [0.0, 0.5]}],
+        }
+        self.assertTrue(self.dm_core.is_test_available("dummy_test_target", test, "finesse"))
+        self.dm_core.entities["dummy_test_target"]["hp"] = 9
+        self.assertFalse(self.dm_core.is_test_available("dummy_test_target", test, "finesse"))
+
+    def test_existing_requires_condition_only_tests_are_unaffected(self):
+        # The shipped chest lock still only authors requires_condition/blocks_if_condition --
+        # no "requirements" key at all -- and must keep working exactly as before.
+        self.dm_core.entities["dummy_chest"] = {"name": "dummy_chest", "active_conditions": {"locked": {}}}
+        test = {"skill": ["finesse"], "requires_condition": "locked", "blocks_if_condition": "jammed"}
+        self.assertTrue(self.dm_core.is_test_available("dummy_chest", test, "finesse"))
+        del self.dm_core.entities["dummy_chest"]["active_conditions"]["locked"]
+        self.assertFalse(self.dm_core.is_test_available("dummy_chest", test, "finesse"))
+
+
 class TestConditionModifiers(DMTestCase):
     """!
     @brief get_condition_modifier (DM_Status.py) and its use in resolve_action/
@@ -7973,6 +8047,22 @@ class TestValidation(DMTestCase):
             "requirements[0] should be a {field, operator, value} table" in e for e in errors
         ))
         self.assertTrue(any("[[entity.behavior]][1] action should be a string" in e for e in errors))
+
+    def test_behavior_list_accepts_nested_all_any_none_requirements(self):
+        self.dm_core.entities["nested_requirement_widget"] = {
+            "name": "nested_requirement_widget", "supertype": "creature",
+            "abilities": [{"name": "bite", "supertype": "innate", "subtype": "weapon", "skill": "brawling"}],
+            "behavior": [{
+                "requirements": [{"any": [
+                    {"field": "has_condition:prone", "operator": "==", "value": True},
+                    {"all": [{"field": "hp_per_remain", "operator": "between", "value": [0.0, 0.5]}]},
+                ]}],
+                "action": "bite",
+            }],
+        }
+        errors = self._capture("log_error")
+        self.dm_core.validate_loaded_data()
+        self.assertFalse(any("nested_requirement_widget" in e for e in errors))
 
     def test_ability_shape_checks_cover_targets_summon_and_materials(self):
         self.dm_core.entities["bad_ability_widget"] = {

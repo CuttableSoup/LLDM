@@ -91,9 +91,16 @@ filtering, above).
 `rules.toml`'s `[[status]]` table drives derived conditions. Each entry has:
 - `trigger` — when to evaluate it; only `"on_damage"` is wired today, called from both
   `apply_damage` and `apply_healing` (see "Damage and healing").
-- `requirements` — a list of `{field, operator, value}` comparisons (`COMPARATORS` in
-  `DM_Status.py`: `>`, `<`, `>=`, `<=`, `==`, `!=`, `in`, `not_in`), ALL of which must hold.
-  `field` is either derived (`"hp_per_remain"`) or a direct entity attribute.
+- `requirements` — a list of entries, ALL of which must hold. Each entry is either a plain
+  `{field, operator, value}` comparison (`COMPARATORS` in `Combat_Resolution.py`: `>`, `<`,
+  `>=`, `<=`, `==`, `!=`, `in`, `not_in`, `between` — the last taking a `[low, high]` value,
+  inclusive) or a nested `{"all"|"any"|"none": [...]}` boolean combination of more such entries
+  (recursive) — the same shape `Program_Interpreter.evaluate_condition` gives program
+  `if`-steps, both built from the same `COMPARATORS` table so a new operator only needs adding
+  once. `field` is either derived (`"hp_per_remain"`) or a direct entity attribute.
+  `entity_matches_requirements` is also what `is_test_available` (below) consults for an
+  `[entity.test]`'s own optional `requirements` field, alongside its simpler
+  `requires_condition`/`blocks_if_condition`.
 - `apply` — `{condition, duration, length, dismiss}`, naming an entry in `[[condition]]`.
 
 The actual roll/condition computation below (`resolve_action`, `get_condition_modifier`,
@@ -108,8 +115,9 @@ membership check) are the shared read accessors every other `active_conditions` 
 below — are built on, rather than each re-deriving
 `entities.get(name, {}).get("active_conditions", {})` independently.
 
-`entity_matches_requirements`/`get_comparable_value` are the shared engine behind both
-`[[status]]`'s own requirements and `[[entity.behavior]]`'s; an optional `opponent_name` param
+`entity_matches_requirements`/`get_comparable_value` are the shared engine behind `[[status]]`'s
+own requirements, `[[entity.behavior]]`'s, and (as of the `requirements` field above)
+`[entity.test]`'s; an optional `opponent_name` param
 resolves the two opponent-relative derived fields, `"distance_to_target"` (the band gap to
 `opponent_name`) — used by a creature choosing *between* attack options by range, ex:
 `field.toml`'s `bandit` favors its `short bow` while `distance_to_target > 0`, falling to its

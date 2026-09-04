@@ -23,10 +23,11 @@
 
 import random
 
-import resolution.Program_Interpreter as Program_Interpreter
-import resolution.Social_Resolution as Social_Resolution
-from resolution.Challenge_Rating import skill_rating
-
+# Defined before the Program_Interpreter import just below, on purpose: that module reads
+# COMPARATORS at its own module level (to build its comparison regex), and the two modules
+# already import each other (Program_Interpreter imports Combat_Resolution too) -- COMPARATORS
+# has to already exist on this partially-initialized module by the time that happens, or the
+# circular import fails with an AttributeError.
 COMPARATORS = {
     ">": lambda actual, value: actual > value,
     "<": lambda actual, value: actual < value,
@@ -36,7 +37,12 @@ COMPARATORS = {
     "!=": lambda actual, value: actual != value,
     "in": lambda actual, value: actual in value,
     "not_in": lambda actual, value: actual not in value,
+    "between": lambda actual, value: value[0] <= actual <= value[1],
 }
+
+import resolution.Program_Interpreter as Program_Interpreter
+import resolution.Social_Resolution as Social_Resolution
+from resolution.Challenge_Rating import skill_rating
 
 
 def roll_dice(dice, pips):
@@ -255,28 +261,52 @@ def get_comparable_value(entities, entity_name, field, opponent_name=None):
     return entities.get(entity_name, {}).get(field)
 
 
-def entity_matches_requirements(entities, event_bus, entity_name, requirements, opponent_name=None):
+def _requirement_matches(entities, event_bus, entity_name, requirement, opponent_name):
     """!
-    @brief Checks whether an entity currently satisfies every comparison in a status's
-        (or a behavior's) requirements.
+    @brief Evaluates one entry of a requirements list -- either a plain {field, operator,
+        value} comparison, or a nested {"all"|"any"|"none": [...]} boolean combination of more
+        such entries (recursive), the same shape Program_Interpreter.evaluate_condition already
+        gives program `if`-steps.
     @param entities The live entities dict.
     @param event_bus The EventBus to publish a log_warning line to on an unknown operator.
     @param entity_name The name of the entity to check.
-    @param requirements A list of {field, operator, value} comparisons, all of which must hold.
+    @param requirement A {field, operator, value} comparison, or a boolean-combinator table.
     @param opponent_name The entity being acted against, if any.
-    @return True if every comparison is satisfied.
+    @return True if this entry is satisfied.
     """
-    for comparison in requirements:
-        compare = COMPARATORS.get(comparison.get("operator"))
-        if compare is None:
-            event_bus.publish("log_warning", f"Unknown requirement operator: {comparison.get('operator')}")
-            return False
+    if "all" in requirement:
+        return all(_requirement_matches(entities, event_bus, entity_name, sub, opponent_name) for sub in requirement["all"])
+    if "any" in requirement:
+        return any(_requirement_matches(entities, event_bus, entity_name, sub, opponent_name) for sub in requirement["any"])
+    if "none" in requirement:
+        return not any(_requirement_matches(entities, event_bus, entity_name, sub, opponent_name) for sub in requirement["none"])
 
-        actual_value = get_comparable_value(entities, entity_name, comparison.get("field"), opponent_name)
-        if actual_value is None or not compare(actual_value, comparison.get("value")):
-            return False
+    compare = COMPARATORS.get(requirement.get("operator"))
+    if compare is None:
+        event_bus.publish("log_warning", f"Unknown requirement operator: {requirement.get('operator')}")
+        return False
 
-    return True
+    actual_value = get_comparable_value(entities, entity_name, requirement.get("field"), opponent_name)
+    return actual_value is not None and compare(actual_value, requirement.get("value"))
+
+
+def entity_matches_requirements(entities, event_bus, entity_name, requirements, opponent_name=None):
+    """!
+    @brief Checks whether an entity currently satisfies every comparison in a status's
+        (or a behavior's, or an [entity.test]'s) requirements.
+    @param entities The live entities dict.
+    @param event_bus The EventBus to publish a log_warning line to on an unknown operator.
+    @param entity_name The name of the entity to check.
+    @param requirements A list of {field, operator, value} comparisons (each of which may
+        instead be a nested {"all"|"any"|"none": [...]} boolean combination -- see
+        _requirement_matches), all of which must hold.
+    @param opponent_name The entity being acted against, if any.
+    @return True if every entry is satisfied.
+    """
+    return all(
+        _requirement_matches(entities, event_bus, entity_name, requirement, opponent_name)
+        for requirement in requirements
+    )
 
 
 def get_applicable_statuses(entities, rules, event_bus, entity_name, trigger):

@@ -379,10 +379,14 @@ class StatusMixin(DMCoreProtocol):
             applied on a failed attempt would have no actual effect on future ones.
         @param entity_name The name of the entity being tested (ex: a chest).
         @param test The entity's test table ({difficulty, skill, requires_condition,
-            blocks_if_condition, pass, fail}).
+            blocks_if_condition, requirements, pass, fail}).
         @param skill_name The skill the player is attempting to use.
         @return True if skill_name matches test["skill"], test["requires_condition"] (if set)
-                is currently active, and test["blocks_if_condition"] (if set) is not.
+                is currently active, test["blocks_if_condition"] (if set) is not, and
+                test["requirements"] (if set) is satisfied by entity_matches_requirements --
+                the same requirements engine [[status]]/[[entity.behavior]] already use, letting
+                a test gate on more than one named condition's presence/absence (ex: an HP tier,
+                an attribute, or a boolean combination of several checks).
         """
         if skill_name not in test.get("skill", []):
             return False
@@ -391,6 +395,9 @@ class StatusMixin(DMCoreProtocol):
             return False
         blocks = test.get("blocks_if_condition")
         if blocks and self.has_condition(entity_name, blocks):
+            return False
+        requirements = test.get("requirements")
+        if requirements and not self.entity_matches_requirements(entity_name, requirements):
             return False
         return True
 

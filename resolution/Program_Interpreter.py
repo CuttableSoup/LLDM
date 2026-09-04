@@ -37,8 +37,9 @@ import resolution.Social_Resolution as Social_Resolution
 # may name -- see PLAYER_PLACEHOLDER (DM_Rules.py) for the same reserved-token precedent.
 ROLES = ("actor", "target")
 
+_OP_ALTERNATION = "|".join(sorted((re.escape(op) for op in Combat_Resolution.COMPARATORS), key=len, reverse=True))
 _COMPARISON_PATTERN = re.compile(
-    r"^(?P<role>actor|target)\.(?P<field>[\w:]+)\s+(?P<op>>=|<=|==|!=|not_in|in|>|<)\s+(?P<value>.+)$"
+    rf"^(?P<role>actor|target)\.(?P<field>[\w:]+)\s+(?P<op>{_OP_ALTERNATION})\s+(?P<value>.+)$"
 )
 _VALUE_REF_PATTERN = re.compile(r"^(?P<role>actor|target)\.(?P<field>[\w:]+)$")
 

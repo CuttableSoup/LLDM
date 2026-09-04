@@ -557,9 +557,30 @@ class ValidationMixin(DMCoreProtocol):
                         owner_label, f"[[entity.attitudes.{axis_name}]].{key}", value, allow_varied,
                     )
 
+    def _is_valid_requirement_entry(self, requirement):
+        """!
+        @brief Whether one entry of a "requirements" list is a shape entity_matches_requirements
+            (Combat_Resolution.py) actually accepts -- either a plain {field, operator, value}
+            comparison, or a nested {"all"|"any"|"none": [...]} boolean combination of more such
+            entries (recursive), the same shape Program_Interpreter.evaluate_condition already
+            gives program `if`-steps.
+        @param requirement One requirements-list entry.
+        @return True if it's a valid comparison or a valid boolean-combinator table.
+        """
+        if not isinstance(requirement, dict):
+            return False
+        for combinator in ("all", "any", "none"):
+            if combinator in requirement:
+                sub_entries = requirement[combinator]
+                return isinstance(sub_entries, list) and all(
+                    self._is_valid_requirement_entry(sub) for sub in sub_entries
+                )
+        return {"field", "operator", "value"} <= requirement.keys()
+
     def _check_behavior_list(self, owner_label, entity):
         """!@brief [[entity.behavior]] -- a list of {requirements, action, ...} tables, each
-        requirement itself a {field, operator, value} table (entity_matches_requirements' own
+        requirement itself either a {field, operator, value} table or a nested
+        {"all"|"any"|"none": [...]} boolean combination (entity_matches_requirements' own
         shape, Combat_Resolution.py)."""
         behaviors = entity.get("behavior")
         if behaviors is None:
@@ -578,9 +599,11 @@ class ValidationMixin(DMCoreProtocol):
                     self._log(label, "requirements should be a list.")
                 else:
                     for req_index, requirement in enumerate(requirements):
-                        if not isinstance(requirement, dict) or not {"field", "operator", "value"} <= requirement.keys():
+                        if not self._is_valid_requirement_entry(requirement):
                             self._log(
-                                label, f"requirements[{req_index}] should be a {{field, operator, value}} table.",
+                                label,
+                                f"requirements[{req_index}] should be a {{field, operator, value}} table, "
+                                f"or a nested {{\"all\"|\"any\"|\"none\": [...]}} table.",
                             )
             if "action" in behavior and not isinstance(behavior["action"], str):
                 self._log(label, "action should be a string.")
