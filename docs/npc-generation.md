@@ -58,6 +58,17 @@ matters because generation runs synchronously on whatever thread is instancing t
 entries visibly pauses ~5s per generated NPC on a fresh load. A two-phase "placeholder now,
 patch later" redesign would fix this properly; out of scope for now.
 
+`DM_Encounters.py`'s `_resolve_ambient_encounter` is the one call site with no such pause to
+excuse it — unlike `_resolve_location_encounter`'s "on_enter" trigger (once, on a deliberate
+location/room entry) or `DM_Travel.py`'s per-block environment roll (once per elapsed travel
+block), "ambient" fires on an arbitrary player turn (`DM_Core.py`'s `_on_turn_detected`)
+whenever no hostile is already present. A `generate=true` entity_template referenced from an
+ambient-triggered entry is still resolved normally, but `_resolve_ambient_encounter` forces
+`skip_llm_generation=True` through `_instance_entities`, so it always takes
+`generate_npc_stats`' instant offline-fallback path instead of ever blocking on Ollama.
+`Rules/Fantasy/scenarios/town.toml`'s own `generated_beggar` (an "on_enter" reference) is
+unaffected — it's a real, shipped example of the tolerated case.
+
 `DM_NpcGeneration.py`'s `NpcGenerationMixin` runs from `_instance_entities` right after an
 instance is stored into `self.entities` (the CR-fitting math reads back off
 `self.entities[name]`). `_resolve_npc_target_cr` resolves a template's `target_cr` — a number,

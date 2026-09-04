@@ -5939,6 +5939,45 @@ class TestNpcGenerationDMCoreIntegration(DMTestCase):
         self.assertTrue(any("unknown entity template" in e for e in errors))
 
 
+class TestAmbientEncounterSkipsLlmGeneration(DMTestCase):
+    """!
+    @brief DM_Encounters.py's own "ambient" trigger (_resolve_ambient_encounter) forces
+        skip_llm_generation=True through to _instance_entities/generate_npc_stats -- the one
+        encounter context with no natural pause (unlike "on_enter" or a travel block) to
+        justify a synchronous LLM call landing on an arbitrary player turn. Uses
+        scenario_entity_test's own "vault_specter_stub" -- a real generate=true
+        entity_template deliberately never pre-referenced by any [[location.room]] entities
+        (see TestNpcGenerationDMCoreIntegration's own "never accidentally referenced" test) --
+        so resolving it here is a genuine template lookup, not a name collision with an
+        already-instanced live entity.
+    """
+    scenario_name = "scenario_entity_test"
+
+    def test_ambient_trigger_never_calls_the_llm_even_for_a_generate_true_template(self):
+        def fail_if_called(*args, **kwargs):
+            raise AssertionError("an ambient-triggered generation must never call the LLM")
+
+        room = self.dm_core.rooms[self.dm_core.current_room_key]
+        room["encounter"] = [
+            {"name": "ambient specter", "trigger": "ambient", "encounter": [{"vault_specter_stub": 100}]},
+        ]
+        original = DM_Encounters.resolve_varied_value
+        DM_Encounters.resolve_varied_value = lambda choices: "vault_specter_stub"
+        self.addCleanup(setattr, DM_Encounters, "resolve_varied_value", original)
+        self.dm_core.apply_damage("vault sentinel", 999)  # clear the room so ambient can fire
+
+        with patch("resolution.NPC_Generation._real_call_chat_completion", side_effect=fail_if_called):
+            self.dm_core._on_turn_detected({
+                "clauses": [{"kind": "action", "skill": "athletics"}], "input": "I wait",
+            })
+
+        new_names = [name for name in self.dm_core.entities if name.startswith("vault_specter_stub")]
+        self.assertEqual(len(new_names), 1)
+        entity = self.dm_core.entities[new_names[0]]
+        self.assertTrue(entity["generated"])
+        self.assertEqual(entity["name"], "Unnamed Stranger")  # NPC_Generation.py's offline-fallback name
+
+
 class TestCharacterCreationDMCoreIntegration(DMTestCase):
 
     def test_valid_character_creation_replaces_the_players_own_skills(self):

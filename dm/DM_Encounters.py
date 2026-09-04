@@ -64,15 +64,27 @@ class EncounterMixin(DMCoreProtocol):
             return
         for entry in table.get("encounter", []):
             if entry.get("trigger") == "ambient":
-                self._resolve_one_encounter(entry)
+                # Forced True here (unlike _resolve_location_encounter's own "on_enter" call,
+                # and DM_Travel.py's per-block environment roll) -- this is the one encounter
+                # context with no natural pause to justify a synchronous LLM call: it fires on
+                # an arbitrary player turn, not a deliberate location-entry/travel-block action,
+                # so a generate=true entity_template referenced here must always take
+                # NPC_Generation.py's instant offline-fallback path instead of ever blocking on
+                # Ollama. See CLAUDE.md/docs/npc-generation.md's own synchronous-call notes.
+                self._resolve_one_encounter(entry, skip_llm_generation=True)
 
-    def _resolve_one_encounter(self, entry):
+    def _resolve_one_encounter(self, entry, skip_llm_generation=False):
         """!
         @brief Rolls one [[location.encounter]] entry's own weighted "encounter" list and
             applies whatever it resolves to -- see this class's own docstring for the three
             possible outcomes.
         @param entry One [[location.encounter]]/[[location.room.encounter]] table
             ({"name", "trigger", "encounter"}).
+        @param skip_llm_generation Forwarded to _instance_entities -- see its own docstring.
+            True only from _resolve_ambient_encounter; "on_enter" (_resolve_location_encounter)
+            and DM_Travel.py's per-block environment roll both leave this False, since both are
+            already a deliberate, expected pause point (location entry / spending a travel
+            block), unlike an ambient roll's arbitrary per-turn timing.
         @return True if this roll instanced at least one entity hostile to the player --
             DM_Travel.py's own night-watch check (_roll_night_watch) uses this to know whether
             a night block's roll is even worth a watch check against; every other existing
@@ -89,7 +101,8 @@ class EncounterMixin(DMCoreProtocol):
         if result in self.entities or result in self.entity_templates:
             key = "name" if result in self.entities else "template"
             instanced = self._instance_entities(
-                [{key: result, "band": self.get_band(self.player_name)}], party_pool=self.persistent_entities,
+                [{key: result, "band": self.get_band(self.player_name)}],
+                party_pool=self.persistent_entities, skip_llm_generation=skip_llm_generation,
             )
             hostile = False
             for name in instanced:
