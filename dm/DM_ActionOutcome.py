@@ -73,7 +73,18 @@ class DefenderDetailsEffect:
     text: str
 
 
-Effect = DamageEffect | LootEffect | SummonEffect | CraftEffect | RevealEffect | DefenderDetailsEffect
+@dataclass
+class TeleportEffect:
+    """!@brief An entity relocated outright by a successful teleport-shaped cast -- a direct
+        band jump within the current room (Dimension Door) or a jump to a different, named
+        location (Teleport). Exactly one of band/location is set, matching whichever of the
+        ability's own "teleport_to_band"/"teleport_to_location" fields fired."""
+    entity: str
+    band: int | None = None
+    location: str | None = None
+
+
+Effect = DamageEffect | LootEffect | SummonEffect | CraftEffect | RevealEffect | DefenderDetailsEffect | TeleportEffect
 
 
 @dataclass

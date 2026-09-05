@@ -282,12 +282,28 @@ class CombatMixin(DMCoreProtocol):
             all, and a lone action always resolves at full dice. Also folds in
             get_condition_modifier(entity_name) (StatusMixin) -- ex: "stunned"'s -1D -- into
             the same dice/pips pool, floored at 0 dice the same way dice_penalty is; its own
-            "bonus" is added straight to the final roll, after dice are rolled.
+            "bonus" is added straight to the final roll, after dice are rolled. Also folds in
+            get_equipped_skill_bonus(entity_name, skill_name) -- a worn item's own
+            equipped_skill_bonus (ex: a ring granting +1D to observation).
         @return A dict describing the roll and whether it succeeded.
         """
         return Combat_Resolution.resolve_action(
             self.entities, self.rules, self.event_bus, entity_name, skill_name, difficulty, dice_penalty,
         )
+
+    def get_equipped_skill_bonus(self, entity_name, skill_name):
+        """!
+        @brief Sums the {dice, pips} bonus every one of entity_name's own equipped items
+            contributes to skill_name -- a worn item's own "equipped_skill_bonus" =
+            {skill, dice, pips} (ex: a ring granting +1D to observation; "skill" may also name
+            a rules.toml [[skill_group]], buffing every skill in it at once -- see get_skill_
+            group_members). Folded into resolve_action/resolve_opposed_action for whichever
+            entity is rolling, alongside get_condition_modifier.
+        @param entity_name The name of the entity to check.
+        @param skill_name The skill being rolled, or None.
+        @return A {"dice", "pips"} dict, each defaulting to 0 if nothing applies.
+        """
+        return Combat_Resolution.get_equipped_skill_bonus(self.entities, self.rules, entity_name, skill_name)
 
     def get_opposing_skill(self, skill_name, defender_name):
         """!
@@ -298,7 +314,7 @@ class CombatMixin(DMCoreProtocol):
         """
         return Combat_Resolution.get_opposing_skill(self.entities, self.skills, skill_name, defender_name)
 
-    def resolve_opposed_action(self, attacker_name, skill_name, defender_name, dice_penalty=0):
+    def resolve_opposed_action(self, attacker_name, skill_name, defender_name, dice_penalty=0, ability=None):
         """!
         @brief Resolves a skill roll opposed by a defending entity's matching skill. Range
             (see DM_Movement.py's is_in_range) is checked by the caller *before* this is
@@ -314,11 +330,19 @@ class CombatMixin(DMCoreProtocol):
             Games rule this implements). The defender's own active_conditions still apply to
             their roll, via get_condition_modifier (StatusMixin) -- ex: a stunned defender
             still rolls their opposing skill at -1D, same as if they'd been the one acting.
-        @return A dict describing the roll, the opposing skill used (if any), and the outcome.
+            Same for the defender's own get_equipped_skill_bonus -- a worn ring/belt bonus
+            applies to their opposing roll too, not just the attacker's.
+        @param ability The attacker's own resolved weapon/spell/technique, if any -- consulted
+            only for its optional "ignores_concealment" flag (ex: a ghost touch/seeking
+            weapon), letting it bypass the defender's own concealment/miss_chance below.
+        @return A dict describing the roll, the opposing skill used (if any), and the outcome
+            -- "success" can still come back False with its own "concealed_miss": True if the
+            defender's own concealment (get_concealment) rolls a hit on an otherwise-successful
+            attack (the Pathfinder Invisible/concealment shape).
         """
         return Combat_Resolution.resolve_opposed_action(
             self.entities, self.rules, self.skills, self.event_bus,
-            attacker_name, skill_name, defender_name, dice_penalty,
+            attacker_name, skill_name, defender_name, dice_penalty, ability,
         )
 
     def find_attack_ability(self, entity_name, skill_name):
@@ -534,7 +558,8 @@ class CombatMixin(DMCoreProtocol):
             unlike fleeing (which needs an author's judgment call about which creatures value
             their own life) there's no reason this needs to be opted into per entity.
         @param entity_name The name of the acting entity (ex: a wolf).
-        @param target_name The name of the entity being acted against (ex: the player).
+        @param target_name The entity being acted against (ex: the player) -- overridden
+            outright if entity_name has its own active override_target (see below).
         @return A MovementOutcome if the chosen behavior was a deliberate move, or was an
             attack that had to close distance instead; a TransferOutcome if it was a "steal"/
             "gift"; a RolledOutcome (with a DamageEffect on a successful hit) on a normal
@@ -550,6 +575,21 @@ class CombatMixin(DMCoreProtocol):
         """
         if self.is_action_prevented(entity_name):
             return None
+
+        # A [[condition]]'s own override_target (Combat_Resolution.resolve_override_target)
+        # hijacks WHO this turn is aimed at, not whether it can act at all or which ability it
+        # picks -- Pathfinder's Confused ("random") and the combat-relevant slice of Dominate
+        # (a literal name, authored by whatever spell/effect applied the condition) are the
+        # same primitive: everything downstream (behavior selection, range, roll, damage,
+        # on-hit effects) runs completely unchanged against whichever name ends up here.
+        # Resolved *before* choose_behavior so a behavior that picks between attack options by
+        # distance (ex: debug.toml's bandit) judges that distance against the real target.
+        override_target = self.resolve_override_target(entity_name, [
+            name for name in self.scenario_entities
+            if name != entity_name and self.get_current_hp(name) > 0
+        ])
+        if override_target:
+            target_name = override_target
 
         behavior = self.choose_behavior(entity_name, target_name)
         if behavior is None:
@@ -573,12 +613,29 @@ class CombatMixin(DMCoreProtocol):
             )
             return None
 
+        if not self.has_medium_access(entity_name, target_name, ability):
+            # Checked *before*, and separately from, is_in_range's own band-distance gate --
+            # advancing (closing band distance) can never fix a medium mismatch (a grounded
+            # wolf will never "catch up" to a flying bird no matter how many bands it closes),
+            # so the ordinary out-of-range fallback (advance toward the target) would be
+            # actively wrong here. No behavior currently lets this entity act at all this
+            # round, the same "doesn't act" outcome an unmatched behavior list already gets.
+            return None
+
         if not self.is_in_range(entity_name, target_name, ability):
             movement = self.move_toward_or_away(entity_name, target_name, "advance")
             return self._movement_outcome(entity_name, "advance", movement)
 
+        if ability.get("cooldown_rounds"):
+            # Starts recharging the moment the ability is used, win or lose -- the Pathfinder
+            # "breath weapon usable once every 1d4 rounds" shape. A behavior list gates back
+            # off this same ability via the "ability_ready:<name>" derived requirement field
+            # (Combat_Resolution.get_comparable_value) until tick_ability_cooldowns
+            # (run_round_upkeep, DM_Status.py) counts it back down to 0.
+            self.entities.setdefault(entity_name, {}).setdefault("ability_cooldowns", {})[ability["name"]] = ability["cooldown_rounds"]
+
         skill_name = self.select_ability_skill(entity_name, ability)
-        roll = self.resolve_opposed_action(entity_name, skill_name, target_name)
+        roll = self.resolve_opposed_action(entity_name, skill_name, target_name, ability=ability)
         result = rolled_outcome_from_roll(roll)
 
         if result.success:
@@ -592,6 +649,10 @@ class CombatMixin(DMCoreProtocol):
             # already uses for the player's own attacks, generalized to any entity's resolved
             # attack (ex: an ally striking a shared foe, or a monster hitting the player).
             self._nudge_combat_hit_attitude(target_name, entity_name, damage.get("net_damage", 0))
+            # "on_action" statuses (ex: Frightful Presence) -- fired on a landed hit, the
+            # honest simplification of Pathfinder's "fires on the attack attempt" (see
+            # evaluate_proximity_statuses, DM_Status.py).
+            self.evaluate_proximity_statuses(entity_name, "on_action")
 
         return result
 

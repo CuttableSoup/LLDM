@@ -16,8 +16,12 @@ action-kind entry is a typed `ActionOutcome` (`DM_ActionOutcome.py`) — a tagge
 loosely-shaped dict — populated into the `action_resolved`/`round_resolved` envelope's own `"actions"` list
 (the envelope itself stays a plain dict, like every other `EventBus` payload). A `RolledOutcome`
 carries a list of `Effect`s (`DamageEffect`/`LootEffect`/`SummonEffect`/`CraftEffect`/
-`RevealEffect`/`DefenderDetailsEffect`) instead of a fixed set of optional fields, so a new kind
-of on-hit consequence is a new `Effect` subtype, not a new field every outcome carries unused.
+`RevealEffect`/`TeleportEffect`/`DefenderDetailsEffect`) instead of a fixed set of optional
+fields, so a new kind of on-hit consequence is a new `Effect` subtype, not a new field every
+outcome carries unused. `TeleportEffect` is `_apply_teleport_if_hit`'s own (`DM_Core.py`) --
+an ability's `teleport_to_band`/`teleport_to_location` field relocates the player outright on
+a successful cast (Dimension Door/Teleport, Pathfinder-mapping terms), the same "not really
+against anyone" scope a summon already has.
 `resolve_action`/`resolve_opposed_action` (`DM_Combat.py`) themselves keep returning a plain,
 untyped roll dict — `DM_Rules.py`'s hidden-notice auto-roll (`_auto_roll_notice`) uses that raw
 dict for an unrelated bool check with nothing to do with narration — so every narration-facing

@@ -561,6 +561,44 @@ class MovementMixin(DMCoreProtocol):
         max_range = ability.get("range", 0)
         return self.get_distance_between(attacker_name, defender_name) <= max_range
 
+    def has_medium_access(self, attacker_name, defender_name, ability):
+        """!
+        @brief Whether attacker_name can physically engage defender_name at all, given each
+            entity's own optional "medium" ("air"/"water"/"earth"; absent/"ground" -- the
+            default every existing entity implicitly has, completely unaffected either way) --
+            a second, independent reachability gate alongside is_in_range's own band-distance
+            check, not a replacement for it. This is deliberately NOT a new spatial/elevation
+            axis: the band model stays exactly one-dimensional, and nothing about *traversing*
+            bands changes (there was never any terrain-blocking to bypass in the first place --
+            every entity already crosses every band freely regardless of what's narrated
+            there). What Fly/Swim-and-submerge/Burrow actually need mechanically is this: a
+            grounded creature's melee can't connect with something airborne/submerged/
+            underground unless it shares that medium itself -- the Pathfinder shape of "you
+            can't full-attack a flying dragon with your sword," not a movement-cost question.
+            A defender in "ground" (the default) is always reachable by everyone, unconditionally
+            -- so the overwhelming majority of entities, which never author "medium" at all, are
+            completely unaffected by this check regardless of what they fight.
+        @param attacker_name The name of the acting entity.
+        @param defender_name The name of the target entity.
+        @param ability The weapon/spell/innate-ability table being used, or None (always
+            reachable, same "nothing physical to be out of reach of" case is_in_range shares).
+        @return True if defender_name is in "ground" (or has no "medium" authored at all);
+                True if the ability has a "range" > 0 at all (any ranged/reach attack already
+                crosses medium -- no new field needed on any existing weapon/spell, this reuses
+                "range" exactly as authored today); True if attacker_name's own "medium"
+                matches defender_name's; False otherwise (a melee-only, "ground"-medium
+                attacker can't touch a non-"ground" defender).
+        """
+        if ability is None:
+            return True
+        defender_medium = self.entities.get(defender_name, {}).get("medium", "ground")
+        if defender_medium == "ground":
+            return True
+        if ability.get("range", 0) > 0:
+            return True
+        attacker_medium = self.entities.get(attacker_name, {}).get("medium", "ground")
+        return attacker_medium == defender_medium
+
     def _find_room_exit(self, room, direction):
         """!
         @brief Finds the current room's own declared [[room.exit]] usable right now for the

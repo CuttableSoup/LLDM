@@ -159,6 +159,22 @@ speed = 1                                   # Only ever read off the player's ow
                                             # nothing but the player currently moves.
 # "band" is never set in a template -- it's assigned per-instance at scenario-load time from
 # the scenario/room's own "entities" list ({name, band}), not authored here.
+medium = "air"                              # "air"/"water"/"earth"; absent/"ground" is the
+                                            # default every entity implicitly has, unaffected
+                                            # regardless of what it fights -- deliberately NOT a
+                                            # new elevation/spatial axis, bands stay one-
+                                            # dimensional. Gates has_medium_access (DM_Movement.
+                                            # py, checked in _resolve_roll/resolve_behavior_
+                                            # action alongside is_in_range): a melee-only
+                                            # (range 0/absent) attacker whose own "medium"
+                                            # doesn't match a non-"ground" defender's can't reach
+                                            # it at all, no roll attempted (same OutOfRangeOutcome
+                                            # is_in_range's own failure already reports) -- the
+                                            # Pathfinder Fly/Swim(submerge)/Burrow shape (a
+                                            # grounded creature's sword can't connect with a
+                                            # flying dragon). Any ability with an already-
+                                            # authored "range" > 0 reaches every medium freely --
+                                            # no new field needed on ranged weapons/spells.
 #
 # ---------------------------------------------------------------------------------------------
 # Overland conveyance -- travel_speed/mount/pulled entities (see docs/downtime.md's "Travel"
@@ -251,6 +267,22 @@ inventory = [ "longsword", "health potion", "health potion" ]
 rhand = "longsword"
 chest = "chain mail"
 
+equipped_skill_bonus = { skill = "observation", dice = 1, pips = 0 }
+                                            # Item-only -- a passive skill-dice bonus while
+                                            # this item is equipped, regardless of slot (a ring,
+                                            # belt, or cloak, not just a weapon/armor piece) --
+                                            # the Pathfinder "Ring/belt/wondrous stat bonus"
+                                            # shape. get_equipped_skill_bonus (Combat_
+                                            # Resolution.py) sums every equipped item's own
+                                            # matching bonus into resolve_action/resolve_
+                                            # opposed_action, alongside get_condition_modifier.
+                                            # "skill" may instead name a rules.toml
+                                            # [[skill_group]] (ex: "strength"), buffing every
+                                            # skill in that group at once -- the Pathfinder
+                                            # ability-score-bonus shape (ex: a belt of giant
+                                            # strength), authored without this engine needing a
+                                            # real attribute layer. See get_skill_group_members.
+
 # ---------------------------------------------------------------------------------------------
 # Ability/weapon/spell/technique fields -- present directly on a weapon/armor object
 # (items.toml), a spell/technique (spells.toml/techniques.toml), or an inline table inside
@@ -312,6 +344,13 @@ language_dependent = true                   # Opt-in precondition, not a damage 
                                             # "persuade the guard"), _ability_requires_language
                                             # (DM_Combat.py) falls back to checking the skill's own
                                             # declared "abilities" list (skills.toml) instead.
+ignores_concealment = true                  # Lets this ability bypass a defender's own
+                                            # concealment/miss_chance (ex: a ghost touch/seeking
+                                            # weapon cutting through an invisible target's
+                                            # concealment) -- see get_concealment,
+                                            # resolve_opposed_action. Absent (the default) means
+                                            # an otherwise-successful roll can still come back a
+                                            # "concealed_miss" against a concealed defender.
 difficulty = 10                             # The flat number the actor must roll (with this
                                             # ability's own "skill") to pull the working off at
                                             # all, independent of who it's aimed at -- checked in
@@ -358,6 +397,37 @@ targets = { number = 1, aoe = 0 }           # Widens a hit past the one entity t
                                             # DamageEffect/attitude nudge per resolved target) and
                                             # _run_ability_outcome_program (this ability's own
                                             # on_pass/on_fail run once per resolved target).
+on_hit_condition = { condition = "bleeding", chance = 100 }
+                                            # Applies a [[condition]] directly to whoever this
+                                            # ability just hit, no [entity.test] detour needed
+                                            # -- the Pathfinder "Wounding"/poison-on-hit shape
+                                            # (apply_on_hit_condition, Combat_Resolution.py).
+                                            # "chance" (1-100, default 100) is the percent
+                                            # chance it actually lands; "duration"/"length"/
+                                            # "dismiss" are the same apply_condition params
+                                            # [[status]]'s own "apply" block already takes.
+                                            # Skipped outright if the defender is immune to
+                                            # this ability's own damage_tags.
+damage_bonus_vs = { supertypes = ["undead"], value = { dice = 2, pips = 0, bonus = 0 } }
+                                            # Extra rolled damage that only applies against a
+                                            # defender of a particular kind, matched by the
+                                            # defender's own supertype/subtype (either list,
+                                            # both optional) rather than by damage_tags overlap
+                                            # -- the Pathfinder "Holy"/"Bane" shape (get_damage_
+                                            # bonus_vs, Combat_Resolution.py), which damage_tags
+                                            # alone can't express (that only ever checks the
+                                            # defender's resistance/immunity/vulnerability, not
+                                            # what it *is*).
+cooldown_rounds = 3                         # A behavior-driven ability only (DM_Combat.py's
+                                            # resolve_behavior_action) -- once used, sets the
+                                            # acting entity's own ability_cooldowns[name] to
+                                            # this many rounds, ticked back down to 0 by
+                                            # tick_ability_cooldowns (run_round_upkeep,
+                                            # DM_Status.py). A behavior list gates back off this
+                                            # same ability meanwhile via the derived requirement
+                                            # field "ability_ready:<name>" (get_comparable_value)
+                                            # -- ex: a breath weapon usable once every 3 rounds,
+                                            # falling back to a weaker attack entry until then.
 summon = { name = "spectral wolf", duration = 4 }
                                             # A spell/technique/innate ability only -- opts a
                                             # successful cast into conjuring a temporary ally
@@ -383,6 +453,34 @@ summon = { name = "spectral wolf", duration = 4 }
                                             # -- it's a real, hand-authored creature template,
                                             # unrelated to (and not gated by) the "abilities"
                                             # this ability lives on.
+teleport_to_band = 4                        # A spell/technique only -- on a successful cast,
+                                            # jumps the PLAYER directly to this band within the
+                                            # current room (move_entity's own existing floor/
+                                            # ceiling clamp still applies), no roll against a
+                                            # target needed (same "not really against anyone"
+                                            # scope "summon" has, below) -- the Pathfinder
+                                            # Dimension Door shape. Player-only; not wired into
+                                            # a creature's own behavior. Author a real "difficulty"
+                                            # (any small nonzero number) alongside this if a
+                                            # hostile current_target might be present when this
+                                            # is cast -- without one, _resolve_roll falls to the
+                                            # ordinary opposed-roll path (resisted by whatever
+                                            # current_target happens to be) instead of a flat,
+                                            # always-succeeds self-cast; "targets" is not
+                                            # consulted here at all (this always relocates the
+                                            # caster, never resolve_targets' own widened pool).
+teleport_to_location = { location = "crypt", room = "entry_hall", band = 1 }
+                                            # A spell/technique only -- on a successful cast,
+                                            # jumps the PLAYER to a different, already-known
+                                            # [[location]] outright via _enter_location, the
+                                            # same mechanism ordinary location-to-location
+                                            # travel uses -- but called directly, so it skips
+                                            # that path's own hostile-gate/grid-cost checks
+                                            # entirely (instant, works mid-combat) -- the
+                                            # Pathfinder Teleport shape. "room"/"band" default to
+                                            # that location's own start_room/band 1. Player-only;
+                                            # same "author a real difficulty" note as
+                                            # teleport_to_band, above, applies here too.
 materials = [
     { item = "iron filings", quantity = 1 }, # A spell/technique/innate ability only -- same
 ]                                           # {item, quantity} shape and same _has_materials/

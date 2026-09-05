@@ -65,7 +65,7 @@ max_hp = 24
 
 # Rolled reduction against ordinary weapons -- but a hit tagged "silver" bypasses it outright,
 # regardless of also carrying a matching resistance tag (Pathfinder's "DR 10/silver"; see
-# Rules/Fantasy/reference/pathfinder_conversion.md's #2 and DM_Combat.py's
+# Rules/Fantasy/reference/pathfinder_mapping.toml's damage_resistance table and DM_Combat.py's
 # get_damage_reduction). A silvered blade's own damage_tags would be
 # ["slashing", "silver"] -- the "slashing" tag alone still matches resistance_tags below on an
 # ordinary weapon, but "silver" short-circuits the reduction entirely once present.

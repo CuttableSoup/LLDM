@@ -122,6 +122,36 @@ def has_condition(entities, entity_name, condition_name):
 CONDITION_DURATIONS = ("rounds", "rooms", "blocks", "permanent")
 
 
+def _apply_stat_drain(entities, rules, entity_name, condition_name):
+    """!
+    @brief Permanently removes dice/pips from entity_name's own base skill, per condition_name's
+        own [[condition]] entry's optional "drain" = {skill, dice, pips} -- the Pathfinder
+        "Energy Drained" shape (a permanent stat loss, distinct from [[condition]]'s ordinary
+        "modifier", which is a roll-time-only penalty that evaporates the instant the condition
+        is dismissed). Clamped so a drain can never push a skill below 0/0.
+    @param entities The live entities dict.
+    @param rules The loaded rules dict (may be None/{} -- no [[condition]] entry found means
+        nothing to drain).
+    @param entity_name The name of the entity losing the stat.
+    @param condition_name The name of the condition being newly applied.
+    @return {"skill", "dice", "pips"} describing the amount actually removed (for
+        dismiss_condition to restore later), or None if this condition authors no "drain" at
+        all, or the entity has no such skill to drain.
+    """
+    condition_def = next((c for c in (rules or {}).get("condition", []) if c.get("name") == condition_name), None)
+    drain = condition_def.get("drain") if condition_def else None
+    if not drain:
+        return None
+    skill_stats = entities.get(entity_name, {}).get("skills", {}).get(drain.get("skill"))
+    if skill_stats is None:
+        return None
+    dice_amount = min(drain.get("dice", 0), skill_stats.get("dice", 0))
+    pips_amount = min(drain.get("pips", 0), skill_stats.get("pips", 0))
+    skill_stats["dice"] -= dice_amount
+    skill_stats["pips"] -= pips_amount
+    return {"skill": drain["skill"], "dice": dice_amount, "pips": pips_amount}
+
+
 def apply_condition(entities, event_bus, entity_name, condition_name, duration=None, length=None, dismiss=None, rules=None):
     """!
     @brief Marks a condition as active on an entity.
@@ -137,11 +167,13 @@ def apply_condition(entities, event_bus, entity_name, condition_name, duration=N
         call.
     @param length How many of "duration"'s own unit remain (unused/ignored for "permanent").
     @param dismiss What removes the condition (ex: "healing", "resurrection").
-    @param rules The loaded rules dict, needed only to convert a "days" duration to "blocks" --
-        every caller that can ever author "days" (DM_Status.py's own apply_condition wrapper,
+    @param rules The loaded rules dict, needed to convert a "days" duration to "blocks", and to
+        look up condition_name's own optional "drain" (see _apply_stat_drain) -- every caller
+        that can ever author "days"/"drain" (DM_Status.py's own apply_condition wrapper,
         Program_Interpreter.py's `condition` op, evaluate_statuses below) already has self.rules/
-        rules in reach and passes it through; a caller that only ever applies "permanent"/
-        "rounds"/"rooms"/"blocks" conditions (ex: DM_Travel.py's "surprised") can omit it.
+        rules in reach and passes it through; a caller that only ever applies a plain "permanent"/
+        "rounds"/"rooms"/"blocks", non-draining condition (ex: DM_Travel.py's "surprised") can
+        omit it.
     """
     if duration == "days":
         blocks_per_day = (rules or {}).get("time", {}).get("blocks_per_day", 3)
@@ -150,7 +182,17 @@ def apply_condition(entities, event_bus, entity_name, condition_name, duration=N
     if entity is None:
         return
     active_conditions = entity.setdefault("active_conditions", {})
-    active_conditions[condition_name] = {"duration": duration, "length": length, "dismiss": dismiss}
+    # Drains only once per gain, not on every reapplication/refresh (ex: an extended duration
+    # on an already-active condition must not double-drain the same skill) -- an already-active
+    # condition carries its own already-computed "_drained" forward unchanged.
+    if condition_name in active_conditions:
+        drained = active_conditions[condition_name].get("_drained")
+    else:
+        drained = _apply_stat_drain(entities, rules, entity_name, condition_name)
+    entry = {"duration": duration, "length": length, "dismiss": dismiss}
+    if drained:
+        entry["_drained"] = drained
+    active_conditions[condition_name] = entry
     event_bus.publish("log_info", f"{entity_name} gains condition '{condition_name}'.")
 
 
@@ -179,9 +221,34 @@ def tick_condition_durations(entities, event_bus, entity_name, unit, amount=1):
             dismiss_condition(entities, event_bus, entity_name, condition_name)
 
 
+def tick_ability_cooldowns(entities, entity_name):
+    """!
+    @brief Decrements every one of entity_name's own active ability_cooldowns entries by one,
+        dropping any that reach 0 -- the per-round counterpart to tick_condition_durations, for
+        an ability's own cooldown_rounds (set when the ability is used -- see
+        DM_Combat.py's resolve_behavior_action) rather than a [[condition]]'s duration/length.
+        Called once per round from run_round_upkeep (DM_Status.py), same cadence as
+        tick_condition_durations(unit="rounds").
+    @param entities The live entities dict.
+    @param entity_name The entity to tick.
+    """
+    cooldowns = entities.get(entity_name, {}).get("ability_cooldowns")
+    if not cooldowns:
+        return
+    for ability_name in list(cooldowns):
+        cooldowns[ability_name] -= 1
+        if cooldowns[ability_name] <= 0:
+            del cooldowns[ability_name]
+
+
 def dismiss_condition(entities, event_bus, entity_name, condition_name):
     """!
-    @brief Removes a condition from an entity, if it's currently active.
+    @brief Removes a condition from an entity, if it's currently active -- restoring any stat
+        drain it applied (see _apply_stat_drain/apply_condition) by reading the exact amount
+        stashed on the condition's own active_conditions entry at apply time, rather than
+        re-deriving it from rules (which would need condition_name's own [[condition]] entry
+        to still exist/be unchanged -- reading back what was actually removed is exact
+        regardless). No rules param needed here as a result.
     @param entities The live entities dict.
     @param event_bus The EventBus to publish a log_info line to.
     @param entity_name The name of the entity losing the condition.
@@ -191,9 +258,118 @@ def dismiss_condition(entities, event_bus, entity_name, condition_name):
     active_conditions = get_active_conditions(entities, entity_name)
     if condition_name not in active_conditions:
         return False
-    del active_conditions[condition_name]
+    entry = active_conditions.pop(condition_name)
+    drained = entry.get("_drained")
+    if drained:
+        skill_stats = entities.get(entity_name, {}).get("skills", {}).get(drained["skill"])
+        if skill_stats is not None:
+            skill_stats["dice"] = skill_stats.get("dice", 0) + drained.get("dice", 0)
+            skill_stats["pips"] = skill_stats.get("pips", 0) + drained.get("pips", 0)
     event_bus.publish("log_info", f"{entity_name} loses condition '{condition_name}'.")
     return True
+
+
+def get_concealment(entities, rules, entity_name):
+    """!
+    @brief The highest "miss_chance" (percent, 0-100) of any of entity_name's own
+        active_conditions with a matching [[condition]] entry authoring one -- the Pathfinder
+        "concealment"/Invisible shape: even a successful attack roll can still just miss
+        outright. Takes the max across conditions rather than summing them (concealment
+        doesn't stack additively either in Pathfinder), capped at 95 so nothing is ever
+        completely unhittable by ordinary means.
+    @param entities The live entities dict.
+    @param rules The loaded rules dict.
+    @param entity_name The name of the entity to check.
+    @return The effective miss_chance, 0 if nothing applies.
+    """
+    active_conditions = get_active_conditions(entities, entity_name)
+    condition_defs = {c.get("name"): c for c in rules.get("condition", [])}
+    best = 0
+    for condition_name in active_conditions:
+        condition_def = condition_defs.get(condition_name)
+        if not condition_def:
+            continue
+        miss_chance = condition_def.get("miss_chance", 0)
+        if miss_chance > best:
+            best = miss_chance
+    return min(best, 95)
+
+
+def get_override_target(entities, rules, entity_name):
+    """!
+    @brief The raw "override_target" value ("random", or a literal entity name) authored by
+        any of entity_name's own active_conditions with a matching [[condition]] entry -- the
+        Pathfinder Confused ("random")/Dominate (a literal name, authored by whatever spell
+        applied the condition at cast time) shape: hijacking WHO an entity's turn is aimed at,
+        not whether it can act (prevents_action) or which ability it picks (choose_behavior is
+        untouched). If more than one active condition authors one, the last one found wins --
+        same "no defined stacking order" precedent get_condition_modifier's own summing
+        sidesteps by just adding everything together; a stacked, contradictory pair of forced-
+        target effects isn't a case any shipped content produces.
+    @param entities The live entities dict.
+    @param rules The loaded rules dict.
+    @param entity_name The name of the entity to check.
+    @return "random", a literal entity name, or None if nothing overrides.
+    """
+    condition_defs = {c.get("name"): c for c in rules.get("condition", [])}
+    override = None
+    for condition_name in get_active_conditions(entities, entity_name):
+        condition_def = condition_defs.get(condition_name)
+        if condition_def and condition_def.get("override_target"):
+            override = condition_def["override_target"]
+    return override
+
+
+def resolve_override_target(entities, rules, entity_name, candidates):
+    """!
+    @brief Resolves entity_name's own active override_target (get_override_target) to a real,
+        currently-living target name.
+    @param entities The live entities dict.
+    @param rules The loaded rules dict.
+    @param entity_name The name of the entity to check.
+    @param candidates A caller-supplied pool of other currently-living scene entities to pick
+        randomly from -- this pure module has no notion of "the scene" (self.scenario_entities
+        lives on DMCore), so "random" can't derive its own pool.
+    @return "random" resolves to a uniform random choice from candidates (None if candidates
+        is empty); a literal name resolves to itself only if it currently names a real, living
+        entity (None otherwise -- ex: the named target died since the effect was applied,
+        treated the same as no override at all rather than erroring); None if nothing
+        overrides in the first place.
+    """
+    override = get_override_target(entities, rules, entity_name)
+    if override is None:
+        return None
+    if override == "random":
+        return random.choice(candidates) if candidates else None
+    if get_current_hp(entities, override) > 0:
+        return override
+    return None
+
+
+def get_skill_group_members(rules, name_or_names):
+    """!
+    @brief Expands a skill/group name (or a list of them) through rules.toml's own
+        [[skill_group]] table -- {name, skills} entries letting a cluster of skills be
+        addressed by one shared name, standing in for the attribute layer this engine
+        deliberately doesn't have (Pathfinder's Bull's Strength buffs every Strength-based
+        skill/check at once; a "strength" skill_group is how the same shape is authored here,
+        without building a real attribute stat). A name matching a defined group's own "name"
+        expands to that group's own "skills" list; any other name (the common case -- most
+        skills belong to no group at all) passes through unchanged as a single-element result,
+        so this is purely additive over every existing "skill" field/reference that never
+        mentions a group. The two current consumers: get_condition_modifier's own applies_to,
+        and get_equipped_skill_bonus's own equipped_skill_bonus.skill.
+    @param rules The loaded rules dict.
+    @param name_or_names A single skill/group name, or a list of them.
+    @return A flat list of real skill names (groups expanded; duplicates not deduplicated,
+        since every caller only ever uses this for a membership test).
+    """
+    names = name_or_names if isinstance(name_or_names, list) else [name_or_names]
+    group_defs = {g.get("name"): g.get("skills", []) for g in rules.get("skill_group", [])}
+    expanded = []
+    for name in names:
+        expanded.extend(group_defs.get(name, [name]))
+    return expanded
 
 
 def get_condition_modifier(entities, rules, entity_name, skill_name=None):
@@ -204,11 +380,12 @@ def get_condition_modifier(entities, rules, entity_name, skill_name=None):
     @param rules The loaded rules dict.
     @param entity_name The name of the entity to sum modifiers for.
     @param skill_name The skill being rolled, if known. A [[condition]] entry's own optional
-        "applies_to" (a list of skill names) restricts its modifier to only those skills'
-        rolls -- absent (every condition shipped before this field existed) still applies
-        globally, unaffected. A scoped condition contributes nothing when skill_name is None
-        (no skill context to check against), the same "can't match without a value" precedent
-        distance_to_target/opponent_has_condition already follow with no opponent_name.
+        "applies_to" (a list of skill/skill_group names -- see get_skill_group_members)
+        restricts its modifier to only those skills' rolls -- absent (every condition shipped
+        before this field existed) still applies globally, unaffected. A scoped condition
+        contributes nothing when skill_name is None (no skill context to check against), the
+        same "can't match without a value" precedent distance_to_target/opponent_has_condition
+        already follow with no opponent_name.
     @return A {"dice", "pips", "bonus"} dict, each defaulting to 0 if nothing applies.
     """
     active_conditions = get_active_conditions(entities, entity_name)
@@ -222,11 +399,41 @@ def get_condition_modifier(entities, rules, entity_name, skill_name=None):
         if not modifier:
             continue
         applies_to = condition_def.get("applies_to")
-        if applies_to and skill_name not in applies_to:
+        if applies_to and skill_name not in get_skill_group_members(rules, applies_to):
             continue
         total["dice"] += modifier.get("dice", 0)
         total["pips"] += modifier.get("pips", 0)
         total["bonus"] += modifier.get("bonus", 0)
+    return total
+
+
+def get_equipped_skill_bonus(entities, rules, entity_name, skill_name):
+    """!
+    @brief Sums the {dice, pips} bonus every one of entity_name's own equipped items
+        contributes to skill_name, via each item's own optional "equipped_skill_bonus" =
+        {skill, dice, pips} -- the Pathfinder "Ring/belt/wondrous stat bonus" shape (a passive
+        skill-dice buff from a worn, non-weapon item). Distinct from armor_value/resistance_
+        value (defense) and damage_value (offense) -- this is the first equipped-item field
+        read for an *ordinary skill roll*, not just combat math. "skill" may name a single
+        skill, a skill_group (see get_skill_group_members -- ex: a belt granting +1D to every
+        Strength-based skill at once), or a list mixing either, the same "single name or list"
+        convention an ability's own "skill" field already follows.
+    @param entities The live entities dict.
+    @param rules The loaded rules dict.
+    @param entity_name The name of the entity to check.
+    @param skill_name The skill being rolled, or None (matches nothing, same "can't match
+        without a value" precedent get_condition_modifier's own applies_to follows).
+    @return A {"dice", "pips"} dict, each defaulting to 0 if nothing applies.
+    """
+    total = {"dice": 0, "pips": 0}
+    if skill_name is None:
+        return total
+    entity = entities.get(entity_name, {})
+    for item_name in entity.get("equipped", {}).values():
+        bonus = entities.get(item_name, {}).get("equipped_skill_bonus")
+        if bonus and skill_name in get_skill_group_members(rules, bonus.get("skill")):
+            total["dice"] += bonus.get("dice", 0)
+            total["pips"] += bonus.get("pips", 0)
     return total
 
 
@@ -259,6 +466,16 @@ def get_comparable_value(entities, entity_name, field, opponent_name=None):
             return None
         condition_name = field[len("opponent_has_condition:"):]
         return has_condition(entities, opponent_name, condition_name)
+    if field.startswith("ability_ready:"):
+        # True unless entity_name's own ability_cooldowns (set by an ability's own
+        # cooldown_rounds, ticked down once per round by tick_ability_cooldowns) still has a
+        # positive count for this ability name -- lets a behavior entry gate itself off while
+        # its own high-value attack is recharging (ex: a breath weapon), falling through to a
+        # weaker fallback entry in the meantime, the same way "has_condition:<name>" already
+        # lets one gate off a paralyzed/warded creature's own attack entries.
+        ability_name = field[len("ability_ready:"):]
+        cooldowns = entities.get(entity_name, {}).get("ability_cooldowns", {})
+        return cooldowns.get(ability_name, 0) <= 0
     if field in Social_Resolution.ATTITUDE_AXES:
         # entity_name's own attitude *toward* opponent_name -- ex: a program condition like
         # "target.threat < -50" reads how the checked entity feels about whoever it's being
@@ -561,6 +778,33 @@ def get_vulnerability_bonus(entities, defender_name, damage_tags):
     return 0
 
 
+def get_damage_bonus_vs(entities, defender_name, ability):
+    """!
+    @brief Rolls an ability's own damage_bonus_vs bonus -- extra damage that only applies
+        against a defender of a particular kind, matched by supertype/subtype rather than by
+        damage_tags overlap (which only ever checks the defender's resistance/immunity/
+        vulnerability, not what it *is*). This is the Pathfinder "Holy"/"Bane" shape (bonus
+        damage vs. a creature type), which damage_tags alone can't express -- a "holy" damage
+        tag would need every undead entity to also carry a matching vulnerability_tag, an
+        indirect workaround rather than checking the defender's own supertype directly.
+    @param entities The live entities dict.
+    @param defender_name The name of the entity taking damage.
+    @param ability A table optionally carrying "damage_bonus_vs" = {supertypes, subtypes,
+        value = {dice, pips, bonus}}.
+    @return The rolled bonus damage, or 0 if the defender's supertype/subtype doesn't match
+        either list (both default to empty, so an ability authoring "damage_bonus_vs" with
+        neither key matches nothing).
+    """
+    spec = ability.get("damage_bonus_vs")
+    if not spec:
+        return 0
+    defender = entities.get(defender_name, {})
+    if defender.get("supertype") not in spec.get("supertypes", []) and defender.get("subtype") not in spec.get("subtypes", []):
+        return 0
+    value = spec.get("value", {})
+    return roll_dice(value.get("dice", 0), value.get("pips", 0)) + value.get("bonus", 0)
+
+
 def is_immune_to(entities, defender_name, damage_tags):
     """!
     @brief Whether an entity's immunity_tags fully negate an incoming attack's damage tags.
@@ -573,19 +817,53 @@ def is_immune_to(entities, defender_name, damage_tags):
     return any(tag in immunity_tags for tag in damage_tags)
 
 
+def apply_on_hit_condition(entities, rules, event_bus, defender_name, ability, damage_tags):
+    """!
+    @brief Applies an ability's own on_hit_condition directly to whoever it just hit -- no
+        [entity.test] detour needed. This is the Pathfinder "Wounding"/poison-on-hit shape
+        (Rules/Fantasy/reference/pathfinder_mapping.toml's magic_item "Wounding" row and
+        creature_ability "Poison" row both flagged this as the missing piece: the only way to
+        apply a condition from an attack used to be via a target's own [entity.test], which a
+        plain weapon/ability hit never has). Skipped entirely if the defender is immune to the
+        ability's own damage_tags -- an attack a creature is fully immune to shouldn't also
+        inflict a condition tied to that same damage.
+    @param entities The live entities dict.
+    @param rules The loaded rules dict, forwarded to apply_condition (for "days" duration
+        conversion).
+    @param event_bus The EventBus, forwarded to apply_condition.
+    @param defender_name The name of the entity that was just hit.
+    @param ability A table optionally carrying "on_hit_condition" = {condition, chance,
+        duration, length, dismiss}. "chance" (1-100, default 100) is the percent chance the
+        condition actually lands -- absent means it always does.
+    @param damage_tags The hit's own damage_tags, checked against the defender's immunity_tags.
+    """
+    on_hit = ability.get("on_hit_condition")
+    if not on_hit or is_immune_to(entities, defender_name, damage_tags):
+        return
+    if random.randint(1, 100) > on_hit.get("chance", 100):
+        return
+    apply_condition(
+        entities, event_bus, defender_name, on_hit["condition"],
+        duration=on_hit.get("duration"), length=on_hit.get("length"), dismiss=on_hit.get("dismiss"),
+        rules=rules,
+    )
+
+
 def calculate_damage(entities, rules, event_bus, attacker_name, defender_name, ability):
     """!
     @brief Calculates and applies damage from an attacker's ability to a defender, including
-        immunity, resistance/armor reduction, and vulnerability. Also records ability's own
-        damage_tags onto defender_name's own "recent_damage_tags".
+        immunity, resistance/armor reduction, vulnerability, and a supertype/subtype-matched
+        damage_bonus_vs. Also records ability's own damage_tags onto defender_name's own
+        "recent_damage_tags", and applies the ability's own on_hit_condition (if any) directly
+        to the defender.
     @param entities The live entities dict.
     @param rules The loaded rules dict.
     @param event_bus The EventBus to publish a log_info line to.
     @param attacker_name The name of the entity dealing damage.
     @param defender_name The name of the entity taking damage.
     @param ability A table with damage_value {dice, pips, bonus} and damage_tags.
-    @return A dict describing the raw damage, reduction, vulnerability bonus, net damage, and
-        the defender's remaining HP.
+    @return A dict describing the raw damage, reduction, vulnerability/vs-type bonus, net
+        damage, and the defender's remaining HP.
     """
     damage_value = ability.get("damage_value", {"dice": 0, "pips": 0, "bonus": 0})
     damage_tags = ability.get("damage_tags", [])
@@ -594,11 +872,14 @@ def calculate_damage(entities, rules, event_bus, attacker_name, defender_name, a
     if is_immune_to(entities, defender_name, damage_tags):
         reduction = raw_damage
         vulnerability_bonus = 0
+        bonus_vs = 0
     else:
         reduction = get_damage_reduction(entities, defender_name, damage_tags)
         vulnerability_bonus = get_vulnerability_bonus(entities, defender_name, damage_tags)
-    net_damage = max(0, raw_damage + vulnerability_bonus - reduction)
+        bonus_vs = get_damage_bonus_vs(entities, defender_name, ability)
+    net_damage = max(0, raw_damage + vulnerability_bonus + bonus_vs - reduction)
     remaining_hp = apply_damage(entities, rules, event_bus, defender_name, net_damage, actor_name=attacker_name)
+    apply_on_hit_condition(entities, rules, event_bus, defender_name, ability, damage_tags)
 
     defender = entities.get(defender_name)
     if defender is not None and damage_tags:
@@ -608,6 +889,7 @@ def calculate_damage(entities, rules, event_bus, attacker_name, defender_name, a
         "log_info",
         f"{attacker_name} deals {raw_damage} raw damage to {defender_name}"
         f"{f' (+{vulnerability_bonus} vulnerability)' if vulnerability_bonus else ''}"
+        f"{f' (+{bonus_vs} vs. type)' if bonus_vs else ''}"
         f", reduced by {reduction} -> {net_damage} net damage."
     )
     return {
@@ -616,6 +898,7 @@ def calculate_damage(entities, rules, event_bus, attacker_name, defender_name, a
         "raw_damage": raw_damage,
         "reduction": reduction,
         "vulnerability_bonus": vulnerability_bonus,
+        "bonus_vs": bonus_vs,
         "net_damage": net_damage,
         "remaining_hp": remaining_hp,
     }
@@ -661,8 +944,9 @@ def resolve_action(entities, rules, event_bus, entity_name, skill_name, difficul
     entity = entities.get(entity_name, {})
     skill_stats = entity.get("skills", {}).get(skill_name, {"dice": 0, "pips": 0})
     condition_modifier = get_condition_modifier(entities, rules, entity_name, skill_name)
-    dice = max(0, skill_stats.get("dice", 0) - dice_penalty + condition_modifier["dice"])
-    pips = skill_stats.get("pips", 0) + condition_modifier["pips"]
+    equip_bonus = get_equipped_skill_bonus(entities, rules, entity_name, skill_name)
+    dice = max(0, skill_stats.get("dice", 0) - dice_penalty + condition_modifier["dice"] + equip_bonus["dice"])
+    pips = skill_stats.get("pips", 0) + condition_modifier["pips"] + equip_bonus["pips"]
     roll = roll_dice(dice, pips) + condition_modifier["bonus"]
     success = roll >= difficulty
     event_bus.publish(
@@ -678,7 +962,7 @@ def resolve_action(entities, rules, event_bus, entity_name, skill_name, difficul
     }
 
 
-def resolve_opposed_action(entities, rules, skills, event_bus, attacker_name, skill_name, defender_name, dice_penalty=0):
+def resolve_opposed_action(entities, rules, skills, event_bus, attacker_name, skill_name, defender_name, dice_penalty=0, ability=None):
     """!
     @brief Resolves a skill roll opposed by a defending entity's matching skill. Range is
         checked by the caller before this is reached at all.
@@ -690,14 +974,23 @@ def resolve_opposed_action(entities, rules, skills, event_bus, attacker_name, sk
     @param skill_name The skill being used by the attacker.
     @param defender_name The name of the opposing entity.
     @param dice_penalty Forwarded to resolve_action for attacker_name's own roll only.
-    @return A dict describing the roll, the opposing skill used (if any), and the outcome.
+    @param ability The attacker's own resolved weapon/spell/technique, if any -- consulted only
+        for its optional "ignores_concealment" flag (see below); every other field is unused
+        here. None (the default, every pre-existing caller) never bypasses concealment.
+    @return A dict describing the roll, the opposing skill used (if any), and the outcome. An
+        otherwise-successful roll can still come back with "success": False and its own
+        "concealed_miss": True if defender_name's own concealment (get_concealment) rolls a hit
+        -- the Pathfinder Invisible/concealment shape (a successful attack roll can still just
+        miss outright), unless "ability" authors "ignores_concealment" (ex: a ghost touch/
+        seeking weapon).
     """
     opposing_skill = get_opposing_skill(entities, skills, skill_name, defender_name)
     if opposing_skill:
         defender_stats = entities[defender_name]["skills"][opposing_skill]
         defender_modifier = get_condition_modifier(entities, rules, defender_name, opposing_skill)
-        defender_dice = max(0, defender_stats.get("dice", 0) + defender_modifier["dice"])
-        defender_pips = defender_stats.get("pips", 0) + defender_modifier["pips"]
+        defender_equip_bonus = get_equipped_skill_bonus(entities, rules, defender_name, opposing_skill)
+        defender_dice = max(0, defender_stats.get("dice", 0) + defender_modifier["dice"] + defender_equip_bonus["dice"])
+        defender_pips = defender_stats.get("pips", 0) + defender_modifier["pips"] + defender_equip_bonus["pips"]
         difficulty = roll_dice(defender_dice, defender_pips) + defender_modifier["bonus"]
     else:
         difficulty = 0
@@ -705,4 +998,10 @@ def resolve_opposed_action(entities, rules, skills, event_bus, attacker_name, sk
     result = resolve_action(entities, rules, event_bus, attacker_name, skill_name, difficulty, dice_penalty=dice_penalty)
     result["defender"] = defender_name
     result["opposing_skill"] = opposing_skill
+    if result["success"] and not (ability and ability.get("ignores_concealment")):
+        concealment = get_concealment(entities, rules, defender_name)
+        if concealment and random.randint(1, 100) <= concealment:
+            result["success"] = False
+            result["concealed_miss"] = True
+            event_bus.publish("log_info", f"{attacker_name}'s attack on {defender_name} misses outright -- concealed.")
     return result

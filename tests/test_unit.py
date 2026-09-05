@@ -41,7 +41,7 @@ from dm.DM_ActionOutcome import (
     ActionOutcome, ActionPreventedOutcome, CraftEffect, DamageEffect, DefenderDetailsEffect,
     LanguageBarrierOutcome, LootEffect, MissingMaterialsOutcome, MissingSpellMaterialsOutcome,
     MissingStationOutcome, MovementOutcome, NotCraftableOutcome, OutOfRangeOutcome, RevealEffect,
-    RolledOutcome, SummonEffect, TransferOutcome,
+    RolledOutcome, SummonEffect, TeleportEffect, TransferOutcome,
 )
 from dm.DM_Core import DMCore
 from dm.DM_Rules import list_available_scenarios
@@ -1622,6 +1622,137 @@ class TestMovementAndRange(DMTestCase):
         self.assertIsInstance(action, RolledOutcome)
 
 
+class TestMediumAccess(DMTestCase):
+    """!
+    @brief medium (an entity field) + has_medium_access (DM_Movement.py) -- gates who can
+        engage whom by medium ("air"/"water"/"earth" vs. the default "ground"), the Pathfinder
+        Fly/Swim(submerge)/Burrow shape. Deliberately not a spatial axis -- band distance is
+        unaffected; this is a second, independent reachability gate alongside is_in_range.
+    """
+
+    def test_a_ground_defender_is_always_reachable(self):
+        longsword = self.dm_core.entities["longsword"]
+        self.assertTrue(self.dm_core.has_medium_access("gladstone", "wolf", longsword))
+
+    def test_melee_cannot_reach_a_different_medium_defender(self):
+        longsword = self.dm_core.entities["longsword"]
+        self.dm_core.entities["wolf"]["medium"] = "air"
+        self.assertFalse(self.dm_core.has_medium_access("gladstone", "wolf", longsword))
+
+    def test_matching_medium_attacker_reaches_the_defender(self):
+        longsword = self.dm_core.entities["longsword"]
+        self.dm_core.entities["wolf"]["medium"] = "air"
+        self.dm_core.entities["gladstone"]["medium"] = "air"
+        self.assertTrue(self.dm_core.has_medium_access("gladstone", "wolf", longsword))
+
+    def test_a_ranged_ability_reaches_any_medium_regardless(self):
+        fireball = self.dm_core.entities["fireball"]
+        self.dm_core.entities["wolf"]["medium"] = "air"
+        self.assertTrue(self.dm_core.has_medium_access("gladstone", "wolf", fireball))
+
+    def test_no_ability_at_all_always_reaches(self):
+        self.dm_core.entities["wolf"]["medium"] = "air"
+        self.assertTrue(self.dm_core.has_medium_access("gladstone", "wolf", None))
+
+    def test_player_melee_attack_on_an_airborne_target_is_denied_without_a_roll(self):
+        self.dm_core.entities["wolf"]["band"] = 1  # in band range -- only medium blocks it
+        self.dm_core.entities["wolf"]["medium"] = "air"
+        events = self._capture_any("round_resolved", "action_resolved")
+
+        self.dm_core._on_turn_detected({"clauses": [{"kind": "action", "skill": "blades"}], "input": "I attack with my sword"})
+
+        action = events[-1]["actions"][0]
+        self.assertIsInstance(action, OutOfRangeOutcome)
+
+    def test_player_ranged_spell_on_an_airborne_target_still_rolls(self):
+        self.dm_core.entities["wolf"]["band"] = 1
+        self.dm_core.entities["wolf"]["medium"] = "air"
+        events = self._capture_any("round_resolved", "action_resolved")
+
+        self.dm_core._on_turn_detected({"clauses": [{"kind": "action", "skill": "arcane"}], "input": "I cast fireball"})
+
+        action = events[-1]["actions"][0]
+        self.assertIsInstance(action, RolledOutcome)
+
+    def test_resolve_behavior_action_returns_none_instead_of_advancing_toward_a_different_medium(self):
+        # wolf's own "bite" is melee -- normally an out-of-range target gets an "advance"
+        # fallback (see TestMovementAndRange), but a medium mismatch can never be fixed by
+        # closing band distance, so the entity simply doesn't act instead.
+        self.dm_core.entities["gladstone"]["medium"] = "air"
+        self.assertIsNone(self.dm_core.resolve_behavior_action("wolf", "gladstone"))
+
+
+class TestTeleport(DMTestCase):
+    """!
+    @brief teleport_to_band/teleport_to_location (ability fields) + _apply_teleport_if_hit
+        (DM_Core.py) -- relocates the player outright on a successful cast (Dimension Door/
+        Teleport), reusing move_entity's own existing clamp and _enter_location's own
+        machinery rather than inventing a new movement/location mechanism.
+    """
+
+    def test_teleport_to_band_moves_the_player_and_appends_a_teleport_effect(self):
+        # arena_grounds: bands=4, enclosed=true, everyone starts band 1.
+        ability = {"name": "dimension door", "teleport_to_band": 3}
+        result = RolledOutcome(entity="gladstone", skill="arcane", roll=10, difficulty=1, success=True)
+
+        self.dm_core._apply_teleport_if_hit(result, ability)
+
+        self.assertEqual(self.dm_core.get_band("gladstone"), 3)
+        effects = [e for e in result.effects if isinstance(e, TeleportEffect)]
+        self.assertEqual(len(effects), 1)
+        self.assertEqual(effects[0].band, 3)
+        self.assertIsNone(effects[0].location)
+
+    def test_teleport_to_band_is_clamped_to_the_rooms_own_ceiling(self):
+        ability = {"name": "dimension door", "teleport_to_band": 99}
+        result = RolledOutcome(entity="gladstone", skill="arcane", roll=10, difficulty=1, success=True)
+
+        self.dm_core._apply_teleport_if_hit(result, ability)
+
+        self.assertEqual(self.dm_core.get_band("gladstone"), 4)  # arena_grounds' own ceiling
+
+    def test_teleport_to_location_moves_the_player_to_a_different_location(self):
+        ability = {"name": "teleport", "teleport_to_location": {"location": "crypt"}}
+        result = RolledOutcome(entity="gladstone", skill="arcane", roll=10, difficulty=1, success=True)
+
+        self.dm_core._apply_teleport_if_hit(result, ability)
+
+        self.assertEqual(self.dm_core.current_location_key, "crypt")
+        effects = [e for e in result.effects if isinstance(e, TeleportEffect)]
+        self.assertEqual(len(effects), 1)
+        self.assertEqual(effects[0].location, "crypt")
+        self.assertIsNone(effects[0].band)
+
+    def test_no_effect_on_a_failed_roll(self):
+        ability = {"name": "dimension door", "teleport_to_band": 3}
+        result = RolledOutcome(entity="gladstone", skill="arcane", roll=1, difficulty=10, success=False)
+
+        self.dm_core._apply_teleport_if_hit(result, ability)
+
+        self.assertEqual(self.dm_core.get_band("gladstone"), 1)  # unchanged
+        self.assertEqual(result.effects, [])
+
+    def test_no_effect_with_no_named_ability(self):
+        result = RolledOutcome(entity="gladstone", skill="blades", roll=10, difficulty=1, success=True)
+
+        self.dm_core._apply_teleport_if_hit(result, None)
+
+        self.assertEqual(result.effects, [])
+
+    def test_end_to_end_casting_relocates_the_player_via_the_real_roll_pipeline(self):
+        # _resolve_roll + _finish_rolled_outcome together, the same pipeline a real turn goes
+        # through -- named_ability passed explicitly (skipping NLP name resolution, which
+        # would otherwise have to disambiguate gladstone's several other "arcane" spells) with
+        # no target_name, so this resolves via the untargeted, always-succeeds branch.
+        dimension_door = {"name": "dimension door", "skill": "arcane", "teleport_to_band": 3}
+        result, ability, via_test = self.dm_core._resolve_roll("arcane", dimension_door, None)
+        self.dm_core._finish_rolled_outcome(result, "arcane", dimension_door, ability, None, via_test)
+
+        self.assertTrue(result.success)
+        self.assertEqual(self.dm_core.get_band("gladstone"), 3)
+        self.assertTrue(any(isinstance(e, TeleportEffect) for e in result.effects))
+
+
 class TestMount(DMTestCase):
     # arena: bands=4, enclosed=true, gladstone/wolf/wolf_2 all start band 1, current_target
     # is "wolf" -- wolf is hostile by default (no [entity.attitudes] table of its own).
@@ -3139,8 +3270,8 @@ class TestEntityBehavior(DMTestCase):
     def test_has_condition_gates_a_behavior_entry_off_the_entitys_own_condition(self):
         # A paralyzed creature shouldn't "act" at 0 dice -- it should match nothing and stand
         # down entirely, the same "no matching entry" fallback an entity with no behavior list
-        # at all already gets. See Rules/Fantasy/reference/pathfinder_conversion.md's §1
-        # Pattern A recipe.
+        # at all already gets. See Rules/Fantasy/reference/pathfinder_mapping.toml's
+        # condition_pattern "A" recipe.
         self.dm_core.entities["paralyzed_dummy"] = {
             "name": "paralyzed_dummy", "max_hp": 20, "skills": {},
             "active_conditions": {"paralyzed": {"duration": "permanent", "dismiss": ""}},
@@ -3393,7 +3524,8 @@ class TestRoundUpkeep(DMTestCase):
     @brief The generic per-round upkeep hook (run_round_upkeep/apply_round_upkeep/
         get_condition_upkeep, DM_Status.py) and creatures.toml's "troll" -- the shipped
         regeneration-suppressed-by-fire example (see rules.toml's own "regenerating"
-        [[condition]] entry and Rules/Fantasy/reference/pathfinder_conversion.md's #6).
+        [[condition]] entry and Rules/Fantasy/reference/pathfinder_mapping.toml's
+        creature_ability "Regeneration / Fast Healing" row).
     """
 
     def setUp(self):
@@ -4574,6 +4706,424 @@ class TestConditionModifiers(DMTestCase):
         with patch("random.randint", return_value=3):
             result = self.dm_core.resolve_opposed_action("gladstone", "blades", "test_defender")
         self.assertEqual(result["difficulty"], 15)  # (6 - 1) * 3
+
+
+class TestOnHitCondition(DMTestCase):
+    """!
+    @brief on_hit_condition (an ability field) + apply_on_hit_condition (Combat_Resolution.py)
+        -- an ability applies a [[condition]] directly to whoever it just hit, no
+        [entity.test] detour needed (the Pathfinder "Wounding"/poison-on-hit shape).
+    """
+
+    def test_a_successful_hit_applies_the_named_condition(self):
+        ability = {
+            "damage_value": {"dice": 0, "pips": 0, "bonus": 0},
+            "damage_tags": ["slashing"],
+            "on_hit_condition": {"condition": "bleeding", "duration": "permanent", "dismiss": ""},
+        }
+        self.dm_core.rules.setdefault("condition", []).append(
+            {"name": "bleeding", "upkeep_damage": {"dice": 1, "pips": 0, "bonus": 0}}
+        )
+        self.dm_core.calculate_damage("gladstone", "wolf", ability)
+        self.assertIn("bleeding", self.dm_core.entities["wolf"]["active_conditions"])
+
+    def test_chance_below_100_can_fail_to_apply(self):
+        ability = {
+            "damage_value": {"dice": 0, "pips": 0, "bonus": 0},
+            "damage_tags": [],
+            "on_hit_condition": {"condition": "bleeding", "chance": 1},
+        }
+        with patch("random.randint", return_value=99):
+            self.dm_core.calculate_damage("gladstone", "wolf", ability)
+        self.assertNotIn("bleeding", self.dm_core.entities["wolf"].get("active_conditions", {}))
+
+    def test_immune_defender_never_gains_the_condition(self):
+        # wolf immune to "slashing" for this test -- a hit it's fully immune to shouldn't also
+        # inflict a condition tied to that same damage type.
+        self.dm_core.entities["wolf"]["immunity_tags"] = ["slashing"]
+        ability = {
+            "damage_value": {"dice": 0, "pips": 0, "bonus": 0},
+            "damage_tags": ["slashing"],
+            "on_hit_condition": {"condition": "bleeding"},
+        }
+        self.dm_core.calculate_damage("gladstone", "wolf", ability)
+        self.assertNotIn("bleeding", self.dm_core.entities["wolf"].get("active_conditions", {}))
+
+    def test_ability_with_no_on_hit_condition_is_unaffected(self):
+        ability = {"damage_value": {"dice": 0, "pips": 0, "bonus": 0}, "damage_tags": []}
+        self.dm_core.calculate_damage("gladstone", "wolf", ability)
+        self.assertEqual(self.dm_core.entities["wolf"].get("active_conditions", {}), {})
+
+
+class TestDamageBonusVs(DMTestCase):
+    """!
+    @brief damage_bonus_vs (an ability field) + get_damage_bonus_vs (Combat_Resolution.py) --
+        extra rolled damage that only applies against a defender of a particular kind, matched
+        by supertype/subtype (the Pathfinder "Holy"/"Bane" shape).
+    """
+
+    def test_bonus_applies_when_defenders_supertype_matches(self):
+        self.dm_core.entities["wolf"]["supertype"] = "undead"
+        ability = {
+            "damage_value": {"dice": 0, "pips": 0, "bonus": 0},
+            "damage_tags": [],
+            "damage_bonus_vs": {"supertypes": ["undead"], "value": {"dice": 0, "pips": 0, "bonus": 5}},
+        }
+        result = self.dm_core.calculate_damage("gladstone", "wolf", ability)
+        self.assertEqual(result["bonus_vs"], 5)
+        self.assertEqual(result["net_damage"], 5)
+
+    def test_bonus_does_not_apply_when_supertype_does_not_match(self):
+        # wolf's own real supertype ("creature") never matches "undead".
+        ability = {
+            "damage_value": {"dice": 0, "pips": 0, "bonus": 0},
+            "damage_tags": [],
+            "damage_bonus_vs": {"supertypes": ["undead"], "value": {"dice": 0, "pips": 0, "bonus": 5}},
+        }
+        result = self.dm_core.calculate_damage("gladstone", "wolf", ability)
+        self.assertEqual(result["bonus_vs"], 0)
+
+
+class TestEquippedSkillBonus(DMTestCase):
+    """!
+    @brief equipped_skill_bonus (an item field) + get_equipped_skill_bonus (Combat_
+        Resolution.py) -- a worn item's own passive skill-dice bonus, folded into resolve_
+        action/resolve_opposed_action (the Pathfinder "Ring/belt/wondrous stat bonus" shape).
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.dm_core.entities["ring of observation"] = {
+            "name": "ring of observation", "equipped_skill_bonus": {"skill": "observation", "dice": 1, "pips": 0},
+        }
+        self.dm_core.entities["gladstone"]["inventory"].append("ring of observation")
+        self.dm_core.entities["gladstone"]["equipped"]["ring"] = "ring of observation"
+
+    def test_get_equipped_skill_bonus_sums_a_matching_worn_item(self):
+        self.assertEqual(
+            self.dm_core.get_equipped_skill_bonus("gladstone", "observation"),
+            {"dice": 1, "pips": 0},
+        )
+
+    def test_get_equipped_skill_bonus_ignores_a_non_matching_skill(self):
+        self.assertEqual(
+            self.dm_core.get_equipped_skill_bonus("gladstone", "blades"),
+            {"dice": 0, "pips": 0},
+        )
+
+    def test_resolve_action_folds_the_worn_bonus_into_the_roll(self):
+        # gladstone's observation is 2D+0; the ring adds +1D.
+        with patch("random.randint", return_value=3):
+            result = self.dm_core.resolve_action("gladstone", "observation")
+        self.assertEqual(result["roll"], 9)  # (2 + 1) * 3
+
+    def test_resolve_opposed_action_folds_the_defenders_own_worn_bonus(self):
+        self.dm_core.entities["test_defender"] = {
+            "name": "test_defender", "skills": {"dodge": {"dice": 2, "pips": 0}},
+            "equipped": {"ring": "ring of observation"},
+        }
+        self.dm_core.entities["ring of observation"]["equipped_skill_bonus"] = {"skill": "dodge", "dice": 2, "pips": 0}
+        with patch("random.randint", return_value=3):
+            result = self.dm_core.resolve_opposed_action("gladstone", "blades", "test_defender")
+        self.assertEqual(result["difficulty"], 12)  # (2 + 2) * 3
+
+
+class TestAbilityCooldown(DMTestCase):
+    """!
+    @brief cooldown_rounds (an ability field) + tick_ability_cooldowns (Combat_Resolution.py)
+        + the derived requirement field "ability_ready:<name>" -- an ability recharges over N
+        rounds after use, and a behavior list can gate itself off the same ability meanwhile
+        (the Pathfinder "breath weapon usable once every 1d4 rounds" shape).
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.dm_core.entities["wolf"]["abilities"] = [{
+            "name": "howl", "supertype": "innate", "subtype": "weapon", "skill": "brawling",
+            "damage_tags": ["sonic"], "damage_value": {"dice": 1, "pips": 0, "bonus": 0},
+            "cooldown_rounds": 2,
+        }]
+        self.dm_core.entities["wolf"]["behavior"] = [
+            {"requirements": [{"field": "hp_per_remain", "operator": ">=", "value": 0.01}], "action": "howl"},
+        ]
+
+    def test_ability_ready_is_true_before_first_use(self):
+        self.assertTrue(self.dm_core.get_comparable_value("wolf", "ability_ready:howl"))
+
+    def test_using_the_ability_sets_its_cooldown(self):
+        self.dm_core.resolve_behavior_action("wolf", "gladstone")
+        self.assertEqual(self.dm_core.entities["wolf"]["ability_cooldowns"]["howl"], 2)
+        self.assertFalse(self.dm_core.get_comparable_value("wolf", "ability_ready:howl"))
+
+    def test_run_round_upkeep_ticks_the_cooldown_down_to_zero_and_removes_it(self):
+        self.dm_core.resolve_behavior_action("wolf", "gladstone")
+        self.dm_core.run_round_upkeep()
+        self.assertEqual(self.dm_core.entities["wolf"]["ability_cooldowns"]["howl"], 1)
+        self.dm_core.run_round_upkeep()
+        self.assertNotIn("howl", self.dm_core.entities["wolf"].get("ability_cooldowns", {}))
+        self.assertTrue(self.dm_core.get_comparable_value("wolf", "ability_ready:howl"))
+
+    def test_a_behavior_entry_can_gate_off_while_the_ability_is_on_cooldown(self):
+        self.dm_core.entities["wolf"]["behavior"] = [
+            {
+                "requirements": [
+                    {"field": "hp_per_remain", "operator": ">=", "value": 0.01},
+                    {"field": "ability_ready:howl", "operator": "==", "value": True},
+                ],
+                "action": "howl",
+            },
+            {"requirements": [{"field": "hp_per_remain", "operator": ">=", "value": 0.01}], "action": "bite"},
+        ]
+        self.dm_core.entities["wolf"]["ability_cooldowns"] = {"howl": 2}
+        behavior = self.dm_core.choose_behavior("wolf", "gladstone")
+        self.assertEqual(behavior["action"], "bite")
+
+
+class TestProximityStatuses(DMTestCase):
+    """!
+    @brief evaluate_proximity_statuses (DM_Status.py) + the [[status]] "on_action" trigger --
+        applies a condition to nearby OTHER entities off the acting entity's own requirements,
+        rather than self-applying the way "on_damage" statuses do (the Pathfinder "Fear aura/
+        Frightful Presence" shape).
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.dm_core.rules.setdefault("status", []).append({
+            "trigger": "on_action",
+            "requirements": [{"field": "subtype", "operator": "==", "value": "animal"}],
+            "apply": {"condition": "shaken", "duration": "permanent", "dismiss": "", "radius": 5, "side": "enemies"},
+        })
+
+    def test_applies_the_condition_to_a_nearby_hostile_entity(self):
+        # "wolf_2" (debug.toml's second wolf, same band as "wolf") has no [entity.attitudes]
+        # table of its own -- is_hostile treats it as hostile unconditionally, same as "wolf",
+        # so it passes the status's own side = "enemies" filter relative to the actor.
+        self.dm_core.evaluate_proximity_statuses("wolf", "on_action")
+        self.assertIn("shaken", self.dm_core.entities["wolf_2"]["active_conditions"])
+
+    def test_never_applies_the_condition_to_the_actor_itself(self):
+        self.dm_core.evaluate_proximity_statuses("wolf", "on_action")
+        self.assertNotIn("shaken", self.dm_core.entities["wolf"].get("active_conditions", {}))
+
+    def test_out_of_radius_entity_is_unaffected(self):
+        self.dm_core.rules["status"][-1]["apply"]["radius"] = 0
+        self.dm_core.entities["wolf_2"]["band"] = 5
+        self.dm_core.entities["wolf"]["band"] = 1
+        self.dm_core.evaluate_proximity_statuses("wolf", "on_action")
+        self.assertNotIn("shaken", self.dm_core.entities["wolf_2"].get("active_conditions", {}))
+
+    def test_actor_not_matching_requirements_applies_nothing(self):
+        self.dm_core.entities["wolf"]["subtype"] = "elemental"
+        self.dm_core.evaluate_proximity_statuses("wolf", "on_action")
+        self.assertNotIn("shaken", self.dm_core.entities["wolf_2"].get("active_conditions", {}))
+
+    def test_resolve_behavior_action_fires_on_action_statuses_on_a_landed_hit(self):
+        # An unarmored, skill-less target, added to the live scene so evaluate_proximity_
+        # statuses' own nearby-entity scan (self.scenario_entities) can see it, so the wolf's
+        # bite always lands -- isolating this from opposed-roll specifics, same precedent
+        # TestEntityBehavior's own test_resolve_behavior_action_strikes_back_and_applies_damage
+        # already follows.
+        self.dm_core.entities["target_dummy"] = {"name": "target_dummy", "max_hp": 20, "skills": {}}
+        self.dm_core.scenario_entities.append("target_dummy")
+        with patch("random.randint", return_value=4):
+            self.dm_core.resolve_behavior_action("wolf", "target_dummy")
+        self.assertIn("shaken", self.dm_core.entities["target_dummy"]["active_conditions"])
+
+
+class TestConcealment(DMTestCase):
+    """!
+    @brief miss_chance (a [[condition]] field) + get_concealment (Combat_Resolution.py) -- a
+        successful attack roll can still miss outright against a concealed/invisible defender,
+        unless the attacker's own ability authors ignores_concealment.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.dm_core.rules.setdefault("condition", []).append({"name": "invisible", "miss_chance": 50})
+        # dice=0 on the attacker's own skill means roll_dice consumes zero random.randint
+        # calls for the roll itself (an empty range) -- the only randint call left to control
+        # is the concealment check, so patch("random.randint", return_value=...) unambiguously
+        # targets just that roll.
+        self.dm_core.entities["test_attacker"] = {"name": "test_attacker", "skills": {"blades": {"dice": 0, "pips": 5}}}
+        self.dm_core.entities["test_defender"] = {"name": "test_defender", "skills": {}}
+        self.dm_core.apply_condition("test_defender", "invisible", duration="permanent", dismiss="")
+
+    def test_get_concealment_reads_the_active_conditions_own_miss_chance(self):
+        self.assertEqual(self.dm_core.get_concealment("test_defender"), 50)
+
+    def test_get_concealment_is_zero_with_no_matching_condition(self):
+        self.assertEqual(self.dm_core.get_concealment("test_attacker"), 0)
+
+    def test_a_roll_under_the_miss_chance_forces_an_otherwise_successful_hit_to_miss(self):
+        with patch("random.randint", return_value=50):
+            result = self.dm_core.resolve_opposed_action("test_attacker", "blades", "test_defender")
+        self.assertFalse(result["success"])
+        self.assertTrue(result["concealed_miss"])
+
+    def test_a_roll_over_the_miss_chance_leaves_the_hit_untouched(self):
+        with patch("random.randint", return_value=51):
+            result = self.dm_core.resolve_opposed_action("test_attacker", "blades", "test_defender")
+        self.assertTrue(result["success"])
+        self.assertNotIn("concealed_miss", result)
+
+    def test_ignores_concealment_bypasses_the_check_entirely(self):
+        ability = {"skill": "blades", "ignores_concealment": True}
+        with patch("random.randint", return_value=1):  # would otherwise definitely trigger a miss
+            result = self.dm_core.resolve_opposed_action("test_attacker", "blades", "test_defender", ability=ability)
+        self.assertTrue(result["success"])
+
+
+class TestStatDrain(DMTestCase):
+    """!
+    @brief drain (a [[condition]] field) + apply_condition/dismiss_condition
+        (Combat_Resolution.py) -- a permanent base-stat mutation, distinct from the ordinary
+        roll-time-only "modifier" (the Pathfinder "Energy Drained" shape).
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.dm_core.rules.setdefault("condition", []).append(
+            {"name": "energy drained", "drain": {"skill": "athletics", "dice": 1, "pips": 1}}
+        )
+
+    def test_applying_the_condition_permanently_drains_the_named_skill(self):
+        # gladstone's athletics is 2D+2.
+        self.dm_core.apply_condition("gladstone", "energy drained", duration="permanent", dismiss="")
+        self.assertEqual(self.dm_core.entities["gladstone"]["skills"]["athletics"], {"dice": 1, "pips": 1})
+
+    def test_dismissing_the_condition_restores_the_exact_drained_amount(self):
+        self.dm_core.apply_condition("gladstone", "energy drained", duration="permanent", dismiss="")
+        self.dm_core.dismiss_condition("gladstone", "energy drained")
+        self.assertEqual(self.dm_core.entities["gladstone"]["skills"]["athletics"], {"dice": 2, "pips": 2})
+
+    def test_drain_is_clamped_and_does_not_go_below_zero(self):
+        self.dm_core.rules["condition"][-1]["drain"] = {"skill": "athletics", "dice": 10, "pips": 10}
+        self.dm_core.apply_condition("gladstone", "energy drained", duration="permanent", dismiss="")
+        self.assertEqual(self.dm_core.entities["gladstone"]["skills"]["athletics"], {"dice": 0, "pips": 0})
+        self.dm_core.dismiss_condition("gladstone", "energy drained")
+        # Restores only what was actually removed (2D+2), not the nominal 10D+10.
+        self.assertEqual(self.dm_core.entities["gladstone"]["skills"]["athletics"], {"dice": 2, "pips": 2})
+
+    def test_reapplying_an_already_active_condition_does_not_double_drain(self):
+        self.dm_core.apply_condition("gladstone", "energy drained", duration="permanent", dismiss="")
+        self.dm_core.apply_condition("gladstone", "energy drained", duration="permanent", dismiss="")
+        self.assertEqual(self.dm_core.entities["gladstone"]["skills"]["athletics"], {"dice": 1, "pips": 1})
+
+    def test_condition_with_no_drain_field_is_unaffected(self):
+        self.dm_core.apply_condition("gladstone", "wounded", duration="permanent", dismiss="")
+        self.assertEqual(self.dm_core.entities["gladstone"]["skills"]["athletics"], {"dice": 2, "pips": 2})
+
+
+class TestForcedActionTargetOverride(DMTestCase):
+    """!
+    @brief override_target (a [[condition]] field) + resolve_override_target (Combat_
+        Resolution.py) -- hijacks WHO an entity's turn is aimed at, folded into resolve_
+        behavior_action (the Pathfinder Confused/Dominate shape).
+    """
+
+    def test_resolve_override_target_is_none_with_no_matching_condition(self):
+        self.assertIsNone(self.dm_core.resolve_override_target("wolf", ["gladstone", "thane"]))
+
+    def test_random_override_picks_from_the_given_candidates(self):
+        self.dm_core.rules.setdefault("condition", []).append({"name": "confused", "override_target": "random"})
+        self.dm_core.apply_condition("wolf", "confused", duration="permanent", dismiss="")
+        with patch("random.choice", return_value="thane"):
+            self.assertEqual(self.dm_core.resolve_override_target("wolf", ["gladstone", "thane"]), "thane")
+
+    def test_random_override_with_no_candidates_returns_none(self):
+        self.dm_core.rules.setdefault("condition", []).append({"name": "confused", "override_target": "random"})
+        self.dm_core.apply_condition("wolf", "confused", duration="permanent", dismiss="")
+        self.assertIsNone(self.dm_core.resolve_override_target("wolf", []))
+
+    def test_a_literal_override_resolves_to_a_real_living_entity(self):
+        self.dm_core.rules.setdefault("condition", []).append({"name": "dominated", "override_target": "thane"})
+        self.dm_core.apply_condition("wolf", "dominated", duration="permanent", dismiss="")
+        self.assertEqual(self.dm_core.resolve_override_target("wolf", []), "thane")
+
+    def test_a_literal_override_naming_a_dead_entity_resolves_to_none(self):
+        self.dm_core.entities["thane"]["hp"] = 0
+        self.dm_core.rules.setdefault("condition", []).append({"name": "dominated", "override_target": "thane"})
+        self.dm_core.apply_condition("wolf", "dominated", duration="permanent", dismiss="")
+        self.assertIsNone(self.dm_core.resolve_override_target("wolf", []))
+
+    def test_resolve_behavior_action_attacks_the_overridden_target_instead(self):
+        # wolf is normally acting against "gladstone" this turn -- "dominated" redirects it to
+        # attack "target_dummy" instead, with everything else (behavior/ability selection,
+        # range, roll, damage) running completely unchanged.
+        self.dm_core.entities["target_dummy"] = {"name": "target_dummy", "max_hp": 20, "skills": {}}
+        self.dm_core.scenario_entities.append("target_dummy")
+        self.dm_core.rules.setdefault("condition", []).append({"name": "dominated", "override_target": "target_dummy"})
+        self.dm_core.apply_condition("wolf", "dominated", duration="permanent", dismiss="")
+        with patch("random.randint", return_value=4):
+            result = self.dm_core.resolve_behavior_action("wolf", "gladstone")
+        assert result is not None
+        self.assertTrue(result.success)
+        self.assertEqual(result.defender, "target_dummy")
+        self.assertLess(self.dm_core.get_current_hp("target_dummy"), 20)
+        self.assertEqual(
+            self.dm_core.get_current_hp("gladstone"), self.dm_core.entities["gladstone"]["max_hp"],
+        )
+
+
+class TestSkillGroups(DMTestCase):
+    """!
+    @brief [[skill_group]] (rules.toml) + get_skill_group_members (Combat_Resolution.py) --
+        lets a [[condition]]'s own applies_to or an item's own equipped_skill_bonus.skill
+        address a whole cluster of skills by one shared name, standing in for the attribute
+        layer this engine deliberately doesn't have.
+    """
+
+    def test_a_defined_group_name_expands_to_its_member_skills(self):
+        # rules.toml's own shipped "strength" group.
+        self.assertEqual(
+            self.dm_core.get_skill_group_members("strength"),
+            ["strength", "athletics", "blades", "axes", "brawling"],
+        )
+
+    def test_an_undefined_name_passes_through_as_a_literal_skill(self):
+        self.assertEqual(self.dm_core.get_skill_group_members("observation"), ["observation"])
+
+    def test_a_list_mixing_a_group_and_a_literal_skill_expands_each_entry(self):
+        self.assertEqual(
+            self.dm_core.get_skill_group_members(["dexterity", "observation"]),
+            ["finesse", "acrobatics", "dodge", "escape", "observation"],
+        )
+
+    def test_condition_applies_to_a_group_penalizes_every_member_skill(self):
+        self.dm_core.rules.setdefault("condition", []).append(
+            {"name": "weakened", "modifier": {"dice": -1, "pips": 0, "bonus": 0}, "applies_to": ["strength"]}
+        )
+        self.dm_core.apply_condition("gladstone", "weakened", duration="permanent", dismiss="")
+        # "blades" is in the "strength" group -- penalized; "observation" isn't -- untouched.
+        self.assertEqual(
+            self.dm_core.get_condition_modifier("gladstone", "blades"),
+            {"dice": -1, "pips": 0, "bonus": 0},
+        )
+        self.assertEqual(
+            self.dm_core.get_condition_modifier("gladstone", "observation"),
+            {"dice": 0, "pips": 0, "bonus": 0},
+        )
+
+    def test_equipped_skill_bonus_naming_a_group_buffs_every_member_skill(self):
+        self.dm_core.entities["belt of giant strength"] = {
+            "name": "belt of giant strength", "equipped_skill_bonus": {"skill": "strength", "dice": 1, "pips": 0},
+        }
+        self.dm_core.entities["gladstone"]["inventory"].append("belt of giant strength")
+        self.dm_core.entities["gladstone"]["equipped"]["belt"] = "belt of giant strength"
+        # "blades"/"athletics" are in the "strength" group -- buffed; "observation" isn't.
+        self.assertEqual(
+            self.dm_core.get_equipped_skill_bonus("gladstone", "blades"),
+            {"dice": 1, "pips": 0},
+        )
+        self.assertEqual(
+            self.dm_core.get_equipped_skill_bonus("gladstone", "athletics"),
+            {"dice": 1, "pips": 0},
+        )
+        self.assertEqual(
+            self.dm_core.get_equipped_skill_bonus("gladstone", "observation"),
+            {"dice": 0, "pips": 0},
+        )
 
 
 class TestActionPrevented(DMTestCase):

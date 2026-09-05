@@ -530,7 +530,7 @@ bulk = 0
 value = 2
 
 # Worked example of container_capacity (see docs/inventory-items.md's "Carry capacity (bulk)"
-# and reference/pathfinder_conversion.md's Magic Items table, "Bag of Holding / Handy
+# and reference/pathfinder_mapping.toml's magic_item table, "Bag of Holding / Handy
 # Haversack / Portable Hole") -- get_current_bulk never recurses into an item's own nested
 # "inventory" in the first place, so whatever's stored inside already doesn't count against
 # whoever's carrying this bag; container_capacity is what actually bounds how much can go
@@ -545,8 +545,8 @@ value = 50
 container_capacity = 40
 inventory = [ "health potion" ]
 
-# Worked example of container_allowed_supertypes (see reference/pathfinder_conversion.md's
-# Magic Items table) -- a spellbook only ever holds spell entities; transfer_item/
+# Worked example of container_allowed_supertypes (see reference/pathfinder_mapping.toml's
+# magic_item table) -- a spellbook only ever holds spell entities; transfer_item/
 # place_new_item refuse "wrong_item_type" for anything else, whether that's a player-driven
 # give/take/trade, a loot sweep, or an ad hoc ADaM placement.
 [[entity]]

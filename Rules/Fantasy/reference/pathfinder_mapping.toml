@@ -1,0 +1,700 @@
+# Pathfinder 1e -> D6 engine mechanic-mapping table.
+#
+# Reference only -- never loaded as game data, same reason entity_schema.toml/
+# template_schema.toml aren't: load_rules (DM_Rules.py) only os.listdir()s the top level of
+# Rules/Fantasy/, one directory shallower than reference/.
+#
+# This is the machine-readable "Stage 1" lookup for a PF1e -> D6 conversion pipeline: a
+# reconstruction of a prose survey doc (git history: Rules/Fantasy/reference/
+# pathfinder_conversion.md, added 3435b43, removed ea2a846) as structured entries a script/LLM
+# can key off of, instead of a document a human has to re-read every time. Each entry answers
+# one question -- "given this Pathfinder mechanic, which engine primitive covers it, and what
+# does the TOML look like" -- for a *mechanic category*, not a specific spell/monster/item; a
+# real conversion tool classifies an incoming Pathfinder entry against these categories, then
+# fills the matched `recipe` template with that entry's own numbers.
+#
+# `fit` on every entry is one of:
+#   "full"    -- directly authorable today, no engine change needed, `recipe` shows the shape.
+#   "partial" -- authorable as an honest simplification (see `notes` for what's lost).
+#   "none"    -- no engine equivalent; `recipe` is absent. `notes` says what mechanism is
+#               missing. A conversion pipeline should surface these as "unmappable, needs a
+#               human call" rather than guessing.
+#
+# Engine primitives this file's recipes lean on (as of the 2026-09-04 survey that produced the
+# original doc): [[condition]].modifier is real dice cost (not narration-only); [[condition]]
+# can scope that modifier to specific skills via `applies_to`; [[condition]] can carry
+# `upkeep_heal`/`upkeep_damage` (+ `upkeep_blocked_by_tags`) for per-round ticks; `[[entity.
+# behavior]]` requirements can test `has_condition:<name>`/`opponent_has_condition:<name>`;
+# `resistance_bypass_tags`/`armor_bypass_tags` give DR-with-bypass ("DR 10/magic"); container
+# items can cap contents via `container_capacity`/`container_allowed_supertypes`/
+# `container_allowed_subtypes`. See docs/combat.md and docs/data-conventions.md for how these
+# actually work; this file only says which Pathfinder concept each one converts.
+
+[meta]
+sources_pathfinder = "aonprd.com (Archives of Nethys): Conditions, Universal Monster Rules, Damage Reduction/Energy Resistance/Vulnerability, Magic Items, core Magic chapter, Core Rulebook spell list."
+sources_d6 = "Settings/d6 Fantasy.pdf (core), Settings/d6 Fantasy Creatures.pdf (bestiary), Settings/d6 Magic.pdf (Vade Mecum of Magic)."
+verified_against_engine_as_of = "2026-09-04"
+scope = "Mechanic categories, not an exhaustive spell/monster/item catalog. A new piece of content is converted by recognizing which category below it falls into and following that category's recipe."
+
+# ============================================================================================
+# 1. Conditions / status effects
+# ============================================================================================
+# D6 Fantasy's own wound track (Bruised..Dead, gated on % max Body Points) is a different axis
+# from Pathfinder's ~30 independent stackable conditions -- converting one means picking the
+# right pattern below, not inventing a new subsystem per condition.
+
+[[condition_pattern]]
+id = "A"
+name = "full incapacitation (can't act at all)"
+pf_examples = ["Stunned", "Dazed", "Paralyzed", "Unconscious", "Helpless", "Nauseated", "Cowering", "Sleep"]
+summary = "A [[condition]] with prevents_action = true stops the entity from acting on its own turn at all -- DM_Core.py's _resolve_roll checks it for the player (ActionPreventedOutcome, no roll), resolve_behavior_action checks it for a creature/ally (treated as 'no behavior entry matched', no action this round). Pair with a modifier too (even though prevents_action already blocks the actor's own turn) in case a future mechanism ever rolls AGAINST this entity directly (ex: an opposed escape attempt) rather than just skipping its turn -- rules.toml's own 'pinned' does exactly this."
+recipe = '''
+[[condition]]
+name = "paralyzed"
+prevents_action = true
+modifier = { dice = -99, pips = 0, bonus = 0 }
+'''
+shipped_example = "rules.toml's pinned (maneuvers.toml's pin) is the shipped prevents_action example, though for Pattern D below, not A"
+
+[[condition_pattern]]
+id = "B"
+name = "reduced-but-not-zero action economy"
+pf_examples = ["Staggered", "Disabled", "Entangled", "Haste (extra-attack half)", "Time Stop (free-action half)"]
+summary = "No engine equivalent in either direction -- action economy is 'one clause = one turn slot' with no notion of fewer OR more slots than normal. Flatten anything with a pure dice/AC/speed component to Pattern C; leave a pure slot-count change (one action only, an extra attack) as flavor-only, don't force it into a mechanic that doesn't fit."
+fit = "none"
+
+[[condition_pattern]]
+id = "C"
+name = "flat dice-pool/roll penalty (or buff) while active"
+pf_examples = ["Shaken/Frightened/Panicked", "Sickened", "Fatigued/Exhausted", "Dazzled", "Deafened", "Bull's Strength-style ability buffs", "enraged (D6-native)"]
+summary = "The best-fitting pattern -- [[condition]].modifier is directly {dice, pips, bonus}. Use the optional `applies_to` (list of skill/skill_group names -- see get_skill_group_members) when the real effect is scoped to specific rolls (Dazzled = sight only, Deafened = sound/initiative only) instead of authoring it as a global modifier, which overstates a scoped buff and understates a scoped penalty. An ability-score buff (Bull's Strength, +4 Str) authors applies_to against a rules.toml [[skill_group]] (ex: \"strength\") instead of one named skill, buffing every skill that ability score actually governs at once -- the same trick that stands in for a real attribute layer this engine deliberately doesn't have."
+recipe = '''
+[[condition]]
+name = "shaken"
+modifier = { dice = -1, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "dazzled"
+modifier = { dice = -1, pips = 0, bonus = 0 }
+applies_to = ["observation"]
+'''
+shipped_example = "rules.toml's dazzled (applies_to = [\"observation\"])"
+
+[[condition_pattern]]
+id = "D"
+name = "no-defense / helpless-to-hit"
+pf_examples = ["Flat-Footed", "Prone", "Grappled", "Pinned"]
+summary = "These key off AC, which the engine has no equivalent of (opposed-roll defense only). Two honest translations, pick by severity: a milder case (Flat-Footed, Prone) is a Pattern-C-style defender-side modifier -- resolve_opposed_action already applies the defender's own active_conditions to their own difficulty roll independently of dice_penalty (which only ever touches the attacker's side). A full stop (Grappled/Pinned -- can't even attempt to defend) uses prevents_action = true instead, same as Pattern A -- rules.toml's own 'pinned' (only landable on an already-'grappled' target, via maneuvers.toml's 'pin') is the shipped example, keeping its own -4 modifier alongside prevents_action in case a future mechanism rolls against the pinned entity directly (ex: an opposed escape attempt)."
+recipe = '''
+[[condition]]
+name = "prone"
+modifier = { dice = -2, pips = 0, bonus = 0 }   # milder -- Flat-Footed/Prone
+
+[[condition]]
+name = "pinned"
+prevents_action = true                          # full stop -- Grappled/Pinned
+modifier = { dice = -4, pips = 0, bonus = 0 }
+'''
+fit = "full"
+shipped_example = "rules.toml's pinned"
+
+[[condition_pattern]]
+id = "E"
+name = "wound-track-adjacent (bleed, dying, stabilize)"
+pf_examples = ["Bleed", "Dying", "Stable", "Disabled"]
+summary = "These sit inside the same 'how close to death' axis the wound track already owns rather than needing a new condition. A recurring per-round damage/heal tick is upkeep_damage/upkeep_heal on a [[condition]] (run_round_upkeep, once per combat round), dismissed the ordinary dismiss_condition way (ex: a passed [entity.test])."
+recipe = '''
+[[condition]]
+name = "bleeding"
+upkeep_damage = { dice = 1, pips = 0, bonus = 0 }
+# No upkeep_blocked_by_tags -- ordinary Bleed isn't suppressed by a damage type, it's
+# dismissed by treatment instead (an [entity.test] whose pass outcome is
+# dismiss_condition = "bleeding").
+'''
+
+[[condition_pattern]]
+id = "F"
+name = "absolute / special"
+pf_examples = ["Petrified", "Incorporeal", "Invisible", "Energy Drained", "Confused"]
+summary = "Permanent-to-the-encounter defensive traits map onto tags (immunity_tags), not conditions, since they don't fade. Invisible is now a [[condition]]'s own miss_chance (get_concealment, rolled in resolve_opposed_action) rather than the is_targetable gate this row used to call for -- deliberately shallower than blocking targeting outright, since map_to_target (NLP) has no other reason to know about combat conditions. Energy Drained is now a [[condition]]'s own drain = {skill, dice, pips} (apply_condition/dismiss_condition), a permanent base-stat mutation distinct from the ordinary roll-time-only modifier. Confused is now override_target = \"random\" on a [[condition]] entry, hijacking WHO an NPC's turn is aimed at (see resolve_override_target) -- NPC-only, a Confused player is left out of scope."
+fit = "full"
+
+[[condition]]
+pf_name = "Blinded"
+pattern = "C"
+fit = "partial"
+notes = "PF is -4 to several specific skills plus can't-act-on-sight-based-checks; author as a flat -2 global penalty as the honest simplification rather than trying to enumerate every sight-based skill."
+
+[[condition]]
+pf_name = "Bleed"
+pattern = "E"
+fit = "full"
+
+[[condition]]
+pf_name = "Confused"
+pattern = "F"
+fit = "full"
+notes = "override_target = \"random\" on a [[condition]] entry (resolve_override_target, folded into resolve_behavior_action) hijacks WHO the entity's turn is aimed at -- everything downstream (behavior selection, range, roll, damage) is unaffected by which name it ends up being. NPC-only -- a Confused player would need the player's own free-text input scrambled, a much harder NLP-layer question left out of scope."
+recipe = '''
+[[condition]]
+name = "confused"
+override_target = "random"
+'''
+
+[[condition]]
+pf_name = "Cowering"
+pattern = "A"
+fit = "full"
+
+[[condition]]
+pf_name = "Dazed"
+pattern = "A"
+fit = "full"
+
+[[condition]]
+pf_name = "Dazzled"
+pattern = "C"
+fit = "full"
+notes = "Sight-only in PF -- author with applies_to = [\"observation\"] (or whichever skill covers sight-based checks in a given setting), not a global penalty."
+
+[[condition]]
+pf_name = "Deafened"
+pattern = "C"
+fit = "full"
+notes = "Initiative/sound-only in PF -- scope with applies_to rather than a global penalty."
+
+[[condition]]
+pf_name = "Dying / Stable / Disabled"
+pattern = "E"
+fit = "full"
+notes = "Already close to the engine's own mortal status shape (apply = {condition = \"unconscious\", duration = \"scene\"})."
+
+[[condition]]
+pf_name = "Energy Drained"
+pattern = "F"
+fit = "full"
+notes = "drain = {skill, dice, pips} on a [[condition]] entry permanently subtracts from the entity's own base skill dice/pips the first time it's gained, restored exactly by dismiss_condition (ex: a restoration-style spell)."
+recipe = '''
+[[condition]]
+name = "energy drained"
+drain = { skill = "strength", dice = 1, pips = 0 }
+'''
+
+[[condition]]
+pf_name = "Entangled"
+pattern = "B"
+fit = "partial"
+notes = "Flatten the '-2 attack, -4 Dex' half to a Pattern C dice penalty; the 'half speed, no run' half has no movement-system hook."
+
+[[condition]]
+pf_name = "Exhausted / Fatigued"
+pattern = "C"
+fit = "full"
+
+[[condition]]
+pf_name = "Fascinated"
+pattern = "C"
+fit = "partial"
+notes = "'Stops acting unless threatened' is a behavior-requirement shape, not a roll penalty -- author as a behavior gate (has_condition check) rather than a [[condition]] modifier."
+
+[[condition]]
+pf_name = "Flat-Footed"
+pattern = "D"
+fit = "full"
+
+[[condition]]
+pf_name = "Frightened / Panicked / Shaken"
+pattern = "C"
+fit = "full"
+notes = "Fear ladder = three severities of the same Pattern C condition (-1/-2/-3 or similar escalation); pair with a behavior entry favoring flight for the creature-AI side."
+
+[[condition]]
+pf_name = "Grappled / Pinned"
+pattern = "D"
+fit = "full"
+
+[[condition]]
+pf_name = "Helpless / Paralyzed / Unconscious / Stunned / Nauseated"
+pattern = "A"
+fit = "full"
+
+[[condition]]
+pf_name = "Incorporeal"
+pattern = "F"
+fit = "full"
+notes = "immunity_tags = [\"physical\"] layered with a narrower resistance_tags for magic damage."
+
+[[condition]]
+pf_name = "Invisible"
+pattern = "F"
+fit = "full"
+notes = "miss_chance on a [[condition]] entry (get_concealment, resolve_opposed_action) -- an otherwise-successful attack can still miss outright. Deliberately not an is_targetable gate (map_to_target/NLP has no other reason to know about combat conditions); the target can still be named and rolled against, it just still might miss."
+recipe = '''
+[[condition]]
+name = "invisible"
+miss_chance = 50
+'''
+
+[[condition]]
+pf_name = "Petrified"
+pattern = "F"
+fit = "full"
+notes = "immunity_tags (helpless + immune to most effects) combined with Pattern A (dice = -99) for the can't-act half."
+
+[[condition]]
+pf_name = "Prone"
+pattern = "D"
+fit = "full"
+
+[[condition]]
+pf_name = "Sickened"
+pattern = "C"
+fit = "full"
+
+[[condition]]
+pf_name = "Staggered"
+pattern = "B"
+fit = "partial"
+notes = "Flatten to a dice penalty; the 'one action only' half has no action-economy hook."
+
+# ============================================================================================
+# 2. Damage types & resistance/vulnerability
+# ============================================================================================
+# D6 Fantasy canon has no typed-damage system (one undifferentiated Physique-plus-armor roll,
+# edged-vs-blunt as the one mechanical exception). The engine's damage_tags/armor_tags/
+# resistance_tags/immunity_tags/vulnerability_tags system is already a deliberate extension
+# past D6 canon, built specifically for Pathfinder-style typed damage -- the one category
+# where the engine is already ahead of its own source material, not behind Pathfinder.
+
+[[damage_resistance]]
+pf_concept = "Energy type (acid/cold/electricity/fire/sonic)"
+engine_equivalent = "damage_tags entry"
+fit = "full"
+
+[[damage_resistance]]
+pf_concept = "Physical type (bludgeoning/piercing/slashing)"
+engine_equivalent = "damage_tags entry"
+fit = "full"
+
+[[damage_resistance]]
+pf_concept = "Energy Resistance N (per-instance-of-damage cap)"
+engine_equivalent = "resistance_value rolled reduction"
+fit = "partial"
+notes = "Engine rolls a die pool instead of a fixed cap -- more variance than PF's flat number, but same partial-reduction role. Don't try to force an exact N."
+
+[[damage_resistance]]
+pf_concept = "Immunity"
+engine_equivalent = "immunity_tags"
+fit = "full"
+
+[[damage_resistance]]
+pf_concept = "Vulnerability (+50% damage)"
+engine_equivalent = "vulnerability_value / vulnerability_tags"
+fit = "partial"
+notes = "Engine adds a rolled bonus rather than a fixed 50% multiplier -- same role, different math shape, don't try to force an exact percentage."
+
+[[damage_resistance]]
+pf_concept = "Hardness (object DR)"
+engine_equivalent = "none distinct from a creature's resistance_value"
+fit = "partial"
+notes = "resistance_value works identically if authored on an object-supertype entity (a door, a container) -- just not a conceptually distinct field today."
+
+[[damage_resistance]]
+pf_concept = "DR-with-bypass (\"DR 10/magic\", \"DR 5/silver\", \"DR 15/cold iron and good\")"
+engine_equivalent = "resistance_bypass_tags (defender) / armor_bypass_tags (equipped item)"
+fit = "full"
+notes = "A matching bypass tag on the incoming hit skips that side's reduction entirely, even though resistance_tags/armor_tags would otherwise have matched. Absent/empty by default -- purely additive."
+recipe = '''
+# A creature that shrugs off mundane weapons but not enchanted ones -- "DR 10/magic".
+resistance_value = { dice = 3, pips = 1 }
+resistance_tags = [ "slashing", "piercing", "bludgeoning" ]
+resistance_bypass_tags = [ "magic" ]
+
+# ...and the enchanted weapon that cuts through it -- an ordinary sword keeps
+# damage_tags = ["slashing"] and still gets reduced; this one adds "magic" too.
+[[entity]]
+name = "enchanted longsword"
+supertype = "object"
+subtype = "weapon"
+damage_value = { dice = 3, pips = 0, bonus = 0 }
+damage_tags = [ "slashing", "magic" ]
+'''
+
+# ============================================================================================
+# 3. Magic items
+# ============================================================================================
+# D6 Magic treats every magic item as a spell permanently bound into an object (point-buy
+# Spell Total math converted to a flat die-code bonus). None of item-as-bound-spell/wards/
+# alchemical crafting has an engine equivalent -- the engine's item model (usable/charges/
+# replace_with, a flat damage_value/armor_value bonus) is a much narrower abstraction on
+# purpose. That's fine for USING an item; the gap only matters for in-fiction item CRAFTING.
+# Pathfinder's slot-based wondrous-item system maps directly onto equip_slot +
+# rules.toml's [[equip_slot]] -- most Pathfinder magic items are pure data, no new mechanism.
+
+[[magic_item]]
+pf_shape = "+N weapon (flat attack/damage bonus)"
+fit = "full"
+recipe = "Fold N into the weapon's own damage_value.bonus, or its skill dice -- the engine has no separate 'attack roll' distinct from the skill check itself. A +1 longsword is just a longsword with a richer damage_value."
+
+[[magic_item]]
+pf_shape = "Flaming / Frost / Shock (+1d6 elemental on command)"
+fit = "full"
+recipe = "Add the element to damage_tags and bump damage_value.dice/.pips -- a flaming longsword keeps damage_tags = [\"slashing\"] and adds \"fire\", with dice bumped to cover the extra d6."
+
+[[magic_item]]
+pf_shape = "Keen (doubled threat range)"
+fit = "none"
+notes = "No critical-hit/threat-range mechanic at all. Not authorable without a new crit subsystem."
+
+[[magic_item]]
+pf_shape = "Holy / Unholy / Bane (bonus vs. a creature type/alignment)"
+fit = "full"
+notes = "get_damage_bonus_vs (Combat_Resolution.py) rolls an ability's own damage_bonus_vs bonus when the defender's supertype/subtype matches -- checks the defender's own classification directly rather than the vulnerability-tag workaround this row used to recommend."
+recipe = '''
+damage_bonus_vs = { supertypes = ["undead"], value = { dice = 2, pips = 0, bonus = 0 } }
+'''
+
+[[magic_item]]
+pf_shape = "Vorpal"
+fit = "none"
+notes = "No crit system to hook a decapitate-on-crit effect into."
+
+[[magic_item]]
+pf_shape = "Wounding (bleed on hit)"
+fit = "full"
+notes = "on_hit_condition (an ability field, applied by apply_on_hit_condition in calculate_damage) applies a condition directly on a successful hit, no [entity.test] detour needed -- combined with a \"bleeding\" condition's own upkeep_damage (Pattern E), this is now a direct one-field recipe."
+recipe = '''
+on_hit_condition = { condition = "bleeding", chance = 100 }
+'''
+
+[[magic_item]]
+pf_shape = "Ghost touch / Seeking"
+fit = "full"
+notes = "ignores_concealment (an ability field) bypasses a defender's own concealment/miss_chance (get_concealment) entirely -- checked in resolve_opposed_action right alongside the concealment roll it's meant to skip."
+recipe = '''
+damage_tags = [ "piercing" ]
+ignores_concealment = true
+'''
+
+[[magic_item]]
+pf_shape = "Fortification (armor: % chance to negate a crit)"
+fit = "none"
+notes = "No crit system."
+
+[[magic_item]]
+pf_shape = "Energy resistance armor (fixed absorption)"
+fit = "full"
+recipe = "Directly resistance_value/resistance_tags authored on the armor item itself -- already supported, no gap."
+
+[[magic_item]]
+pf_shape = "Spell resistance item (fixed SR while worn)"
+fit = "none"
+notes = "Nothing rolls a caster-level check against a target before a spell/ability applies -- every resolve_opposed_action cast already IS the resistance check (the defender's own opposing skill). A separate SR layer would be redundant, not additive. Skip this one."
+
+[[magic_item]]
+pf_shape = "Ring / belt / wondrous stat bonus (passive skill-dice buff from a worn, non-weapon item)"
+fit = "full"
+notes = "equipped_skill_bonus (an item field) is summed across every equipped item by get_equipped_skill_bonus and folded into resolve_action/resolve_opposed_action for whichever entity is rolling, the same way get_condition_modifier already is -- not gated by slot or by carrying a damage_value, so a ring/belt/cloak with no weapon/armor role at all works. \"skill\" may also name a rules.toml [[skill_group]] (ex: \"strength\") instead of one literal skill -- a belt of giant strength shape, buffing every skill that ability score governs at once (get_skill_group_members)."
+recipe = '''
+[[entity]]
+name = "ring of observation"
+supertype = "object"
+subtype = "ring"
+equip_slot = "ring"
+equipped_skill_bonus = { skill = "observation", dice = 1, pips = 0 }
+'''
+
+[[magic_item]]
+pf_shape = "Potions / scrolls"
+fit = "full"
+recipe = "usable = true, charges = 1, [entity.skills].healing/.poison is a potion. A scroll with a one-shot arbitrary spell effect needs _resolve_use_intent extended past its two hardcoded effect types (healing/poison) -- flag if the spell effect isn't one of those two."
+
+[[magic_item]]
+pf_shape = "Wands / staves (multi-charge, spell-slot item)"
+fit = "full"
+notes = "charges already covers 'N uses, then gone/replaced' -- mechanically identical to a health potion with more charges. Same effect-variety caveat as scrolls."
+
+[[magic_item]]
+pf_shape = "Bag of Holding / Handy Haversack / Portable Hole (container with its own capacity, independent of the carrier's load)"
+fit = "full"
+recipe = '''
+[[entity]]
+name = "bag of holding"
+supertype = "object"
+subtype = "container"
+container_capacity = 50
+# container_allowed_supertypes / container_allowed_subtypes optionally restrict WHAT the
+# container may hold at all (ex: items.toml's "spellbook", spell entities only).
+'''
+shipped_example = "items.toml's bag of holding"
+
+# ============================================================================================
+# 4. Spellcasting
+# ============================================================================================
+# D6 Magic's point-buy Spell Total system (fixed Difficulty, roll magic skill, bank excess
+# into extra effect/range/duration) is NOT what the engine implements. The engine treats every
+# spell as a hand-authored [[entity]] with supertype = "spell" (fixed skill/difficulty/range/
+# damage_value/damage_tags), resolved through the same resolve_action/resolve_opposed_action
+# path any ability uses -- see spells.toml's fireball/splash flow. Deliberate simplification:
+# no per-spell point budget, no banked result points, no failure-consequence table.
+
+[[spell_mechanic]]
+pf_concept = "Spell school (8 schools + subschools)"
+engine_equivalent = "subtype on the spell entity"
+fit = "full"
+notes = "Already used this way -- spells.toml's fireball is subtype = \"evocation\". skills.toml's arcane/miracles skills already list all 8 school names as specializations, so the vocabulary exists, just unused by any real spell yet."
+
+[[spell_mechanic]]
+pf_concept = "Saving throw type (Fort/Ref/Will)"
+engine_equivalent = "the defender's opposing skill, via skills.toml's opposes list"
+fit = "full"
+notes = "Already the mechanism -- arcane opposes [\"willpower\", \"arcane\"]. No need to add 'save types' as a separate concept, just pick the right opposing skill when authoring the spell's own skill field."
+
+[[spell_mechanic]]
+pf_concept = "Spell duration (instantaneous / rounds / permanent / concentration)"
+engine_equivalent = "duration on apply_condition, free-text"
+fit = "partial"
+notes = "Instantaneous spells need nothing (calculate_damage resolves in one shot). A buff/debuff spell (PF's '1 round/level') needs duration = \"scene\" as the closest available approximation (expires when scene/encounter logic clears it, not on a round count) since there's no real duration-timer sweep. Concentration has no engine hook at all -- treat concentration spells as ordinary fixed-duration ones, don't model concentration explicitly."
+
+[[spell_mechanic]]
+pf_concept = "Spell Resistance"
+engine_equivalent = "none"
+fit = "none"
+notes = "Skip -- already redundant with the existing opposed roll (see magic_item's spell-resistance-item row)."
+
+[[spell_mechanic]]
+pf_concept = "Metamagic (Empower/Maximize/Quicken/etc.)"
+engine_equivalent = "none"
+fit = "none"
+notes = "Spells are static TOML entities, not built at cast-time from a base spell + modifiers. A 'quickened fireball' is just a second, separate spell entity with adjusted numbers -- no mechanism for the player to apply a metamagic modifier at the point of casting."
+
+[[spell_mechanic]]
+pf_concept = "Area of effect"
+engine_equivalent = "targets = {number, aoe, side}"
+fit = "full"
+notes = "resolve_targets widens the roll to every living entity within aoe bands, filtered by side (\"enemies\"/\"allies\" via is_hostile, or \"all\") and capped at number (0 = unlimited)."
+recipe = '''
+# Indiscriminate blast -- fireball, spells.toml
+targets = { number = 0, aoe = 5, side = "all" }
+
+# Discriminating multi-target, no radius -- cleave, techniques.toml
+targets = { number = 3, aoe = 0 }
+
+# Ally-only area effect (ex: channeling)
+targets = { number = 0, aoe = 3, side = "allies" }
+'''
+
+[[spell_mechanic]]
+pf_concept = "Teleportation / movement-warping (Teleport, Dimension Door)"
+engine_equivalent = "teleport_to_band / teleport_to_location (ability fields, DM_Core.py's _apply_teleport_if_hit)"
+fit = "full"
+notes = "The band model (DM_Movement.py) has no 'jump past intervening bands' op, but a teleport effect never needed one -- band is just a field, so setting it directly (via a computed delta into the existing move_entity, which keeps its own floor/ceiling clamp) is the whole trick; no new movement verb required. Dimension Door is teleport_to_band (a direct band jump within the current room); Teleport is teleport_to_location (a jump to a different, already-known location via _enter_location, called directly so it skips the ordinary travel path's own hostile-gate/grid-cost checks -- instant, works mid-combat). Both fire unconditionally on a successful cast, the same 'not really against anyone' scope summon already has. Player-only, same scope summon/materials-consumption already keep -- not wired into a creature's own behavior."
+recipe = '''
+# Dimension Door -- a short, instant band jump within the current room. "difficulty" (any
+# small nonzero number -- _resolve_roll's own flat-check branch is gated on ability.get(
+# "difficulty") being truthy, so a bare 0 wouldn't force it) is what guarantees this resolves
+# as a flat, unopposed check even with a hostile current_target present mid-combat -- without
+# it, casting this while current_target is set would incorrectly roll opposed against that
+# target's own defenses instead of just succeeding.
+[[entity]]
+name = "dimension door"
+supertype = "spell"
+subtype = "conjuration"
+skill = "arcane"
+difficulty = 5
+teleport_to_band = 4
+
+# Teleport -- an instant jump to a different, already-known location. Same difficulty note.
+[[entity]]
+name = "teleport"
+supertype = "spell"
+subtype = "conjuration"
+skill = "arcane"
+difficulty = 5
+teleport_to_location = { location = "crypt", room = "entry_hall", band = 1 }
+'''
+
+[[creature_ability]]
+name = "Fly / Swim (submerge) / Burrow -- a creature or spell effect operating in a medium other than ground"
+primitive = "medium (an entity field) + has_medium_access (DM_Movement.py)"
+fit = "full"
+notes = "Deliberately NOT a new elevation/spatial axis -- the band model was investigated first (docs/movement-scenarios.md) and confirmed to have no terrain-blocking within a room at all today, so there was never any obstacle for Fly to 'bypass' in the first place; every entity already crosses every band freely regardless of what's narrated there. What Fly/Swim/Burrow actually need mechanically is gating who can ENGAGE whom: an entity's own optional medium (\"air\"/\"water\"/\"earth\"; absent/\"ground\" is the unconditional default, so the overwhelming majority of entities are entirely unaffected) blocks a melee-only, ground-medium attacker from reaching a non-ground defender -- checked in _resolve_roll (player)/resolve_behavior_action (NPC) as a second, independent gate alongside is_in_range's own band-distance check, reported as the same OutOfRangeOutcome. No new field needed on any weapon/spell to let ranged attacks through -- any ability with an already-authored range > 0 crosses medium freely (has_medium_access), reusing 'range' exactly as it's authored today. An NPC that can't reach its target's medium at all (no fallback movement could ever fix it) simply doesn't act that round, rather than uselessly advancing band-by-band."
+recipe = '''
+[[entity]]
+name = "giant eagle"
+supertype = "creature"
+subtype = "animal"
+medium = "air"
+speed = 3
+
+[[entity]]
+name = "giant octopus"
+supertype = "creature"
+subtype = "animal"
+medium = "water"
+
+# A burrowing ambush predator -- ground-medium creatures can't melee it until it surfaces
+# (ex: an on_action/behavior-driven medium change, or simply removing "medium" once it attacks).
+[[entity]]
+name = "ankheg"
+supertype = "creature"
+subtype = "vermin"
+medium = "earth"
+'''
+
+[[spell_mechanic]]
+pf_concept = "Pure divination / information spells (Identify, Scrying, Discern Location)"
+engine_equivalent = "none"
+fit = "none"
+notes = "Most don't resolve through a roll in Pathfinder either. The gap isn't mechanical -- it's a structured 'reveal X to the player' hook distinct from ordinary narration; closer to an ADaM (docs/adam-improvisation.md) authoring question than an engine primitive worth adding."
+
+[[spell_mechanic]]
+pf_concept = "Delayed/triggered magic (Magic Mouth, Contingency, Glyph of Warding)"
+engine_equivalent = "none"
+fit = "none"
+notes = "Nothing lets an effect lie dormant and fire later on an arbitrary future turn. Distinct from [[status]]'s on_damage trigger (only fires from damage already being dealt in live combat) -- trap/glyph magic needs a standing world object persisting across rooms/blocks/scenes, past combat's round-scoped lifetime. Would need a new 'world trigger' entity type."
+
+[[spell_mechanic]]
+pf_concept = "Mind-affecting control (Charm Person, Dominate Person)"
+engine_equivalent = "override_target on a [[condition]] entry (Confused's own mechanism, reused)"
+fit = "partial"
+notes = "Distinct from the attitude system (docs/social-dialogue.md) -- attitude drift changes disposition, feeding into behavior SELECTION, but never overrides whose input drives a turn. Charm-tier ('make them like me') is already fine via ordinary attitude nudges (maneuvers.toml's charm, Suggestion is already shipped in spells.toml). Dominate's combat-relevant slice -- forcing a dominated creature to attack on the dominator's behalf -- is now override_target authored with a literal name instead of \"random\" (the caster's own on_pass program would apply_condition the dominated target with it, naming whichever ally/target the caster wants attacked). Still partial: this only ever hijacks the COMBAT TARGET, not arbitrary spoken commands ('fetch that key', 'open the door') -- that's a narrative/ADaM question (docs/adam-improvisation.md), not an engine primitive, so real free-form Dominate obedience stays out of scope."
+recipe = '''
+# Cast by the dominator, naming who the dominated target should attack:
+[[condition]]
+name = "dominated"
+override_target = "the guard captain"   # a literal target name, chosen at cast time
+'''
+
+[[spell_mechanic]]
+pf_concept = "Polymorph / shapeshifting (Baleful Polymorph, the Polymorph line)"
+engine_equivalent = "none"
+fit = "none"
+notes = "Nothing swaps an entity's skill dice/abilities/supertype/subtype mid-scene and reverts it later. [[condition]]'s modifier is a flat delta on an unchanged base, not a stat-block replacement -- would need a new 'form override' mechanism (snapshot + later restore)."
+
+[[spell_mechanic]]
+pf_concept = "Persistent terrain/obstacle spells (Wall of Fire, Web, Wall of Stone)"
+engine_equivalent = "none"
+fit = "none"
+notes = "Distinct from targets = {number, aoe, side}, which widens a single roll once at cast time. This is a standing scene feature -- something occupies a band after the spell resolves, persists across rounds, affects whoever later enters/leaves (recurring damage, blocked movement, forced checks). Plausible as a scoped extension (a band-tagged temporary hazard object with its own duration and an on-entry hook) -- doesn't exist today."
+
+# ============================================================================================
+# 5. Creature special abilities
+# ============================================================================================
+# D6 Fantasy Creatures expresses recurring traits as ranked Special Abilities (Flight (R#),
+# Fear (R#), Natural Hand-to-Hand Weapon, Natural Armor, Accelerated Healing, ...) -- narrower
+# than Pathfinder's Universal Monster Rules glossary, but the same idea: a small reusable
+# vocabulary, not one-off-per-monster mechanics. Grouped below by which existing primitive
+# fits, not by source book -- D6's and Pathfinder's versions of "this creature regenerates"
+# want the same conversion regardless of origin.
+
+[[creature_ability]]
+name = "Natural armor / hardiness"
+primitive = "resistance_value / resistance_tags, innate (not on an equipped item)"
+fit = "full"
+shipped_example = "creatures.toml's fire elemental"
+
+[[creature_ability]]
+name = "Elemental immunity/vulnerability"
+primitive = "immunity_tags / vulnerability_value + vulnerability_tags"
+fit = "full"
+shipped_example = "creatures.toml's fire elemental (fire immunity + water vulnerability)"
+
+[[creature_ability]]
+name = "Natural weapon (claws/bite/breath)"
+primitive = "[[entity.abilities]], inline supertype = \"innate\""
+fit = "full"
+shipped_example = "gladstone's punch, the fire elemental's flame touch"
+
+[[creature_ability]]
+name = "Multiple natural attacks in one action (PF's Rend, Rake)"
+primitive = "none"
+fit = "partial"
+notes = "An entity's behavior resolves to exactly one action per round -- 'hit with two claws, then bonus rend if both connect' needs multi-action-within-one-behavior-entry, which doesn't exist. Approximate with a single ability whose damage_value folds in the expected average of both hits, rather than modeling two separate rolls."
+
+[[creature_ability]]
+name = "Regeneration / Fast Healing"
+primitive = "upkeep_heal on a [[condition]], seeded permanently via [entity.conditions.<name>]"
+fit = "full"
+shipped_example = "creatures.toml's troll"
+recipe = '''
+[entity.conditions.regenerating]
+duration = "permanent"
+
+[[condition]]
+name = "regenerating"
+upkeep_heal = { dice = 2, pips = 0, bonus = 0 }
+upkeep_blocked_by_tags = ["fire"]   # "Regeneration 10 (fire)" shape
+'''
+
+[[creature_ability]]
+name = "Breath weapon with recharge limit"
+primitive = "cooldown_rounds (an ability field) + the derived requirement field \"ability_ready:<name>\""
+fit = "full"
+notes = "An ability's own cooldown_rounds sets the acting entity's ability_cooldowns[name] the moment it's used (win or lose), ticked back down to 0 once per round by tick_ability_cooldowns. A behavior list gates back off the same ability meanwhile via {field = \"ability_ready:<name>\", operator = \"==\", value = true}, falling through to a weaker fallback entry until it recharges -- the same declaration-order pattern has_condition:<name> already uses to gate an entry off."
+recipe = '''
+[[entity.abilities]]
+name = "breath weapon"
+cooldown_rounds = 3
+targets = { aoe = 3, side = "enemies", number = 0 }
+damage_value = { dice = 6, pips = 0, bonus = 0 }
+damage_tags = ["fire"]
+
+[[entity.behavior]]
+requirements = [
+    { field = "ability_ready:breath weapon", operator = "==", value = true },
+]
+action = "breath weapon"
+
+[[entity.behavior]]
+requirements = []
+action = "bite"   # falls back to this every round the breath weapon is on cooldown
+'''
+
+[[creature_ability]]
+name = "Poison (on-hit secondary effect, often delayed)"
+primitive = "on_hit_condition applies \"poisoned\" directly; upkeep_damage covers the ticking half"
+fit = "partial"
+notes = "on_hit_condition (ability field) applies a \"poisoned\" condition directly on a successful hit, no [entity.test] detour needed, and its own upkeep_damage ticks for real once active, dismissible via dismiss_condition (ex: a passed Fortitude-style test) -- same shape as the \"bleeding\" Pattern E example. Still missing: true onset delay ('doesn't start for 1 round') -- apply_condition has no notion of a delayed start, only a delayed *end* (duration/length)."
+recipe = '''
+on_hit_condition = { condition = "poisoned", chance = 100 }
+
+[[condition]]
+name = "poisoned"
+upkeep_damage = { dice = 1, pips = 0, bonus = 0 }
+'''
+
+[[creature_ability]]
+name = "Fear aura / Frightful Presence"
+primitive = "condition Pattern C, applied via the new \"on_action\" status trigger + evaluate_proximity_statuses"
+fit = "full"
+notes = "A [[status]] entry authoring trigger = \"on_action\" (requirements checked against the acting entity itself) applies its own condition to every OTHER living entity within the apply block's own \"radius\" bands (0 = same band) and \"side\" (default \"enemies\") -- evaluate_proximity_statuses (DM_Status.py), fired once per landed hit from resolve_behavior_action/_apply_damage_if_hit. Honest simplification: fires on a landed hit, not on the bare attempt the way real Frightful Presence does (no untargeted 'roar' action exists to hook instead)."
+recipe = '''
+[[status]]
+trigger = "on_action"
+requirements = [ { field = "supertype", operator = "==", value = "dragon" } ]
+apply = { condition = "shaken", duration = "rounds", length = 3, radius = 2, side = "enemies" }
+'''
+
+[[creature_ability]]
+name = "Damage Reduction / Spell Resistance"
+primitive = "see damage_resistance / spell_mechanic sections"
+fit = "full"
+
+[[creature_ability]]
+name = "Trample / Powerful Charge / Pounce (charge-dependent)"
+primitive = "none"
+fit = "none"
+notes = "No 'charge' action distinct from an ordinary advance-then-attack; multi-action bonus-on-condition-of-movement has no hook. Skip modeling the charge-dependency; bake the bonus damage into the ability's own damage_value if the creature is expected to always fight at range-closing distance anyway."
+
+[[creature_ability]]
+name = "Swallow Whole / Constrict / Grapple-chain effects"
+primitive = "on_hit_condition applies the restraining condition directly; upkeep_damage covers the ongoing-damage half"
+fit = "partial"
+notes = "on_hit_condition now applies a Pattern-D \"grappled\"/prevents_action-style condition directly on the hit that starts the grab, in the same ability that also authors an upkeep_damage-bearing condition for the ongoing crush/digest -- author both condition names in sequence (grab applies \"grappled\", a follow-up successful attack applies \"being digested\") rather than one hit doing both at once, since on_hit_condition only names a single condition per ability. Still two hand-authored conditions chained across two hits, not one single-hit recipe, but each individual piece is now a direct field rather than a workaround."
+
+[[creature_ability]]
+name = "Ferocity (fights on below 0 HP)"
+primitive = "behavior requirements checking hp_per_remain down to any threshold"
+fit = "full"
+notes = "Already representable: a normal-attack behavior entry with hp_per_remain >= 0.01 and no explicit 'retreat' entry means the creature fights all the way to 0 HP by default -- Ferocity is arguably the engine's default, not a gap."

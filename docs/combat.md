@@ -186,8 +186,19 @@ at their own call sites, so this costs no new plumbing beyond the one added para
 `skill_name`, for the defender's side. A condition authoring no `applies_to` at all (every
 condition shipped before this field existed) still applies globally, unchanged. This is what
 lets Pathfinder's sight-only Dazzled or sound-only Deafened be authored honestly instead of as
-an oversized blanket penalty (see `Rules/Fantasy/reference/pathfinder_conversion.md`'s Pattern
+an oversized blanket penalty (see `Rules/Fantasy/reference/pathfinder_mapping.toml`'s Pattern
 C) — `rules.toml`'s own `"dazzled"` is the shipped example, `applies_to = ["observation"]`.
+
+**`applies_to` (and `equipped_skill_bonus`'s own `skill`) can name a `[[skill_group]]` instead
+of a literal skill**, expanded by `get_skill_group_members` (`Combat_Resolution.py`) — `rules.
+toml`'s own `[[skill_group]]` table (`{name, skills}`) lets a cluster of skills be addressed by
+one shared name, standing in for the attribute layer this engine deliberately doesn't have.
+Pathfinder's Bull's Strength buffs every Strength-based skill/check at once, not one named
+skill; authoring a condition's own `applies_to = ["strength"]` against `rules.toml`'s shipped
+`"strength"` group (`["strength", "athletics", "blades", "axes", "brawling"]`) gets the same
+shape without this engine needing a real ability score. A name matching no defined group is
+still just a literal skill name, unchanged — this is purely additive over every existing
+`applies_to`/`equipped_skill_bonus.skill` value, none of which name a group today.
 
 **A `[[condition]]` entry can also carry `prevents_action = true`** — unlike `modifier` (a
 penalized roll), this stops the entity from acting on its own turn at all.
@@ -238,6 +249,92 @@ block — the same "avoid swinginess from rolling repeatedly" reasoning rest's o
 healing already follows), so a regenerating creature genuinely heals while camped, not just
 mid-fight. It still checks `"recent_damage_tags"` the same way — a troll that took fire damage
 right before making camp still doesn't regenerate through that rest.
+
+
+## Pathfinder-mapping engine extensions
+
+Five additive fields/triggers, added specifically to close `fit = "partial"`/`"none"` gaps in
+`Rules/Fantasy/reference/pathfinder_mapping.toml` (a machine-readable Pathfinder 1e -> D6
+mechanic-lookup table) without touching any existing behavior -- every one of these is
+absent/inert unless a piece of content actually authors it.
+
+- **`on_hit_condition`** (an ability field, `{condition, chance, duration, length, dismiss}`) --
+  `apply_on_hit_condition` (`Combat_Resolution.py`, called from `calculate_damage`) applies a
+  `[[condition]]` directly to whoever an ability just hit, no `[entity.test]` detour needed
+  (the Pathfinder "Wounding"/poison-on-hit shape). `chance` (1-100, default 100) is the percent
+  chance it actually lands. Skipped outright if the defender is immune to the ability's own
+  `damage_tags`.
+- **`damage_bonus_vs`** (an ability field, `{supertypes, subtypes, value = {dice, pips,
+  bonus}}`) -- `get_damage_bonus_vs` rolls extra damage when the defender's own
+  `supertype`/`subtype` matches either list, added into `calculate_damage` alongside
+  `vulnerability_bonus`. The Pathfinder "Holy"/"Bane" shape (bonus vs. a creature *kind*),
+  which plain `damage_tags` overlap can't express since that only ever checks the defender's
+  resistance/immunity/vulnerability, not what it *is*.
+- **`equipped_skill_bonus`** (an item field, `{skill, dice, pips}`) -- `get_equipped_skill_bonus`
+  sums every equipped item's own matching bonus, folded into `resolve_action`/
+  `resolve_opposed_action` alongside `get_condition_modifier`, for whichever entity is rolling
+  (both sides of an opposed roll). The Pathfinder "Ring/belt/wondrous stat bonus" shape -- a
+  passive skill-dice buff from a worn item with no weapon/armor role at all, not gated by slot.
+- **`cooldown_rounds`** (an ability field) + the derived requirement field
+  `"ability_ready:<name>"` -- using a behavior-driven ability that authors `cooldown_rounds`
+  sets the acting entity's own `ability_cooldowns[name]` to that many rounds (`resolve_
+  behavior_action`, `DM_Combat.py`, regardless of hit/miss), ticked back down to 0 (removed
+  once it gets there) by `tick_ability_cooldowns`, called from `run_round_upkeep` alongside the
+  existing condition-duration tick. A behavior list gates back off the same ability meanwhile
+  via `{field = "ability_ready:<name>", operator = "==", value = true}` (`get_comparable_value`),
+  falling through to a weaker fallback entry -- the Pathfinder "breath weapon usable once every
+  1d4 rounds" shape, the same declaration-order gating `"has_condition:<name>"` already does
+  for a paralyzed/warded creature.
+- **The `[[status]]` `"on_action"` trigger** + `evaluate_proximity_statuses` (`DM_Status.py`) --
+  distinct from every existing `[[status]]` trigger (`"on_damage"`, the only other one), which
+  always self-applies its condition to whoever's HP just changed. An `"on_action"` status's own
+  `requirements` are checked against the ACTING entity, but its `apply` block's condition lands
+  on every *other* living entity within `apply.radius` bands (default 0 -- same band only) of
+  the actor, filtered by `apply.side` (default `"enemies"`, same vocabulary `targets` uses).
+  Fired once per turn that lands a real hit, from both `resolve_behavior_action` (an NPC's own
+  turn) and `_apply_damage_if_hit` (`DM_Core.py`, the player's own turn) -- the Pathfinder "Fear
+  aura/Frightful Presence" shape (fires off the attacker's own trait, not off damage taken).
+  Honest simplification: fires on a landed hit, not on the bare attack attempt real Frightful
+  Presence uses, since there's no untargeted "roar" action to hook instead; and runs no stale-
+  condition dismissal sweep the way `evaluate_statuses` does for `"on_damage"`, since re-
+  sweeping every nearby entity on each of the actor's turns would dismiss a still-fresh
+  application from a different actor's own aura sharing the same condition name.
+- **`miss_chance`** (a `[[condition]]` field, percent 0-100) -- `get_concealment` takes the
+  highest `miss_chance` across a defender's own matching active conditions (capped at 95, not
+  summed -- concealment doesn't stack additively), rolled in `resolve_opposed_action` right
+  after an otherwise-successful roll: a hit that rolls under the defender's own concealment
+  comes back `"success": False`, `"concealed_miss": True` instead. The Pathfinder Invisible/
+  concealment shape -- deliberately *not* an `is_targetable` gate at the NLP layer (`map_to_
+  target`), which would cross a seam that has no other reason to know about combat conditions.
+  An attacking ability's own `ignores_concealment` (`entity_schema.toml`) bypasses this check
+  entirely (a ghost touch/seeking weapon). Scoped to the ordinary opposed-roll path only -- a
+  flat-`difficulty` spell or an `[entity.test]` check never consults it, matching how those
+  paths already have no notion of "attack roll" the way an opposed check does.
+- **`drain`** (a `[[condition]]` field, `{skill, dice, pips}`) -- `apply_condition` permanently
+  subtracts from `entity["skills"][skill]`'s own base dice/pips the first time this condition
+  is gained (floored at 0, and skipped on a reapplication/duration-refresh of an already-active
+  instance, so it can never double-drain), stashing the *actual* amount removed (which may be
+  less than authored, if clamped) on the condition's own `active_conditions` entry.
+  `dismiss_condition` reads that stashed amount back and restores it -- no `rules` lookup
+  needed at dismissal, since the exact removed amount already travels with the condition
+  instance itself. Distinct from the ordinary `modifier` field: `modifier` is a roll-time-only
+  penalty that evaporates the instant the condition is dismissed; `drain` mutates the base
+  stat, restored only when the condition is explicitly removed (ex: a restoration-style spell's
+  own `dismiss_condition` op) -- the Pathfinder "Energy Drained" shape (permanent stat loss).
+- **`override_target`** (a `[[condition]]` field, `"random"` or a literal entity name) --
+  `resolve_override_target` hijacks WHO an entity's turn is aimed at, not whether it can act
+  (`prevents_action`) or which ability it picks (`choose_behavior` runs unaffected). Folded
+  into `resolve_behavior_action` (`DM_Combat.py`), which swaps its own `target_name` *before*
+  choosing a behavior, so a distance-based behavior choice (ex: a bandit favoring its bow at
+  range) judges the real, overridden target rather than the original one. `"random"` picks
+  uniformly from every other currently-living scene entity (the Pathfinder Confused shape); a
+  literal name is used as-is if it currently names a real, living entity, else treated as no
+  override at all (ex: the named target already died) -- the mechanical slice of Dominate
+  (attack on the dominator's behalf), authored by whatever spell applies the condition naming
+  its own chosen target. Deliberately NPC-only: `resolve_behavior_action` is the only call
+  site, so a Confused/Dominated *player* -- which would mean scrambling free-text NLP input --
+  is out of scope, the same call already made for real Dominate's "obey arbitrary commands"
+  half (a narrative/ADaM question, not an engine primitive).
 
 
 ## Damage and healing

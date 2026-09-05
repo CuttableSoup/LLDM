@@ -4,7 +4,7 @@ import re
 from dm.DM_ActionOutcome import (
     ActionPreventedOutcome, DamageEffect, DefenderDetailsEffect, LanguageBarrierOutcome, LootEffect,
     MissingSpellMaterialsOutcome, OutOfRangeOutcome, RevealEffect, RolledOutcome, SummonEffect,
-    rolled_outcome_from_roll,
+    TeleportEffect, rolled_outcome_from_roll,
 )
 from dm.DM_CharacterCreation import CharacterCreationMixin
 from dm.DM_Combat import CombatMixin
@@ -667,9 +667,15 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             # reachability check, not a difficulty modifier (see its own module note for why
             # that per-tier accuracy idea was dropped). A skill with no matching ability
             # (ex: "charisma") always comes back in range (nothing physical to be out of
-            # reach of), so this never gates a non-combat opposed check.
+            # reach of), so this never gates a non-combat opposed check. has_medium_access
+            # (DM_Movement.py) is the same "can't do it, don't roll" shape for a second,
+            # independent reason: a melee-only attacker can't touch a flying/submerged/
+            # burrowed defender regardless of band distance (the Pathfinder Fly/Swim/Burrow
+            # shape) -- reported as the same OutOfRangeOutcome, an honest simplification
+            # rather than a distinct outcome type for what's still fundamentally "can't reach
+            # them right now."
             ability = named_ability or self.find_attack_ability(self.player_name, skill_name)
-            if not self.is_in_range(self.player_name, target_name, ability):
+            if not self.is_in_range(self.player_name, target_name, ability) or not self.has_medium_access(self.player_name, target_name, ability):
                 result = OutOfRangeOutcome(self.player_name, skill_name, target_name)
             elif (
                 self._ability_requires_language(skill_name, ability)
@@ -699,7 +705,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
                 result.defender = target_name
             else:
                 roll = self.resolve_opposed_action(
-                    self.player_name, skill_name, target_name, dice_penalty=dice_penalty,
+                    self.player_name, skill_name, target_name, dice_penalty=dice_penalty, ability=ability,
                 )
                 result = rolled_outcome_from_roll(roll)
         else:
@@ -738,6 +744,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         self._consume_spell_materials_if_rolled(result, named_ability)
         self._apply_damage_if_hit(result, skill_name, named_ability, ability, target_name, via_test)
         self._apply_summon_if_hit(result, named_ability)
+        self._apply_teleport_if_hit(result, named_ability)
         self._run_ability_outcome_program(result, skill_name, named_ability, ability, target_name, via_test, input_text)
         self._attach_defender_details(result, target_name)
 
@@ -849,6 +856,13 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
                     # shape resolve_behavior_action (DM_Combat.py, an entity's own combat-turn
                     # attack) also uses -- only who's attacking differs, never the shape.
                     self._nudge_combat_hit_attitude(defender_name, self.player_name, damage.get("net_damage", 0))
+                # "on_action" statuses (ex: Frightful Presence) -- see DM_Status.py's
+                # evaluate_proximity_statuses. Fired once per player turn that actually landed
+                # at least one hit with a damage-dealing ability, not once per resolved target
+                # -- the actor's own qualifying requirements don't change per-target, so
+                # re-evaluating them once per resolve_targets() entry would be redundant work
+                # for the same result.
+                self.evaluate_proximity_statuses(self.player_name, "on_action")
 
     def _nudge_combat_hit_attitude(self, target_name, attacker_name, net_damage):
         """!
@@ -922,6 +936,53 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         summoned_name = self._summon_creature(summon_spec)
         if summoned_name:
             result.effects.append(SummonEffect(name=summoned_name))
+
+    def _apply_teleport_if_hit(self, result, named_ability):
+        """!
+        @brief Relocates the player outright if this turn's named ability authors a teleport-
+            shaped field and the roll succeeded -- mirrors _apply_summon_if_hit's own "only on
+            a successful roll" gate and its "not really 'against' anyone" scope (checked
+            regardless of target_name/via_test, same as a summon).
+
+            "teleport_to_band" (an int) jumps the player directly to that band within the
+            CURRENT room -- move_entity (DM_Movement.py) is called with the signed delta needed
+            to land there, reusing its own existing floor/ceiling clamping unchanged (Dimension
+            Door). Deliberately not a new elevation/spatial mechanic or a "jump past
+            intervening bands" movement op -- a teleport doesn't need to reuse the incremental
+            advance/retreat walk at all, since band is just a field; setting it directly (via a
+            computed delta, so the existing clamp keeps working unmodified) is the whole trick.
+
+            "teleport_to_location" ({location, room, band}) instead jumps to a different,
+            already-known location outright via _enter_location -- the exact same mechanism
+            ordinary location-to-location travel already uses, just called directly rather than
+            through _resolve_travel_intent, so it skips that path's own hostile-gate/grid-cost
+            checks entirely (instant, no travel-time charged, and works even mid-combat --
+            Teleport's whole appeal is escaping a losing fight). _enter_location's own "unknown
+            location_key" tolerance (an empty/freeform location, not an error) is unchanged here
+            -- same "malformed data degrades quietly" precedent every other loader follows.
+
+            Player-only, same scope _apply_summon_if_hit/_consume_spell_materials_if_rolled
+            already keep -- not wired into resolve_behavior_action, so an NPC's own behavior
+            can't teleport itself (or the player) today.
+        @param result The roll result from _resolve_roll, mutated in place with a
+            TeleportEffect if a relocation actually happened.
+        @param named_ability The resolved ability entity (technique/spell), or None.
+        """
+        if not result.success or not named_ability:
+            return
+
+        destination_band = named_ability.get("teleport_to_band")
+        if destination_band is not None:
+            new_band = self.move_entity(self.player_name, destination_band - self.get_band(self.player_name))
+            if new_band is not None:
+                result.effects.append(TeleportEffect(entity=self.player_name, band=new_band))
+
+        destination = named_ability.get("teleport_to_location")
+        if destination:
+            self._enter_location(
+                destination["location"], arrival_room=destination.get("room"), arrival_band=destination.get("band", 1),
+            )
+            result.effects.append(TeleportEffect(entity=self.player_name, location=destination["location"]))
 
     def _consume_spell_materials_if_rolled(self, result, named_ability):
         """!

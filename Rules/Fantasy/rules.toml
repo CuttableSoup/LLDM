@@ -147,7 +147,7 @@ modifier = { dice = -2, pips = 0, bonus = 0 }
 # "applies_to" (a list of skill names) scopes this condition's own modifier to only those
 # skills' rolls -- get_condition_modifier (Combat_Resolution.py) skips it entirely for any
 # other skill. Pathfinder's Dazzled is sight-only; without "applies_to" this would otherwise
-# be an ordinary global Pattern C penalty (see pathfinder_conversion.md's Pattern C).
+# be an ordinary global Pattern C penalty (see pathfinder_mapping.toml's condition_pattern "C").
 [[condition]]
 name = "dazzled"
 modifier = { dice = -1, pips = 0, bonus = 0 }
@@ -187,6 +187,21 @@ modifier = { dice = 1, pips = 0, bonus = 0 }
 [strength_damage]
 skill = "strength"
 divisor = 2
+
+# [[skill_group]] -- lets a [[condition]]'s own "applies_to" or an item's own
+# "equipped_skill_bonus.skill" (get_skill_group_members, Combat_Resolution.py) address a whole
+# cluster of skills by one shared name, standing in for the attribute layer this engine
+# deliberately doesn't have: Pathfinder's Bull's Strength (+4 Str) buffs every Strength-based
+# skill/check at once, not one named skill -- authoring "strength" here is how the same shape
+# is expressed without building a real attribute stat. A name that matches no group here is
+# still just a literal skill name, unchanged -- this table is purely additive.
+[[skill_group]]
+name = "strength"
+skills = [ "strength", "athletics", "blades", "axes", "brawling" ]
+
+[[skill_group]]
+name = "dexterity"
+skills = [ "finesse", "acrobatics", "dodge", "escape" ]
 
 # Carry-capacity formula -- get_max_bulk (DM_Rules.py) reads this once per lookup: min_bulk plus
 # this entity's own "skill" dice times mod_multiplier (ex: a 2D strength character here carries

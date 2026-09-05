@@ -49,6 +49,21 @@ usable only in the target's own band. A reach weapon extends that by one band; a
 weapon/spell reaches however far its data says, with no accuracy difference across that range.
 `is_in_range` is `True` unconditionally when `ability` is `None` (a non-physical check).
 
+**Medium (Fly/Swim/Burrow) is a classification, not a second spatial axis.** The band model has
+no terrain-blocking within a room at all — every entity already crosses every band freely
+regardless of what's narrated there, so there was never an obstacle for Fly to bypass in the
+first place. What Fly/Swim(submerge)/Burrow actually need mechanically is gating who can *engage*
+whom: an entity's own optional `medium` (`"air"`/`"water"`/`"earth"`; absent/`"ground"` is the
+default every entity implicitly has) is read by `has_medium_access` (`DM_Movement.py`), a second,
+independent reachability gate alongside `is_in_range` — a melee-only (`range` 0/absent) attacker
+whose own `medium` doesn't match a non-`"ground"` defender's can't reach it at all, reported as
+the same `OutOfRangeOutcome` `is_in_range`'s own failure already produces. Any ability with an
+already-authored `range > 0` crosses medium freely, no new field needed on existing ranged
+weapons/spells. Checked in `_resolve_roll` (the player's own turn) and, *separately* from
+`is_in_range`, in `resolve_behavior_action` (an NPC's own turn) — a medium mismatch there means
+the entity simply doesn't act this round rather than falling back to `"advance"`, since closing
+band distance can never fix it (a grounded wolf will never "catch up" to a flying bird).
+
 
 ## Scenarios, locations, and rooms
 

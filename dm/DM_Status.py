@@ -147,6 +147,18 @@ class StatusMixin(DMCoreProtocol):
         """
         return Combat_Resolution.dismiss_condition(self.entities, self.event_bus, entity_name, condition_name)
 
+    def get_skill_group_members(self, name_or_names):
+        """!
+        @brief Expands a skill/group name (or a list of them) through rules.toml's own
+            [[skill_group]] table -- {name, skills} entries standing in for the attribute
+            layer this engine deliberately doesn't have (see get_condition_modifier's own
+            applies_to / DM_Combat.py's get_equipped_skill_bonus, the two consumers).
+        @param name_or_names A single skill/group name, or a list of them.
+        @return A flat list of real skill names (groups expanded); a name matching no defined
+            group passes through unchanged as a single-element result.
+        """
+        return Combat_Resolution.get_skill_group_members(self.rules, name_or_names)
+
     def get_condition_modifier(self, entity_name, skill_name=None):
         """!
         @brief Sums the {dice, pips, bonus} roll modifier of every one of entity_name's own
@@ -164,6 +176,33 @@ class StatusMixin(DMCoreProtocol):
         @return A {"dice", "pips", "bonus"} dict, each defaulting to 0 if nothing applies.
         """
         return Combat_Resolution.get_condition_modifier(self.entities, self.rules, entity_name, skill_name)
+
+    def resolve_override_target(self, entity_name, candidates):
+        """!
+        @brief Resolves entity_name's own active override_target -- a [[condition]]'s own
+            field hijacking WHO this entity's turn is aimed at (Pathfinder Confused/Dominate)
+            -- to a real, currently-living target name. Folded into resolve_behavior_action
+            (DM_Combat.py), which swaps its own target_name before choosing/resolving the
+            actual attack, so everything downstream is unaffected by which name this returns.
+        @param entity_name The name of the entity to check.
+        @param candidates A pool of other currently-living scene entities an "override_target
+            = \"random\"" condition picks from.
+        @return The resolved target name, or None if nothing overrides (or the override can't
+            currently resolve to anyone real).
+        """
+        return Combat_Resolution.resolve_override_target(self.entities, self.rules, entity_name, candidates)
+
+    def get_concealment(self, entity_name):
+        """!
+        @brief The highest "miss_chance" of any of entity_name's own active_conditions with a
+            matching [[condition]] entry authoring one -- the Pathfinder concealment/Invisible
+            shape (a successful attack roll can still just miss outright). Folded into
+            resolve_opposed_action (DM_Combat.py) unless the attacker's own ability authors
+            "ignores_concealment".
+        @param entity_name The name of the entity to check.
+        @return The effective miss_chance (0-95), 0 if nothing applies.
+        """
+        return Combat_Resolution.get_concealment(self.entities, self.rules, entity_name)
 
     def is_action_prevented(self, entity_name):
         """!
@@ -290,7 +329,7 @@ class StatusMixin(DMCoreProtocol):
         """!
         @brief Applies one round's worth of upkeep (see apply_round_upkeep) to every living
             entity currently in the scene -- the generic per-round hook
-            Rules/Fantasy/reference/pathfinder_conversion.md flagged as the shared
+            Rules/Fantasy/reference/pathfinder_mapping.toml flagged as the shared
             prerequisite for Bleed/Regeneration/Fast Healing/poison-with-onset. Called once
             per round, after every actor's own turn has already resolved (see
             _resolve_combat_round, DM_Core.py), so a condition's own upkeep_blocked_by_tags
@@ -310,6 +349,12 @@ class StatusMixin(DMCoreProtocol):
             watch (DM_Travel.py's _roll_night_watch) with length=1, expiring the first time this
             same entity's upkeep runs after gaining it, docs/downtime.md's "Night watch and
             surprise".
+
+            Also ticks down every entry in the entity's own "ability_cooldowns"
+            (Combat_Resolution.tick_ability_cooldowns) -- set whenever a behavior fires an
+            ability authoring "cooldown_rounds" (DM_Combat.py's resolve_behavior_action),
+            counted back down to 0 (removed entirely once it gets there) the same once-per-
+            round cadence as the condition-duration tick just above.
         """
         for entity_name in list(self.scenario_entities):
             if self.get_current_hp(entity_name) <= 0:
@@ -318,6 +363,7 @@ class StatusMixin(DMCoreProtocol):
             self._run_round_upkeep_program(entity_name)
             self._expire_summon_if_due(entity_name)
             Combat_Resolution.tick_condition_durations(self.entities, self.event_bus, entity_name, "rounds")
+            Combat_Resolution.tick_ability_cooldowns(self.entities, entity_name)
 
     def _run_round_upkeep_program(self, entity_name):
         """!
@@ -467,6 +513,52 @@ class StatusMixin(DMCoreProtocol):
             ability = {"damage_value": outcome["damage"], "damage_tags": outcome.get("damage_tags", [])}
             effects["damage"] = self.calculate_damage(entity_name, self.player_name, ability)
         return effects or None
+
+    def evaluate_proximity_statuses(self, actor_name, trigger):
+        """!
+        @brief Applies a status trigger that fires off the ACTING entity's own qualifying
+            requirements but lands the resulting condition on every OTHER nearby living
+            entity, rather than on the actor itself -- the Pathfinder "Fear aura/Frightful
+            Presence" shape (Rules/Fantasy/reference/pathfinder_mapping.toml's
+            creature_ability row), distinct from evaluate_statuses' own on_damage statuses,
+            which always self-apply to whoever's HP just changed. A [[status]] entry opts into
+            this shape by authoring trigger = "on_action" (the only trigger this checks;
+            "on_damage" statuses are untouched and still only ever self-apply) with an "apply"
+            block carrying two extra optional keys beyond the ones evaluate_statuses already
+            reads: "radius" (bands, default 0 -- only entities sharing actor_name's own band,
+            which already covers a melee-adjacent aura; a wider aura authors a larger number)
+            and "side" (default "enemies", relative to actor_name, same vocabulary
+            resolve_targets' own "targets" table uses -- "allies" or "all" also valid).
+            requirements are checked against actor_name only, never the entities that end up
+            gaining the condition. Deliberately doesn't run evaluate_statuses' own stale-
+            condition dismissal sweep -- an "on_action" condition's own duration/length governs
+            its expiry the ordinary way, and re-sweeping every nearby entity each time the
+            actor acts again would dismiss a still-fresh application from a different actor's
+            own aura sharing the same condition name.
+        @param actor_name The entity whose own action just happened (ex: a dragon that just
+            landed a bite).
+        @param trigger The trigger name to evaluate -- "on_action" for every shipped use today.
+        """
+        for status in self.get_applicable_statuses(actor_name, trigger):
+            apply_block = status.get("apply")
+            if not apply_block or not apply_block.get("condition"):
+                continue
+            radius = apply_block.get("radius", 0)
+            side = apply_block.get("side", "enemies")
+            for target_name in self.scenario_entities:
+                if target_name == actor_name or self.get_current_hp(target_name) <= 0:
+                    continue
+                if self.get_distance_between(actor_name, target_name) > radius:
+                    continue
+                if side == "enemies" and not self.is_hostile(target_name, actor_name):
+                    continue
+                if side == "allies" and self.is_hostile(target_name, actor_name):
+                    continue
+                self.apply_condition(
+                    target_name, apply_block["condition"],
+                    duration=apply_block.get("duration"), length=apply_block.get("length"),
+                    dismiss=apply_block.get("dismiss"),
+                )
 
     def evaluate_statuses(self, entity_name, trigger):
         """!
