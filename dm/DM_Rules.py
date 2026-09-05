@@ -19,7 +19,7 @@ PLAYER_PLACEHOLDER = "player"
 def scenario_file_path(scenario_name, setting="Fantasy"):
     """!
     @brief Resolves a scenario name to its file path under Rules/<setting>/scenarios/.
-    @param scenario_name The scenario's filename without extension (ex: "arena", "tavern").
+    @param scenario_name The scenario's filename without extension (ex: "debug", "lost_coast").
     @param setting Which Rules/ subdirectory to resolve against (ex: "Fantasy", "Zombie") --
         each setting is a self-contained TOML data pack (its own skills/rules/entities/
         scenarios), never mixed with another setting's, so a scenario name only has to be
@@ -36,9 +36,6 @@ def list_available_scenarios(setting="Fantasy"):
         a choice before any DMCore exists -- same "pure, DMCore-independent, re-scan the TOML
         directly" precedent Character_Creation.py's load_character_creation_data sets, since
         GUICore needs this list before it can know whether a DMCore will ever exist.
-        character_test.toml/scenario_entity_test.toml are deliberately excluded -- minimal
-        scenarios built solely for TestCharacterCreationRename/TestScenarioLocalEntities, not
-        real ones to offer a player.
     @param setting Which Rules/ subdirectory to scan -- see scenario_file_path.
     @return A list of (scenario_key, display_name, description) tuples, sorted by key. A
         scenario file that's missing or fails to parse is silently skipped, the same
@@ -53,8 +50,6 @@ def list_available_scenarios(setting="Fantasy"):
         if not filename.endswith(".toml"):
             continue
         key = filename[: -len(".toml")]
-        if key in ("character_test", "scenario_entity_test"):
-            continue
         try:
             with open(os.path.join(scenarios_dir, filename), "rb") as f:
                 data = tomllib.load(f)
@@ -494,7 +489,7 @@ class RulesMixin(DMCoreProtocol):
             this), so a scenario-local entity/template can reuse a shared name on purpose to
             override it for this one scenario, and so both are re-populated fresh on every
             load, same as everything load_rules itself loads.
-        @param scenario_name The scenario's filename without extension (ex: "arena", "tavern").
+        @param scenario_name The scenario's filename without extension (ex: "debug", "lost_coast").
         @raises FileNotFoundError if no matching scenario file exists. Unlike load_rules'
                 blanket per-file try/except, a missing/malformed scenario is fatal on purpose:
                 silently continuing with an empty self.scenario used to let LLMCore narrate an
@@ -564,7 +559,7 @@ class RulesMixin(DMCoreProtocol):
               unchanged regardless of which template is_player=true or whatever a freshly
               created character was renamed to (see DM_CharacterCreation.py).
             - "template" -- looked up in self.entity_templates instead (see, ex:
-              Rules/Fantasy/scenarios/tavern_random.toml's own [[entity_template]] tables), a
+              Rules/Fantasy/scenarios/debug.toml's own [[entity_template]] tables), a
               stub with no hand-authored [entity.skills]/
               max_hp/name of its own. NpcGenerationMixin._apply_npc_generation fills those in
               immediately after the instance is stored, mutating it in place (it has to
@@ -793,7 +788,7 @@ class RulesMixin(DMCoreProtocol):
         """!
         @brief Instances (or, for a room visited before, restores) room_key's own "entities"
             list and merges it with whatever's already persistent in self.persistent_entities
-            (the player, plus anything else declared at [scenario].entities -- ex: crypt.toml's
+            (the player, plus anything else declared at [scenario].entities -- ex: debug.toml's
             "thane") -- shared by load_scenario (the dungeon's starting room) and enter_room
             (every later transition), so both go through the exact same visited-rooms
             bookkeeping. A room's own entity list never includes the player -- only room-local
@@ -834,7 +829,7 @@ class RulesMixin(DMCoreProtocol):
             LLM round trip just to immediately overwrite the result with saved values).
         """
         # Seeds any location a scenario wants already known ahead of a first visit (ex:
-        # plains.toml's own known_locations -- ordinarily "having visited it," but "some other
+        # debug.toml's own known_locations -- ordinarily "having visited it," but "some other
         # in-fiction means" per docs/downtime.md's "Travel" covers a map the player starts
         # with). A no-op union with whatever's already known -- harmless to re-run on every
         # load_scenario call (__init__, load_game, an ad hoc test scenario).

@@ -1,7 +1,7 @@
 # thane/anne used to live here too, but they were test/placeholder party members, not finished
-# characters meant to be shared -- each now lives solely as a local [[entity]] table in the
-# scenario file(s) that actually use it (arena.toml/crypt.toml's own thane, crypt.toml's own
-# anne). "gladstone" stays here -- it's the one entity template every setting boot needs
+# characters meant to be shared -- each now lives solely as a local [[entity]] table in
+# debug.toml, the scenario file that actually uses them (its own thane/anne). "gladstone" stays
+# here -- it's the one entity template every setting boot needs
 # resolvable via is_player = true *before* any scenario loads (_resolve_player_name runs right
 # after load_rules, before load_scenario_definition), so it can never be scenario-local.
 

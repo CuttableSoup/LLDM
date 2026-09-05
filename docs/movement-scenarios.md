@@ -26,7 +26,8 @@ nothing can reach the fleeing entity.
 
 **Party formation.** Every `is_party` entity carries its own `follow_offset` (int, default 0),
 read by `_apply_party_formation` to snap that entity's band to `player_band + follow_offset`
-(ex: `crypt.toml`'s `anne` trails one band behind to favor her ranged spellwork). This is a flat
+(ex: `debug.toml`'s `anne`, in its own `crypt` area, trails one band behind to favor her ranged
+spellwork). This is a flat
 teleport, not a speed-limited move, and only ever fires where the *player's* band changes
 (`advance_or_retreat`, `enter_room`, `_enter_location`) — never from a creature/ally's own combat-turn movement,
 which stays free to drift out of formation until the player's next move snaps it back. The
@@ -51,24 +52,28 @@ weapon/spell reaches however far its data says, with no accuracy difference acro
 
 ## Scenarios, locations, and rooms
 
-`Rules/Fantasy/scenarios/*.toml` (`arena`, `tavern`, `field`, `dungeon`, `crypt`, `town`, plus
-`character_test`/`scenario_entity_test`/`npc_generation_test` — see "Testing") each hold one
-`[scenario]` table, kept in their own subdirectory so multiple scenarios can coexist without the
-flat `load_rules` scan (which only keeps the last `[scenario]` table it reads) overwriting one
-with another. Every scenario is `[scenario]` (just `name`/`description`/`start_location`) →
+`Rules/Fantasy/scenarios/*.toml` (`debug`, the single hub-and-spoke developer/test scenario --
+see "Testing" -- plus `lost_coast`, kept separate as the one real shipped scenario) each hold
+one `[scenario]` table, kept in their own subdirectory so multiple scenarios can coexist without
+the flat `load_rules` scan (which only keeps the last `[scenario]` table it reads) overwriting
+one with another. Every scenario is `[scenario]` (just `name`/`description`/`start_location`) →
 one or more `[[location]]` tables → optionally, per location, one or more `[[location.room]]`
 tables — a location is a *superset* of a room, not a sister of it: `[[location.room]]`/
 `[[location.room.exit]]` behave exactly like an ordinary room/exit, just nested one level
 deeper. `Rules/Fantasy/reference/location_schema.toml`
-is the field-by-field reference for the `[[location]]` shape.
+is the field-by-field reference for the `[[location]]` shape. `debug.toml` itself is a worked
+example of a multi-location scenario at real scale: a freeform `debug_hub` location with a
+`[[location.exit]]` to each of its dozen-plus areas, each pointing back via its own
+`return_to = "debug_hub"` — the same hub-and-spoke pattern `debug.toml`'s own
+`town_square`/`blacksmith`/`old_well` sub-graph already uses at a smaller scale, just one level up.
 
 **A location may declare `entities` directly, `[[location.room]]`, or both.** On a location with
-no rooms at all (ex: `town.toml`'s `town_square`/`blacksmith`), `entities` is genuinely
+no rooms at all (ex: `debug.toml`'s `town_square`/`blacksmith`), `entities` is genuinely
 freeform — no bands, every entry lands at an implicit band 1 (same default
 `_instance_entities` already applies to any band-less entry) — fine for anywhere that never
 needs real positioning. On a location that *does* have `[[location.room]]` (opted into only
 when real positioning is needed — combat with meaningful advance/retreat/range, or a genuine
-multi-room interior, ex: `crypt.toml`'s whole dungeon, wrapped in one location), `entities`
+multi-room interior, ex: `debug.toml`'s own `crypt` area, wrapped in one location), `entities`
 instead plays exactly the role a room's own `entities` doesn't: whoever persists across *every*
 room in that location's own graph (ex: `crypt`'s `thane`/`anne`, following the player from room
 to room) — still positioned via ordinary room bands, not freeform. A room's own `entities` list
@@ -90,34 +95,43 @@ reserved sentinel `"player"` (`DM_Rules.py`'s `PLAYER_PLACEHOLDER`, resolved to
 `persistent_names` regardless, *without* re-instancing them: unlike `thane`/`anne`,
 re-instancing the player via `_instance_entities` on every new location's first visit would
 silently wipe `active_conditions` (any status effect gained mid-playthrough), since that
-unconditionally overwrites from the template's static `conditions` field. `town.toml`'s own
-locations never name the player at all, relying entirely on this guarantee.
+unconditionally overwrites from the template's static `conditions` field. `debug.toml`'s own
+`town_square`/`blacksmith`/`old_well` locations never name the player at all, relying entirely
+on this guarantee.
 
 **A scenario file can define its own `[[entity]]`/`[[entity_template]]` tables**, sibling to
 `[scenario]`/`[[location]]`, scoped to this one scenario — letting a boss, one-off prop, or NPC-
 generation stub live in the same file as the scenario referencing it. `load_scenario_definition`
 reads these into `self.entities`/`self.entity_templates` after `load_rules` has run, so a
 scenario-local entity can reuse a shared name on purpose to override it just for this scenario.
-`scenario_entity_test.toml` (excluded from `list_available_scenarios`) exists solely to
-exercise this.
+`debug.toml`'s own `vault_specter_stub` entity_template (see its `vault` area) exists solely to
+exercise this, deliberately never referenced by any location/room `entities` list.
 
-**Every real gameplay scenario owns its own local copy of every npc/creature entity it
-references** — playable standalone, without a shared creatures/characters file.
+**Every area of `debug.toml` owns its own local copy of every npc/creature entity it
+references** — the same "playable standalone, no shared creatures/characters file" convention
+every one of its former separate scenario files followed on its own before the merge.
 `characters.toml` keeps only `gladstone` (`_resolve_player_name` scans `self.entities` right
 after `load_rules`, before any scenario loads, so the one template every boot needs resolvable
 via `is_player = true` can never be scenario-local); `creatures.toml` keeps only `fire
-elemental` (used directly by `test_unit.py`'s damage-reduction tests). An entity shared across
-scenario files (ex: `wolf` between `arena.toml`/`field.toml`) is kept in sync by hand — no
-single source of truth, the tradeoff self-containment makes on purpose. Items are out of scope
-for this — a scenario's NPCs can still reference a shared item (ex: `field.toml`'s `bandit`
-names `items.toml`'s `short bow`).
+elemental` (used directly by `test_unit.py`'s damage-reduction tests). Items are out of scope
+for this self-containment convention — an area's NPCs can still reference a shared item (ex:
+`debug.toml`'s own `bandit`, in its `field_grounds` area, names `items.toml`'s `short bow`).
 
-`DMCore.__init__(event_bus, scenario_name="arena")` loads via `load_scenario_definition`, which
+`DMCore.__init__(event_bus, scenario_name="debug")` loads via `load_scenario_definition`, which
 raises `FileNotFoundError` for an unknown name (fatal on purpose — an empty `self.scenario`
 would let the LLM hallucinate an opening scene with no real content), then `load_scenario()` →
 `_enter_location(self.scenario.get("start_location"))`. `_instance_entities` deep-copies each
 named template into an independent instance, tags it with its starting `band`, disambiguates
-duplicates (`wolf`, `wolf_2`, ...), and gives each instance its own `entity_id`.
+duplicates (`wolf`, `wolf_2`, ...), and gives each instance its own `entity_id`. An optional
+`start_location` constructor param overrides `self.scenario["start_location"]` right after
+`load_scenario_definition`, before `load_scenario()` ever reads it — the mechanism
+`tests/test_unit.py`'s `DMTestCase` uses to land directly in one specific area of `debug.toml`
+(ex: `start_location="crypt"`) instead of always booting into `debug_hub`. It's an `__init__`-only
+override, not persisted anywhere on the instance — `DM_Persistence.py`'s `load_game` re-derives
+`self.scenario` from scratch via the same `load_scenario_definition`/`load_scenario` path and
+has no way to see it, so a resumed save still transits through the scenario file's own raw
+`start_location` for a moment before jumping to wherever the save actually left off (harmless
+for real play, which never passes this param in the first place).
 
 `enter_room(room_key, arrival_band)` — the room-to-room move — is gated on the current room declaring a matching exit at the player's
 band and on no living hostile remaining. Moves only the player's band; HP/inventory/currency/

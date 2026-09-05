@@ -494,7 +494,7 @@ value = 1
 
 # Worked example of [entity.craft] (see CLAUDE.md's "Crafting" and reference/entity_schema.toml)
 # -- craftable via either strength or finesse (whichever gladstone is better-trained in gets
-# auto-selected), needs the blacksmith's own forge (town.toml) nearby, and consumes its own
+# auto-selected), needs the blacksmith's own forge (debug.toml) nearby, and consumes its own
 # materials whether the roll succeeds or fails.
 [[entity]]
 name = "iron dagger"

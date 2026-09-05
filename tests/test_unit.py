@@ -166,12 +166,18 @@ class TestEventBus(unittest.TestCase):
 class DMTestCase(unittest.TestCase):
     """Shared setUp for tests that just need a fresh DMCore over a real scenario.
     Subclasses set scenario_name to pick which one, and override setUp (calling
-    super().setUp() first) to also capture events or otherwise extend the fixture."""
-    scenario_name = "arena"
+    super().setUp() first) to also capture events or otherwise extend the fixture.
+    start_location overrides which of "debug" scenario's own many areas to land in --
+    None (the default) leaves it at "debug".toml's own start_location ("arena_grounds"),
+    which is what every subclass that never overrides either attribute relies on."""
+    scenario_name = "debug"
+    start_location = "arena_grounds"
 
     def setUp(self):
         self.event_bus = EventBus()
-        self.dm_core = DMCore(self.event_bus, scenario_name=self.scenario_name)
+        self.dm_core = DMCore(
+            self.event_bus, scenario_name=self.scenario_name, start_location=self.start_location,
+        )
 
     def _stub_roll_dice(self, roll_result):
         """Forces every dice roll anywhere in the resolution graph (Combat_Resolution.py) to
@@ -1216,7 +1222,8 @@ class TestActionDrivenAttitudeDrift(DMTestCase):
         of nudge_attitude's own "attitude_deltas"/TALK_ATTITUDE_DRIFT_CAP -- combat hit wiring is
         covered separately, in TestDamageCalculation, right where _apply_damage_if_hit lives.
     """
-    scenario_name = "tavern"
+    scenario_name = "debug"
+    start_location = "tavern_floor"
 
     def test_event_scales_every_axis_by_magnitude(self):
         base = self.dm_core.entities["innkeeper"]["attitudes"]["default"]
@@ -1531,7 +1538,7 @@ class TestMovementAndRange(DMTestCase):
 
 
     def test_move_entity_is_unbounded_when_not_enclosed(self):
-        field = DMCore(EventBus(), scenario_name="field")  # bands=6, enclosed=false
+        field = DMCore(EventBus(), scenario_name="debug", start_location="field_grounds")  # bands=6, enclosed=false
         field.entities["wolf"]["band"] = 6
         self.assertEqual(field.move_entity("wolf", 20), 26)  # no ceiling at all -- can flee
 
@@ -2020,7 +2027,7 @@ class TestHitch(DMTestCase):
 
 
 class TestDowntime(DMTestCase):
-    # arena.toml authors no [time] table, so DM_Time.py's own default (24 hours/day, 16
+    # debug.toml authors no [time] table, so DM_Time.py's own default (24 hours/day, 16
     # daylight, 3 blocks/day -- an 8-hour block) is what every test here exercises.
 
     def test_get_time_state_starts_at_day_zero_block_zero_daytime(self):
@@ -2110,12 +2117,13 @@ class TestDowntime(DMTestCase):
 
 
 class TestGridTravel(DMTestCase):
-    # plains.toml: "trailhead" (grid 0,0, start_location) and "border_stones" (grid 24,0), both
+    # debug.toml: "trailhead" (grid 0,0, start_location) and "border_stones" (grid 24,0), both
     # seeded into known_locations by the scenario's own [scenario].known_locations, both inside
     # world_map.toml's "the open plains" region (-60..120 x, -60..60 y) naming the "plains"
     # environment. rules.toml's [travel] default_speed is 24 (1 grid unit = 1 mile -- see that
     # file's own comment), so this 24-mile hop costs exactly one block.
-    scenario_name = "plains"
+    scenario_name = "debug"
+    start_location = "trailhead"
 
     def _stub_encounter_roll(self, result):
         """Forces DM_Encounters.py's own resolve_varied_value call to always return result,
@@ -2289,13 +2297,13 @@ class TestGridTravel(DMTestCase):
         self.assertEqual(self.dm_core.current_location_key, "trailhead")  # never moved
 
     def _add_party_member(self, name):
-        # Both of plains.toml's locations author an empty "entities" list, so a freeform
+        # Both of debug.toml's locations author an empty "entities" list, so a freeform
         # _enter_location rebuilds scenario_entities from location_runtime's own cached
         # persistent_names on every arrival (DM_Rules.py) -- a name merely appended to
         # scenario_entities directly would be wiped out the moment travel's own
         # _enter_location(destination_key) runs. Seeding it into both locations' own
         # persistent_names instead makes it survive travel exactly like a real
-        # hand-authored ally (ex: crypt.toml's thane) would.
+        # hand-authored ally (ex: debug.toml's thane) would.
         self.dm_core.entities[name] = {
             "is_party": True, "name": name, "hp": 10, "max_hp": 10, "skills": {},
         }
@@ -2448,7 +2456,7 @@ class TestGridTravel(DMTestCase):
     def test_rest_at_a_location_with_no_grid_never_consults_an_environment(self):
         # A location with no "grid" field at all has no environment mapped onto it --
         # _current_environment resolves to None, so rest behaves exactly as it did before this
-        # existed (see TestDowntime, which exercises this same path against arena.toml).
+        # existed (see TestDowntime, which exercises this same path against debug.toml).
         self.dm_core.locations["trailhead"].pop("grid")
         calls = self._stub_encounter_roll("wild boar")
         self.dm_core.current_block = 2
@@ -2572,7 +2580,7 @@ class TestGridTravel(DMTestCase):
         self.dm_core.apply_damage("wild boar", 5)
         self.dm_core.save_game(slot)
 
-        fresh_dm = DMCore(EventBus(), scenario_name="plains")
+        fresh_dm = DMCore(EventBus(), scenario_name="debug", start_location="trailhead")
         fresh_dm.load_game(slot)
 
         # current_location_key resolves to a real, non-empty location (not {}) -- the
@@ -2600,7 +2608,7 @@ class TestGridTravel(DMTestCase):
         self.dm_core.rest(2)
         self.dm_core.save_game(slot)
 
-        fresh_dm = DMCore(EventBus(), scenario_name="plains")
+        fresh_dm = DMCore(EventBus(), scenario_name="debug", start_location="trailhead")
         fresh_dm.load_game(slot)
 
         self.assertIsNotNone(fresh_dm.pending_downtime)
@@ -2626,10 +2634,17 @@ class TestGridTravel(DMTestCase):
         })
         self.dm_core.save_game(slot)
 
-        fresh_dm = DMCore(EventBus(), scenario_name="plains")
+        fresh_dm = DMCore(EventBus(), scenario_name="debug", start_location="trailhead")
         fresh_dm.load_game(slot)
 
-        self.assertEqual(fresh_dm.known_locations, {"trailhead", "border_stones"})
+        # load_game's own load_scenario_definition/load_scenario re-derivation has no way to
+        # see the "trailhead" start_location override above (that's an __init__-only param) --
+        # it lands at debug.toml's own raw [scenario].start_location ("debug_hub") for a moment
+        # before jumping to this save's real position, and that transient landing is enough to
+        # mark "debug_hub" known too, permanently. Real play is unaffected: a normal boot with
+        # no override already starts at debug_hub, so this never adds anything a real player
+        # save wouldn't already have picked up at the very first turn.
+        self.assertEqual(fresh_dm.known_locations, {"trailhead", "border_stones", "debug_hub"})
 
     def test_watch_rotation_index_round_trips_through_save_and_load(self):
         slot = "test_watch_rotation_index_round_trip"
@@ -2639,7 +2654,7 @@ class TestGridTravel(DMTestCase):
         self.dm_core.watch_rotation_index = 3
         self.dm_core.save_game(slot)
 
-        fresh_dm = DMCore(EventBus(), scenario_name="plains")
+        fresh_dm = DMCore(EventBus(), scenario_name="debug", start_location="trailhead")
         fresh_dm.load_game(slot)
 
         self.assertEqual(fresh_dm.watch_rotation_index, 3)
@@ -2654,6 +2669,9 @@ class TestWorldMapExpansion(DMTestCase):
     # overrides that slowdown back to the plain default_speed of 24, so the shipped trip still
     # costs exactly 3 blocks (distance 60 / speed 24), a single day.
     scenario_name = "lost_coast"
+    start_location = None  # lost_coast.toml is its own file, untouched by the debug.toml merge --
+    # None leaves its own [scenario].start_location ("sandpoint") alone, overriding
+    # DMTestCase's own "arena_grounds" default, which doesn't exist in this scenario at all.
 
     def _stub_encounter_roll(self, result):
         original = DM_Encounters.resolve_varied_value
@@ -2665,7 +2683,7 @@ class TestWorldMapExpansion(DMTestCase):
         self.assertIsNone(self.dm_core._resolve_region_terrain(1000, 1000))
 
     def test_effective_speed_multiplier_is_1_0_with_nothing_authored(self):
-        # plains.toml's own region authors no "terrain" at all -- the regression guard that
+        # debug.toml's own region authors no "terrain" at all -- the regression guard that
         # "nothing authored" still behaves exactly as it did before terrain/roads existed.
         self.assertEqual(self.dm_core._effective_speed_multiplier(1000, 1000), 1.0)
 
@@ -3086,7 +3104,7 @@ class TestEntityBehavior(DMTestCase):
         self.resolved = self._capture("round_resolved")
 
     def test_choose_behavior_matches_while_the_entity_is_alive(self):
-        # arena.toml's wolf: a single behavior, "always bite while hp_per_remain >= 0.01".
+        # debug.toml's wolf: a single behavior, "always bite while hp_per_remain >= 0.01".
         behavior = self.dm_core.choose_behavior("wolf")
         assert behavior is not None
         self.assertEqual(behavior["action"], "bite")
@@ -4303,7 +4321,7 @@ class TestSummoning(DMTestCase):
         # inserts self.player_name directly without re-instancing it, so this doesn't collide
         # with the "gladstone" the parent setUp already instanced once via "arena" (unlike
         # explicitly listing {"name": "gladstone", ...} again here, which would instead produce
-        # a second, orphaned "gladstone_2" instance -- see town.toml's own real-scenario
+        # a second, orphaned "gladstone_2" instance -- see debug.toml's own real-scenario
         # precedent for this same "never name the player" convention).
         self._load_ad_hoc_scenario([])
         self.assertIsNone(self.dm_core.current_target)
@@ -4320,7 +4338,7 @@ class TestSummoning(DMTestCase):
         self.assertFalse(any(isinstance(effect, DamageEffect) for effect in action.effects))
 
     def test_apply_summon_if_hit_against_a_hostile_target_ticks_this_rounds_upkeep_too(self):
-        # arena.toml's own default scenario already has a hostile wolf as current_target --
+        # debug.toml's own default scenario already has a hostile wolf as current_target --
         # this exercises the targeted cast path (a flat check against the spell's own authored
         # difficulty of 10; gladstone's 2D arcane at a fixed per-die value of 5 rolls exactly
         # 10), and confirms _resolve_combat_round's own run_round_upkeep (which fires later in
@@ -4340,11 +4358,12 @@ class TestSummoning(DMTestCase):
 
 
 class TestBandit(DMTestCase):
-    # "bandit" is field.toml's own local entity now (creatures.toml no longer carries one --
+    # "bandit" is debug.toml's own local entity now (creatures.toml no longer carries one --
     # see its own comment) -- booting "field" first is what makes it resolvable at all, before
     # setUp below overrides self.dm_core.scenario/re-runs load_scenario() with a custom band
     # layout.
-    scenario_name = "field"
+    scenario_name = "debug"
+    start_location = "field_grounds"
 
     def setUp(self):
         super().setUp()
@@ -4570,7 +4589,7 @@ class TestActionPrevented(DMTestCase):
 
 class TestScenarioLoading(DMTestCase):
     def test_duplicate_entities_get_unique_instance_names(self):
-        # arena.toml's own location lists gladstone and thane (persistent across the whole
+        # debug.toml's own location lists gladstone and thane (persistent across the whole
         # location); its one room lists wolf twice (room-local) -- scenario_entities is
         # persistent_entities + this room's own instances, in that order.
         self.assertEqual(self.dm_core.scenario_entities, ["gladstone", "thane", "wolf", "wolf_2"])
@@ -4578,7 +4597,7 @@ class TestScenarioLoading(DMTestCase):
         self.assertIn("wolf_2", self.dm_core.entities)
 
     def test_current_target_defaults_to_the_first_hostile_entity_skipping_allies(self):
-        # thane (non-hostile, an ally) is listed after both wolves in arena.toml, but even if
+        # thane (non-hostile, an ally) is listed after both wolves in debug.toml, but even if
         # it weren't, current_target must never default to an ally -- it's chosen by hostility,
         # not by list position.
         self.assertEqual(self.dm_core.current_target, "wolf")
@@ -4752,7 +4771,7 @@ class TestChallengeRating(unittest.TestCase):
 
 class TestChallengeRatingDMCoreIntegration(DMTestCase):
     """!
-    @brief get_challenge_rating/get_party_challenge_rating (DM_Combat.py) against arena.toml's
+    @brief get_challenge_rating/get_party_challenge_rating (DM_Combat.py) against debug.toml's
         real gladstone/thane/wolf data -- confirms the DMCore-side glue (finding each entity's
         best damage-dealing weapon/ability, filtering the party by is_player/is_party) feeds
         Challenge_Rating.py's pure math the right numbers, not just that the math itself is
@@ -4782,7 +4801,7 @@ class TestChallengeRatingDMCoreIntegration(DMTestCase):
 class TestXpAward(DMTestCase):
     """!
     @brief _award_xp_for_defeat (DM_Combat.py), triggered from calculate_damage the moment a
-        hostile entity's HP first reaches 0 -- arena.toml's own gladstone (is_player, starts
+        hostile entity's HP first reaches 0 -- debug.toml's own gladstone (is_player, starts
         with exp = 100)/thane (is_party, no authored "exp" -- starts at the implicit 0) and its
         first wolf (hostile by default, challenge rating 21 -- TestChallengeRatingDMCoreIntegration).
     """
@@ -5491,7 +5510,7 @@ class TestImprovisation(DMTestCase):
         self.assertIn("wolf", self.dm_core.removed_entities)
 
         # Simulates a revisit/reload re-instancing the scenario's own static entities list --
-        # "wolf" must not respawn just because arena.toml still declares it (unlike "wolf_2",
+        # "wolf" must not respawn just because debug.toml still declares it (unlike "wolf_2",
         # a separate instance never removed, which should still be there).
         self.dm_core.load_scenario()
         self.assertNotIn("wolf", self.dm_core.scenario_entities)
@@ -5936,14 +5955,15 @@ class TestReachableEntityNames(DMTestCase):
 class TestShopScenario(DMTestCase):
     """!
     @brief End-to-end proof (mocked LLM, no live Ollama needed) that Rules/Fantasy/
-        scenarios/shop.toml's "shopkeeper" can sell "most general goods... despite not being
+        scenarios/debug.toml's "shopkeeper" can sell "most general goods... despite not being
         defined entities" (the scenario this file exists to exercise) -- TARGET_CENTRIC_INTENTS'
         own "trade" handling in DM_Improvisation.py. "dagger" is the shopkeeper's one real,
-        hand-authored good (shop.toml's own local shopkeeper entity), kept deliberately sparse
+        hand-authored good (debug.toml's own local shopkeeper entity), kept deliberately sparse
         so this test can show both the ordinary trade path and the ad hoc one working side by
         side.
     """
-    scenario_name = "shop"
+    scenario_name = "debug"
+    start_location = "general_store"
 
     def setUp(self):
         super().setUp()
@@ -6028,12 +6048,13 @@ class TestShopScenario(DMTestCase):
 class TestNpcGenerationDMCoreIntegration(DMTestCase):
     """!
     @brief _instance_entities' entity_template branch (DM_Rules.py/DM_NpcGeneration.py)
-        against npc_generation_test.toml's own local "generated_stranger" entity_template --
+        against debug.toml's own local "generated_stranger" entity_template --
         no live LLM, NPC_Generation._real_call_chat_completion is patched with a deterministic
         fake so this stays part of the fast offline suite (see test_integration.py for a real
         end-to-end Ollama round trip).
     """
-    scenario_name = "npc_generation_test"
+    scenario_name = "debug"
+    start_location = "generation_grounds"
 
     def setUp(self):
         self.fake_call_log = []
@@ -6104,7 +6125,7 @@ class TestNpcGenerationDMCoreIntegration(DMTestCase):
         self.assertTrue(-40 <= familiarity <= 40)
 
     def test_player_attitude_token_is_substituted_with_the_live_player_name(self):
-        # npc_generation_test.toml's own generated_stranger authors this override toward the
+        # debug.toml's own generated_stranger authors this override toward the
         # literal token "player" -- it must resolve to whichever entity is actually
         # is_player = true (gladstone), not stay keyed to a string no live entity is ever named.
         name_overrides = self.dm_core.entities["generated_stranger"]["attitudes"]["name"]
@@ -6177,7 +6198,7 @@ class TestNpcGenerationDMCoreIntegration(DMTestCase):
         self.assertEqual(len(self.fake_call_log), 1)  # only the original setUp() generation
 
     def test_entity_templates_are_never_accidentally_referenced(self):
-        # scenario_entity_test.toml's own "vault_specter_stub" is a real entity_template that
+        # debug.toml's own "vault_specter_stub" is a real entity_template that
         # its own [scenario].entities deliberately never references (see
         # TestScenarioLocalEntities) -- unlike self.dm_core (this class's own
         # npc_generation_test fixture, which already has a *live*, generated
@@ -6186,7 +6207,7 @@ class TestNpcGenerationDMCoreIntegration(DMTestCase):
         # "Scenarios and rooms"), self.entities here has no "vault_specter_stub" at all -- only
         # self.entity_templates does, proving the lookup itself is what's isolated, not just
         # that this particular scenario never happens to collide.
-        dm = DMCore(EventBus(), scenario_name="scenario_entity_test")
+        dm = DMCore(EventBus(), scenario_name="debug", start_location="vault")
         self.assertIn("vault_specter_stub", dm.entity_templates)
         self.assertNotIn("vault_specter_stub", dm.entities)
 
@@ -6219,7 +6240,8 @@ class TestAmbientEncounterSkipsLlmGeneration(DMTestCase):
         so resolving it here is a genuine template lookup, not a name collision with an
         already-instanced live entity.
     """
-    scenario_name = "scenario_entity_test"
+    scenario_name = "debug"
+    start_location = "vault"
 
     def test_ambient_trigger_never_calls_the_llm_even_for_a_generate_true_template(self):
         def fail_if_called(*args, **kwargs):
@@ -6253,7 +6275,7 @@ class TestCharacterCreationDMCoreIntegration(DMTestCase):
             "race": "elf",
             "allocation": {"arcane": 5, "stealth": 5, "observation": 5},
         }
-        dm = DMCore(EventBus(), scenario_name="arena", character=character)
+        dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds", character=character)
         self.assertEqual(dm.entities["gladstone"]["skills"]["arcane"], {"dice": 8, "pips": 0})
         self.assertEqual(dm.entities["gladstone"]["skills"]["strength"], {"dice": 1, "pips": 0})
         # A skill the character sheet never touches still exists, at the elf's own baseline --
@@ -6266,7 +6288,7 @@ class TestCharacterCreationDMCoreIntegration(DMTestCase):
             "race": "elf",
             "allocation": {"arcane": 5, "stealth": 5, "observation": 5},
         }
-        dm = DMCore(EventBus(), scenario_name="arena", character=character)
+        dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds", character=character)
         self.assertEqual(dm.entities["gladstone"]["languages"], ["common", "elvish"])
 
     def test_human_character_gains_no_new_language_since_common_is_already_there(self):
@@ -6274,7 +6296,7 @@ class TestCharacterCreationDMCoreIntegration(DMTestCase):
             "race": "human",
             "allocation": {"arcane": 5, "stealth": 5, "observation": 5},
         }
-        dm = DMCore(EventBus(), scenario_name="arena", character=character)
+        dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds", character=character)
         self.assertEqual(dm.entities["gladstone"]["languages"], ["common"])
 
     def test_pip_spend_trains_a_skill_further_using_the_players_own_starting_exp(self):
@@ -6283,7 +6305,7 @@ class TestCharacterCreationDMCoreIntegration(DMTestCase):
             "allocation": {"arcane": 5, "stealth": 5, "observation": 5},
             "pip_spend": ["arcane"],
         }
-        dm = DMCore(EventBus(), scenario_name="arena", character=character)
+        dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds", character=character)
         # arcane: 3 baseline + 5 allocated = 8D -- one more pip costs 8 XP, gladstone starts
         # at exp = 100 (characters.toml).
         self.assertEqual(dm.entities["gladstone"]["skills"]["arcane"], {"dice": 8, "pips": 1})
@@ -6293,7 +6315,7 @@ class TestCharacterCreationDMCoreIntegration(DMTestCase):
         # "allocation" absent entirely -- pip_spend still trains gladstone's own hand-authored
         # skills directly (characters.toml's own blades = 5D).
         character = {"pip_spend": ["blades"]}
-        dm = DMCore(EventBus(), scenario_name="arena", character=character)
+        dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds", character=character)
         self.assertEqual(dm.entities["gladstone"]["skills"]["blades"], {"dice": 5, "pips": 1})
         self.assertEqual(dm.entities["gladstone"]["exp"], 100 - 5)
 
@@ -6304,7 +6326,7 @@ class TestCharacterCreationDMCoreIntegration(DMTestCase):
         errors = []
         event_bus.subscribe("log_error", errors.append)
 
-        dm = DMCore(event_bus, scenario_name="arena", character=character)
+        dm = DMCore(event_bus, scenario_name="debug", start_location="arena_grounds", character=character)
 
         self.assertEqual(dm.entities["gladstone"]["skills"]["blades"], {"dice": 5, "pips": 0})
         self.assertEqual(dm.entities["gladstone"]["exp"], 100)
@@ -6317,9 +6339,9 @@ class TestCharacterCreationRename(unittest.TestCase):
         name field) plus the generic "player" scenario placeholder (DM_Rules.py's
         PLAYER_PLACEHOLDER/_instance_entities) that lets a renamed character actually appear
         in a scenario without the scenario itself needing to know that name. Uses
-        Rules/Fantasy/scenarios/character_test.toml -- a minimal scenario built solely to
-        exercise this mechanism, not one of the "real" gameplay scenarios (arena/tavern/
-        field/dungeon/crypt), so neither can drift out of sync with the other.
+        Rules/Fantasy/scenarios/debug.toml's own "arena_grounds"/"crypt" areas -- their own
+        scenario-local "wolf"/"anne" give this exactly the rename-collision/attitude-rekey
+        targets it needs.
     """
 
 
@@ -6329,7 +6351,7 @@ class TestCharacterCreationRename(unittest.TestCase):
             "allocation": {"arcane": 5, "stealth": 5, "observation": 5},
             "name": "Aria",
         }
-        dm = DMCore(EventBus(), scenario_name="character_test", character=character)
+        dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds", character=character)
 
         self.assertEqual(dm.player_name, "Aria")
         self.assertNotIn("gladstone", dm.entities)  # re-keyed away, not left behind
@@ -6350,11 +6372,11 @@ class TestCharacterCreationRename(unittest.TestCase):
             "allocation": {"arcane": 5, "stealth": 5, "observation": 5},
             # A load_rules-level collision (creatures.toml's own "fire elemental") --
             # test_renaming_to_a_scenario_local_entitys_name_is_also_rejected below covers the
-            # scenario-local case (character_test.toml's own "wolf").
+            # scenario-local case (debug.toml's own "wolf").
             "name": "fire elemental",
         }
 
-        dm = DMCore(bus, scenario_name="character_test", character=character)
+        dm = DMCore(bus, scenario_name="debug", start_location="arena_grounds", character=character)
 
         self.assertEqual(dm.player_name, "gladstone")  # rename rejected
         self.assertEqual(dm.entities["gladstone"]["skills"]["arcane"], {"dice": 8, "pips": 0})
@@ -6364,7 +6386,7 @@ class TestCharacterCreationRename(unittest.TestCase):
 
     def test_renaming_to_a_scenario_local_entitys_name_is_also_rejected(self):
         # apply_character_creation now runs after load_scenario_definition specifically so
-        # this collision (against character_test.toml's own local "wolf", not anything in the
+        # this collision (against debug.toml's own local "wolf", not anything in the
         # shared Rules/Fantasy/*.toml catalog) is caught too -- previously it wasn't, since
         # the scenario's own entities hadn't been loaded into self.entities yet at the point
         # the rename's collision check ran.
@@ -6377,7 +6399,7 @@ class TestCharacterCreationRename(unittest.TestCase):
             "name": "wolf",
         }
 
-        dm = DMCore(bus, scenario_name="character_test", character=character)
+        dm = DMCore(bus, scenario_name="debug", start_location="arena_grounds", character=character)
 
         self.assertEqual(dm.player_name, "gladstone")  # rename rejected
         self.assertEqual(dm.entities["gladstone"]["skills"]["arcane"], {"dice": 8, "pips": 0})
@@ -6385,7 +6407,7 @@ class TestCharacterCreationRename(unittest.TestCase):
         self.assertTrue(any("rename rejected" in message for message in errors))
 
     def test_renaming_rekeys_another_entitys_attitude_override_to_the_new_name(self):
-        # crypt.toml's own "anne" authors [[entity.attitudes.name]] gladstone = [100, 100, 100]
+        # debug.toml's own "anne" authors [[entity.attitudes.name]] gladstone = [100, 100, 100]
         # -- a rename has to carry that override forward or anne's own scripted warmth toward
         # the player silently stops applying the moment they're renamed.
         character = {
@@ -6393,7 +6415,7 @@ class TestCharacterCreationRename(unittest.TestCase):
             "allocation": {"arcane": 5, "stealth": 5, "observation": 5},
             "name": "Aria",
         }
-        dm = DMCore(EventBus(), scenario_name="crypt", character=character)
+        dm = DMCore(EventBus(), scenario_name="debug", start_location="crypt", character=character)
 
         anne_overrides = dm.entities["anne"]["attitudes"]["name"]
         self.assertNotIn({"gladstone": [100, 100, 100]}, anne_overrides)
@@ -6404,7 +6426,7 @@ class TestCharacterCreationRename(unittest.TestCase):
         # LLDM.py's CLI quick-boot path (a scenario + a bare character name, no interactive
         # point-buy) passes exactly this shape -- {"name": ...} with no "race"/"allocation" at
         # all -- so the skill/race override step must be skippable independently of the rename.
-        dm = DMCore(EventBus(), scenario_name="character_test", character={"name": "Aria"})
+        dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds", character={"name": "Aria"})
 
         self.assertEqual(dm.player_name, "Aria")
         self.assertNotIn("gladstone", dm.entities)
@@ -6468,7 +6490,7 @@ class TestZombieArchetypeCharacterCreation(unittest.TestCase):
         # No Rules/Fantasy/races.toml race authors "starting_items" -- confirms the new
         # field is purely additive and doesn't change existing Fantasy chargen behavior.
         character = {"race": "elf", "allocation": {"arcane": 5, "stealth": 5, "observation": 5}}
-        dm = DMCore(EventBus(), scenario_name="arena", character=character)
+        dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds", character=character)
         # characters.toml's own hand-authored gladstone starting gear, untouched.
         self.assertIn("longsword", dm.entities["gladstone"]["inventory"])
 
@@ -6479,7 +6501,7 @@ class TestScenarioLocalEntities(unittest.TestCase):
         load_scenario_definition) -- lets a scenario-specific entity/NPC-generation stub live
         in the same file as the scenario that references it, instead of needing to be authored
         into a shared file like creatures.toml. Uses
-        Rules/Fantasy/scenarios/scenario_entity_test.toml, whose "vault sentinel" entity and
+        Rules/Fantasy/scenarios/debug.toml, whose "vault sentinel" entity and
         "vault_specter_stub" template exist nowhere else -- if load_scenario_definition didn't
         load them, [scenario].entities' reference to the former would fail with "unknown
         entity" and never make it into scenario_entities at all, and the latter would be
@@ -6487,14 +6509,14 @@ class TestScenarioLocalEntities(unittest.TestCase):
     """
 
     def test_scenario_local_entity_is_loaded_and_instanced(self):
-        dm = DMCore(EventBus(), scenario_name="scenario_entity_test")
+        dm = DMCore(EventBus(), scenario_name="debug", start_location="vault")
 
         self.assertEqual(dm.entities["vault sentinel"]["max_hp"], 10)
         self.assertEqual(dm.entities["vault sentinel"]["supertype"], "creature")
         self.assertIn("vault sentinel", dm.scenario_entities)
 
     def test_scenario_local_entity_template_is_loaded(self):
-        dm = DMCore(EventBus(), scenario_name="scenario_entity_test")
+        dm = DMCore(EventBus(), scenario_name="debug", start_location="vault")
 
         self.assertEqual(dm.entity_templates["vault_specter_stub"]["subtype"], "undead")
         # A stub template -- never instanced (not referenced by [scenario]/[[room]] entities),
@@ -6722,10 +6744,11 @@ class TestOllamaLauncher(unittest.TestCase):
 
 
 class TestLockedChest(DMTestCase):
-    # Rules/Fantasy/scenarios/dungeon.toml puts the player alone with a locked chest
+    # Rules/Fantasy/scenarios/debug.toml puts the player alone with a locked chest
     # (items.toml's "chest": [entity.test] {difficulty=12, skill=["finesse"]}, starting
     # condition "locked").
-    scenario_name = "dungeon"
+    scenario_name = "debug"
+    start_location = "cellar"
 
     def setUp(self):
         super().setUp()
@@ -6773,9 +6796,10 @@ class TestLockedChest(DMTestCase):
 
 
 class TestItemInteraction(DMTestCase):
-    # dungeon.toml's chest carries a "cursed dagger" plus currency=20, for exercising
+    # debug.toml's chest carries a "cursed dagger" plus currency=20, for exercising
     # examine (read-only) vs take (transfers) without any dice roll involved.
-    scenario_name = "dungeon"
+    scenario_name = "debug"
+    start_location = "cellar"
 
     def setUp(self):
         super().setUp()
@@ -6889,7 +6913,8 @@ class TestItemInteraction(DMTestCase):
 
 
 class TestItemTargetedSkillCheck(DMTestCase):
-    scenario_name = "dungeon"
+    scenario_name = "debug"
+    start_location = "cellar"
 
     def setUp(self):
         super().setUp()
@@ -6926,7 +6951,8 @@ class TestItemTargetedSkillCheck(DMTestCase):
 
 
 class TestOpenClose(DMTestCase):
-    scenario_name = "dungeon"
+    scenario_name = "debug"
+    start_location = "cellar"
 
     def setUp(self):
         super().setUp()
@@ -6953,9 +6979,10 @@ class TestOpenClose(DMTestCase):
 
 
 class TestBulk(DMTestCase):
-    # dungeon.toml's chest (cursed dagger, bulk 1) -- same fixture TestItemInteraction/
+    # debug.toml's chest (cursed dagger, bulk 1) -- same fixture TestItemInteraction/
     # TestOpenClose already use for take/open.
-    scenario_name = "dungeon"
+    scenario_name = "debug"
+    start_location = "cellar"
 
     def setUp(self):
         super().setUp()
@@ -7015,7 +7042,7 @@ class TestBulk(DMTestCase):
         self.assertIn("cursed dagger", self.dm_core.entities["gladstone"]["inventory"])
 
     def test_trade_is_denied_once_it_would_exceed_max_bulk_and_charges_no_currency(self):
-        # dungeon.toml's chest doubles as a "shop" -- same reuse
+        # debug.toml's chest doubles as a "shop" -- same reuse
         # test_trade_charges_the_items_toml_value (TestGiveAndTrade) relies on, just against the
         # scenario's own already-instanced chest rather than a fresh ad hoc one (a second ad hoc
         # "chest" would collide with this class's own scenario_name = "dungeon" load in setUp
@@ -7114,9 +7141,10 @@ class TestBulk(DMTestCase):
 
 
 class TestGiveAndTrade(DMTestCase):
-    # tavern.toml's innkeeper -- a living recipient, unlike the dungeon's chest, so give
+    # debug.toml's innkeeper -- a living recipient, unlike the dungeon's chest, so give
     # actually has somewhere sensible to go.
-    scenario_name = "tavern"
+    scenario_name = "debug"
+    start_location = "tavern_floor"
 
     def setUp(self):
         super().setUp()
@@ -7194,7 +7222,7 @@ class TestGiveAndTrade(DMTestCase):
 
 
     def test_trade_charges_the_items_toml_value_and_moves_it_to_the_player(self):
-        # dungeon.toml's chest holds "cursed dagger" (value = 5); tavern's innkeeper has
+        # debug.toml's chest holds "cursed dagger" (value = 5); tavern's innkeeper has
         # neither, so build an ad-hoc scenario reusing the chest as a "shop" for this test.
         self._load_ad_hoc_scenario([{"name": "gladstone", "band": 1}, {"name": "chest", "band": 1}])
         self.dm_core.dismiss_condition("chest", "locked")
@@ -7218,7 +7246,7 @@ class TestGiveAndTrade(DMTestCase):
         # inserts self.player_name directly without re-instancing it, so this doesn't collide
         # with the "gladstone" the parent setUp already instanced once via "arena" (unlike
         # explicitly listing {"name": "gladstone", ...} again here, which would instead produce
-        # a second, orphaned "gladstone_2" instance -- see town.toml's own real-scenario
+        # a second, orphaned "gladstone_2" instance -- see debug.toml's own real-scenario
         # precedent for this same "never name the player" convention).
         self._load_ad_hoc_scenario([])
 
@@ -7336,7 +7364,7 @@ class TestCrafting(DMTestCase):
     # items.toml's "iron dagger" ([entity.craft]: skill=["strength","finesse"], difficulty=10,
     # requires_station="forge", materials=2x iron ingot + 1x leather strip) is globally loaded
     # (items.toml, not scenario-local) regardless of scenario_name -- "arena" (DMTestCase's own
-    # default) is fine; only the "forge" station itself (town.toml-local) needs manually placing.
+    # default) is fine; only the "forge" station itself (debug.toml-local) needs manually placing.
     def setUp(self):
         super().setUp()
         self.action_events = self._capture("action_resolved")
@@ -7482,7 +7510,8 @@ class TestEquipUnequipDrop(DMTestCase):
 
 
 class TestInventoryTransfer(DMTestCase):
-    scenario_name = "dungeon"
+    scenario_name = "debug"
+    start_location = "cellar"
 
 
     def test_loot_entity_moves_currency_and_every_inventory_item(self):
@@ -7498,9 +7527,10 @@ class TestInventoryTransfer(DMTestCase):
 
 
 class TestNpcDialogue(DMTestCase):
-    # Rules/Fantasy/scenarios/tavern.toml puts the player with a friendly NPC (its own local
+    # Rules/Fantasy/scenarios/debug.toml puts the player with a friendly NPC (its own local
     # innkeeper) instead of the default "arena" combat scenario.
-    scenario_name = "tavern"
+    scenario_name = "debug"
+    start_location = "tavern_floor"
 
     def setUp(self):
         super().setUp()
@@ -7546,7 +7576,8 @@ class TestFreeformDialogue(DMTestCase):
         charisma skill check path). scenario "tavern" puts the player with a friendly NPC
         (its own local innkeeper), same fixture TestNpcDialogue itself uses.
     """
-    scenario_name = "tavern"
+    scenario_name = "debug"
+    start_location = "tavern_floor"
 
     def setUp(self):
         super().setUp()
@@ -7567,7 +7598,7 @@ class TestFreeformDialogue(DMTestCase):
         # Unlike combat targeting, dialogue never gates on hostility -- addressing something
         # hostile (ex: shouting at a wolf mid-fight) is allowed. "fire elemental" is already
         # loaded as a template (creatures.toml, via load_rules, regardless of scenario) even
-        # though tavern.toml never instances it -- just needs to be added to the live scene
+        # though debug.toml never instances it -- just needs to be added to the live scene
         # for this one check.
         self.dm_core.scenario_entities.append("fire elemental")
         self.assertTrue(self.dm_core.is_hostile("fire elemental", self.dm_core.player_name))
@@ -7601,7 +7632,7 @@ class TestFreeformDialogue(DMTestCase):
         # inserts self.player_name directly without re-instancing it, so this doesn't collide
         # with the "gladstone" the parent setUp already instanced once via "arena" (unlike
         # explicitly listing {"name": "gladstone", ...} again here, which would instead produce
-        # a second, orphaned "gladstone_2" instance -- see town.toml's own real-scenario
+        # a second, orphaned "gladstone_2" instance -- see debug.toml's own real-scenario
         # precedent for this same "never name the player" convention).
         self._load_ad_hoc_scenario([])
 
@@ -7684,7 +7715,8 @@ class TestLanguageBarrier(DMTestCase):
         race (races.toml) doesn't cover it. scenario "tavern" for the same friendly-innkeeper
         fixture TestFreeformDialogue already uses.
     """
-    scenario_name = "tavern"
+    scenario_name = "debug"
+    start_location = "tavern_floor"
 
     def setUp(self):
         super().setUp()
@@ -7756,7 +7788,8 @@ class TestCurrentLanguage(DMTestCase):
         persistent, single-language choice (see TestLanguageBarrier for the barrier check
         this feeds). scenario "tavern", same fixture TestLanguageBarrier uses.
     """
-    scenario_name = "tavern"
+    scenario_name = "debug"
+    start_location = "tavern_floor"
 
     def setUp(self):
         super().setUp()
@@ -7805,7 +7838,7 @@ class TestHelpChannel(DMTestCase):
         TestFreeformDialogue above, there's no "not found"/"denied" case to cover -- ADaM isn't
         a scene entity, so _on_help_detected always resolves.
     """
-    scenario_name = "arena"
+    scenario_name = "debug"
 
     def setUp(self):
         super().setUp()
@@ -7846,7 +7879,8 @@ class TestHelpChannelExits(DMTestCase):
         is populated (see _describe_available_exits), so this is exercised separately against
         "crypt" rather than folded into TestHelpChannel's own flat-scenario fixture.
     """
-    scenario_name = "crypt"
+    scenario_name = "debug"
+    start_location = "crypt"
 
     def test_lists_the_current_rooms_own_exits_with_friendly_destination_names(self):
         self.help_events = self._capture("help_resolved")
@@ -7890,7 +7924,7 @@ class TestAttitudePhrases(DMTestCase):
 class TestIsHostileThreshold(DMTestCase):
     """!
     @brief is_hostile's two distinct defaults (DM_Social.py): an entity with no
-        [entity.attitudes] table at all (ex: arena.toml's wolf/field.toml's bandit) is hostile
+        [entity.attitudes] table at all (ex: debug.toml's wolf/debug.toml's bandit) is hostile
         unconditionally, regardless of the -100 threshold below -- otherwise every existing
         hostile creature with no authored attitude data would stop fighting the moment the
         threshold tightened from "<= 0" to "<= -100".
@@ -8311,7 +8345,7 @@ class TestSaveLoad(DMTestCase):
         self.dm_core.save_game(slot)
         data = self._read_dm_state(slot)
 
-        self.assertEqual(data["scenario_key"], "arena")
+        self.assertEqual(data["scenario_key"], "debug")
         self.assertEqual(data["player_name"], "gladstone")
         self.assertEqual(data["scenario_entities"], self.dm_core.scenario_entities)
         gladstone_state = data["instances"]["gladstone"]
@@ -8357,7 +8391,7 @@ class TestSaveLoad(DMTestCase):
         self.assertEqual(self.dm_core.entities["gladstone"]["equipped"], {"chest": "chain mail"})
         self.dm_core.save_game(slot)
 
-        fresh_dm = DMCore(EventBus(), scenario_name="arena")  # boots with the template default
+        fresh_dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds")  # boots with the template default
         fresh_dm.load_game(slot)
 
         self.assertEqual(fresh_dm.entities["gladstone"]["equipped"], {"chest": "chain mail"})
@@ -8372,7 +8406,7 @@ class TestSaveLoad(DMTestCase):
         self.dm_core.entities["gladstone"]["exp"] += 21  # as if a wolf had just been defeated
         self.dm_core.save_game(slot)
 
-        fresh_dm = DMCore(EventBus(), scenario_name="arena")  # boots with the template default
+        fresh_dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds")  # boots with the template default
         self.assertEqual(fresh_dm.entities["gladstone"]["exp"], 100)
         fresh_dm.load_game(slot)
 
@@ -8387,7 +8421,7 @@ class TestSaveLoad(DMTestCase):
         self.assertEqual(self.dm_core.current_block, 2)
         self.dm_core.save_game(slot)
 
-        fresh_dm = DMCore(EventBus(), scenario_name="arena")  # boots at current_block = 0
+        fresh_dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds")  # boots at current_block = 0
         self.assertEqual(fresh_dm.current_block, 0)
         fresh_dm.load_game(slot)
 
@@ -8405,7 +8439,7 @@ class TestSaveLoad(DMTestCase):
         self.assertIn("health potion", self.dm_core._current_ground_items())
         self.dm_core.save_game(slot)
 
-        fresh_dm = DMCore(EventBus(), scenario_name="arena")  # boots with an empty ground list
+        fresh_dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds")  # boots with an empty ground list
         self.assertEqual(fresh_dm._current_ground_items(), [])
         fresh_dm.load_game(slot)
 
@@ -8423,7 +8457,7 @@ class TestSaveLoad(DMTestCase):
         self.dm_core.entities["wolf"]["edited"] = True
         self.dm_core.save_game(slot)
 
-        fresh_dm = DMCore(EventBus(), scenario_name="arena")  # boots with the template's own description
+        fresh_dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds")  # boots with the template's own description
         fresh_dm.load_game(slot)
 
         self.assertEqual(fresh_dm.entities["wolf"]["description"], "A scarred, one-eyed wolf.")
@@ -8443,7 +8477,7 @@ class TestSaveLoad(DMTestCase):
         self.dm_core._current_ground_items().append("stone")
         self.dm_core.save_game(slot)
 
-        fresh_dm = DMCore(EventBus(), scenario_name="arena")
+        fresh_dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds")
         self.assertNotIn("stone", fresh_dm.entities)
         fresh_dm.load_game(slot)
 
@@ -8476,7 +8510,7 @@ class TestSaveLoad(DMTestCase):
         self.dm_core.apply_damage(name, 5)  # 16 -> 11
         self.dm_core.save_game(slot)
 
-        fresh_dm = DMCore(EventBus(), scenario_name="arena")
+        fresh_dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds")
         self.assertNotIn(name, fresh_dm.scenario_entities)
         fresh_dm.load_game(slot)
 
@@ -8491,7 +8525,7 @@ class TestSaveLoad(DMTestCase):
         self.assertNotIn("wolf", self.dm_core.scenario_entities)
         self.dm_core.save_game(slot)
 
-        fresh_dm = DMCore(EventBus(), scenario_name="arena")  # boots with "wolf" freshly instanced
+        fresh_dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds")  # boots with "wolf" freshly instanced
         self.assertIn("wolf", fresh_dm.scenario_entities)
         fresh_dm.load_game(slot)
 
@@ -8501,7 +8535,8 @@ class TestSaveLoad(DMTestCase):
 
 
 class TestMultiRoomDungeon(DMTestCase):
-    scenario_name = "crypt"
+    scenario_name = "debug"
+    start_location = "crypt"
 
     def setUp(self):
         super().setUp()
@@ -8530,7 +8565,7 @@ class TestMultiRoomDungeon(DMTestCase):
         self.assertEqual(self.dm_core.scenario_entities, ["gladstone", "thane", "anne", "dart trap"])
         # A trap is never hostile (same is_hostile short-circuit as any other "object"
         # supertype) -- with nothing hostile in the room, current_target falls back to it,
-        # exactly the way the original dungeon.toml's chest already works.
+        # exactly the way the original debug.toml's chest already works.
         self.assertEqual(self.dm_core.current_target, "dart trap")
 
 
@@ -8557,7 +8592,7 @@ class TestMultiRoomDungeon(DMTestCase):
 
     def test_hidden_trap_fails_its_notice_roll_and_stays_out_of_the_roster(self):
         with patch("random.randint", return_value=1):  # observation 1D=1, under difficulty 4
-            dm = DMCore(EventBus(), scenario_name="crypt")
+            dm = DMCore(EventBus(), scenario_name="debug", start_location="crypt")
         self.assertTrue(dm.is_hidden("dart trap"))
         roster_text = " ".join(dm._describe_scenario_characters())
         self.assertNotIn("dart trap", roster_text)
@@ -8661,7 +8696,7 @@ class TestMultiRoomDungeon(DMTestCase):
 class TestRoomLevelPresenceScoping(unittest.TestCase):
     """!
     @brief The actual payoff of room-level presence tagging: DMCore and LLMCore wired
-        together over one real event bus (crypt.toml, same room graph TestMultiRoomDungeon
+        together over one real event bus (debug.toml, same room graph TestMultiRoomDungeon
         exercises) -- an entity met only after a room transition has no access to what was
         narrated before it existed, while a party member who traveled through both rooms
         does. NLPCore is deliberately left out (dialogue/movement are triggered directly on
@@ -8675,7 +8710,7 @@ class TestRoomLevelPresenceScoping(unittest.TestCase):
         # first "scenario_loaded" -- same ordering TestGameBoot already requires for NLPCore's
         # "rules_loaded" subscription, for the exact same reason.
         self.llm_core = LLMCore(self.event_bus, rag_source_dir=os.path.join("Rules", "Fantasy"))
-        self.dm_core = DMCore(self.event_bus, scenario_name="crypt")
+        self.dm_core = DMCore(self.event_bus, scenario_name="debug", start_location="crypt")
 
     def test_dialogue_history_is_scoped_to_who_was_actually_in_the_room(self):
         # Entrance room: gladstone/thane/anne/dart trap. This narration entry is tagged with
@@ -8700,13 +8735,14 @@ class TestRoomLevelPresenceScoping(unittest.TestCase):
         for entry in spider_history:
             self.assertNotIn("dart trap", entry.get("present") or [])
 
-        # thane persisted across both rooms (crypt.toml's own [scenario].entities), so his own
+        # thane persisted across both rooms (debug.toml's own [scenario].entities), so his own
         # witnessed history spans the entrance narration *and* everything since.
         self.assertEqual(len(thane_history), len(self.llm_core.context_window))
 
 
 class TestMultiRoomSaveLoad(DMTestCase):
-    scenario_name = "crypt"
+    scenario_name = "debug"
+    start_location = "crypt"
 
     def setUp(self):
         super().setUp()
@@ -8727,7 +8763,7 @@ class TestMultiRoomSaveLoad(DMTestCase):
         self.dm_core.save_game(slot)
 
         fresh_bus = EventBus()
-        fresh_dm = DMCore(fresh_bus, scenario_name="crypt")  # boots back at "entrance"
+        fresh_dm = DMCore(fresh_bus, scenario_name="debug", start_location="crypt")  # boots back at "entrance"
         fresh_dm.load_game(slot)
 
         self.assertEqual(fresh_dm.current_room_key, "hall_of_webs")
@@ -8748,7 +8784,7 @@ class TestMultiRoomSaveLoad(DMTestCase):
         self.dm_core.enter_room("hall_of_webs")
         self.dm_core.save_game(slot)
 
-        fresh_dm = DMCore(EventBus(), scenario_name="crypt")  # boots back at "entrance"
+        fresh_dm = DMCore(EventBus(), scenario_name="debug", start_location="crypt")  # boots back at "entrance"
         fresh_dm.load_game(slot)
 
         self.assertEqual(fresh_dm.rooms["entrance"].get("ground"), ["health potion"])
@@ -8760,16 +8796,17 @@ class TestDuplicateEntityNamesAcrossRooms(DMTestCase):
     """!
     @brief The DM_Rules.py "Known gaps" entry this fixes: self.entity_occurrence_counts is now
         scoped to the whole DMCore's lifetime, not to one _instance_entities call, so two
-        different rooms in the same multi-room dungeon (crypt.toml) that happen to declare the
+        different rooms in the same multi-room dungeon (debug.toml) that happen to declare the
         same creature name disambiguate against each other instead of the second one's own
         _place_new_entity silently overwriting the first's live HP/conditions under the same
-        self.entities key. crypt.toml itself never actually declares such a collision (see its
+        self.entities key. debug.toml itself never actually declares such a collision (see its
         own comment on "kept in sync by hand"), so this injects a second room reusing
         "giant spider" (already real in hall_of_webs) directly onto self.dm_core.rooms, the
         same "inject a room, then enter_room into it" technique TestMultiRoomDungeon's own
         move/revisit tests already use.
     """
-    scenario_name = "crypt"
+    scenario_name = "debug"
+    start_location = "crypt"
 
     def _inject_colliding_room(self):
         self.dm_core.rooms["ambush_nook"] = {
@@ -8808,11 +8845,11 @@ class TestDuplicateEntityNamesAcrossRooms(DMTestCase):
         self.addCleanup(shutil.rmtree, slot_dir, ignore_errors=True)
         self.dm_core.save_game(slot_name)
 
-        # load_game's own load_scenario_definition re-reads crypt.toml fresh from disk, which
+        # load_game's own load_scenario_definition re-reads debug.toml fresh from disk, which
         # would otherwise wipe the injected "ambush_nook" room -- re-inject it the moment
         # self.locations exists again, exactly where load_game itself populates it, before the
         # location_runtime replay loop (which needs it present) runs.
-        fresh_dm = DMCore(EventBus(), scenario_name="crypt")
+        fresh_dm = DMCore(EventBus(), scenario_name="debug", start_location="crypt")
         real_load_scenario_definition = fresh_dm.load_scenario_definition
 
         def load_scenario_definition_with_ambush_nook(scenario_name):
@@ -8839,12 +8876,13 @@ class TestInterleavedLocationSaveLoad(DMTestCase):
         interleaves visits across two *different* locations (leaves one location mid-dungeon,
         visits a second, then returns to the first for a room they hadn't seen yet). self.entity_
         instancing_order (DM_Rules.py) now records that exact live order and load_game replays it
-        verbatim instead. crypt.toml is one location -- this test injects a second, "b_wing", to
+        verbatim instead. debug.toml is one location -- this test injects a second, "b_wing", to
         actually exercise cross-location interleaving, the same "inject after construction, then
         drive it with low-level DMCore calls directly" technique TestDuplicateEntityNamesAcrossRooms
         already uses for a single extra room.
     """
-    scenario_name = "crypt"
+    scenario_name = "debug"
+    start_location = "crypt"
 
     def _inject_b_wing(self, dm_core):
         dm_core.locations["b_wing"] = {
@@ -8864,7 +8902,7 @@ class TestInterleavedLocationSaveLoad(DMTestCase):
         # location's own rooms together" replay.
         self._inject_b_wing(self.dm_core)
         # A second, colliding reference alongside guard_chamber's own real "iron chest" --
-        # crypt.toml itself declares no such collision (kept collision-free by hand, per its
+        # debug.toml itself declares no such collision (kept collision-free by hand, per its
         # own comments), so this is injected the same way TestDuplicateEntityNamesAcrossRooms
         # injects its own "ambush_nook" room.
         self.dm_core.locations["crypt"]["rooms"]["guard_chamber"]["entities"].append(
@@ -8883,7 +8921,7 @@ class TestInterleavedLocationSaveLoad(DMTestCase):
         self.addCleanup(shutil.rmtree, self.dm_core._save_slot_dir(slot_name), ignore_errors=True)
         self.dm_core.save_game(slot_name)
 
-        fresh_dm = DMCore(EventBus(), scenario_name="crypt")
+        fresh_dm = DMCore(EventBus(), scenario_name="debug", start_location="crypt")
         real_load_scenario_definition = fresh_dm.load_scenario_definition
 
         def load_scenario_definition_with_b_wing(scenario_name):
@@ -8921,7 +8959,7 @@ class TestInterleavedLocationSaveLoad(DMTestCase):
         with open(save_path, "w") as f:
             json.dump(data, f)
 
-        fresh_dm = DMCore(EventBus(), scenario_name="crypt")
+        fresh_dm = DMCore(EventBus(), scenario_name="debug", start_location="crypt")
         fresh_dm.load_game(slot_name)
 
         self.assertEqual(fresh_dm.current_room_key, "hall_of_webs")
@@ -9415,9 +9453,9 @@ class TestGUICore(unittest.TestCase):
         picker = next(w for w in self.gui.root.winfo_children() if isinstance(w, tk.Toplevel))
         listbox = next(w for w in picker.winfo_children() if isinstance(w, tk.Listbox))
         scenario_keys = [key for key, _name, _description in list_available_scenarios()]
-        crypt_index = scenario_keys.index("crypt")
+        debug_index = scenario_keys.index("debug")
         listbox.selection_clear(0, tk.END)
-        listbox.selection_set(crypt_index)
+        listbox.selection_set(debug_index)
         button_row = next(w for w in picker.winfo_children() if isinstance(w, tk.Frame))
         load_button = next(
             w for w in button_row.winfo_children()
@@ -9427,7 +9465,7 @@ class TestGUICore(unittest.TestCase):
         load_button.invoke()
 
         self.assertEqual(events, [{
-            "scenario_name": "crypt",
+            "scenario_name": "debug",
             "character": {"race": "elf", "allocation": {"arcane": 5}, "name": "Aria"},
             "setting": "Fantasy",
         }])

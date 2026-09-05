@@ -77,7 +77,7 @@ richness the way CR budgets creature power.
 
 **Location generation**, at its eventual full scope, generates a location's complete internal
 structure — the whole `[[location.room]]` graph: multiple rooms, their exits/bands/connectivity,
-each room's own `entities`/encounter table — a whole `crypt.toml`-shaped location in one authoring
+each room's own `entities`/encounter table — a whole `debug.toml`-`crypt`-shaped location in one authoring
 pass, not just the single named point on the overworld grid `docs/downtime.md`'s own "Not yet
 built" ad hoc destination generation idea produces. Runs deterministic post-generation
 validation — every exit references a real room/band, every room is reachable from the start room — flagging breakage for the reviewer rather

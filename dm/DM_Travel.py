@@ -330,7 +330,7 @@ class TravelMixin(DMCoreProtocol):
             road's own multiplier if one reaches this point (_resolve_road_multiplier), else
             whichever region's own "terrain" names (_resolve_region_terrain/_find_terrain),
             else the plain, unmodified 1.0 every point got before either of these existed --
-            the exact "nothing authored" default that keeps plains.toml's own math unchanged.
+            the exact "nothing authored" default that keeps debug.toml's own math unchanged.
         @param x Grid x coordinate.
         @param y Grid y coordinate.
         @return A positive float multiplier against the party's own base travel speed.
@@ -662,7 +662,7 @@ class TravelMixin(DMCoreProtocol):
         @brief Moves the party into a small, ephemeral scratch scene for a mid-journey ambush
             -- ROAD_ENCOUNTER_KEY, a single fixed key reused by every such pause rather than a
             freshly-minted one each time. Deliberately does NOT go through the ordinary
-            _enter_location: naming an already-live entity (an ally like crypt.toml's "thane")
+            _enter_location: naming an already-live entity (an ally like debug.toml's "thane")
             in a *new* location's own "entities" list would re-instance it as a fresh
             occurrence-disambiguated copy of its template (_instance_entities), silently
             orphaning the real live instance and its current hp/active_conditions -- exactly

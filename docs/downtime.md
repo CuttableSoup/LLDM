@@ -85,9 +85,9 @@ naming it (its own `name`, or a location-level `aliases` list — distinct from 
 per-connection `aliases`) — no exit to author. `DMCore.known_locations` (a persistent, top-level
 set, round-tripped through save/load) gates this: `_enter_location` adds every location key it
 ever enters, gridded or not, and a scenario may also seed starting knowledge ahead of any visit
-via its own `[scenario].known_locations` (`plains.toml`'s worked example seeds both of its
-locations at once — "some other in-fiction means," here a map the player starts with, since
-neither could otherwise ever be named before being visited once).
+via its own `[scenario].known_locations` (`debug.toml`'s own `trailhead`/`border_stones` worked
+example seeds both locations at once — "some other in-fiction means," here a map the player
+starts with, since neither could otherwise ever be named before being visited once).
 
 **Distance and speed.** Blocks for a trip are Euclidean distance between the two locations' own
 `grid` coordinates, divided by the party's travel speed, rounded up (`_resolve_grid_travel_intent`)
@@ -211,12 +211,12 @@ authored regions has no environment at all, which is what "safe" looks like ever
 design — no watch check, no encounter roll. `_resolve_grid_travel_intent` samples the *midpoint* of
 each block's own leg of the straight line between origin and destination — true per-block sampling,
 not a coarser origin/destination split — so a journey crossing multiple regions (not exercised by
-`plains.toml`'s own single-region shipped map, but already correct for one) would roll from each
+`debug.toml`'s own single-region `trailhead`/`border_stones` map, but already correct for one) would roll from each
 proportional to how much of the line it covers. `_resolve_environment_block` factors the actual
 "roll this environment's own day/night table, then a watch check if it's hostile at night" step out
 of this per-block loop so rest (a single fixed point, not a line) can reuse it unchanged.
 
-Shipped worked example: `Rules/Fantasy/scenarios/plains.toml`'s `trailhead` (grid `0,0`) and
+Shipped worked example: `Rules/Fantasy/scenarios/debug.toml`'s `trailhead` (grid `0,0`) and
 `border_stones` (grid `24,0`), both inside `world_map.toml`'s `"the open plains"` region (naming
 the `"plains"` environment, whose day table includes `environments.toml`'s two new shared
 `creatures.toml` wildlife entries, `"wild boar"`/`"coyote"`) — exactly far enough apart, at the
@@ -235,7 +235,7 @@ table, resolved off one shared `_resolve_region(x, y)` lookup (`resolve_region_e
 `_resolve_region_terrain`/`_resolve_region_polity` are thin wrappers over it). A region authoring
 neither of the two new fields (every region shipped before they existed) behaves exactly as it
 always did — this was the one hard constraint the whole design had to preserve, verified directly
-by `plains.toml`'s own shipped trip still costing exactly one block.
+by `debug.toml`'s own shipped `trailhead`-to-`border_stones` trip still costing exactly one block.
 
 `terrain.toml`'s own `speed_multiplier` (default `1.0`) scales how far one block of travel actually
 covers: `_advance_pending_travel`'s per-block loop no longer computes a fixed block count up front

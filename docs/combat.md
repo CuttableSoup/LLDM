@@ -6,7 +6,7 @@ Part of the [LLDM](../CLAUDE.md) docs — rounds/turns, CR math, conditions, dam
 
 Combat is a target being present *and* `is_hostile(target_name, player_name)`, which has two
 distinct defaults, deliberately not collapsed into one: an entity with **no**
-`[entity.attitudes]` table at all (ex: `arena.toml`'s wolf) is hostile unconditionally — a
+`[entity.attitudes]` table at all (ex: `debug.toml`'s wolf) is hostile unconditionally — a
 monster that never bothered to author a disposition is still a monster. An entity that **does**
 declare attitude data instead has to reach true hostility, `disposition <= -100`, to actually
 fight — a merely wary/negative disposition is dialogue, not combat, which is what lets a
@@ -52,7 +52,7 @@ match otherwise. A name with no live duplicates short-circuits immediately.
 A behavior entry's `action` is either an ability name or one of two reserved movement words,
 `"advance"`/`"retreat"` (`MOVEMENT_ACTIONS`, `DM_Combat.py`), routed to `move_toward_or_away`
 instead of an ability lookup. An explicit `"retreat"` entry is how a creature values its own
-life — checked ahead of its attack entry, ex: `arena.toml`'s wolf flees once `hp_per_remain`
+life — checked ahead of its attack entry, ex: `debug.toml`'s wolf flees once `hp_per_remain`
 drops under 0.40 (the same cutoff `rules.toml`'s `"wounded"` tier bottoms out at); an
 undead/construct entity has no such entry and fights on regardless. Separately,
 `resolve_behavior_action` falls back to `"advance"` on its own whenever its chosen action can't
@@ -120,7 +120,7 @@ own requirements, `[[entity.behavior]]`'s, and (as of the `requirements` field a
 `[entity.test]`'s; an optional `opponent_name` param
 resolves the two opponent-relative derived fields, `"distance_to_target"` (the band gap to
 `opponent_name`) — used by a creature choosing *between* attack options by range, ex:
-`field.toml`'s `bandit` favors its `short bow` while `distance_to_target > 0`, falling to its
+`debug.toml`'s `bandit` favors its `short bow` while `distance_to_target > 0`, falling to its
 `rusty shortsword` once that gap closes to 0 — and `"opponent_has_condition:<name>"` (below).
 Two more derived fields resolve via `has_condition` rather than a numeric/positional value:
 `"has_condition:<name>"` (a boolean presence check against the checking entity's own

@@ -201,7 +201,7 @@ through the ordinary `action_resolved`/`round_resolved` narration path unchanged
 deliberately never touches `self.current_target` and never sets `engaged_combat_target`, same
 as an item test's own roll.
 
-`Rules/Fantasy/scenarios/town.toml`'s `blacksmith` location (already narrated as having "the
+`Rules/Fantasy/scenarios/debug.toml`'s `blacksmith` location (already narrated as having "the
 forge in the back") is the shipped worked example: a `forge` prop entity
 (`provides_station = "forge"`, in the same `subtype = "prop"` style as `town_square`'s own
 `market stall`) sits in its own `entities` list, and `items.toml`'s `iron dagger` is craftable

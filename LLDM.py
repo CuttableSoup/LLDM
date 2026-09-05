@@ -13,7 +13,7 @@ from gui.GUI_Core import GUICore
 from nlp.NLP_Core import NLPCore
 from llm.Ollama_Launcher import ensure_ollama_running
 
-DEFAULT_SCENARIO = "arena"
+DEFAULT_SCENARIO = "debug"
 
 
 def _peek_saved_scenario_key(slot_name, fallback, fallback_setting="Fantasy"):
@@ -53,7 +53,7 @@ def main():
         "scenario",
         nargs="?",
         default=None,
-        help="Scenario to load, matching a file in Rules/Fantasy/scenarios/ (ex: 'arena'). "
+        help="Scenario to load, matching a file in Rules/Fantasy/scenarios/ (ex: 'debug'). "
              "Boots straight into it, skipping the Character menu entirely, the moment it's "
              "given -- omit it to open the window and pick Character -> Create/Load instead.",
     )

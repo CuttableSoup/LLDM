@@ -30,7 +30,7 @@ def resolve_varied_value(value):
     """!
     @brief Resolves one entity_template field that may be authored as a plain value, a
         {min, max} range, or a weighted-choice list -- the shared "how varied is this field"
-        vocabulary an entity_template (ex: Rules/Fantasy/scenarios/tavern_random.toml's own
+        vocabulary an entity_template (ex: Rules/Fantasy/scenarios/debug.toml's own
         generated_stranger) uses across hint/cr_multiplier/currency/qualities/attitudes, so
         DM_NpcGeneration.py doesn't need separate resolution logic per field.
         Applying this to every leaf individually (not the whole [entity_template.attitudes]

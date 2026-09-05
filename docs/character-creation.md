@@ -33,7 +33,8 @@ entity is rejected outright (`log_error`, not raised) — `DMCore.__init__` runs
 sees a scenario file's own local entities, not just the shared `Rules/<setting>/*.toml`
 catalog. Renaming also rewrites any other entity's own `[[entity.attitudes.name]]` override
 still keyed to the old name (`_rekey_attitude_overrides`) — a hand-authored disposition toward
-the player's original template name (ex: `crypt.toml`'s own `anne`, keyed to `gladstone`) keeps
+the player's original template name (ex: `debug.toml`'s own `anne`, in its `crypt` area, keyed
+to `gladstone`) keeps
 applying to whoever they were actually renamed to. `character=None` (every caller that omits
 it) is a complete no-op.
 

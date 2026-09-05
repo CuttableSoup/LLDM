@@ -1,5 +1,6 @@
-# A grid-based overworld scenario (see docs/downtime.md's "Travel", plains.toml's own worked
-# example) using real Golarion place names and their well-documented relative geography, in place
+# A grid-based overworld scenario (see docs/downtime.md's "Travel", debug.toml's own
+# trailhead/border_stones worked example) using real Golarion place names and their
+# well-documented relative geography, in place
 # of importing pf-wikis' own GIS map data directly -- that data is real-world-scale vector
 # geometry (polygons/lines/points across the whole of Golarion, stored in Kart's binary
 # .table-dataset format) with no meaningful translation onto this engine's own grid, which only
@@ -8,8 +9,8 @@
 # convention (rules.toml's own [travel] comment) lets Sandpoint and Magnimar actually sit at their
 # real canonical ~60-mile separation along the Lost Coast Road -- at the default_speed of 24
 # miles/block, that's exactly 3 blocks, a single day. known_locations seeds both as already known
-# from the very first turn, the same "a map the player starts with" rationale plains.toml already
-# uses.
+# from the very first turn, the same "a map the player starts with" rationale debug.toml's own
+# trailhead/border_stones already uses.
 #
 # Also the worked example for world_map.toml's own "terrain"/"polity" region fields and its
 # [[road]] table (see docs/downtime.md's "Terrain, roads, and polities"): "the Lost Coast" region
@@ -65,8 +66,8 @@ default = [ 30, 20, 0 ]
 observation = { dice = 2, pips = 0 }
 
 # Local copy of the environment's own signature encounter (see environments.toml's own
-# "lost_coast_wilds"), following the same self-containment convention field.toml's own docstring
-# sets for scenario-local npc/creature entities -- a lightly armed raider scaled a notch below
+# "lost_coast_wilds"), following the same self-containment convention every scenario file
+# follows for scenario-local npc/creature entities -- a lightly armed raider scaled a notch below
 # creatures.toml's own wild boar/coyote (lower fortitude, higher dodge/reflexes), matching
 # Golarion's own portrayal of goblins as individually weak but quick and vicious.
 [[entity]]

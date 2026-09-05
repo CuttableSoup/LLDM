@@ -481,7 +481,7 @@ class CombatMixin(DMCoreProtocol):
             requirements are currently met, in declaration order -- the same
             {field, operator, value} requirement engine [[status]] already uses
             (entity_matches_requirements), just read from "behavior" instead of
-            "status". Ex: arena.toml's wolf checks a low-hp "retreat" entry first,
+            "status". Ex: debug.toml's wolf checks a low-hp "retreat" entry first,
             then falls back to "always attack while hp_per_remain >= 0.01", so it
             keeps attacking (or fleeing) until it's effectively dead and then simply
             stops matching any behavior at all.
@@ -505,7 +505,7 @@ class CombatMixin(DMCoreProtocol):
         """!
         @brief Resolves an entity's currently-chosen behavior against a target -- either a
             deliberate move (see below) or an opposed attack. A behavior names a specific
-            *action* (ex: arena.toml's wolf names "bite", one of its own abilities)
+            *action* (ex: debug.toml's wolf names "bite", one of its own abilities)
             rather than a bare skill -- reusing resolve_named_ability + select_ability_skill,
             the exact same lookup the player's own named-technique path (ex: "cleave")
             already uses, rather than going through find_attack_ability's
@@ -517,8 +517,8 @@ class CombatMixin(DMCoreProtocol):
             -- MOVEMENT_ACTIONS routes straight to move_toward_or_away (DM_Movement.py), the
             explicit way a behavior entry opts into self-preservation (ex: fleeing once
             hp_per_remain drops low, checked ahead of an attack entry in the same
-            declaration-order list choose_behavior already walks -- see arena.toml's
-            wolf/crypt.toml's giant spider for the shipped example) or into deliberately
+            declaration-order list choose_behavior already walks -- see debug.toml's
+            wolf/giant spider for the shipped example) or into deliberately
             closing distance
             regardless of what's in range. `action = "steal"`/`"gift"` are reserved the same
             way -- routed to _resolve_transfer_behavior instead, an autonomous item transfer

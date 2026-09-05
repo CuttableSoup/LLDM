@@ -39,7 +39,7 @@ TARGET_ORDINAL_KEYWORDS = {"first": 1, "second": 2, "third": 3, "fourth": 4}
 TARGET_OTHER_KEYWORDS = ("other", "another")
 TARGET_WOUNDED_KEYWORDS = ("wounded", "hurt", "injured")
 TARGET_HEALTHY_KEYWORDS = ("healthy", "unhurt", "uninjured", "unharmed")
-# The same 0.40 hp_per_remain cutoff rules.toml's own "wounded" status tier -- and arena.toml's
+# The same 0.40 hp_per_remain cutoff rules.toml's own "wounded" status tier -- and debug.toml's
 # wolf retreat behavior -- already use elsewhere in this codebase (see CLAUDE.md's "Combat"),
 # reused here rather than inventing a second threshold. A candidate has to actually cross this
 # line before "wounded"/"healthy" is honored -- calling a room full of undamaged creatures
@@ -81,12 +81,19 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         docstring.
     """
 
-    def __init__(self, event_bus, scenario_name="arena", character=None, setting="Fantasy"):
+    def __init__(self, event_bus, scenario_name="debug", character=None, setting="Fantasy", start_location=None):
         """!
         @brief Initializes the DM core and loads system references.
         @param event_bus The central event bus instance.
         @param scenario_name Which scenario to load, matching a file in
-            Rules/<setting>/scenarios/ (ex: "arena" loads scenarios/arena.toml).
+            Rules/<setting>/scenarios/ (ex: "debug" loads scenarios/debug.toml).
+        @param start_location Overrides the loaded scenario's own [scenario].start_location --
+            None (the default) leaves it untouched. Lets a caller land in one specific area of
+            a multi-area scenario file (ex: "debug"'s own "arena_grounds") without needing a
+            dedicated scenario file per area -- the same override
+            DMTestCase._load_ad_hoc_scenario (tests/test_unit.py) already applies by hand today,
+            just as a constructor param. Applied right after load_scenario_definition, before
+            load_scenario() actually instances anything.
         @param character An optional finished character-creation result
             ({"race": race_name, "allocation": {skill_name: dice_int}}), applied to the
             player entity via apply_character_creation (DM_CharacterCreation.py) right
@@ -110,7 +117,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         # Stub templates for NPC generation (see NPC_Generation.py/DM_NpcGeneration.py,
         # CLAUDE.md's "NPC generation") -- kept in their own namespace, loaded from
         # [[entity_template]] tables (declared inline in a scenario file, ex:
-        # Rules/Fantasy/scenarios/tavern_random.toml -- or any flat Rules/<setting>/*.toml
+        # Rules/Fantasy/scenarios/debug.toml -- or any flat Rules/<setting>/*.toml
         # file via load_rules, for a genuinely shared one), not [[entity]] ones, so they can
         # never collide with (or be mistakenly referenced as) a real, directly usable
         # entity/creature template in self.entities. A scenario/room entry opts into one via
@@ -189,6 +196,8 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         # catalog -- see DM_CharacterCreation.py's own docstring for why the rename still
         # has to land before load_scenario() itself (the actual instancing step) either way.
         self.load_scenario_definition(scenario_name)
+        if start_location is not None:
+            self.scenario["start_location"] = start_location
         self.apply_character_creation(character)
         self.validate_loaded_data()
         self.load_scenario()
@@ -1309,7 +1318,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
     def _is_party_member(self, entity_name):
         """!
         @brief Whether entity_name is on the player's own side -- the player themselves
-            (is_player = true) or an ally like crypt.toml's "thane" (is_party = true, same
+            (is_player = true) or an ally like debug.toml's "thane" (is_party = true, same
             flag GUICore's Party tab keys off of). Neither _get_target_name nor
             _choose_combat_target's fallback should ever resolve to a party member -- an ally
             standing in the same scenario_entities list as the room's actual trap/chest/
@@ -1337,7 +1346,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         @brief Picks self.current_target: the first living, hostile-toward-the-player entity
             in scenario_entities order. If none qualifies (ex: every wolf is dead, or nothing
             in the scene was ever hostile -- the dungeon's chest, the tavern's innkeeper),
-            falls back to the first living, non-party entity instead (ex: crypt.toml's own
+            falls back to the first living, non-party entity instead (ex: debug.toml's own
             "dart trap"), so an ally (ex: "thane") is never mistaken for the scene's own
             trap/chest/NPC just because it happens to sit earlier in scenario_entities than
             the real one. Only once *no* such entity exists either does it fall back further,

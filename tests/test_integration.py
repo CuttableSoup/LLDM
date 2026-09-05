@@ -71,7 +71,8 @@ class _LivePipelineTestCase(unittest.TestCase):
         named "Test*" by default, and this one deliberately isn't. Subclasses set
         scenario_name and call self._boot() from their own setUp.
     """
-    scenario_name = "tavern"
+    scenario_name = "debug"
+    start_location = "tavern_floor"
     # A finished character-creation result ({"race", "allocation", "name"}), or None (the
     # default every existing subclass relies on) to boot with the player template's own
     # untouched skills/name -- see DMCore.__init__'s own "character" param.
@@ -86,6 +87,7 @@ class _LivePipelineTestCase(unittest.TestCase):
         self.llm_core = LLMCore(self.event_bus)
         self.dm_core = DMCore(
             self.event_bus, scenario_name=self.scenario_name, character=self.character,
+            start_location=self.start_location,
         )
 
         self._wait_for_responses(1)  # the scene intro, fired during DMCore.__init__
@@ -114,7 +116,8 @@ class TestInnkeeperConversation(_LivePipelineTestCase):
            entirely (not failed) when Ollama isn't reachable, so the rest of the suite
            stays fast and network-independent.
     """
-    scenario_name = "tavern"
+    scenario_name = "debug"
+    start_location = "tavern_floor"
 
     def setUp(self):
         self._boot()
@@ -187,7 +190,8 @@ class TestPromptDirectiveConversation(_LivePipelineTestCase):
         here would just add an unrelated, unseeded dice roll to a test that has nothing to do
         with whether the spell lands.
     """
-    scenario_name = "tavern"
+    scenario_name = "debug"
+    start_location = "tavern_floor"
 
     def setUp(self):
         self._boot()
@@ -242,7 +246,8 @@ class TestRagGroundedNarration(_LivePipelineTestCase):
         and this suite must never become flaky just because a fresh machine hasn't warmed the
         cache. Run test_unit.py or boot the app once beforehand to warm it.
     """
-    scenario_name = "tavern"
+    scenario_name = "debug"
+    start_location = "tavern_floor"
 
     def setUp(self):
         self._boot()
@@ -285,7 +290,8 @@ class TestArenaCombatConversation(_LivePipelineTestCase):
         not seeded here, so every assertion below checks the event/narration *structure* holds
         up round after round rather than who lands a hit or who wins.
     """
-    scenario_name = "arena"
+    scenario_name = "debug"
+    start_location = "arena_grounds"
 
     def setUp(self):
         self._boot()
@@ -342,7 +348,8 @@ class TestMountingConversation(_LivePipelineTestCase):
         "thane" (an unmounted ally) would keep the whole party at the default speed even
         after gladstone mounts up, masking the very effect this test exists to prove.
     """
-    scenario_name = "plains"
+    scenario_name = "debug"
+    start_location = "trailhead"
 
     def setUp(self):
         self._boot()
@@ -422,7 +429,8 @@ class TestGridTravelAmbushConversation(_LivePipelineTestCase):
         (bypassing further real dice) if it's still alive after a bounded number of real
         attacks, so the test can't hang or flake on an unlucky streak of misses.
     """
-    scenario_name = "plains"
+    scenario_name = "debug"
+    start_location = "trailhead"
 
     def setUp(self):
         original_resolve_varied_value = DM_Encounters.resolve_varied_value
@@ -496,14 +504,15 @@ class TestLocationEncounterConversation(_LivePipelineTestCase):
         request (llm/LLM_Core.py's own subscription). Unlike TestGridTravelAmbushConversation
         (which drives DM_Travel.py's own per-block environment roll, a different code path
         entirely), nothing anywhere else in this file ever loads a scenario with a
-        [[location.encounter]] table or exercises this event at all -- "town" (town.toml) is
+        [[location.encounter]] table or exercises this event at all -- "town" (debug.toml) is
         the only ruleset scenario that has one. Forces the roll to a flavor-only string result
-        (an authored choice already in town.toml's own town-square table), not
+        (an authored choice already in debug.toml's own town-square table), not
         "generated_beggar" (also authored there), so this stays scoped to the
         encounter-narration pipeline alone rather than also dragging in NPC generation's own
         already-covered (TestNpcGenerationLive) tool-calling round trip.
     """
-    scenario_name = "town"
+    scenario_name = "debug"
+    start_location = "town_square"
     FORCED_ENCOUNTER = "A ragged child tugs at your sleeve, asking if you've seen their missing cat."
 
     def setUp(self):
@@ -523,7 +532,9 @@ class TestLocationEncounterConversation(_LivePipelineTestCase):
         self.event_bus.subscribe("llm_response_ready", self.responses.append)
         self.nlp_core = NLPCore(self.event_bus)
         self.llm_core = LLMCore(self.event_bus)
-        self.dm_core = DMCore(self.event_bus, scenario_name=self.scenario_name)
+        self.dm_core = DMCore(
+            self.event_bus, scenario_name=self.scenario_name, start_location=self.start_location,
+        )
 
     def test_on_enter_encounter_narrates_through_a_real_llm_call(self):
         # Deterministic first -- proves the encounter actually fired and rolled the forced
@@ -563,7 +574,8 @@ class TestMultiActionCombatConversation(_LivePipelineTestCase):
         real, unseeded roll_dice and a real LLM narration call don't trip over the batch
         shape end to end.
     """
-    scenario_name = "arena"
+    scenario_name = "debug"
+    start_location = "arena_grounds"
 
     def setUp(self):
         self._boot()
@@ -612,13 +624,12 @@ class TestCreatedCharacterConversation(_LivePipelineTestCase):
     """!
     @brief End-to-end proof that a freshly created, custom-named, custom-race character --
         not characters.toml's own hand-authored "gladstone" -- narrates and fights correctly
-        through the real pipeline. Uses Rules/Fantasy/scenarios/character_test.toml, a
-        scenario that never names any specific character by its literal template name (see
-        DM_Rules.py's PLAYER_PLACEHOLDER), so this is exercising the same generic-player
-        resolution real scenarios (arena/tavern/field/dungeon/crypt) now rely on too, without
-        coupling this test's own pass/fail to a rebalance of any of them.
+        through the real pipeline. Boots into debug.toml's own "arena_grounds", exercising the
+        same generic-player resolution (DM_Rules.py's PLAYER_PLACEHOLDER) every other area of
+        that same file also relies on.
     """
-    scenario_name = "character_test"
+    scenario_name = "debug"
+    start_location = "arena_grounds"
     character = {
         "race": "elf",
         "allocation": {"arcane": 5, "stealth": 5, "observation": 5},
@@ -654,7 +665,8 @@ class TestChestSagaConversation(_LivePipelineTestCase):
         TestOpenClose in test_unit.py, which call DMCore's methods directly with no NLP or LLM
         in the loop at all.
     """
-    scenario_name = "dungeon"
+    scenario_name = "debug"
+    start_location = "cellar"
 
     def setUp(self):
         self._boot()
@@ -769,7 +781,8 @@ class TestChestTradeConversation(_LivePipelineTestCase):
         TestChestSagaConversation's job -- trading itself rolls no dice at all (transfer_
         currency/transfer_item are both deterministic), so this test needs no seeded randomness.
     """
-    scenario_name = "dungeon"
+    scenario_name = "debug"
+    start_location = "cellar"
 
     def setUp(self):
         self._boot()
@@ -813,7 +826,7 @@ class TestCryptDungeonConversation(_LivePipelineTestCase):
     """!
     @brief The multi-room dungeon's full-pipeline counterpart: real NLPCore/DMCore/LLMCore
         driving an actual room-to-room crawl through "crypt" (Rules/Fantasy/scenarios/
-        crypt.toml) -- a trap's disarm-or-be-damaged check, a real combat kill, a room
+        debug.toml) -- a trap's disarm-or-be-damaged check, a real combat kill, a room
         transition narrated through a live LLM call (DMCore._resolve_room_transition_intent /
         LLMCore.generate_item_interaction_response's "move" branch -- nothing in
         test_unit.py's TestMultiRoomDungeon touches the LLM side of this at all, only the
@@ -821,7 +834,8 @@ class TestCryptDungeonConversation(_LivePipelineTestCase):
         second, room-local chest -- distinct from TestChestSagaConversation, which never
         leaves its one room at all.
     """
-    scenario_name = "crypt"
+    scenario_name = "debug"
+    start_location = "crypt"
 
     def setUp(self):
         self._boot()
@@ -957,7 +971,7 @@ class TestSaveAndResumeConversation(unittest.TestCase):
         bus_a.subscribe("game_saved", save_events.append)
         NLPCore(bus_a)
         llm_a = LLMCore(bus_a)
-        dm_a = DMCore(bus_a, scenario_name="tavern")
+        dm_a = DMCore(bus_a, scenario_name="debug", start_location="tavern_floor")
         self._wait_for(responses_a, 1)  # the scene intro
 
         self.slot_dir = dm_a._save_slot_dir(self.slot)
@@ -980,7 +994,7 @@ class TestSaveAndResumeConversation(unittest.TestCase):
         bus_b.subscribe("game_loaded", load_events.append)
         NLPCore(bus_b)
         llm_b = LLMCore(bus_b)
-        DMCore(bus_b, scenario_name="tavern")
+        DMCore(bus_b, scenario_name="debug", start_location="tavern_floor")
         self._wait_for(responses_b, 1)  # session B's own fresh intro, unrelated to the save
 
         responses_before_load = len(responses_b)
@@ -1024,7 +1038,7 @@ class TestAdHocRemovalLive(unittest.TestCase):
     """
 
     def setUp(self):
-        self.dm_core = DMCore(EventBus(), scenario_name="arena")
+        self.dm_core = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds")
 
     def test_declines_to_remove_a_live_hostile_just_because_the_fight_is_hard(self):
         outcome = self.dm_core._attempt_entity_removal(
@@ -1044,7 +1058,7 @@ class TestAdHocRemovalLive(unittest.TestCase):
 
     def test_still_allows_removing_something_genuinely_harmless(self):
         # Proves the guardrail is targeted at live threats, not a blanket removal refusal --
-        # thane is present but positive-disposition (never hostile, see arena.toml's own
+        # thane is present but positive-disposition (never hostile, see debug.toml's own
         # thane), so a plainly non-combat removal request about him should still be honored
         # normally.
         outcome = self.dm_core._attempt_entity_removal(
@@ -1069,7 +1083,7 @@ class TestNpcGenerationLive(unittest.TestCase):
     """
 
     def test_generated_stranger_generates_a_real_npc_fit_to_the_players_own_cr(self):
-        dm_core = DMCore(EventBus(), scenario_name="npc_generation_test")
+        dm_core = DMCore(EventBus(), scenario_name="debug", start_location="generation_grounds")
         entity = dm_core.entities["generated_stranger"]
 
         self.assertTrue(entity["generated"])
@@ -1125,7 +1139,7 @@ async def test_innkeeper_dialogue_through_textual():
     nlp_core = NLPCore(event_bus)
     llm_core = LLMCore(event_bus)
     app = TextualCore(event_bus)
-    dm_core = DMCore(event_bus, scenario_name="tavern")
+    dm_core = DMCore(event_bus, scenario_name="debug", start_location="tavern_floor")
 
     async def wait_for_response_count(pilot, count, timeout=30):
         deadline = time.time() + timeout

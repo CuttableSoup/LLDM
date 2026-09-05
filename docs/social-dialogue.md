@@ -217,7 +217,7 @@ the resolved value, so sustained same-direction talk can still push a base value
 someone long enough and they turn on you). `get_attitude` adds `attitude_deltas` elementwise on
 top of whichever name/supertype/default array it resolves, so `is_hostile`/`describe_attitude`/
 the GUI all see the drifted value transparently, with no other call site changes. An entity with
-no `[entity.attitudes]` table at all (ex: `arena.toml`'s wolf) stays hostile unconditionally
+no `[entity.attitudes]` table at all (ex: `debug.toml`'s wolf) stays hostile unconditionally
 regardless of drift, since `is_hostile` short-circuits on the table's absence before ever reading
 a disposition value. `attitude_deltas` is genuinely dynamic runtime state, so it round-trips
 through save/load in the ordinary per-instance diff (`DM_Persistence.py`) for *every* entity, not

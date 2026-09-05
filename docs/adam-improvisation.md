@@ -109,7 +109,7 @@ re-dispatches the same way, `"inventory"` places into the player's own inventory
 player-centric intent does. `TARGET_CENTRIC_INTENTS` (`trade` alone) ignores `location` and
 stocks the entity into the current scene target's own inventory via the same `place_new_item`
 call — this is what lets a shopkeeper sell "most general goods" without every item being
-pre-authored (`Rules/Fantasy/scenarios/shop.toml`); short-circuits to a decline if there's no
+pre-authored (`Rules/Fantasy/scenarios/debug.toml`'s own `general_store` area); short-circuits to a decline if there's no
 current scene target to sell from. `_on_item_interaction_detected` itself resolves "examine"/
 "take" directly against the player whenever the item is already sitting in their own inventory
 (checked ahead of the locked/closed-target gates, not just the source/destination resolution, so
@@ -142,7 +142,7 @@ party-pool math) and calls `generate_ad_hoc_creature`: one tool call constrained
 (`weak`/`moderate`/`strong`, a multiplier on `target_cr`). No second LLM round trip for stats —
 the keyword choice is reused directly with `NPC_Generation.py`'s deterministic
 `fit_skills_to_cr`. **Only `"hostile"`** gets an inline attack ability plus a
-flee-under-0.4-hp_per_remain-then-attack behavior pair, mirroring `arena.toml`'s wolf; a
+flee-under-0.4-hp_per_remain-then-attack behavior pair, mirroring `debug.toml`'s wolf; a
 wary/neutral/friendly conjured NPC is dialogue-only. Placement mutates
 `self.entities`/`self.scenario_entities` directly (since `_instance_entities` only runs at load
 time) — `entity_id`/`band` (player's current band), `ad_hoc = True`. A hostile creature also

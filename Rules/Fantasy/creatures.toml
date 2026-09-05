@@ -1,9 +1,7 @@
 # wolf/bandit/giant spider/skeleton warrior/the bone warden used to live here, but every one
 # of them was test/placeholder content, not a finished creature meant to be shared across
-# scenarios -- each now lives solely as a local [[entity]] table in the one (or two) scenario
-# file(s) that actually use it (arena.toml/field.toml's own wolf, field.toml's own bandit,
-# crypt.toml's own giant spider/skeleton warrior/the bone warden; character_test.toml keeps its
-# own separate copy of wolf too, for the same reason). "fire elemental", "wraith", "troll", and
+# scenarios -- each now lives solely as a local [[entity]] table in debug.toml, the one scenario
+# file that actually uses it. "fire elemental", "wraith", "troll", and
 # "spectral wolf" all stay here -- none is owned by any scenario (all four referenced directly
 # by test_unit.py's own tests instead, "spectral wolf" also by spells.toml's own "summon
 # spectral wolf"), so there's no scenario file for any of them to move into. "wild boar"/
@@ -170,7 +168,7 @@ max_hp = 16
 
 # A non-hostile default is what actually makes this an *ally* rather than a monster: an entity
 # with no [entity.attitudes] table at all defaults to hostile unconditionally (see CLAUDE.md's
-# "Combat" -- the same reason arena.toml's wolf, with no attitudes table of its own, always
+# "Combat" -- the same reason debug.toml's wolf, with no attitudes table of its own, always
 # fights). is_hostile only reaches true hostility at disposition <= -100, so a flat positive
 # default here reads as a firm ally instead. spells.toml's "summon spectral wolf" is the only
 # thing that ever instances this template (via DM_Summoning.py's _summon_creature); nothing
@@ -193,7 +191,7 @@ damage_value = { dice = 2, pips = 1, bonus = 0 }
 
 # An ally's own behavior attacks self.current_target, not the player -- see is_hostile's own
 # two branches (CLAUDE.md's "Combat"). No "retreat" entry: a conjured spell effect has nothing
-# to lose by fighting to the end, unlike arena.toml's wolf (which flees below 40% hp_per_remain
+# to lose by fighting to the end, unlike debug.toml's wolf (which flees below 40% hp_per_remain
 # to value its own life).
 [[entity.behavior]]
 requirements = [ { field = "hp_per_remain", operator = ">=", value = 0.01 } ]

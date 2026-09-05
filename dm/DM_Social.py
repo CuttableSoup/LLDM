@@ -124,7 +124,7 @@ class SocialMixin(DMCoreProtocol):
         @brief Whether entity_name is hostile enough toward toward_name to be treated as a
             combat target rather than a dialogue partner. Two distinct defaults, deliberately
             not collapsed into one:
-            - No `[entity.attitudes]` table at all (ex: arena.toml's wolf/field.toml's bandit,
+            - No `[entity.attitudes]` table at all (ex: debug.toml's wolf/bandit,
               which declare no attitude data whatsoever) -- treated as hostile unconditionally. A
               monster that never bothered to author a disposition is still a monster; this is
               what keeps every existing hostile creature fighting exactly as before.

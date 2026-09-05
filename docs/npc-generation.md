@@ -6,8 +6,8 @@ Part of the [LLDM](../CLAUDE.md) docs — entity_template, varied fields, CR fit
 
 `[[entity_template]]` is a genuinely different top-level key from `[[entity]]`, loaded into its
 own `self.entity_templates` dict, never `self.entities`. Every entity_template in
-`Rules/Fantasy/` today is scenario-local (ex: `tavern_random.toml`'s own
-`generated_innkeeper`/`generated_stranger`). Keeping generation stubs in a separate namespace
+`Rules/Fantasy/` today is scenario-local (ex: `debug.toml`'s own `tavern_tonight` area, with its
+own `generated_innkeeper`/`generated_stranger`). Keeping generation stubs in a separate namespace
 means a scenario/room entry names a real entity via `{ name = "wolf", band = 1 }` (looked up in
 `self.entities`) but an entity_template via `{ template = "generated_stranger", band = 2 }`
 (looked up in `self.entity_templates`) — `_instance_entities` (`DM_Rules.py`) checks which key
@@ -66,8 +66,8 @@ whenever no hostile is already present. A `generate=true` entity_template refere
 ambient-triggered entry is still resolved normally, but `_resolve_ambient_encounter` forces
 `skip_llm_generation=True` through `_instance_entities`, so it always takes
 `generate_npc_stats`' instant offline-fallback path instead of ever blocking on Ollama.
-`Rules/Fantasy/scenarios/town.toml`'s own `generated_beggar` (an "on_enter" reference) is
-unaffected — it's a real, shipped example of the tolerated case.
+`Rules/Fantasy/scenarios/debug.toml`'s own `generated_beggar` (an "on_enter" reference, in its
+`town_square` area) is unaffected — it's a shipped example of the tolerated case.
 
 `DM_NpcGeneration.py`'s `NpcGenerationMixin` runs from `_instance_entities` right after an
 instance is stored into `self.entities` (the CR-fitting math reads back off

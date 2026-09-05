@@ -615,7 +615,7 @@ def generate_ad_hoc_creature(
         call is reused instead of calling generate_npc_stats' own separate tool call again.
         Only a "hostile" disposition (the exact -100 threshold DM_Social.py's is_hostile
         requires) gets an attack ability + flee-when-wounded behavior attached, mirroring
-        arena.toml's own wolf/field.toml's own bandit shape -- a wary/neutral/friendly conjured
+        debug.toml's own wolf/bandit shape -- a wary/neutral/friendly conjured
         NPC is dialogue-only, same as a template author would choose for a peaceful NPC.
     @param phrase The player's own raw message naming what to conjure (ex: "a snarling wolf").
     @param scene_description The current scene's own description, grounding what's plausible.
@@ -701,7 +701,7 @@ def generate_ad_hoc_creature(
                 "damage_value": {"dice": max(1, attack_dice // 2), "pips": 0, "bonus": 0},
                 "damage_tags": ["physical"],
             }]
-            # Mirrors arena.toml's own wolf/field.toml's own bandit shape exactly -- flee once
+            # Mirrors debug.toml's own wolf/bandit shape exactly -- flee once
             # genuinely hurt (hp_per_remain under 0.40, the same cutoff rules.toml's "wounded"
             # tier bottoms out at), otherwise keep attacking until effectively dead.
             entity["behavior"] = [

@@ -378,7 +378,7 @@ class GUICore:
     def request_scenario_load(self):
         """!
         @brief Scenario -> Load...: opens a popup listing every real scenario
-            (list_available_scenarios(), DM_Rules.py -- character_test excluded) for whichever
+            (list_available_scenarios(), DM_Rules.py) for whichever
             character is currently self._pending_character (set by request_character_creation,
             which is also what unlocks this menu entry in the first place). Mirrors
             request_load's own save-slot picker Toplevel almost exactly, just listing
