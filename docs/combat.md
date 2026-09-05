@@ -175,6 +175,20 @@ track's own conditions (`stunned`/`wounded`/`severe`/`incapacitated`/`mortal`, e
 `[[condition]]` entry already authored in `rules.toml`) mechanically real rather than narration
 flavor — a wounded character is measurably worse at everything, not just described as hurt.
 
+**A `[[condition]]` entry's own `modifier` can be scoped to specific skills via `applies_to`**
+(a list of skill names) — `get_condition_modifier` now takes an optional `skill_name` and skips
+a condition's `modifier` entirely if it authors `applies_to` and `skill_name` isn't in it (no
+`skill_name` at all never matches a scoped condition, same "can't match without a value"
+precedent `distance_to_target`/`opponent_has_condition` already follow with no `opponent_name`).
+`resolve_action`/`resolve_opposed_action` (`DM_Combat.py`) both already have the skill in scope
+at their own call sites, so this costs no new plumbing beyond the one added parameter —
+`resolve_opposed_action` passes the defender's own resolved `opposing_skill`, not the attacker's
+`skill_name`, for the defender's side. A condition authoring no `applies_to` at all (every
+condition shipped before this field existed) still applies globally, unchanged. This is what
+lets Pathfinder's sight-only Dazzled or sound-only Deafened be authored honestly instead of as
+an oversized blanket penalty (see `Rules/Fantasy/reference/pathfinder_conversion.md`'s Pattern
+C) — `rules.toml`'s own `"dazzled"` is the shipped example, `applies_to = ["observation"]`.
+
 **A `[[condition]]` entry can also carry `prevents_action = true`** — unlike `modifier` (a
 penalized roll), this stops the entity from acting on its own turn at all.
 `is_action_prevented(entity_name)` (`DM_Status.py`) is true if any of the entity's own

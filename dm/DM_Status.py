@@ -147,7 +147,7 @@ class StatusMixin(DMCoreProtocol):
         """
         return Combat_Resolution.dismiss_condition(self.entities, self.event_bus, entity_name, condition_name)
 
-    def get_condition_modifier(self, entity_name):
+    def get_condition_modifier(self, entity_name, skill_name=None):
         """!
         @brief Sums the {dice, pips, bonus} roll modifier of every one of entity_name's own
             active_conditions that has a matching entry in rules.toml's own [[condition]] table
@@ -158,9 +158,12 @@ class StatusMixin(DMCoreProtocol):
             real dice instead of just narrating -- resolve_action/resolve_opposed_action
             (DM_Combat.py) fold this into every roll, for whichever entity is doing the rolling.
         @param entity_name The name of the entity to sum modifiers for.
+        @param skill_name The skill being rolled, if known -- restricts a condition's own
+            optional "applies_to" list to only those skills (see Combat_Resolution.py's own
+            docstring); absent/None means only unscoped (no "applies_to") conditions apply.
         @return A {"dice", "pips", "bonus"} dict, each defaulting to 0 if nothing applies.
         """
-        return Combat_Resolution.get_condition_modifier(self.entities, self.rules, entity_name)
+        return Combat_Resolution.get_condition_modifier(self.entities, self.rules, entity_name, skill_name)
 
     def is_action_prevented(self, entity_name):
         """!

@@ -42,6 +42,48 @@ def transfer_currency(entities, event_bus, from_name, to_name, amount=None):
     return moved
 
 
+def get_container_rejection_reason(entities, container_name, item_name):
+    """!
+    @brief Whether container_name's own optional container_allowed_supertypes/
+        container_allowed_subtypes/container_capacity fields refuse item_name being added to
+        its "inventory" -- the shared gate transfer_item/place_new_item both check before
+        mutating anything, so every existing mover (give/take/trade, loot_entity, ADaM
+        placement, a maneuver's own transfer op) respects it uniformly, not just player-typed
+        commands (unlike get_max_bulk's own player-only carry cap, which is checked by
+        DM_Inventory.py's own callers instead -- a container's own contents are a property of
+        the container itself, not of whoever happens to be moving something into it).
+    @param entities The live entities dict.
+    @param container_name The entity item_name would be added to.
+    @param item_name The item entity being added.
+    @return "wrong_item_type" if container_name authors container_allowed_supertypes and/or
+        container_allowed_subtypes and item_name's own supertype/subtype doesn't match every
+        one of those that's set; "container_capacity_exceeded" if container_name authors
+        container_capacity and adding item_name's own "bulk" to the sum of what it already
+        holds would exceed it; None if container_name authors none of these fields (every
+        entity shipped before this mechanic existed) or item_name passes every check it does
+        author.
+    """
+    container = entities.get(container_name, {})
+    item = entities.get(item_name, {})
+
+    allowed_supertypes = container.get("container_allowed_supertypes")
+    if allowed_supertypes and item.get("supertype") not in allowed_supertypes:
+        return "wrong_item_type"
+    allowed_subtypes = container.get("container_allowed_subtypes")
+    if allowed_subtypes and item.get("subtype") not in allowed_subtypes:
+        return "wrong_item_type"
+
+    capacity = container.get("container_capacity")
+    if capacity is not None:
+        current_bulk = sum(
+            entities.get(name, {}).get("bulk", 0) for name in container.get("inventory", [])
+        )
+        if current_bulk + item.get("bulk", 0) > capacity:
+            return "container_capacity_exceeded"
+
+    return None
+
+
 def transfer_item(entities, event_bus, from_name, to_name, item_name):
     """!
     @brief Moves one occurrence of an item from one entity's inventory list to another's.
@@ -52,7 +94,10 @@ def transfer_item(entities, event_bus, from_name, to_name, item_name):
     @param from_name The name of the entity the item is taken from.
     @param to_name The name of the entity the item is given to.
     @param item_name The name of the item to move.
-    @return True if the item was present in from_name's inventory and moved, False otherwise.
+    @return True if the item was present in from_name's inventory and moved, False otherwise
+        (also False, with nothing moved, if to_name's own container_allowed_supertypes/
+        container_allowed_subtypes/container_capacity refuses item_name -- see
+        get_container_rejection_reason).
     """
     source = entities.get(from_name)
     destination = entities.get(to_name)
@@ -61,6 +106,11 @@ def transfer_item(entities, event_bus, from_name, to_name, item_name):
 
     source_inventory = source.get("inventory", [])
     if item_name not in source_inventory:
+        return False
+
+    reason = get_container_rejection_reason(entities, to_name, item_name)
+    if reason:
+        event_bus.publish("log_info", f"{item_name} can't be moved into {to_name} ({reason}).")
         return False
 
     source_inventory.remove(item_name)
@@ -78,5 +128,13 @@ def place_new_item(entities, destination_name, item_name):
     @param entities The live entities dict.
     @param destination_name The entity item_name should end up owned by.
     @param item_name The item entity's own name/entity_id.
+    @return True if item_name was added; False if destination_name's own
+        container_allowed_supertypes/container_allowed_subtypes/container_capacity refuses it
+        (see get_container_rejection_reason) -- nothing is placed anywhere in that case, so an
+        ad hoc item a caller doesn't check this return value for simply never comes into
+        existence rather than leaking into an unreachable dict entry.
     """
+    if get_container_rejection_reason(entities, destination_name, item_name):
+        return False
     entities.setdefault(destination_name, {}).setdefault("inventory", []).append(item_name)
+    return True

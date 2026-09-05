@@ -144,9 +144,14 @@ modifier = { dice = -1, pips = 0, bonus = 0 }
 name = "grappled"
 modifier = { dice = -2, pips = 0, bonus = 0 }
 
+# "applies_to" (a list of skill names) scopes this condition's own modifier to only those
+# skills' rolls -- get_condition_modifier (Combat_Resolution.py) skips it entirely for any
+# other skill. Pathfinder's Dazzled is sight-only; without "applies_to" this would otherwise
+# be an ordinary global Pattern C penalty (see pathfinder_conversion.md's Pattern C).
 [[condition]]
 name = "dazzled"
 modifier = { dice = -1, pips = 0, bonus = 0 }
+applies_to = [ "observation" ]
 
 [[condition]]
 name = "flat_footed"

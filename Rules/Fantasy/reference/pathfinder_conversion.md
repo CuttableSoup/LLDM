@@ -165,23 +165,25 @@ name = "sickened"
 modifier = { dice = -2, pips = 0, bonus = 0 }
 ```
 
-A condition whose effect only applies to *specific* rolls (Dazzled: sight-only; Deafened:
-initiative/sound-Perception only) can't be expressed today — `[[condition]]`'s modifier is
-global once wired in (`get_condition_modifier`, `DM_Status.py`, sums it into every roll the
-entity makes, no matter which skill). Authoring a *penalty* as a global (but smaller) one is
-the honest simplification; a skill-scoped modifier would need a new field (ex: `applies_to =
-["observation"]`) on the condition entry, read by `get_condition_modifier` alongside `modifier`
-itself.
+**✅ Fixed (2026-09-04).** A condition whose effect only applies to *specific* rolls (Dazzled:
+sight-only; Deafened: initiative/sound-Perception only) is now expressible: `[[condition]]`
+gained an optional `applies_to` (a list of skill names) — `get_condition_modifier` (now taking
+a `skill_name` param, threaded through from `resolve_action`/`resolve_opposed_action`, which
+both already have it in scope) skips a scoped condition's `modifier` entirely unless the
+skill being rolled is on that list. Absent `applies_to` (every condition authored before this
+field existed) still applies globally, unchanged. `rules.toml`'s `dazzled` is the shipped
+example (`applies_to = ["observation"]`, replacing the oversized blanket penalty this doc
+originally flagged).
 
 **This cuts both ways — it's a buff-scoping gap too, not just a penalty one, and the 2026-09-04
-spell survey (§3/§4) found the live content category it blocks.** Pathfinder's own ability-score
-buffs (*Bull's Strength* `+4 Str`, *Cat's Grace* `+4 Dex`, *Fox's Cunning* `+4 Int`, ...) are
-each meant to raise only *that one ability's own rolls*. Authoring one today as an ordinary
-global `[[condition]]` modifier — the same shape `creatures.toml`'s `enraged` already uses for a
-flat, deliberately-everywhere +1D — makes it far stronger than Pathfinder intends: a blanket
-+4D/+4 to literally every roll the entity makes, not just Strength-based ones. `applies_to` is
-the same fix on both sides of the ledger; until it exists, a scoped buff/debuff has no honest
-conversion the way an unscoped one (`shaken`/`sickened`) already does.
+spell survey (§3/§4) found the live content category it blocks — now fixed by the same field.**
+Pathfinder's own ability-score buffs (*Bull's Strength* `+4 Str`, *Cat's Grace* `+4 Dex`,
+*Fox's Cunning* `+4 Int`, ...) are each meant to raise only *that one ability's own rolls*.
+Authoring one as an ordinary global `[[condition]]` modifier — the same shape `creatures.toml`'s
+`enraged` already uses for a flat, deliberately-everywhere +1D — would make it far stronger than
+Pathfinder intends: a blanket +4D/+4 to literally every roll the entity makes, not just
+Strength-based ones. `applies_to` is the same fix on both sides of the ledger, authorable today
+for either direction.
 
 ### Pattern D — no-defense / helpless-to-hit
 Pathfinder: Flat-Footed, Prone, Grappled, Pinned all key off AC, which the engine has no
@@ -336,7 +338,7 @@ items are pure data — no new mechanism needed, just an item entity with the ri
 | **Ring/belt/wondrous stat bonus** | A flat bonus to a named skill — either `damage_value.bonus` for an offensive item, or (no current field for a passive skill-dice buff from a *worn, non-weapon* item) would need equipped items to be able to modify skill dice the way `resistance_value`/`armor_value` already let equipped items modify defense. Currently only weapons/armor equipped items are read by combat math (`get_equipped_weapon`/`get_damage_reduction`); a ring granting +1D to `observation` has no mechanism to apply that bonus to `resolve_action` today. Worth flagging as a scoped extension: an `equipped_skill_bonus = { skill = "observation", dice = 1 }` field, read by `resolve_action` alongside the entity's own base skill dice. |
 | **Potions/scrolls** | Already fully supported — `usable`/`charges`/`[entity.skills].healing`/`.poison` is a potion; a scroll with a one-shot spell effect is really just a usable item whose "use" *is* casting — model it as `usable = true`, `charges = 1`, with the actual effect authored as a real ability the item's use resolves (not currently generic — `_resolve_use_intent` only knows healing/poison, so a scroll that casts an arbitrary spell effect would need `_resolve_use_intent` extended past its two hardcoded effect types). |
 | **Wands/staves** (multi-charge, spell-slot item) | `charges` already covers "N uses, then gone/replaced" — a wand is mechanically identical to a health potion with more charges, same caveat as scrolls above (effect variety). |
-| **Bag of Holding / Handy Haversack / Portable Hole** (a container with its own capacity, independent of the carrier's own load) | No engine equivalent — `[bulk]`/`get_max_bulk`/`get_current_bulk` (`DM_Rules.py`) compute one flat carry cap for an entity; nothing lets a *container item* hold its own nested bulk pool that doesn't count against the carrier's own total. A scoped, additive fix: a `container_capacity` field on an item, with `get_current_bulk` special-casing anything stored "inside" such an item (distinguishing carried-directly vs. carried-in-container inventory) as exempt from the carrier's own total. Found via the 2026-09-04 survey. |
+| **Bag of Holding / Handy Haversack / Portable Hole** (a container with its own capacity, independent of the carrier's own load) | ✅ Fixed (2026-09-04). `get_current_bulk` (`DM_Rules.py`) already never recursed into an item's own nested `inventory`, so a container's contents never counted against the carrier's own total in the first place; the real gap was that nothing capped the container's own contents either. A container item's own optional `container_capacity` field now does — enforced by `transfer_item`/`place_new_item` (`Inventory_Resolution.py`'s shared `get_container_rejection_reason`), refusing to add an item that would push the container's own contained bulk past it. `items.toml`'s `bag of holding` is the shipped example. The same seam also grew `container_allowed_supertypes`/`container_allowed_subtypes`, restricting *what kind* of item a container may hold at all (ex: `items.toml`'s `spellbook`, spell entities only) — not a Pathfinder-specific mechanic on its own, but the natural sibling of a capacity cap on the same primitive. |
 
 ---
 

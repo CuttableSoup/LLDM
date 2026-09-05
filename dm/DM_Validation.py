@@ -25,6 +25,7 @@ SCALAR_FIELD_TYPES = {
     "is_player": bool, "is_party": bool,
     "max_hp": (int, float), "currency": (int, float), "bulk": (int, float),
     "max_bulk": (int, float), "value": (int, float), "exp": (int, float),
+    "container_capacity": (int, float),
     "speed": (int, float), "travel_speed": (int, float), "follow_offset": (int, float),
     "usable": bool, "charges": (int, float), "replace_with": str,
     "current_language": str, "provides_station": str, "mount": (str, list),
@@ -38,6 +39,7 @@ LIST_OF_STRING_FIELDS = (
     "languages", "memories", "quotes", "inventory",
     "damage_tags", "armor_tags", "armor_bypass_tags",
     "resistance_tags", "resistance_bypass_tags", "immunity_tags", "vulnerability_tags", "tags",
+    "container_allowed_supertypes", "container_allowed_subtypes",
 )
 # Every field documented as a rollable {dice, pips, bonus} table -- see _check_dice_table.
 DICE_TABLE_FIELDS = ("damage_value", "armor_value", "resistance_value", "vulnerability_value")
@@ -101,6 +103,7 @@ class ValidationMixin(DMCoreProtocol):
             the save was written.
         """
         self._validate_equipped_slots()
+        self._validate_container_contents()
         self._validate_skill_references()
         self._validate_ability_references()
         self._validate_entity_references()
@@ -234,6 +237,46 @@ class ValidationMixin(DMCoreProtocol):
         """
         for material in materials or []:
             self._check_entity_name(owner_label, "material", material.get("item"))
+
+    def _validate_container_contents(self):
+        """!
+        @brief Cross-checks every entity's own pre-authored "inventory" list against its own
+            container_allowed_supertypes/container_allowed_subtypes (if either is set) --
+            Inventory_Resolution.get_container_rejection_reason only ever runs at the moment
+            something is actually moved in via transfer_item/place_new_item, so a mismatch
+            hand-authored directly into a template's own "inventory" (ex: a stray non-spell
+            item written straight into a spellbook's own [[entity]] table) would otherwise load
+            silently with no signal it was ever a mistake -- the same "flag a pre-existing
+            authoring mismatch, don't just gate future moves" role _validate_equipped_slots
+            already plays for [entity.equipped]. Deliberately doesn't also check
+            container_capacity here -- unlike a type mismatch, that check inherently compares
+            "what's already inside" against "one more incoming item," and every item here is
+            already inside, so re-running it verbatim would double-count every entry against
+            itself; a genuinely over-stuffed container is left to whichever caller inserted the
+            item in the first place (referential type integrity is the concern here, not
+            capacity planning).
+        """
+        for name, entity in self.entities.items():
+            allowed_supertypes = entity.get("container_allowed_supertypes")
+            allowed_subtypes = entity.get("container_allowed_subtypes")
+            if not allowed_supertypes and not allowed_subtypes:
+                continue
+            for item_name in entity.get("inventory", []):
+                item = self.entities.get(item_name)
+                if item is None:
+                    continue  # already flagged by _validate_entity_references' own referential check
+                if allowed_supertypes and item.get("supertype") not in allowed_supertypes:
+                    self.event_bus.publish(
+                        "log_error",
+                        f"entity '{name}' authors inventory item '{item_name}' whose supertype "
+                        f"isn't in its own container_allowed_supertypes {allowed_supertypes}.",
+                    )
+                elif allowed_subtypes and item.get("subtype") not in allowed_subtypes:
+                    self.event_bus.publish(
+                        "log_error",
+                        f"entity '{name}' authors inventory item '{item_name}' whose subtype "
+                        f"isn't in its own container_allowed_subtypes {allowed_subtypes}.",
+                    )
 
     def _validate_entity_references(self):
         """!

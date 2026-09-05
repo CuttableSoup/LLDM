@@ -196,21 +196,33 @@ def dismiss_condition(entities, event_bus, entity_name, condition_name):
     return True
 
 
-def get_condition_modifier(entities, rules, entity_name):
+def get_condition_modifier(entities, rules, entity_name, skill_name=None):
     """!
     @brief Sums the {dice, pips, bonus} roll modifier of every one of entity_name's own
         active_conditions that has a matching entry in rules.toml's own [[condition]] table.
     @param entities The live entities dict.
     @param rules The loaded rules dict.
     @param entity_name The name of the entity to sum modifiers for.
+    @param skill_name The skill being rolled, if known. A [[condition]] entry's own optional
+        "applies_to" (a list of skill names) restricts its modifier to only those skills'
+        rolls -- absent (every condition shipped before this field existed) still applies
+        globally, unaffected. A scoped condition contributes nothing when skill_name is None
+        (no skill context to check against), the same "can't match without a value" precedent
+        distance_to_target/opponent_has_condition already follow with no opponent_name.
     @return A {"dice", "pips", "bonus"} dict, each defaulting to 0 if nothing applies.
     """
     active_conditions = get_active_conditions(entities, entity_name)
-    condition_defs = {c.get("name"): c.get("modifier", {}) for c in rules.get("condition", [])}
+    condition_defs = {c.get("name"): c for c in rules.get("condition", [])}
     total = {"dice": 0, "pips": 0, "bonus": 0}
     for condition_name in active_conditions:
-        modifier = condition_defs.get(condition_name)
+        condition_def = condition_defs.get(condition_name)
+        if not condition_def:
+            continue
+        modifier = condition_def.get("modifier")
         if not modifier:
+            continue
+        applies_to = condition_def.get("applies_to")
+        if applies_to and skill_name not in applies_to:
             continue
         total["dice"] += modifier.get("dice", 0)
         total["pips"] += modifier.get("pips", 0)
@@ -648,7 +660,7 @@ def resolve_action(entities, rules, event_bus, entity_name, skill_name, difficul
     """
     entity = entities.get(entity_name, {})
     skill_stats = entity.get("skills", {}).get(skill_name, {"dice": 0, "pips": 0})
-    condition_modifier = get_condition_modifier(entities, rules, entity_name)
+    condition_modifier = get_condition_modifier(entities, rules, entity_name, skill_name)
     dice = max(0, skill_stats.get("dice", 0) - dice_penalty + condition_modifier["dice"])
     pips = skill_stats.get("pips", 0) + condition_modifier["pips"]
     roll = roll_dice(dice, pips) + condition_modifier["bonus"]
@@ -683,7 +695,7 @@ def resolve_opposed_action(entities, rules, skills, event_bus, attacker_name, sk
     opposing_skill = get_opposing_skill(entities, skills, skill_name, defender_name)
     if opposing_skill:
         defender_stats = entities[defender_name]["skills"][opposing_skill]
-        defender_modifier = get_condition_modifier(entities, rules, defender_name)
+        defender_modifier = get_condition_modifier(entities, rules, defender_name, opposing_skill)
         defender_dice = max(0, defender_stats.get("dice", 0) + defender_modifier["dice"])
         defender_pips = defender_stats.get("pips", 0) + defender_modifier["pips"]
         difficulty = roll_dice(defender_dice, defender_pips) + defender_modifier["bonus"]

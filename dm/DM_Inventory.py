@@ -36,7 +36,12 @@ class InventoryMixin(DMCoreProtocol):
         @param from_name The name of the entity the item is taken from.
         @param to_name The name of the entity the item is given to.
         @param item_name The name of the item to move.
-        @return True if the item was present in from_name's inventory and moved, False otherwise.
+        @return True if the item was present in from_name's inventory and moved, False otherwise
+            (also False, with nothing moved, if to_name's own container_allowed_supertypes/
+            container_allowed_subtypes/container_capacity refuses item_name -- see
+            Inventory_Resolution.get_container_rejection_reason). loot_entity relies on this: an
+            item a restricted container refuses just stays with whatever's being looted rather
+            than silently vanishing.
         """
         return Inventory_Resolution.transfer_item(self.entities, self.event_bus, from_name, to_name, item_name)
 
@@ -48,11 +53,17 @@ class InventoryMixin(DMCoreProtocol):
             simply starts existing already in someone's possession. Unlike transfer_item, this
             never fails on a missing destination -- setdefault creates the entity's own
             "inventory" list the first time it's needed, same as transfer_item's own
-            destination.setdefault("inventory", []) already does for an existing entity.
+            destination.setdefault("inventory", []) already does for an existing entity. It can
+            still refuse, though, if destination_name's own container_allowed_supertypes/
+            container_allowed_subtypes/container_capacity rejects item_name (see
+            Inventory_Resolution.get_container_rejection_reason) -- nothing is placed at all in
+            that case.
         @param destination_name The entity item_name should end up owned by.
         @param item_name The item entity's own name/entity_id.
+        @return True if item_name was actually added, False if destination_name's own
+            container fields refused it.
         """
-        Inventory_Resolution.place_new_item(self.entities, destination_name, item_name)
+        return Inventory_Resolution.place_new_item(self.entities, destination_name, item_name)
 
     def resolve_equip_slot(self, entity_name, item_name):
         """!
@@ -443,6 +454,11 @@ class InventoryMixin(DMCoreProtocol):
             "take"/"trade" are also denied "bulk_exceeded" (_bulk_would_be_exceeded) if the item
             would push the player's own carried bulk past get_max_bulk -- "give" is never
             bulk-gated (only the player's own carrying capacity is enforced, never a target's).
+            Every intent that actually moves the item ("give"/"trade"/"take") is additionally
+            denied "wrong_item_type"/"container_capacity_exceeded" if destination_name's own
+            container_allowed_supertypes/container_allowed_subtypes/container_capacity fields
+            refuse item_name (Inventory_Resolution.get_container_rejection_reason) -- checked
+            (and, for "trade", the price left unpaid) ahead of the actual transfer_item call.
         @param intent "give", "trade", "examine", or "take".
         @param item_name NLPCore's best-guess item match (map_to_item), or the literal sentinel
             "currency".
@@ -544,12 +560,28 @@ class InventoryMixin(DMCoreProtocol):
             if self._bulk_would_be_exceeded(item_name):
                 resolved(False, reason="bulk_exceeded")
                 return
+            # Checked (and the currency left unpaid) ahead of transfer_currency -- destination_
+            # name's own container_allowed_supertypes/container_allowed_subtypes/
+            # container_capacity would otherwise refuse the transfer_item call below only
+            # *after* the price was already charged.
+            container_rejection = Inventory_Resolution.get_container_rejection_reason(
+                self.entities, destination_name, item_name,
+            )
+            if container_rejection:
+                resolved(False, reason=container_rejection)
+                return
             self.transfer_currency(self.player_name, target_name, price)
             self.transfer_item(source_name, destination_name, item_name)
             resolved(True, container=target_name, price=price)
         else:
             if intent == "take" and not already_owned and self._bulk_would_be_exceeded(item_name):
                 resolved(False, reason="bulk_exceeded")
+                return
+            container_rejection = Inventory_Resolution.get_container_rejection_reason(
+                self.entities, destination_name, item_name,
+            )
+            if container_rejection:
+                resolved(False, reason=container_rejection)
                 return
             self.transfer_item(source_name, destination_name, item_name)
             container = target_name if source_name != destination_name else None

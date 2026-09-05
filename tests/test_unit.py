@@ -1988,7 +1988,7 @@ class TestHitch(DMTestCase):
             "intent": "hitch", "item_name": None, "input": "i hitch the horse to the cart",
         })
 
-        self.assertEqual(self.dm_core._resolve_travel_speed("cart"), 48)
+        self.assertEqual(self.dm_core._resolve_travel_speed("cart"), 40)  # creatures.toml's own horse
 
     def test_unhitch_removes_a_bare_string_mount_field_entirely(self):
         self._add_horse()
@@ -2227,7 +2227,7 @@ class TestGridTravel(DMTestCase):
     def test_party_travel_speed_uses_a_mounted_players_own_horse(self):
         self._add_horse()
         self.dm_core.entities["gladstone"]["mount"] = "horse"
-        self.assertEqual(self.dm_core._party_travel_speed(), 48)  # creatures.toml's own horse
+        self.assertEqual(self.dm_core._party_travel_speed(), 40)  # creatures.toml's own horse
 
     def test_party_travel_speed_walks_a_mount_chain_through_a_cart(self):
         # A rider defers to their cart, which in turn defers to whichever horse pulls it --
@@ -2240,7 +2240,7 @@ class TestGridTravel(DMTestCase):
         self.dm_core.scenario_entities.append("cart")
         self.dm_core.entities["gladstone"]["mount"] = "cart"
 
-        self.assertEqual(self.dm_core._party_travel_speed(), 48)
+        self.assertEqual(self.dm_core._party_travel_speed(), 40)  # creatures.toml's own horse
 
     def test_party_travel_speed_paces_a_cart_to_its_slowest_horse(self):
         first = self._add_horse()
@@ -4513,6 +4513,48 @@ class TestConditionModifiers(DMTestCase):
             self.dm_core.get_condition_modifier("gladstone"),
             {"dice": 0, "pips": 0, "bonus": 0},
         )
+
+    def test_get_condition_modifier_applies_only_to_the_scoped_skill(self):
+        # rules.toml's own "dazzled" now authors applies_to = ["observation"] -- Pathfinder's
+        # Dazzled is sight-only, not a blanket penalty.
+        self.dm_core.apply_condition("gladstone", "dazzled", duration="permanent", dismiss="")
+        self.assertEqual(
+            self.dm_core.get_condition_modifier("gladstone", "observation"),
+            {"dice": -1, "pips": 0, "bonus": 0},
+        )
+        self.assertEqual(
+            self.dm_core.get_condition_modifier("gladstone", "blades"),
+            {"dice": 0, "pips": 0, "bonus": 0},
+        )
+
+    def test_get_condition_modifier_with_no_skill_name_skips_scoped_conditions(self):
+        # No skill context at all (skill_name=None, the default) can't match an "applies_to"
+        # list -- same "can't match without a value" precedent distance_to_target already
+        # follows with no opponent_name.
+        self.dm_core.apply_condition("gladstone", "dazzled", duration="permanent", dismiss="")
+        self.assertEqual(
+            self.dm_core.get_condition_modifier("gladstone"),
+            {"dice": 0, "pips": 0, "bonus": 0},
+        )
+
+    def test_get_condition_modifier_unscoped_condition_still_applies_regardless_of_skill(self):
+        # "wounded" authors no applies_to at all -- it must still apply globally, the
+        # pre-existing behavior for every condition that doesn't opt into scoping.
+        self.dm_core.apply_condition("gladstone", "wounded", duration="permanent", dismiss="")
+        self.assertEqual(
+            self.dm_core.get_condition_modifier("gladstone", "observation"),
+            {"dice": -1, "pips": 0, "bonus": 0},
+        )
+
+    def test_resolve_action_scoped_condition_only_penalizes_the_named_skill(self):
+        # gladstone's observation: 2D+0; blades: 5D+0. "dazzled" (applies_to = ["observation"])
+        # must cost a die on the former but leave the latter untouched.
+        self.dm_core.apply_condition("gladstone", "dazzled", duration="permanent", dismiss="")
+        with patch("random.randint", return_value=3):
+            observation_result = self.dm_core.resolve_action("gladstone", "observation")
+            blades_result = self.dm_core.resolve_action("gladstone", "blades")
+        self.assertEqual(observation_result["roll"], 3)   # (2 - 1) * 3
+        self.assertEqual(blades_result["roll"], 15)       # 5 * 3, unpenalized
 
     def test_resolve_action_folds_condition_dice_penalty_into_the_roll(self):
         # gladstone's blades: 5D+0. "wounded" is -1D, same floor-at-zero rule dice_penalty uses.
@@ -7526,6 +7568,157 @@ class TestInventoryTransfer(DMTestCase):
         self.assertEqual(self.dm_core.entities["gladstone"]["inventory"].count("health potion"), 5)
 
 
+class TestContainerRestrictions(DMTestCase):
+    """!
+    @brief container_capacity/container_allowed_supertypes/container_allowed_subtypes
+        (Inventory_Resolution.py's get_container_rejection_reason) -- the shared gate
+        transfer_item/place_new_item both check before moving anything into a container's own
+        "inventory", so every existing mover (give/take/trade, loot_entity, ADaM placement)
+        respects it uniformly, not just player-typed commands. items.toml's "spellbook"
+        (container_allowed_supertypes) and "bag of holding" (container_capacity) are the
+        shipped worked examples this class exercises directly.
+    """
+
+    def test_transfer_item_refuses_the_wrong_supertype(self):
+        self.dm_core.entities["gladstone"]["inventory"].append("iron dagger")
+
+        moved = self.dm_core.transfer_item("gladstone", "spellbook", "iron dagger")
+
+        self.assertFalse(moved)
+        self.assertIn("iron dagger", self.dm_core.entities["gladstone"]["inventory"])
+        self.assertNotIn("iron dagger", self.dm_core.entities["spellbook"]["inventory"])
+
+    def test_transfer_item_allows_a_matching_supertype(self):
+        self.dm_core.entities["gladstone"]["inventory"].append("suggestion")
+
+        moved = self.dm_core.transfer_item("gladstone", "spellbook", "suggestion")
+
+        self.assertTrue(moved)
+        self.assertIn("suggestion", self.dm_core.entities["spellbook"]["inventory"])
+        self.assertNotIn("suggestion", self.dm_core.entities["gladstone"]["inventory"])
+
+    def test_transfer_item_refuses_once_container_capacity_would_be_exceeded(self):
+        # "bag of holding" starts with one health potion (bulk 0) and container_capacity = 40.
+        self.dm_core.entities["anvil"] = {
+            "name": "anvil", "supertype": "object", "description": "A heavy anvil.", "bulk": 41,
+        }
+        self.dm_core.entities["gladstone"]["inventory"].append("anvil")
+
+        moved = self.dm_core.transfer_item("gladstone", "bag of holding", "anvil")
+
+        self.assertFalse(moved)
+        self.assertIn("anvil", self.dm_core.entities["gladstone"]["inventory"])
+        self.assertNotIn("anvil", self.dm_core.entities["bag of holding"]["inventory"])
+
+    def test_transfer_item_allows_up_to_the_containers_own_capacity(self):
+        self.dm_core.entities["anvil"] = {
+            "name": "anvil", "supertype": "object", "description": "A heavy anvil.", "bulk": 40,
+        }
+        self.dm_core.entities["gladstone"]["inventory"].append("anvil")
+
+        moved = self.dm_core.transfer_item("gladstone", "bag of holding", "anvil")
+
+        self.assertTrue(moved)
+        self.assertIn("anvil", self.dm_core.entities["bag of holding"]["inventory"])
+
+    def test_place_new_item_returns_false_and_places_nothing_when_refused(self):
+        placed = self.dm_core.place_new_item("spellbook", "iron dagger")
+
+        self.assertFalse(placed)
+        self.assertNotIn("iron dagger", self.dm_core.entities["spellbook"].get("inventory", []))
+
+    def test_place_new_item_returns_true_and_places_the_item_when_allowed(self):
+        placed = self.dm_core.place_new_item("spellbook", "arc lance")
+
+        self.assertTrue(placed)
+        self.assertIn("arc lance", self.dm_core.entities["spellbook"]["inventory"])
+
+    def test_loot_entity_leaves_a_refused_item_with_the_source(self):
+        # The restriction gates what a container may *receive*, not what it gives up -- so this
+        # exercises loot_entity moving *into* a restricted container (a spellbook stocking
+        # itself from a mixed pile) rather than out of one. An item a restricted destination
+        # refuses stays behind with the source rather than vanishing -- transfer_item's own
+        # False return is what loot_entity already checks.
+        self.dm_core.entities["loose pile"] = {
+            "name": "loose pile", "supertype": "object", "description": "A loose pile of things.",
+            "currency": 5, "inventory": ["suggestion", "iron dagger"],
+        }
+
+        summary = self.dm_core.loot_entity("loose pile", "spellbook")
+
+        self.assertEqual(summary["currency"], 5)
+        self.assertIn("suggestion", summary["items"])
+        self.assertNotIn("iron dagger", summary["items"])
+        self.assertIn("iron dagger", self.dm_core.entities["loose pile"]["inventory"])
+        self.assertIn("suggestion", self.dm_core.entities["spellbook"]["inventory"])
+
+    def test_containers_own_nested_bulk_never_counts_against_the_carrier(self):
+        self.dm_core.entities["gladstone"]["inventory"].append("bag of holding")
+        before = self.dm_core.get_current_bulk("gladstone")
+
+        # Filling the bag right up to its own container_capacity (40) still only ever costs
+        # gladstone the bag's own flat "bulk" (2) -- get_current_bulk never recurses into an
+        # item's own nested "inventory".
+        self.dm_core.entities["anvil"] = {
+            "name": "anvil", "supertype": "object", "description": "A heavy anvil.", "bulk": 40,
+        }
+        self.dm_core.entities["bag of holding"]["inventory"].append("anvil")
+
+        self.assertEqual(self.dm_core.get_current_bulk("gladstone"), before)
+
+    def test_give_denies_wrong_item_type_without_moving_anything(self):
+        self._load_ad_hoc_scenario([{"name": "gladstone", "band": 1}, {"name": "spellbook", "band": 1}])
+        resolved = self._capture("item_interaction_resolved")
+        self.dm_core.entities["gladstone"]["inventory"].append("iron dagger")
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "give", "item_name": "iron dagger", "input": "I put the iron dagger in the spellbook",
+        })
+
+        result = resolved[-1]
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "wrong_item_type")
+        self.assertIn("iron dagger", self.dm_core.entities["gladstone"]["inventory"])
+
+    def test_give_allows_a_matching_supertype(self):
+        self._load_ad_hoc_scenario([{"name": "gladstone", "band": 1}, {"name": "spellbook", "band": 1}])
+        resolved = self._capture("item_interaction_resolved")
+        self.dm_core.entities["gladstone"]["inventory"].append("suggestion")
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "give", "item_name": "suggestion", "input": "I put the suggestion scroll in the spellbook",
+        })
+
+        result = resolved[-1]
+        self.assertTrue(result["found"])
+        self.assertIn("suggestion", self.dm_core.entities["spellbook"]["inventory"])
+
+    def test_trade_denies_a_refused_destination_before_charging_any_currency(self):
+        # No shipped container is ever a "trade"/"take" destination (both always move toward
+        # the player) -- this exercises the same gate against the player entity itself, future-
+        # proofing for a setting that authors container fields on the player. "spellbook" (no
+        # locked/closed conditions of its own, unlike "chest") stands in as an ordinary,
+        # reachable seller here -- what it's selling is beside the point. Set container_
+        # allowed_supertypes *after* loading -- load_scenario is always a fresh re-instancing
+        # (see its own docstring), so anything set on "gladstone" beforehand would just be
+        # discarded.
+        self._load_ad_hoc_scenario([{"name": "gladstone", "band": 1}, {"name": "spellbook", "band": 1}])
+        self.dm_core.entities["gladstone"]["container_allowed_supertypes"] = ["spell"]
+        resolved = self._capture("item_interaction_resolved")
+        self.dm_core.entities["spellbook"]["inventory"].append("iron dagger")
+        starting_currency = self.dm_core.entities["gladstone"]["currency"]
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "trade", "item_name": "iron dagger", "input": "I buy the iron dagger",
+        })
+
+        result = resolved[-1]
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "wrong_item_type")
+        self.assertEqual(self.dm_core.entities["gladstone"]["currency"], starting_currency)
+        self.assertNotIn("iron dagger", self.dm_core.entities["gladstone"]["inventory"])
+
+
 class TestNpcDialogue(DMTestCase):
     # Rules/Fantasy/scenarios/debug.toml puts the player with a friendly NPC (its own local
     # innkeeper) instead of the default "arena" combat scenario.
@@ -8041,6 +8234,30 @@ class TestValidation(DMTestCase):
             "nonexistent_summon", "nonexistent_material", "nonexistent_craft_material",
         ):
             self.assertTrue(any(expected in e for e in errors), f"missing error for {expected}")
+
+    def test_container_content_type_reference_checks(self):
+        self.dm_core.entities["bad_container_widget"] = {
+            "name": "bad_container_widget", "supertype": "object",
+            "container_allowed_supertypes": ["spell"],
+            "inventory": ["iron dagger", "suggestion"],
+        }
+        errors = self._capture("log_error")
+        self.dm_core.validate_loaded_data()
+
+        self.assertTrue(any("iron dagger" in e and "container_allowed_supertypes" in e for e in errors))
+        # "suggestion" is a real spell -- matches the allow-list, never flagged.
+        self.assertFalse(any("'suggestion'" in e for e in errors))
+
+    def test_container_content_subtype_reference_check(self):
+        self.dm_core.entities["bad_quiver_widget"] = {
+            "name": "bad_quiver_widget", "supertype": "object",
+            "container_allowed_subtypes": ["potion"],
+            "inventory": ["iron dagger"],
+        }
+        errors = self._capture("log_error")
+        self.dm_core.validate_loaded_data()
+
+        self.assertTrue(any("iron dagger" in e and "container_allowed_subtypes" in e for e in errors))
 
     def test_summon_template_reference(self):
         self.dm_core.entities["bad_summon_template_widget"] = {

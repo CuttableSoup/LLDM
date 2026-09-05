@@ -77,6 +77,34 @@ and `"give"` is never bulk-gated either way. Mounting an entity is checked separ
 (`DM_Rules.py`'s `_would_exceed_mount_capacity`, `DM_Movement.py`'s `_resolve_mount_intent`)
 against that entity's own `get_carrying_capacity`, not this player-only check.
 
+`get_current_bulk` never recurses into an item's own nested `inventory` in the first place, so
+whatever a container item holds already doesn't count against whoever's carrying it — a
+container item's own `container_capacity` (optional) is what actually caps that instead:
+`transfer_item`/`place_new_item` (`Inventory_Resolution.py`'s shared
+`get_container_rejection_reason`) refuse to add an item that would push the sum of the
+container's own contents' `bulk` past it. `items.toml`'s `bag of holding` is the shipped
+example (the Pathfinder "Bag of Holding"/"Handy Haversack" shape). A container item can
+separately author `container_allowed_supertypes`/`container_allowed_subtypes` (lists) to refuse
+anything whose own `supertype`/`subtype` isn't on the list — `items.toml`'s `spellbook`
+(`container_allowed_supertypes = ["spell"]`) is the shipped example. Both checks are absent/
+unenforced on every container shipped before this mechanic existed.
+
+Unlike `_bulk_would_be_exceeded` (checked only at the player-facing `"take"`/`"trade"` call
+sites in `DM_Inventory.py`, leaving `loot_entity`/ADaM/a maneuver's own transfer op uncapped by
+design), `get_container_rejection_reason` is checked **inside** `transfer_item`/`place_new_item`
+themselves — every existing mover respects it uniformly, not just typed commands. `transfer_item`
+returns `False` (nothing moved) on a refusal the same way it already does for "item not actually
+present in the source"; `loot_entity` already treats that as "leave it with the source," so an
+item a restricted container refuses during a loot sweep just stays behind rather than
+vanishing. `place_new_item` gained the same `bool` return for the same reason — an ad hoc item
+(`DM_Improvisation.py`) placed at a rejecting destination is never added anywhere else either
+(no fallback to the ground or the player), so a caller that ignores the return value simply
+never brings that item into existence, rather than leaking an orphaned entity into `self.entities`
+with nothing referencing it. `_resolve_transfer_intent`'s own `"give"`/`"trade"`/`"take"`
+branches surface the refusal as `reason: "wrong_item_type"`/`"container_capacity_exceeded"` —
+for `"trade"` specifically, checked (and the price left unpaid) *before* `transfer_currency`
+runs, so a doomed transfer never charges the player for nothing.
+
 
 ## Items and movement as intents
 

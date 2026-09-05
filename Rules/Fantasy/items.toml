@@ -528,3 +528,33 @@ subtype = "material"
 description = "A small pouch of fine iron filings, faintly magnetic."
 bulk = 0
 value = 2
+
+# Worked example of container_capacity (see docs/inventory-items.md's "Carry capacity (bulk)"
+# and reference/pathfinder_conversion.md's Magic Items table, "Bag of Holding / Handy
+# Haversack / Portable Hole") -- get_current_bulk never recurses into an item's own nested
+# "inventory" in the first place, so whatever's stored inside already doesn't count against
+# whoever's carrying this bag; container_capacity is what actually bounds how much can go
+# into the bag itself, enforced by transfer_item/place_new_item.
+[[entity]]
+name = "bag of holding"
+supertype = "object"
+subtype = "container"
+description = "A worn leather bag, its inside somehow far roomier than its outside."
+bulk = 2
+value = 50
+container_capacity = 40
+inventory = [ "health potion" ]
+
+# Worked example of container_allowed_supertypes (see reference/pathfinder_conversion.md's
+# Magic Items table) -- a spellbook only ever holds spell entities; transfer_item/
+# place_new_item refuse "wrong_item_type" for anything else, whether that's a player-driven
+# give/take/trade, a loot sweep, or an ad hoc ADaM placement.
+[[entity]]
+name = "spellbook"
+supertype = "object"
+subtype = "container"
+description = "A leather-bound spellbook, its pages dense with arcane notation."
+bulk = 1
+value = 30
+container_allowed_supertypes = [ "spell" ]
+inventory = [ "fireball" ]

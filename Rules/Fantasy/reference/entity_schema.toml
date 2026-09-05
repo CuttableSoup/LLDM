@@ -105,6 +105,33 @@ max_bulk = 20                               # Optional flat override for get_max
                                             # [bulk] -- an explicit number is a deliberate
                                             # override, not something the generic rule should
                                             # second-guess.
+container_capacity = 40                     # Object only. Caps the total "bulk" of whatever
+                                            # sits in this entity's own "inventory" list --
+                                            # enforced by transfer_item/place_new_item
+                                            # (Inventory_Resolution.py's get_container_
+                                            # rejection_reason), refusing to add an item that
+                                            # would push the sum past this number. Absent (every
+                                            # entity shipped before this field existed) means
+                                            # uncapped. Distinct from get_max_bulk/max_bulk,
+                                            # which cap what the *carrier* can carry overall --
+                                            # get_current_bulk never recurses into an item's own
+                                            # nested "inventory" in the first place, so whatever
+                                            # this field lets a container hold never counts
+                                            # against whoever's carrying it (the Pathfinder "Bag
+                                            # of Holding" shape -- see items.toml's own "bag of
+                                            # holding").
+container_allowed_supertypes = [ "spell" ]  # Object only. If set, transfer_item/place_new_item
+                                            # refuse "wrong_item_type" for anything whose own
+                                            # "supertype" isn't in this list -- ex: items.toml's
+                                            # "spellbook" only ever holds spell entities. Checked
+                                            # independently of container_allowed_subtypes, below
+                                            # -- both, if both are authored, must pass.
+container_allowed_subtypes = [ "potion" ]   # Object only. Same shape as container_allowed_
+                                            # supertypes, just matched against an item's own
+                                            # "subtype" instead (ex: a quiver that only holds
+                                            # ammunition). Absent (both fields) means
+                                            # unrestricted -- every container shipped before
+                                            # this mechanic existed.
 value = 0                                   # An object's price -- read by "trade"
                                             # (item_interaction_resolved's "price"; denied
                                             # "cant_afford" if the buyer's own currency is

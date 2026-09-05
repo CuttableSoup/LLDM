@@ -277,8 +277,11 @@ description = "A broad-backed saddle horse, ears flicking toward every sound -- 
 
 max_hp = 24
 
-# Doubles the default overland pace (rules.toml's own [travel] default_speed = 24) -- see this
-# file's header comment above.
+# Pathfinder's own overland movement table pairs a 50 ft base speed (a combat-trained/heavy
+# horse's own) with 40 miles/day at a normal pace -- not simply double rules.toml's own
+# [travel] default_speed (24, a 30 ft baseline's own 24 miles/day), a coincidence of the old
+# default_speed = 4 this would have equaled 8 under, not a fixed 2x multiplier of whatever
+# default_speed happens to be.
 travel_speed = 40
 
 # Skittish, not vicious: a positive disposition (won't attack unprovoked, unlike wild boar/
