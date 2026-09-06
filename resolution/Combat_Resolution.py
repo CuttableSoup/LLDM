@@ -152,6 +152,55 @@ def _apply_stat_drain(entities, rules, entity_name, condition_name):
     return {"skill": drain["skill"], "dice": dice_amount, "pips": pips_amount}
 
 
+def _find_condition_def(rules, condition_name):
+    """!@brief The [[condition]] entry named condition_name, or None."""
+    return next((c for c in (rules or {}).get("condition", []) if c.get("name") == condition_name), None)
+
+
+def _convert_periodic_phase(rules, phase):
+    """!
+    @brief Normalizes a periodic_test phase ({"unit", "length"}) the same way apply_condition
+        normalizes an authored "days" duration -- "days" becomes "blocks", length scaled by
+        rules.toml's own [time].blocks_per_day; "rounds"/"blocks" pass through unchanged.
+    @param rules The loaded rules dict (may be None/{}).
+    @param phase {"unit", "length"} -- an onset or interval entry off a [[condition]]'s own
+        "periodic_test" table.
+    @return (unit, length) with "days" already converted to "blocks".
+    """
+    unit, length = phase["unit"], phase["length"]
+    if unit == "days":
+        blocks_per_day = (rules or {}).get("time", {}).get("blocks_per_day", 3)
+        unit, length = "blocks", length * blocks_per_day
+    return unit, length
+
+
+def _init_periodic_state(rules, condition_name):
+    """!
+    @brief Seeds a freshly-applied condition's own periodic_test countdown state -- the
+        Pathfinder poison/disease "Frequency"/"Onset" shape (Rules/Fantasy/reference/
+        pathfinder_mapping.toml's Poison/Dying-Stable-Disabled rows): a periodic self-save that
+        starts after an optional onset delay, then repeats every "interval" until either it's
+        dismissed some other way or "cure_after_successes" consecutive passes cure it outright.
+    @param rules The loaded rules dict (may be None/{} -- no [[condition]] entry found means
+        nothing to seed).
+    @param condition_name The name of the condition being newly applied.
+    @return {"remaining", "onset_passed", "successes", "drained"} state dict, or None if
+        condition_name authors no "periodic_test" at all.
+    """
+    condition_def = _find_condition_def(rules, condition_name)
+    periodic_test = condition_def.get("periodic_test") if condition_def else None
+    if not periodic_test:
+        return None
+    onset = periodic_test.get("onset")
+    if onset and onset.get("length", 0) > 0:
+        _, remaining = _convert_periodic_phase(rules, onset)
+        onset_passed = False
+    else:
+        _, remaining = _convert_periodic_phase(rules, periodic_test["interval"])
+        onset_passed = True
+    return {"remaining": remaining, "onset_passed": onset_passed, "successes": 0, "drained": {}}
+
+
 def apply_condition(entities, event_bus, entity_name, condition_name, duration=None, length=None, dismiss=None, rules=None):
     """!
     @brief Marks a condition as active on an entity.
@@ -164,16 +213,17 @@ def apply_condition(entities, event_bus, entity_name, condition_name, duration=N
         to "blocks" -- length * that setting's own [time].blocks_per_day, TimeMixin's own
         get_time_state default if a setting authors no [time] table at all); "permanent" for a
         duration with no live countdown at all, cleared only by an explicit dismiss_condition
-        call.
+        call (or, for a periodic_test-bearing condition, by tick_periodic_tests's own
+        cure_after_successes check -- see _init_periodic_state).
     @param length How many of "duration"'s own unit remain (unused/ignored for "permanent").
     @param dismiss What removes the condition (ex: "healing", "resurrection").
     @param rules The loaded rules dict, needed to convert a "days" duration to "blocks", and to
-        look up condition_name's own optional "drain" (see _apply_stat_drain) -- every caller
-        that can ever author "days"/"drain" (DM_Status.py's own apply_condition wrapper,
-        Program_Interpreter.py's `condition` op, evaluate_statuses below) already has self.rules/
-        rules in reach and passes it through; a caller that only ever applies a plain "permanent"/
-        "rounds"/"rooms"/"blocks", non-draining condition (ex: DM_Travel.py's "surprised") can
-        omit it.
+        look up condition_name's own optional "drain"/"periodic_test" (see _apply_stat_drain/
+        _init_periodic_state) -- every caller that can ever author "days"/"drain" (DM_Status.py's
+        own apply_condition wrapper, Program_Interpreter.py's `condition` op, evaluate_statuses
+        below) already has self.rules/rules in reach and passes it through; a caller that only
+        ever applies a plain "permanent"/"rounds"/"rooms"/"blocks", non-draining condition (ex:
+        DM_Travel.py's "surprised") can omit it.
     """
     if duration == "days":
         blocks_per_day = (rules or {}).get("time", {}).get("blocks_per_day", 3)
@@ -182,16 +232,21 @@ def apply_condition(entities, event_bus, entity_name, condition_name, duration=N
     if entity is None:
         return
     active_conditions = entity.setdefault("active_conditions", {})
-    # Drains only once per gain, not on every reapplication/refresh (ex: an extended duration
-    # on an already-active condition must not double-drain the same skill) -- an already-active
-    # condition carries its own already-computed "_drained" forward unchanged.
+    # Drains/periodic state only seed once per gain, not on every reapplication/refresh (ex: an
+    # extended duration on an already-active condition must not double-drain the same skill, or
+    # restart a disease's own onset/interval countdown from scratch) -- an already-active
+    # condition carries its own already-computed state forward unchanged.
     if condition_name in active_conditions:
         drained = active_conditions[condition_name].get("_drained")
+        periodic = active_conditions[condition_name].get("_periodic")
     else:
         drained = _apply_stat_drain(entities, rules, entity_name, condition_name)
+        periodic = _init_periodic_state(rules, condition_name)
     entry = {"duration": duration, "length": length, "dismiss": dismiss}
     if drained:
         entry["_drained"] = drained
+    if periodic:
+        entry["_periodic"] = periodic
     active_conditions[condition_name] = entry
     event_bus.publish("log_info", f"{entity_name} gains condition '{condition_name}'.")
 
@@ -221,6 +276,132 @@ def tick_condition_durations(entities, event_bus, entity_name, unit, amount=1):
             dismiss_condition(entities, event_bus, entity_name, condition_name)
 
 
+def _apply_periodic_drain(entities, entity_name, periodic_state, drain_specs):
+    """!
+    @brief Applies one failed periodic_test's own "on_fail.drain" list, accumulating the actual
+        amount removed per skill onto periodic_state's own "drained" dict -- repeatable, unlike
+        _apply_stat_drain's own one-shot "drain" field, since a disease/poison can fail its save
+        more than once before being cured. dismiss_condition reads this dict back to restore
+        every skill it ever touched, in total, the moment the condition finally clears. Clamped
+        per application so a drain can never push a skill below 0/0, same as _apply_stat_drain.
+    @param entities The live entities dict.
+    @param entity_name The entity failing its save.
+    @param periodic_state The condition instance's own "_periodic" dict, mutated in place.
+    @param drain_specs A list of {"skill", "dice", "pips"} entries (periodic_test.on_fail.drain).
+    """
+    skills = entities.get(entity_name, {}).get("skills", {})
+    for spec in drain_specs:
+        skill_stats = skills.get(spec.get("skill"))
+        if skill_stats is None:
+            continue
+        dice_amount = min(spec.get("dice", 0), skill_stats.get("dice", 0))
+        pips_amount = min(spec.get("pips", 0), skill_stats.get("pips", 0))
+        skill_stats["dice"] -= dice_amount
+        skill_stats["pips"] -= pips_amount
+        accumulated = periodic_state["drained"].setdefault(spec["skill"], {"dice": 0, "pips": 0})
+        accumulated["dice"] += dice_amount
+        accumulated["pips"] += pips_amount
+
+
+def tick_periodic_tests(entities, rules, event_bus, entity_name, unit, amount=1):
+    """!
+    @brief Advances entity_name's own periodic_test countdowns by amount of unit ("rounds" or
+        "blocks") -- the Pathfinder poison ("Frequency 1/round") / disease ("Frequency 1/day")
+        shape (Rules/Fantasy/reference/pathfinder_mapping.toml's Poison/Dying-Stable-Disabled
+        rows). Ticked from the exact same call sites tick_condition_durations already is
+        (DM_Status.py's run_round_upkeep for "rounds", DM_Time.py's _tick_conditions_by_block for
+        "blocks" -- deliberately not enter_room's "rooms" tick, a disease/poison's cadence isn't
+        room-scoped), and over the same "every entity in self.entities, not just
+        self.scenario_entities" scope _tick_conditions_by_block already uses for block-scale
+        duration -- a disease keeps progressing on a party member who isn't even in the current
+        scene.
+
+        Each condition's own onset elapses once (its own countdown swapped for "interval"'s the
+        moment it reaches 0, immediately rolling the first save), then a save (resolve_action, a
+        flat difficulty check -- no dice_penalty, this is never the acting entity's own turn)
+        repeats every "interval". A pass increments a stored consecutive-successes counter,
+        auto-dismissing the condition outright once "cure_after_successes" is reached
+        (Pathfinder's "2 consecutive saves" cure shape) -- a disease/poison with no explicit
+        "cure"-shaped spell/dismiss trigger of its own still eventually clears on its own the
+        honest way. A fail resets that counter to 0 and applies periodic_test's own
+        "on_fail.drain" (see _apply_periodic_drain) and/or "on_fail.damage" (an ordinary rolled
+        hit, via apply_damage -- a simple ongoing toxin with no ability-damage component at all).
+    @param entities The live entities dict.
+    @param rules The loaded rules dict.
+    @param event_bus The EventBus, forwarded to apply_damage/dismiss_condition.
+    @param entity_name The entity to tick.
+    @param unit Which denomination just elapsed ("rounds"/"blocks") -- only conditions whose
+        currently-active phase (onset if not yet passed, else interval) shares this unit (after
+        "days" conversion) are advanced at all.
+    @param amount How many of that unit elapsed.
+    """
+    active_conditions = get_active_conditions(entities, entity_name)
+    for condition_name, entry in list(active_conditions.items()):
+        periodic_state = entry.get("_periodic")
+        if periodic_state is None:
+            continue
+        condition_def = _find_condition_def(rules, condition_name)
+        periodic_test = condition_def.get("periodic_test") if condition_def else None
+        if not periodic_test:
+            continue
+        active_phase = periodic_test["interval"] if periodic_state["onset_passed"] else (
+            periodic_test.get("onset") or periodic_test["interval"]
+        )
+        phase_unit, _ = _convert_periodic_phase(rules, active_phase)
+        if phase_unit != unit:
+            continue
+        periodic_state["remaining"] -= amount
+        if periodic_state["remaining"] > 0:
+            continue
+        periodic_state["onset_passed"] = True
+        _, periodic_state["remaining"] = _convert_periodic_phase(rules, periodic_test["interval"])
+        roll = resolve_action(entities, rules, event_bus, entity_name, periodic_test["skill"], periodic_test.get("difficulty", 0))
+        if roll["success"]:
+            periodic_state["successes"] += 1
+            if periodic_state["successes"] >= periodic_test.get("cure_after_successes", float("inf")):
+                dismiss_condition(entities, event_bus, entity_name, condition_name)
+        else:
+            periodic_state["successes"] = 0
+            on_fail = periodic_test.get("on_fail", {})
+            if on_fail.get("drain"):
+                _apply_periodic_drain(entities, entity_name, periodic_state, on_fail["drain"])
+            damage_spec = on_fail.get("damage")
+            if damage_spec:
+                damage_total = roll_dice(damage_spec.get("dice", 0), damage_spec.get("pips", 0)) + damage_spec.get("bonus", 0)
+                if damage_total > 0:
+                    apply_damage(entities, rules, event_bus, entity_name, damage_total)
+
+
+def dismiss_matching_conditions(entities, rules, event_bus, entity_name, spec):
+    """!
+    @brief Dismisses every one of entity_name's own active conditions whose [[condition]] entry
+        matches spec's "supertypes"/"subtypes" filter (matches_supertype_or_subtype, reused
+        unchanged against the condition catalog instead of the entity catalog -- it only ever
+        reads dict.get("supertype")/dict.get("subtype"), so a [[condition]] entry authoring
+        those two optional fields works identically to an [[entity]]'s own). The Pathfinder
+        "remove disease"/"neutralize poison"/panacea shape: the caster doesn't need to name the
+        specific affliction, just its kind -- {subtypes = ["disease"]} cures any active disease,
+        {supertypes = ["affliction"]} a broader panacea also catching poison/curse. Mirrors
+        DM_Core.py's _apply_dispel_if_hit exactly, just removing a condition instead of banishing
+        an entity; a target carrying nothing matching simply has nothing cured, the same
+        "used on the wrong thing just wastes it" shape dispel already has.
+    @param entities The live entities dict.
+    @param rules The loaded rules dict.
+    @param event_bus The EventBus, forwarded to dismiss_condition.
+    @param entity_name The name of the entity being cured.
+    @param spec A table carrying "supertypes"/"subtypes" (both optional, each a list of
+        strings) -- see matches_supertype_or_subtype.
+    @return A list of the condition names actually dismissed (possibly empty).
+    """
+    cured = []
+    for condition_name in list(get_active_conditions(entities, entity_name)):
+        condition_def = _find_condition_def(rules, condition_name)
+        if condition_def and matches_supertype_or_subtype(condition_def, spec):
+            dismiss_condition(entities, event_bus, entity_name, condition_name)
+            cured.append(condition_name)
+    return cured
+
+
 def tick_ability_cooldowns(entities, entity_name):
     """!
     @brief Decrements every one of entity_name's own active ability_cooldowns entries by one,
@@ -244,11 +425,12 @@ def tick_ability_cooldowns(entities, entity_name):
 def dismiss_condition(entities, event_bus, entity_name, condition_name):
     """!
     @brief Removes a condition from an entity, if it's currently active -- restoring any stat
-        drain it applied (see _apply_stat_drain/apply_condition) by reading the exact amount
-        stashed on the condition's own active_conditions entry at apply time, rather than
-        re-deriving it from rules (which would need condition_name's own [[condition]] entry
-        to still exist/be unchanged -- reading back what was actually removed is exact
-        regardless). No rules param needed here as a result.
+        drain it applied (see _apply_stat_drain/apply_condition, and _apply_periodic_drain's own
+        repeatable per-failure drain) by reading the exact amount(s) stashed on the condition's
+        own active_conditions entry at apply/fail time, rather than re-deriving it from rules
+        (which would need condition_name's own [[condition]] entry to still exist/be unchanged --
+        reading back what was actually removed is exact regardless). No rules param needed here
+        as a result.
     @param entities The live entities dict.
     @param event_bus The EventBus to publish a log_info line to.
     @param entity_name The name of the entity losing the condition.
@@ -259,12 +441,20 @@ def dismiss_condition(entities, event_bus, entity_name, condition_name):
     if condition_name not in active_conditions:
         return False
     entry = active_conditions.pop(condition_name)
+    skills = entities.get(entity_name, {}).get("skills", {})
     drained = entry.get("_drained")
     if drained:
-        skill_stats = entities.get(entity_name, {}).get("skills", {}).get(drained["skill"])
+        skill_stats = skills.get(drained["skill"])
         if skill_stats is not None:
             skill_stats["dice"] = skill_stats.get("dice", 0) + drained.get("dice", 0)
             skill_stats["pips"] = skill_stats.get("pips", 0) + drained.get("pips", 0)
+    periodic = entry.get("_periodic")
+    if periodic:
+        for skill_name, amount in periodic.get("drained", {}).items():
+            skill_stats = skills.get(skill_name)
+            if skill_stats is not None:
+                skill_stats["dice"] = skill_stats.get("dice", 0) + amount.get("dice", 0)
+                skill_stats["pips"] = skill_stats.get("pips", 0) + amount.get("pips", 0)
     event_bus.publish("log_info", f"{entity_name} loses condition '{condition_name}'.")
     return True
 

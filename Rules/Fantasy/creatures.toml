@@ -269,6 +269,38 @@ dodge = { dice = 4, pips = 0 }
 strength = { dice = 2, pips = 0 }
 brawling = { dice = 3, pips = 0 }
 
+# Pathfinder Bestiary's giant rat -- the shipped disease-vector worked example
+# (Rules/Fantasy/reference/pathfinder_mapping.toml's Poison/Dying-Stable-Disabled rows):
+# on_hit_condition applies rules.toml's own "filth fever" unconditionally on a landed bite (see
+# that condition's own comment for why exposure itself is unconditional, with onset/frequency
+# doing the real work of "did it actually take hold").
+[[entity]]
+name = "giant rat"
+supertype = "creature"
+subtype = "animal"
+description = "An oversized, mangy rat, its bite carrying more than just pain."
+max_hp = 6
+
+[[entity.abilities]]
+name = "bite"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "piercing" ]
+damage_value = { dice = 1, pips = 0, bonus = 0 }
+on_hit_condition = { condition = "filth fever", chance = 100, duration = "permanent" }
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "bite"
+
+[entity.skills]
+brawling = { dice = 2, pips = 0 }
+dodge = { dice = 3, pips = 0 }
+fortitude = { dice = 1, pips = 0 }
+
 [[entity]]
 name = "horse"
 supertype = "creature"

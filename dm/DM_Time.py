@@ -86,12 +86,19 @@ class TimeMixin(DMCoreProtocol):
             of presence in the current scene" scope _expire_prompt_directives already uses,
             since a block-scale duration (measured in hours, not the current fight) isn't tied
             to who's actually on-screen the way a round-scale one is.
+
+            Also advances every active_conditions entry's own "periodic_test" countdown by
+            blocks (Combat_Resolution.tick_periodic_tests) -- a disease's own "Frequency 1/day"
+            self-save (converted from "days" via [time].blocks_per_day), the same global,
+            presence-independent scope as the duration tick just above: a disease keeps
+            progressing on a party member who's stepped out of the current scene entirely.
         @param blocks How many blocks just elapsed.
         """
         if blocks <= 0:
             return
         for entity_name in list(self.entities):
             Combat_Resolution.tick_condition_durations(self.entities, self.event_bus, entity_name, "blocks", blocks)
+            Combat_Resolution.tick_periodic_tests(self.entities, self.rules, self.event_bus, entity_name, "blocks", blocks)
 
     def _expire_prompt_directives(self, blocks):
         """!

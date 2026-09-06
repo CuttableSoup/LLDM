@@ -92,7 +92,22 @@ class DispelEffect:
     name: str
 
 
-Effect = DamageEffect | LootEffect | SummonEffect | CraftEffect | RevealEffect | DefenderDetailsEffect | TeleportEffect | DispelEffect
+@dataclass
+class CureEffect:
+    """!@brief One or more active conditions removed outright by a successful cure-shaped cast
+        -- the target's own currently-active condition(s) matched the ability's "cure"
+        {supertypes, subtypes} filter against the [[condition]] catalog (see DM_Core.py's
+        _apply_cure_if_hit). "conditions" is empty if the target had nothing matching -- the
+        same "used on the wrong thing just wastes it" shape DispelEffect's own mismatch case
+        has, just still reported rather than silently skipped."""
+    target: str
+    conditions: list
+
+
+Effect = (
+    DamageEffect | LootEffect | SummonEffect | CraftEffect | RevealEffect | DefenderDetailsEffect
+    | TeleportEffect | DispelEffect | CureEffect
+)
 
 
 @dataclass

@@ -451,6 +451,26 @@ dispel = { supertypes = ["spell"], subtypes = ["spell"] }
                                             # all) offers essentially no resistance, while a
                                             # warded creature's own skill makes it a real contest.
                                             # _apply_dispel_if_hit, DM_Core.py.
+cure = { supertypes = ["affliction"], subtypes = ["disease"] }
+                                            # A spell/technique only -- on a successful cast,
+                                            # dismisses every one of current_target's own active
+                                            # conditions whose OWN [[condition]] entry matches
+                                            # either list (matches_supertype_or_subtype, reused
+                                            # unchanged against the condition catalog rather than
+                                            # the entity one -- it only ever reads dict.get(
+                                            # "supertype")/dict.get("subtype"), so a [[condition]]
+                                            # entry authoring those same two optional fields works
+                                            # identically) -- the Pathfinder "Remove Disease"/
+                                            # "Neutralize Poison"/panacea shape: the caster names a
+                                            # KIND, not a specific instance. {subtypes =
+                                            # ["disease"]} cures whichever disease is active
+                                            # without naming it; {supertypes = ["affliction"]} a
+                                            # broader panacea also catching poison/curse. Aimed at
+                                            # a target with nothing matching simply cures nothing
+                                            # -- "used on the wrong thing wastes the action", the
+                                            # same shape "dispel" above already has, still reported
+                                            # (an empty CureEffect) rather than silently skipped.
+                                            # _apply_cure_if_hit, DM_Core.py.
 cooldown_rounds = 3                         # A behavior-driven ability only (DM_Combat.py's
                                             # resolve_behavior_action) -- once used, sets the
                                             # acting entity's own ability_cooldowns[name] to

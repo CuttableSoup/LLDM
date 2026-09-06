@@ -38,8 +38,8 @@ from resolution.AdHoc_Generation import (
 from gui.Character_Creation_GUI import CharacterCreationDialog
 from resolution.Challenge_Rating import calculate_challenge_rating, calculate_party_challenge_rating, skill_rating
 from dm.DM_ActionOutcome import (
-    ActionOutcome, ActionPreventedOutcome, CraftEffect, DamageEffect, DefenderDetailsEffect, DispelEffect,
-    LanguageBarrierOutcome, LootEffect, MissingMaterialsOutcome, MissingSpellMaterialsOutcome,
+    ActionOutcome, ActionPreventedOutcome, CraftEffect, CureEffect, DamageEffect, DefenderDetailsEffect,
+    DispelEffect, LanguageBarrierOutcome, LootEffect, MissingMaterialsOutcome, MissingSpellMaterialsOutcome,
     MissingStationOutcome, MovementOutcome, NotCraftableOutcome, OutOfRangeOutcome, RevealEffect,
     RolledOutcome, SummonEffect, TeleportEffect, TransferOutcome,
 )
@@ -4583,6 +4583,62 @@ class TestDispelMagic(DMTestCase):
         self.assertEqual([e.name for e in action.effects if isinstance(e, DispelEffect)], ["flame wall"])
 
 
+class TestCureConditionType(DMTestCase):
+    """!
+    @brief cure (an ability field, {supertypes, subtypes}) + dismiss_matching_conditions
+        (Combat_Resolution.py) + DM_Core.py's own _apply_cure_if_hit -- matches_supertype_or_
+        subtype reused unchanged against the [[condition]] catalog instead of the entity one
+        (the Pathfinder "Remove Disease"/"Neutralize Poison" shape: the caster doesn't need to
+        name the specific affliction, just its kind). Shipped as spells.toml's "cure disease"
+        ({subtypes = ["disease"]}), targeting rules.toml's own "filth fever" via its shared
+        subtype = "disease".
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.dm_core.apply_condition("gladstone", "filth fever", duration="permanent", dismiss="")
+
+    def test_matches_supertype_or_subtype_matches_the_condition_catalogs_own_classification(self):
+        filth_fever = Combat_Resolution._find_condition_def(self.dm_core.rules, "filth fever")
+        self.assertTrue(Combat_Resolution.matches_supertype_or_subtype(filth_fever, {"subtypes": ["disease"]}))
+        self.assertTrue(Combat_Resolution.matches_supertype_or_subtype(filth_fever, {"supertypes": ["affliction"]}))
+        self.assertFalse(Combat_Resolution.matches_supertype_or_subtype(filth_fever, {"subtypes": ["curse"]}))
+
+    def test_apply_cure_if_hit_dismisses_a_matching_condition(self):
+        ability = {"cure": {"subtypes": ["disease"]}}
+        result = RolledOutcome(entity="gladstone", skill="miracles", roll=10, difficulty=0, success=True)
+        self.dm_core._apply_cure_if_hit(result, ability, "gladstone")
+        self.assertFalse(self.dm_core.has_condition("gladstone", "filth fever"))
+        self.assertEqual([e.conditions for e in result.effects if isinstance(e, CureEffect)], [["filth fever"]])
+
+    def test_apply_cure_if_hit_ignores_a_non_matching_condition(self):
+        # gladstone isn't afflicted with anything matching "curse" -- casting it does nothing,
+        # the same "used on the wrong thing just wastes the action" shape dispel already has.
+        ability = {"cure": {"subtypes": ["curse"]}}
+        result = RolledOutcome(entity="gladstone", skill="miracles", roll=10, difficulty=0, success=True)
+        self.dm_core._apply_cure_if_hit(result, ability, "gladstone")
+        self.assertTrue(self.dm_core.has_condition("gladstone", "filth fever"))
+        self.assertEqual([e.conditions for e in result.effects if isinstance(e, CureEffect)], [[]])
+
+    def test_apply_cure_if_hit_does_nothing_on_a_failed_roll(self):
+        ability = {"cure": {"subtypes": ["disease"]}}
+        result = RolledOutcome(entity="gladstone", skill="miracles", roll=1, difficulty=10, success=False)
+        self.dm_core._apply_cure_if_hit(result, ability, "gladstone")
+        self.assertTrue(self.dm_core.has_condition("gladstone", "filth fever"))
+        self.assertEqual(result.effects, [])
+
+    def test_casting_cure_disease_end_to_end_cures_filth_fever(self):
+        self.dm_core.current_target = "gladstone"
+        resolved = self._capture("action_resolved")
+        self._stub_roll_dice(10)  # beats "cure disease"'s own flat difficulty of 8
+        self.dm_core._on_turn_detected({
+            "clauses": [{"kind": "action", "skill": "cure disease"}], "input": "I cure gladstone's disease",
+        })
+        self.assertFalse(self.dm_core.has_condition("gladstone", "filth fever"))
+        action = resolved[-1]["actions"][0]
+        self.assertEqual([e.conditions for e in action.effects if isinstance(e, CureEffect)], [["filth fever"]])
+
+
 class TestBandit(DMTestCase):
     # "bandit" is debug.toml's own local entity now (creatures.toml no longer carries one --
     # see its own comment) -- booting "field" first is what makes it resolvable at all, before
@@ -5188,6 +5244,92 @@ class TestStatDrain(DMTestCase):
     def test_condition_with_no_drain_field_is_unaffected(self):
         self.dm_core.apply_condition("gladstone", "wounded", duration="permanent", dismiss="")
         self.assertEqual(self.dm_core.entities["gladstone"]["skills"]["athletics"], {"dice": 2, "pips": 2})
+
+
+class TestPeriodicTest(DMTestCase):
+    """!
+    @brief periodic_test (a [[condition]] field) + tick_periodic_tests (Combat_Resolution.py) --
+        a recurring self-save that starts after an optional onset delay, then repeats every
+        interval until cure_after_successes consecutive passes cures it outright (the Pathfinder
+        poison "Frequency 1/round" / disease "Frequency 1/day" shape, Rules/Fantasy/reference/
+        pathfinder_mapping.toml's Poison/Dying-Stable-Disabled rows). gladstone's own finesse is
+        3D+0, fortitude 2D+0 (characters.toml).
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.dm_core.rules.setdefault("condition", []).append({
+            "name": "test toxin",
+            "periodic_test": {
+                "skill": "fortitude",
+                "difficulty": 12,
+                "onset": {"unit": "rounds", "length": 2},
+                "interval": {"unit": "rounds", "length": 1},
+                "on_fail": {"drain": [{"skill": "finesse", "dice": 1, "pips": 0}]},
+                "cure_after_successes": 2,
+            },
+        })
+
+    def test_no_test_is_rolled_before_onset_elapses(self):
+        self.dm_core.apply_condition("gladstone", "test toxin", duration="permanent", dismiss="")
+        self._stub_roll_dice(1)  # would fail against difficulty 12 if a save were actually rolled
+        self.dm_core.run_round_upkeep()  # onset: 2 -> 1, no test yet
+        self.assertEqual(self.dm_core.entities["gladstone"]["skills"]["finesse"], {"dice": 3, "pips": 0})
+
+    def test_the_first_save_rolls_the_round_onset_elapses(self):
+        self.dm_core.apply_condition("gladstone", "test toxin", duration="permanent", dismiss="")
+        self._stub_roll_dice(1)
+        self.dm_core.run_round_upkeep()
+        self.dm_core.run_round_upkeep()  # onset: 1 -> 0, first save rolled and fails
+        self.assertEqual(self.dm_core.entities["gladstone"]["skills"]["finesse"], {"dice": 2, "pips": 0})
+
+    def test_a_failed_save_resets_consecutive_successes(self):
+        self.dm_core.apply_condition("gladstone", "test toxin", duration="permanent", dismiss="")
+        self._stub_roll_dice(15)  # beats difficulty 12
+        self.dm_core.run_round_upkeep()
+        self.dm_core.run_round_upkeep()  # save #1 passes
+        periodic = self.dm_core.get_active_conditions("gladstone")["test toxin"]["_periodic"]
+        self.assertEqual(periodic["successes"], 1)
+        self._stub_roll_dice(1)
+        self.dm_core.run_round_upkeep()  # save #2 fails
+        self.assertEqual(periodic["successes"], 0)
+        self.assertEqual(self.dm_core.entities["gladstone"]["skills"]["finesse"], {"dice": 2, "pips": 0})
+
+    def test_cure_after_successes_consecutive_passes_auto_dismisses(self):
+        self.dm_core.apply_condition("gladstone", "test toxin", duration="permanent", dismiss="")
+        self._stub_roll_dice(15)
+        self.dm_core.run_round_upkeep()  # onset: 2 -> 1
+        self.dm_core.run_round_upkeep()  # onset elapses, save #1 passes
+        self.assertTrue(self.dm_core.has_condition("gladstone", "test toxin"))
+        self.dm_core.run_round_upkeep()  # interval elapses, save #2 passes -- cured
+        self.assertFalse(self.dm_core.has_condition("gladstone", "test toxin"))
+
+    def test_dismissing_restores_the_total_accumulated_drain_across_multiple_failures(self):
+        self.dm_core.apply_condition("gladstone", "test toxin", duration="permanent", dismiss="")
+        self._stub_roll_dice(1)  # every save fails
+        self.dm_core.run_round_upkeep()
+        self.dm_core.run_round_upkeep()  # save #1 fails -- finesse 3 -> 2
+        self.dm_core.run_round_upkeep()  # save #2 fails -- finesse 2 -> 1
+        self.assertEqual(self.dm_core.entities["gladstone"]["skills"]["finesse"], {"dice": 1, "pips": 0})
+        self.dm_core.dismiss_condition("gladstone", "test toxin")
+        self.assertEqual(self.dm_core.entities["gladstone"]["skills"]["finesse"], {"dice": 3, "pips": 0})
+
+    def test_a_days_denominated_onset_and_interval_convert_through_the_block_clock(self):
+        # blocks_per_day is 3 (rules.toml) -- one day of onset is 3 blocks.
+        self.dm_core.rules["condition"][-1]["periodic_test"]["onset"] = {"unit": "days", "length": 1}
+        self.dm_core.rules["condition"][-1]["periodic_test"]["interval"] = {"unit": "days", "length": 1}
+        self.dm_core.apply_condition("gladstone", "test toxin", duration="permanent", dismiss="")
+        self._stub_roll_dice(1)
+        self.dm_core.advance_blocks(2)
+        self.assertEqual(self.dm_core.entities["gladstone"]["skills"]["finesse"], {"dice": 3, "pips": 0})
+        self.dm_core.advance_blocks(1)  # 3rd block -- onset elapses, first save rolled and fails
+        self.assertEqual(self.dm_core.entities["gladstone"]["skills"]["finesse"], {"dice": 2, "pips": 0})
+
+    def test_a_condition_with_no_periodic_test_field_is_unaffected(self):
+        self.dm_core.apply_condition("gladstone", "wounded", duration="permanent", dismiss="")
+        self.dm_core.run_round_upkeep()
+        self.dm_core.run_round_upkeep()
+        self.assertEqual(self.dm_core.entities["gladstone"]["skills"]["finesse"], {"dice": 3, "pips": 0})
 
 
 class TestForcedActionTargetOverride(DMTestCase):

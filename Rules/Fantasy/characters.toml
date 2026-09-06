@@ -44,6 +44,7 @@ abilities = [
     "summon spectral wolf",
     "wall of fire",
     "dispel magic",
+    "cure disease",
     "cleave",
     { name = "punch", supertype = "innate", subtype = "weapon", skill = "brawling", damage_tags = [ "bludgeoning" ], damage_value = { dice = 0, pips = 0, bonus = "user.strength_damage" } },
 ]

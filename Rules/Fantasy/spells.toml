@@ -154,3 +154,25 @@ description = "Unravel a nearby magical effect, banishing it outright."
 skill = "arcane"
 range = 5
 dispel = { supertypes = [ "spell" ], subtypes = [ "spell" ] }
+
+# Dismisses every one of current_target's own active conditions whose [[condition]] entry
+# matches "cure"'s own {supertypes, subtypes} filter -- matches_supertype_or_subtype, reused
+# unchanged against the condition catalog instead of the entity one (_apply_cure_if_hit,
+# DM_Core.py). The Pathfinder "Remove Disease" shape: the caster doesn't need to name the
+# specific affliction, just its kind -- rules.toml's own "filth fever" (subtype = "disease")
+# is the shipped target, cured without the spell ever naming it directly. A broader panacea
+# would instead author {supertypes = ["affliction"]}, also catching poison/curse. "difficulty"
+# forces a flat, unopposed check the same way "dimension door"/"teleport" already do -- a
+# beneficial spell cast on a willing, already-sick ally must never roll opposed against that
+# ally's own defenses the way an ordinary hostile cast would. Aimed at a target with nothing
+# matching simply cures nothing, the same "used on the wrong thing wastes the action" shape
+# dispel already has.
+[[entity]]
+name = "cure disease"
+supertype = "spell"
+subtype = "conjuration"
+description = "Channel divine grace to burn a festering sickness out of the body."
+skill = "miracles"
+difficulty = 8
+range = 5
+cure = { subtypes = [ "disease" ] }

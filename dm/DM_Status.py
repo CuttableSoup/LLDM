@@ -147,6 +147,20 @@ class StatusMixin(DMCoreProtocol):
         """
         return Combat_Resolution.dismiss_condition(self.entities, self.event_bus, entity_name, condition_name)
 
+    def cure_conditions(self, entity_name, spec):
+        """!
+        @brief Dismisses every one of entity_name's own active conditions matching spec's
+            "supertypes"/"subtypes" filter against the [[condition]] catalog -- the Pathfinder
+            "remove disease"/"neutralize poison" shape, where the caster doesn't need to name
+            the specific affliction, just its kind. See Combat_Resolution.dismiss_matching_
+            conditions and DM_Core.py's _apply_cure_if_hit, its one caller.
+        @param entity_name The name of the entity being cured.
+        @param spec A table carrying "supertypes"/"subtypes" (both optional, each a list of
+            strings) -- the ability's own "cure" field.
+        @return A list of the condition names actually dismissed (possibly empty).
+        """
+        return Combat_Resolution.dismiss_matching_conditions(self.entities, self.rules, self.event_bus, entity_name, spec)
+
     def get_skill_group_members(self, name_or_names):
         """!
         @brief Expands a skill/group name (or a list of them) through rules.toml's own
@@ -350,6 +364,12 @@ class StatusMixin(DMCoreProtocol):
             same entity's upkeep runs after gaining it, docs/downtime.md's "Night watch and
             surprise".
 
+            Also advances every active_conditions entry's own "periodic_test" countdown by one
+            round (Combat_Resolution.tick_periodic_tests) -- a poison's own "Frequency 1/round"
+            self-save (a disease's "1/day" cadence instead ticks off DM_Time.py's block clock,
+            see _tick_conditions_by_block), rolled and applied the same round its onset/interval
+            elapses in.
+
             Also ticks down every entry in the entity's own "ability_cooldowns"
             (Combat_Resolution.tick_ability_cooldowns) -- set whenever a behavior fires an
             ability authoring "cooldown_rounds" (DM_Combat.py's resolve_behavior_action),
@@ -375,6 +395,7 @@ class StatusMixin(DMCoreProtocol):
             self._run_round_upkeep_program(entity_name)
             self._expire_summon_if_due(entity_name)
             Combat_Resolution.tick_condition_durations(self.entities, self.event_bus, entity_name, "rounds")
+            Combat_Resolution.tick_periodic_tests(self.entities, self.rules, self.event_bus, entity_name, "rounds")
             Combat_Resolution.tick_ability_cooldowns(self.entities, entity_name)
             self.evaluate_proximity_statuses(entity_name, "on_round")
 

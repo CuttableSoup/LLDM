@@ -33,7 +33,7 @@
 [meta]
 sources_pathfinder = "aonprd.com (Archives of Nethys): Conditions, Universal Monster Rules, Damage Reduction/Energy Resistance/Vulnerability, Magic Items, core Magic chapter, Core Rulebook spell list."
 sources_d6 = "Settings/d6 Fantasy.pdf (core), Settings/d6 Fantasy Creatures.pdf (bestiary), Settings/d6 Magic.pdf (Vade Mecum of Magic)."
-verified_against_engine_as_of = "2026-09-05"
+verified_against_engine_as_of = "2026-09-06"
 scope = "Mechanic categories, not an exhaustive spell/monster/item catalog. A new piece of content is converted by recognizing which category below it falls into and following that category's recipe."
 
 # ============================================================================================
@@ -715,17 +715,55 @@ action = "bite"   # falls back to this every round the breath weapon is on coold
 '''
 
 [[creature_ability]]
-name = "Poison (on-hit secondary effect, often delayed)"
-primitive = "on_hit_condition applies \"poisoned\" directly; upkeep_damage covers the ticking half"
-fit = "partial"
-notes = "on_hit_condition (ability field) applies a \"poisoned\" condition directly on a successful hit, no [entity.test] detour needed, and its own upkeep_damage ticks for real once active, dismissible via dismiss_condition (ex: a passed Fortitude-style test) -- same shape as the \"bleeding\" Pattern E example. Still missing: true onset delay ('doesn't start for 1 round') -- apply_condition has no notion of a delayed start, only a delayed *end* (duration/length)."
+name = "Poison / Disease (on-hit or exposure-based affliction -- delayed onset, a recurring Fortitude save, ability damage on a failed save, cured by consecutive successes)"
+primitive = "on_hit_condition applies the affliction directly; periodic_test covers onset/frequency/cure entirely"
+fit = "full"
+notes = "on_hit_condition (ability field) applies the affliction condition directly on a successful hit/exposure, no [entity.test] detour needed. The condition's own periodic_test = {skill, difficulty, onset, interval, on_fail, cure_after_successes} (Combat_Resolution.tick_periodic_tests, ticked from the same call sites tick_condition_durations already is -- DM_Status.py's run_round_upkeep for a \"rounds\"-frequency poison, DM_Time.py's block clock for a \"days\"-frequency disease) is what closes the previous gap here: a real onset delay (onset), a recurring self-save at a fixed cadence (interval) instead of a single upkeep tick, ability damage on a FAILED save via on_fail.drain (a repeatable drain, distinct from the ordinary one-shot \"drain\" field -- accumulated per skill, restored in full on cure), and an honest \"2 consecutive saves\" cure (cure_after_successes, auto-dismissing via dismiss_condition with no explicit cure spell needed). Simplified relative to real Pathfinder in one place only: no separate initial-exposure save deciding whether the disease is caught at all -- on_hit_condition's own exposure is unconditional, and the onset-then-first-save flow is the first real chance to shake it off. A simple, non-afflicted poison (no ability-damage/cure-count clause at all, just \"take damage every round until it wears off\") still authors the older, simpler upkeep_damage/upkeep_blocked_by_tags shape directly -- periodic_test is for the specifically Pathfinder Poison/Disease affliction shape with its own save cadence and cure condition, not a replacement for ordinary Pattern E ticking damage. rules.toml's own \"filth fever\" (applied by creatures.toml's \"giant rat\" bite) is the shipped example -- see also the \"Afflictions: classifying a condition by kind\" row below for how \"cure disease\"/a panacea targets it without naming it."
 recipe = '''
-on_hit_condition = { condition = "poisoned", chance = 100 }
+on_hit_condition = { condition = "filth fever", chance = 100, duration = "permanent" }
 
 [[condition]]
-name = "poisoned"
-upkeep_damage = { dice = 1, pips = 0, bonus = 0 }
+name = "filth fever"
+supertype = "affliction"
+subtype = "disease"
+
+[condition.periodic_test]
+skill = "fortitude"
+difficulty = 12
+cure_after_successes = 2
+
+[condition.periodic_test.onset]
+unit = "days"
+length = 2
+
+[condition.periodic_test.interval]
+unit = "days"
+length = 1
+
+[condition.periodic_test.on_fail]
+drain = [
+    { skill = "finesse", dice = 1, pips = 0 },
+    { skill = "fortitude", dice = 1, pips = 0 },
+]
 '''
+shipped_example = "rules.toml's \"filth fever\", creatures.toml's \"giant rat\" (the exposure vector)"
+
+[[creature_ability]]
+name = "Afflictions: classifying a condition by kind (disease/poison/curse), so a cure can target the kind without naming the instance"
+primitive = "supertype/subtype on a [[condition]] entry + the ability field \"cure\" = {supertypes, subtypes}"
+fit = "full"
+notes = "[[condition]] entries are plain dicts, same as [[entity]] ones -- matches_supertype_or_subtype has no entity-specific logic at all (just dict.get(\"supertype\")/dict.get(\"subtype\")), so it's reused UNCHANGED against the condition catalog instead of the entity one; no new matching code, just two new optional fields on [[condition]]. Combat_Resolution.dismiss_matching_conditions walks an entity's own active_conditions, dismissing every one whose [[condition]] entry matches a {supertypes, subtypes} filter; DM_Core.py's _apply_cure_if_hit (mirroring _apply_dispel_if_hit exactly, just removing a condition instead of banishing an entity) is the ability-level hook. The Pathfinder \"Remove Disease\"/\"Neutralize Poison\"/panacea shape: the caster names a KIND, not a specific instance -- {subtypes = [\"disease\"]} cures whichever disease is active without the spell ever naming \"filth fever\" directly, {supertypes = [\"affliction\"]} a broader panacea also catching poison/curse, the same two-axis trick dispel's own {supertypes = [\"spell\"], subtypes = [\"spell\"]} already uses for \"anything magical\" rather than one narrow shape. Aimed at a target with nothing matching simply cures nothing -- the same \"used on the wrong thing wastes it\" shape dispel already has, still reported (an empty CureEffect) rather than silently skipped."
+recipe = '''
+[[entity]]
+name = "cure disease"
+supertype = "spell"
+subtype = "conjuration"
+skill = "miracles"
+difficulty = 8
+range = 5
+cure = { subtypes = [ "disease" ] }
+'''
+shipped_example = "spells.toml's \"cure disease\", targeting rules.toml's \"filth fever\" via its shared subtype = \"disease\""
 
 [[creature_ability]]
 name = "Fear aura / Frightful Presence"

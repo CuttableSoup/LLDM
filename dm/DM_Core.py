@@ -2,8 +2,8 @@ import os
 import re
 
 from dm.DM_ActionOutcome import (
-    ActionPreventedOutcome, DamageEffect, DefenderDetailsEffect, DispelEffect, LanguageBarrierOutcome, LootEffect,
-    MissingSpellMaterialsOutcome, OutOfRangeOutcome, RevealEffect, RolledOutcome, SummonEffect,
+    ActionPreventedOutcome, CureEffect, DamageEffect, DefenderDetailsEffect, DispelEffect, LanguageBarrierOutcome,
+    LootEffect, MissingSpellMaterialsOutcome, OutOfRangeOutcome, RevealEffect, RolledOutcome, SummonEffect,
     TeleportEffect, rolled_outcome_from_roll,
 )
 from dm.DM_CharacterCreation import CharacterCreationMixin
@@ -746,6 +746,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         self._apply_damage_if_hit(result, skill_name, named_ability, ability, target_name, via_test)
         self._apply_summon_if_hit(result, named_ability)
         self._apply_dispel_if_hit(result, named_ability, target_name)
+        self._apply_cure_if_hit(result, named_ability, target_name)
         self._apply_teleport_if_hit(result, named_ability)
         self._run_ability_outcome_program(result, skill_name, named_ability, ability, target_name, via_test, input_text)
         self._attach_defender_details(result, target_name)
@@ -968,6 +969,34 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             return
         self.remove_entity_from_scene(target_name)
         result.effects.append(DispelEffect(name=target_name))
+
+    def _apply_cure_if_hit(self, result, named_ability, target_name):
+        """!
+        @brief Dismisses every one of target_name's own active conditions matching this turn's
+            named ability's own "cure" field (a {"supertypes", "subtypes"} filter against the
+            [[condition]] catalog rather than the entity catalog -- matches_supertype_or_subtype
+            has no entity-specific logic, so a [[condition]] entry authoring those same two
+            optional fields works identically) if the roll succeeded. Mirrors
+            _apply_dispel_if_hit exactly, just removing a condition instead of banishing an
+            entity: {subtypes = ["disease"]} is the Pathfinder "Remove Disease" shape (cures
+            whichever disease is active without the caster needing to name it),
+            {supertypes = ["affliction"]} a broader panacea also catching poison/curse. A
+            target with nothing matching simply has nothing cured -- the same "used on the
+            wrong thing just wastes it" shape dispel already has, still reported (as an empty
+            CureEffect) rather than silently skipped. Player-only, same scope every other
+            cast-time effect (summon/dispel/teleport) already keeps.
+        @param result The roll result from _resolve_roll, mutated in place with a CureEffect
+            if this turn's named ability authors "cure" at all.
+        @param named_ability The resolved ability entity (technique/spell), or None.
+        @param target_name self.current_target, or None.
+        """
+        if not result.success or not named_ability or not target_name:
+            return
+        cure_spec = named_ability.get("cure")
+        if not cure_spec:
+            return
+        cured = self.cure_conditions(target_name, cure_spec)
+        result.effects.append(CureEffect(target=target_name, conditions=cured))
 
     def _apply_teleport_if_hit(self, result, named_ability):
         """!

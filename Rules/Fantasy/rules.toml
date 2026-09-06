@@ -192,6 +192,46 @@ modifier = { dice = 1, pips = 0, bonus = 0 }
 name = "burning"
 upkeep_damage = { dice = 2, pips = 0, bonus = 0 }
 
+# Pathfinder's Filth Fever (Core Rulebook) -- the "periodic_test" shipped worked example
+# (Rules/Fantasy/reference/pathfinder_mapping.toml's Poison/Dying-Stable-Disabled rows), applied
+# by creatures.toml's "giant rat" bite. Real Filth Fever: Fortitude DC 12; onset 1d3 days;
+# frequency 1/day; 1d3 Dex/1d3 Con damage on a failed save; cured by 2 CONSECUTIVE successes.
+# "onset" is flattened from "1d3 days" to a fixed 2 -- the same "flatten a die roll into one
+# authored number" precedent get_concealment's own miss_chance already sets; the engine also
+# doesn't separately model Pathfinder's own "initial exposure save" (whether you catch it at
+# all on the bite that exposes you) -- on_hit_condition's exposure is unconditional, and the
+# onset-then-first-save flow below is the first real chance to shake it off, an honest
+# simplification of the same shape rather than a second, redundant roll. Dex/Con ability damage
+# is mapped onto "finesse"/"fortitude" -- literal skills, not a whole [[skill_group]] drained at
+# once, the same precedent the shipped "energy drained" condition already sets (a [[skill_group]]
+# is for a roll-time modifier scoped across a cluster of rolls, not a permanent stat loss).
+# supertype/subtype classify this as an "affliction"/"disease" -- matches_supertype_or_subtype
+# (reused unchanged against the condition catalog, not just the entity one) is what lets
+# spells.toml's "cure disease" remove whichever disease is active without naming it.
+[[condition]]
+name = "filth fever"
+supertype = "affliction"
+subtype = "disease"
+
+[condition.periodic_test]
+skill = "fortitude"
+difficulty = 12
+cure_after_successes = 2
+
+[condition.periodic_test.onset]
+unit = "days"
+length = 2
+
+[condition.periodic_test.interval]
+unit = "days"
+length = 1
+
+[condition.periodic_test.on_fail]
+drain = [
+    { skill = "finesse", dice = 1, pips = 0 },
+    { skill = "fortitude", dice = 1, pips = 0 },
+]
+
 # The [[status]] "on_round" trigger (evaluate_proximity_statuses, called once a round per living
 # scene entity from run_round_upkeep -- DM_Status.py) is what turns a stationary object into a
 # persistent terrain hazard (Rules/Fantasy/reference/pathfinder_mapping.toml's "Persistent

@@ -377,6 +377,44 @@ absent/inert unless a piece of content actually authors it.
   effect (`summon`/`teleport_to_band`) already keeps. `spells.toml`'s own `"dispel magic"`
   (targeting `spells.toml`'s `"flame wall"` via its shared `subtype = "spell"`) is the shipped
   example.
+- **`periodic_test`** (a `[[condition]]` field, `{skill, difficulty, onset, interval, on_fail,
+  cure_after_successes}`) -- the Pathfinder poison ("Frequency 1/round")/disease ("Frequency
+  1/day") shape: a recurring self-save that starts after an optional `onset` delay (`{unit,
+  length}`, `unit` one of `"rounds"`/`"blocks"`/the authoring-only `"days"`, converted to
+  `"blocks"` via `[time].blocks_per_day` the same way an ordinary condition `duration` already
+  is), then repeats every `interval` (same `{unit, length}` shape) until either
+  `cure_after_successes` consecutive passes cures it outright (Pathfinder's "2 consecutive
+  saves" cure shape -- `dismiss_condition`, no explicit cure spell needed) or something else
+  removes it first (ex: `cure`, below). `Combat_Resolution.tick_periodic_tests` -- ticked from
+  the same call sites `tick_condition_durations` already is (`DM_Status.py`'s
+  `run_round_upkeep` for `"rounds"`, `DM_Time.py`'s `_tick_conditions_by_block` for `"blocks"`,
+  deliberately not `enter_room`'s `"rooms"` tick) -- decrements whichever phase (onset, then
+  interval) is currently active, rolling a flat `resolve_action(skill, difficulty)` self-save
+  the moment it reaches 0. A pass increments a stored consecutive-successes counter; a fail
+  resets it to 0 and applies `on_fail.drain` (a list of `{skill, dice, pips}` entries -- a
+  *repeatable* drain, stashed cumulatively per skill on the condition instance's own
+  `active_conditions` entry and restored in full by `dismiss_condition`, distinct from the
+  ordinary one-shot `drain` field above) and/or `on_fail.damage` (an ordinary rolled hit, via
+  `apply_damage`). `rules.toml`'s own `"filth fever"` (applied by `creatures.toml`'s `"giant
+  rat"` bite) is the shipped example.
+- **`supertype`/`subtype` on a `[[condition]]` entry**, plus the ability field **`cure`**
+  (`{supertypes, subtypes}`) -- `[[condition]]` entries are plain dicts the same as
+  `[[entity]]` ones, and `matches_supertype_or_subtype` has no entity-specific logic at all (it
+  only ever reads `dict.get("supertype")`/`dict.get("subtype")`), so it's reused unchanged
+  against the condition catalog instead of the entity one -- no new matching code, just two new
+  optional fields. `Combat_Resolution.dismiss_matching_conditions` walks an entity's own
+  `active_conditions`, dismissing every one whose `[[condition]]` entry matches `cure`'s filter;
+  `DM_Core.py`'s `_apply_cure_if_hit` (mirroring `_apply_dispel_if_hit` exactly, just removing a
+  condition instead of banishing an entity) calls it on a successful cast against
+  `current_target`, appending a `CureEffect` naming whatever was actually cured (possibly
+  empty). The Pathfinder "Remove Disease"/"Neutralize Poison"/panacea shape -- the caster
+  doesn't need to name the specific affliction, just its kind: `{subtypes = ["disease"]}` cures
+  any active disease, `{supertypes = ["affliction"]}` a broader panacea also catching
+  poison/curse, mirroring the way `dispel`'s own `{supertypes = ["spell"], subtypes =
+  ["spell"]}` covers two different places `"spell"` shows up. A target with nothing matching
+  simply has nothing cured, the same "used on the wrong thing just wastes it" shape `dispel`
+  already has. `spells.toml`'s own `"cure disease"` (`{subtypes = ["disease"]}`, targeting
+  `rules.toml`'s `"filth fever"` via its shared `subtype = "disease"`) is the shipped example.
 
 
 ## Damage and healing
