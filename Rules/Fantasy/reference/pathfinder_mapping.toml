@@ -344,8 +344,8 @@ recipe = "Add the element to damage_tags and bump damage_value.dice/.pips -- a f
 
 [[magic_item]]
 pf_shape = "Keen (doubled threat range)"
-fit = "none"
-notes = "No critical-hit/threat-range mechanic at all. Not authorable without a new crit subsystem."
+fit = "skip"
+notes = "preferred not to be implemented"
 
 [[magic_item]]
 pf_shape = "Holy / Unholy / Bane (bonus vs. a creature type/alignment)"
@@ -357,8 +357,8 @@ damage_bonus_vs = { supertypes = ["undead"], value = { dice = 2, pips = 0, bonus
 
 [[magic_item]]
 pf_shape = "Vorpal"
-fit = "none"
-notes = "No crit system to hook a decapitate-on-crit effect into."
+fit = "skip"
+notes = "No crit system."
 
 [[magic_item]]
 pf_shape = "Wounding (bleed on hit)"
@@ -379,7 +379,7 @@ ignores_concealment = true
 
 [[magic_item]]
 pf_shape = "Fortification (armor: % chance to negate a crit)"
-fit = "none"
+fit = "skip"
 notes = "No crit system."
 
 [[magic_item]]
