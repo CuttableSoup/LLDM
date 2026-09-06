@@ -558,3 +558,25 @@ bulk = 1
 value = 30
 container_allowed_supertypes = [ "spell" ]
 inventory = [ "fireball" ]
+
+# The "on_arrival" shipped worked example (Rules/Fantasy/reference/pathfinder_mapping.toml's
+# "Delayed/triggered magic" row -- Glyph of Warding/Magic Mouth): an ordinary hazard, placed
+# permanently like any other room prop (or conjured via "summon", same as spells.toml's "flame
+# wall"), with no mechanism of its own beyond the [[status]] entry (rules.toml's own "warding
+# glyph shock") that matches it by name. subtype = "spell" (not "trap") marks it as a standing
+# magical effect the same way "flame wall" does -- "dispel magic" already banishes any entity
+# sharing that subtype, so no separate dispel wiring is needed here. immunity_tags = ["any"]
+# for the same reason "flame wall" carries it: current_target has no is_hostile gate, so a
+# non-hostile object can be targeted/attacked like anything else -- a glyph shouldn't be
+# choppable down by an ordinary weapon, only dispelled or its own [entity.conditions.armed]
+# flag cleared some other way.
+[[entity]]
+name = "warding glyph"
+supertype = "object"
+subtype = "spell"
+description = "Faint silver sigils are scratched into the stone underfoot, waiting for an unworthy footstep."
+max_hp = 10
+immunity_tags = [ "any" ]
+
+[entity.conditions.armed]
+duration = "permanent"

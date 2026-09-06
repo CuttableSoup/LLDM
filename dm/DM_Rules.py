@@ -954,6 +954,7 @@ class RulesMixin(DMCoreProtocol):
 
         self._resolve_location_encounter(self._current_room() or location)
         self._run_on_enter_programs()
+        self._evaluate_arrival_statuses()
 
     def _run_on_enter_programs(self):
         """!
@@ -969,6 +970,24 @@ class RulesMixin(DMCoreProtocol):
             program = entity.get("on_enter")
             if program:
                 run_program(program, {"actor": None, "target": entity_name}, self.entities, self.rules, self.event_bus)
+
+    def _evaluate_arrival_statuses(self):
+        """!
+        @brief Fires every [[status]] trigger = "on_arrival" against every present scene entity
+            (evaluate_proximity_statuses, DM_Status.py) -- the Pathfinder "Glyph of Warding"/
+            "Magic Mouth" shape (Rules/Fantasy/reference/pathfinder_mapping.toml's "Delayed/
+            triggered magic" row): an ordinary [[entity]] hazard, placed permanently like any
+            other room prop, whose own [[status]] entry matches it by "name" and lands its
+            "apply" condition on whoever just arrived. Distinct from [entity.on_enter]
+            (_run_on_enter_programs, just above) -- that program hook always targets the
+            entity ITSELF (an item revealing its own tags the moment it's seen), never the
+            party that just walked in; this is the other half, an effect aimed AT the new
+            arrivals. Called once per _enter_location and once per enter_room -- the two
+            "a scene was just entered" moments this engine has, since there's no round clock
+            running at all outside combat for a hazard to otherwise hook a periodic tick off of.
+        """
+        for entity_name in list(self.scenario_entities):
+            self.evaluate_proximity_statuses(entity_name, "on_arrival")
 
     def enter_room(self, room_key, arrival_band=1, skip_llm_generation=False):
         """!
@@ -1015,6 +1034,7 @@ class RulesMixin(DMCoreProtocol):
         self._populate_room(room_key, skip_llm_generation=skip_llm_generation)
         self._apply_party_formation()
         self._sync_mount_bands(self.player_name)
+        self._evaluate_arrival_statuses()
 
         self.current_target = self._choose_combat_target()
         self.event_bus.publish("log_info", f"Entered room '{room_key}': {self.scenario_entities}")

@@ -580,11 +580,32 @@ class StatusMixin(DMCoreProtocol):
             rules.toml's own "flame wall zone", duration = "rounds"/length = 1) is what makes it
             a *zone* rather than a one-time blast -- it lapses on its own the moment an entity is
             no longer co-band, and is simply reapplied fresh each round for as long as they stay.
+
+            DM_Rules.py's own _evaluate_arrival_statuses (called from _enter_location and
+            enter_room) also calls this once per present scene entity with trigger =
+            "on_arrival" -- the Pathfinder "Glyph of Warding"/"Magic Mouth" shape: an ordinary
+            [[entity]] hazard (placed permanently, no different from a room prop) whose own
+            [[status]] entry matches it by "name", landing its "apply" condition on whoever just
+            arrived, fired the moment a scene is entered rather than re-checked every combat
+            round (there's no round clock running at all outside combat) or off a landed hit.
+
+            A status's own optional "self_dismiss" (a condition name) is dismissed on
+            actor_name itself once this call actually lands its "apply" condition on at least
+            one nearby entity (never if nobody was in range this time) -- what makes a glyph
+            spend itself the first time it actually catches someone, the Pathfinder "discharges
+            once triggered" shape. Pairs with a has_condition:<name> requirement (ex: a hazard
+            seeded with [entity.conditions.armed], required active, then named as its own
+            "self_dismiss") -- the same "seed a flag, dismiss it once solved" shape items.toml's
+            dart trap already uses via [entity.test], just spent automatically here instead of
+            by a deliberate disarm attempt. Absent (every status shipped before this field
+            existed) means this trigger keeps firing every time it's checked, same as "on_round"
+            already does for a persistent hazard that's meant to keep re-triggering.
         @param actor_name The entity whose own action just happened (ex: a dragon that just
-            landed a bite), or -- for "on_round" -- whichever living scene entity is currently
-            being checked.
-        @param trigger The trigger name to evaluate -- "on_action" (a landed hit) or "on_round"
-            (once per combat round, per living scene entity) are the two shipped uses today.
+            landed a bite), or -- for "on_round"/"on_arrival" -- whichever living scene entity
+            is currently being checked.
+        @param trigger The trigger name to evaluate -- "on_action" (a landed hit), "on_round"
+            (once per combat round, per living scene entity), and "on_arrival" (once per scene
+            entry, per living scene entity) are the three shipped uses today.
         """
         for status in self.get_applicable_statuses(actor_name, trigger):
             apply_block = status.get("apply")
@@ -592,6 +613,7 @@ class StatusMixin(DMCoreProtocol):
                 continue
             radius = apply_block.get("radius", 0)
             side = apply_block.get("side", "enemies")
+            applied_to_anyone = False
             for target_name in self.scenario_entities:
                 if target_name == actor_name or self.get_current_hp(target_name) <= 0:
                     continue
@@ -606,6 +628,9 @@ class StatusMixin(DMCoreProtocol):
                     duration=apply_block.get("duration"), length=apply_block.get("length"),
                     dismiss=apply_block.get("dismiss"),
                 )
+                applied_to_anyone = True
+            if applied_to_anyone and status.get("self_dismiss"):
+                self.dismiss_condition(actor_name, status["self_dismiss"])
 
     def evaluate_statuses(self, entity_name, trigger):
         """!

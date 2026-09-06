@@ -415,6 +415,30 @@ absent/inert unless a piece of content actually authors it.
   simply has nothing cured, the same "used on the wrong thing just wastes it" shape `dispel`
   already has. `spells.toml`'s own `"cure disease"` (`{subtypes = ["disease"]}`, targeting
   `rules.toml`'s `"filth fever"` via its shared `subtype = "disease"`) is the shipped example.
+- **The `[[status]]` `"on_arrival"` trigger** + `DM_Rules.py`'s own `_evaluate_arrival_statuses`
+  (called from both `_enter_location` and `enter_room` -- the only two "a scene was just
+  entered" moments this engine has) -- the Pathfinder "Glyph of Warding"/"Magic Mouth" shape.
+  Reuses `evaluate_proximity_statuses` completely unchanged, just fired once per scene entity on
+  arrival instead of once a combat round (`"on_round"`) or off a landed hit (`"on_action"`): an
+  ordinary `[[entity]]` hazard, placed permanently like any other room prop (or conjured via
+  `summon`, same as `"flame wall"`), whose own `[[status]]` entry matches it by `"name"` lands
+  its `apply` condition on whoever just arrived. Distinct from the existing `[entity.on_enter]`
+  program hook (`_run_on_enter_programs`, right alongside it) -- that always targets the entity
+  itself (an item revealing its own tags once seen), never the party that just walked in; this
+  is the other half, an effect aimed *at* the new arrivals. `evaluate_proximity_statuses` also
+  gained an optional `self_dismiss` field (a condition name) -- dismissed on the matched hazard
+  itself the moment this call actually lands its effect on at least one nearby entity (never if
+  nobody was in range), what makes a glyph spend itself the first time it actually catches
+  someone rather than re-triggering every visit the way a persistent `"on_round"` hazard
+  (`"flame wall"`) is meant to. Pairs with a `has_condition:<name>` requirement against a hazard
+  seeded with `[entity.conditions.<name>]` -- the same "seed a flag, dismiss it once solved"
+  shape `items.toml`'s dart trap already uses via `[entity.test]`, just spent automatically here
+  instead of by a deliberate disarm attempt. Honest simplification: a `[[status]]`'s own `apply`
+  block only ever applies a *condition*, never a direct one-time damage roll, so a genuine
+  damage-dealing "Blast"-type glyph isn't expressible today -- the shipped example is a
+  debuff-shaped ward instead. `items.toml`'s own `"warding glyph"` (the hazard, seeded with
+  `[entity.conditions.armed]`) + `rules.toml`'s own `"warding glyph shock"`
+  (`self_dismiss = "armed"`, applying `"shaken"`) is the shipped example.
 
 
 ## Damage and healing

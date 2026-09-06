@@ -5162,6 +5162,76 @@ class TestPersistentTerrainHazards(DMTestCase):
         self.assertEqual(self.dm_core.get_current_hp("flame wall"), 20)
 
 
+class TestDelayedTriggeredMagic(DMTestCase):
+    """!
+    @brief The [[status]] "on_arrival" trigger + its own optional "self_dismiss" field --
+        evaluate_proximity_statuses (DM_Status.py), fired once per scene entry by DM_Rules.py's
+        own _evaluate_arrival_statuses (called from _enter_location and enter_room). The
+        Pathfinder "Delayed/triggered magic" shape (Glyph of Warding): items.toml's own
+        "warding glyph" (the hazard entity, seeded with [entity.conditions.armed]) + rules.toml's
+        own "warding glyph shock" ([[status]], self_dismiss = "armed" -- spends itself the first
+        time it actually catches someone).
+    """
+
+    def setUp(self):
+        super().setUp()
+        # Empty entities list -- see TestPersistentTerrainHazards' own setUp comment for why
+        # "gladstone" is never named explicitly here.
+        self._load_ad_hoc_scenario([], bands=4, enclosed=True)
+        self.dm_core._instance_entities([{"name": "warding glyph", "band": 1}])
+        self.dm_core.scenario_entities.append("warding glyph")
+
+    def test_applies_shaken_to_a_co_band_entity(self):
+        self.dm_core._evaluate_arrival_statuses()
+        self.assertIn("shaken", self.dm_core.entities["gladstone"]["active_conditions"])
+
+    def test_never_applies_shaken_to_the_glyph_itself(self):
+        self.dm_core._evaluate_arrival_statuses()
+        self.assertNotIn("shaken", self.dm_core.entities["warding glyph"].get("active_conditions", {}))
+
+    def test_an_entity_outside_the_glyphs_band_is_unaffected(self):
+        self.dm_core.entities["gladstone"]["band"] = 3
+        self.dm_core._evaluate_arrival_statuses()
+        self.assertNotIn("shaken", self.dm_core.entities["gladstone"].get("active_conditions", {}))
+
+    def test_self_dismiss_spends_the_glyph_the_first_time_it_catches_someone(self):
+        self.assertTrue(self.dm_core.has_condition("warding glyph", "armed"))
+        self.dm_core._evaluate_arrival_statuses()
+        self.assertFalse(self.dm_core.has_condition("warding glyph", "armed"))
+
+    def test_a_spent_glyph_never_triggers_again(self):
+        self.dm_core._evaluate_arrival_statuses()  # spends it -- gladstone is shaken once
+        self.dm_core.dismiss_condition("gladstone", "shaken")
+        self.dm_core._evaluate_arrival_statuses()  # armed is gone -- requirements no longer match
+        self.assertNotIn("shaken", self.dm_core.entities["gladstone"].get("active_conditions", {}))
+
+    def test_self_dismiss_does_not_fire_if_nobody_was_in_range(self):
+        # Nobody actually caught by the glyph this pass -- it stays armed for a future arrival,
+        # rather than being wasted on an empty room.
+        self.dm_core.entities["gladstone"]["band"] = 3
+        self.dm_core._evaluate_arrival_statuses()
+        self.assertTrue(self.dm_core.has_condition("warding glyph", "armed"))
+
+
+class TestDelayedTriggeredMagicWiring(DMTestCase):
+    """!
+    @brief Proves the real wiring (_enter_location -> _evaluate_arrival_statuses), not just the
+        underlying evaluate_proximity_statuses call TestDelayedTriggeredMagic's own tests
+        already exercise -- a dedicated class/setUp so the glyph is placed directly in the ad
+        hoc location's own entities list, present the moment load_scenario() itself calls
+        _enter_location, rather than instanced mid-scene afterward the way that class's shared
+        setUp does for its own more granular tests.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self._load_ad_hoc_scenario([{"name": "warding glyph", "band": 1}], bands=4, enclosed=True)
+
+    def test_entering_a_location_with_the_glyph_already_present_triggers_it(self):
+        self.assertIn("shaken", self.dm_core.entities["gladstone"]["active_conditions"])
+        self.assertFalse(self.dm_core.has_condition("warding glyph", "armed"))
+
+
 class TestConcealment(DMTestCase):
     """!
     @brief miss_chance (a [[condition]] field) + get_concealment (Combat_Resolution.py) -- a
