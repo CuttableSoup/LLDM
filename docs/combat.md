@@ -335,6 +335,48 @@ absent/inert unless a piece of content actually authors it.
   site, so a Confused/Dominated *player* -- which would mean scrambling free-text NLP input --
   is out of scope, the same call already made for real Dominate's "obey arbitrary commands"
   half (a narrative/ADaM question, not an engine primitive).
+- **The `[[status]]` `"on_round"` trigger** -- reuses `evaluate_proximity_statuses` (the same
+  function `"on_action"` already calls) unchanged, just fired once a round for every living
+  scene entity from `run_round_upkeep` instead of only whoever just landed a hit. This is the
+  whole mechanism behind a persistent terrain hazard (the Pathfinder "Persistent terrain/
+  obstacle spells" shape -- Wall of Fire, Web, Grease): a `[[status]]` entry's `requirements`
+  match the hazard entity itself (by `"name"`, the same field-comparison engine every other
+  requirement already uses -- confirmed to survive same-name instance disambiguation, since
+  `_instance_entities` never strips an instance's own authored `"name"` field, only the
+  `self.entities`/`scenario_entities` *key* gets a `_2`/`_3` suffix), and its `apply` block
+  (unchanged shape: `condition`, `radius`, `side`, `duration`, `length`) lands on whoever
+  currently shares that entity's band. Authoring the applied condition with a short
+  `duration = "rounds"`/`length = 1` is what makes it a *zone* rather than a one-time blast --
+  it lapses on its own the moment an entity is no longer co-band, simply reapplied fresh each
+  round they stay. No new field anywhere: the hazard is an ordinary `[[entity]]` (placed
+  permanently in a room like any prop, or conjured mid-scene via the existing `summon`
+  mechanism -- `_summon_creature` never cared what kind of entity it was placing), the real
+  effect is an ordinary `[[condition]]`'s own `upkeep_damage`/`upkeep_heal`/`modifier`, and the
+  only "connection" between the two is the same trigger/requirements matching every other
+  status already uses. `rules.toml`'s own `"flame wall zone"` (matched to `spells.toml`'s
+  `"flame wall"`, conjured by its own `"wall of fire"` spell via `summon`) is the shipped
+  example.
+- **`dispel`** (an ability field, `{supertypes, subtypes}`) -- `_apply_dispel_if_hit`
+  (`DM_Core.py`, mirroring `_apply_summon_if_hit` exactly, just removing an entity instead of
+  conjuring one) banishes `current_target` outright (`remove_entity_from_scene`) on a
+  successful cast, but only if the target's own supertype/subtype actually matches either list
+  -- the same `matches_supertype_or_subtype` OR-of-two-lists check `damage_bonus_vs` already
+  uses (extracted as a shared helper, `Combat_Resolution.py`), reused unchanged rather than a
+  second copy of the same matching rule. The shipped spell authors
+  `{supertypes = ["spell"], subtypes = ["spell"]}`, covering both places `"spell"` shows up:
+  every live spell-catalog entity's own `supertype`, and a conjured effect object's own
+  `subtype` (ex: `spells.toml`'s `"flame wall"`, `supertype = "object"`) -- any future magical
+  effect opts into being dispellable the same way, just by authoring `subtype = "spell"`, not
+  narrowly scoped to one particular effect shape the way an earlier `subtypes = ["hazard"]`
+  draft was. A mismatched target (ex: pointing `"dispel magic"` at an ordinary creature) simply
+  does nothing, the Pathfinder "used on the wrong thing just wastes the action" shape, not a
+  hard pre-roll gate. No `difficulty` authored on the shipped spell, so it resolves as an
+  ordinary opposed roll against `current_target`'s own defenses -- a mindless effect with no
+  skills of its own (ex: `"flame wall"`) offers essentially no resistance, while a warded
+  creature's own skill makes it a real contest. Player-only, same scope every other cast-time
+  effect (`summon`/`teleport_to_band`) already keeps. `spells.toml`'s own `"dispel magic"`
+  (targeting `spells.toml`'s `"flame wall"` via its shared `subtype = "spell"`) is the shipped
+  example.
 
 
 ## Damage and healing

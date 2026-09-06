@@ -84,7 +84,15 @@ class TeleportEffect:
     location: str | None = None
 
 
-Effect = DamageEffect | LootEffect | SummonEffect | CraftEffect | RevealEffect | DefenderDetailsEffect | TeleportEffect
+@dataclass
+class DispelEffect:
+    """!@brief An entity banished outright by a successful dispel-shaped cast -- the target's
+        own supertype/subtype matched the ability's "dispel" filter (see DM_Core.py's
+        _apply_dispel_if_hit)."""
+    name: str
+
+
+Effect = DamageEffect | LootEffect | SummonEffect | CraftEffect | RevealEffect | DefenderDetailsEffect | TeleportEffect | DispelEffect
 
 
 @dataclass

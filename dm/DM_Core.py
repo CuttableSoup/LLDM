@@ -2,7 +2,7 @@ import os
 import re
 
 from dm.DM_ActionOutcome import (
-    ActionPreventedOutcome, DamageEffect, DefenderDetailsEffect, LanguageBarrierOutcome, LootEffect,
+    ActionPreventedOutcome, DamageEffect, DefenderDetailsEffect, DispelEffect, LanguageBarrierOutcome, LootEffect,
     MissingSpellMaterialsOutcome, OutOfRangeOutcome, RevealEffect, RolledOutcome, SummonEffect,
     TeleportEffect, rolled_outcome_from_roll,
 )
@@ -25,6 +25,7 @@ from dm.DM_Time import TimeMixin
 from dm.DM_Travel import TravelMixin
 from dm.DM_Validation import ValidationMixin
 from intents.registry import HANDLERS as FREE_STANDING_INTENT_HANDLERS
+from resolution.Combat_Resolution import matches_supertype_or_subtype
 from resolution.Program_Interpreter import run_program
 
 # Multi-instance combat targeting (see DMCore._resolve_named_instance_ambiguity): NLPCore's own
@@ -744,6 +745,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         self._consume_spell_materials_if_rolled(result, named_ability)
         self._apply_damage_if_hit(result, skill_name, named_ability, ability, target_name, via_test)
         self._apply_summon_if_hit(result, named_ability)
+        self._apply_dispel_if_hit(result, named_ability, target_name)
         self._apply_teleport_if_hit(result, named_ability)
         self._run_ability_outcome_program(result, skill_name, named_ability, ability, target_name, via_test, input_text)
         self._attach_defender_details(result, target_name)
@@ -936,6 +938,36 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         summoned_name = self._summon_creature(summon_spec)
         if summoned_name:
             result.effects.append(SummonEffect(name=summoned_name))
+
+    def _apply_dispel_if_hit(self, result, named_ability, target_name):
+        """!
+        @brief Banishes target_name outright (remove_entity_from_scene) if this turn's named
+            ability is a dispel-shaped cast (its own "dispel" field -- a {"supertypes",
+            "subtypes"} filter, the same shape/matching rule damage_bonus_vs already uses --
+            matches_supertype_or_subtype, Combat_Resolution.py) and the roll succeeded, but only
+            if target_name's own supertype/subtype actually matches; a mismatched target simply
+            isn't dispellable by this cast (ex: pointing "dispel magic" -- {supertypes = ["spell"],
+            subtypes = ["spell"]} -- at an ordinary creature does nothing) -- the same "used on
+            the wrong thing just wastes the action" shape Pathfinder's real Dispel Magic already
+            has, rather than a hard pre-roll gate the way missing spell materials/out-of-range
+            are. Mirrors _apply_summon_if_hit exactly, just removing an entity instead of
+            conjuring one. Player-only, same scope every other cast-time effect (summon/teleport)
+            already keeps.
+        @param result The roll result from _resolve_roll, mutated in place with a DispelEffect
+            if something was actually banished.
+        @param named_ability The resolved ability entity (technique/spell), or None.
+        @param target_name self.current_target, or None.
+        """
+        if not result.success or not named_ability or not target_name:
+            return
+        dispel_spec = named_ability.get("dispel")
+        if not dispel_spec:
+            return
+        target = self.entities.get(target_name, {})
+        if not matches_supertype_or_subtype(target, dispel_spec):
+            return
+        self.remove_entity_from_scene(target_name)
+        result.effects.append(DispelEffect(name=target_name))
 
     def _apply_teleport_if_hit(self, result, named_ability):
         """!

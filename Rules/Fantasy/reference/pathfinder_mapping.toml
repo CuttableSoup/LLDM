@@ -33,7 +33,7 @@
 [meta]
 sources_pathfinder = "aonprd.com (Archives of Nethys): Conditions, Universal Monster Rules, Damage Reduction/Energy Resistance/Vulnerability, Magic Items, core Magic chapter, Core Rulebook spell list."
 sources_d6 = "Settings/d6 Fantasy.pdf (core), Settings/d6 Fantasy Creatures.pdf (bestiary), Settings/d6 Magic.pdf (Vade Mecum of Magic)."
-verified_against_engine_as_of = "2026-09-04"
+verified_against_engine_as_of = "2026-09-05"
 scope = "Mechanic categories, not an exhaustive spell/monster/item catalog. A new piece of content is converted by recognizing which category below it falls into and following that category's recipe."
 
 # ============================================================================================
@@ -286,6 +286,7 @@ notes = "Engine rolls a die pool instead of a fixed cap -- more variance than PF
 pf_concept = "Immunity"
 engine_equivalent = "immunity_tags"
 fit = "full"
+notes = "immunity_tags = [\"any\"] is a reserved wildcard -- immune to every damage_tags value, present or future, without enumerating each physical/energy type by hand (and without needing to revisit this entity's own list whenever a new damage_tags value is invented elsewhere). is_immune_to (Combat_Resolution.py) short-circuits on it. spells.toml's \"flame wall\" is the shipped example (a hazard that shouldn't be choppable down by an ordinary weapon at all -- see the \"Persistent terrain/obstacle spells\" row below)."
 
 [[damage_resistance]]
 pf_concept = "Vulnerability (+50% damage)"
@@ -469,6 +470,22 @@ fit = "none"
 notes = "Spells are static TOML entities, not built at cast-time from a base spell + modifiers. A 'quickened fireball' is just a second, separate spell entity with adjusted numbers -- no mechanism for the player to apply a metamagic modifier at the point of casting."
 
 [[spell_mechanic]]
+pf_concept = "Dispel Magic (end a standing magical effect/summon outright)"
+engine_equivalent = "dispel = {supertypes, subtypes} (an ability field) + remove_entity_from_scene"
+fit = "full"
+notes = "A real Pathfinder targeted Dispel Magic ends ONE named magical effect on a caster-level check; this engine has no generic 'undo an active spell effect' concept (spells are static TOML entities, not reversible operations), so the honest slice that's actually buildable is banishing an entity outright, matched by what KIND of thing it is rather than a specific spell instance. _apply_dispel_if_hit (DM_Core.py) reuses matches_supertype_or_subtype (Combat_Resolution.py) unchanged -- the same {supertypes, subtypes} OR-of-two-lists filter damage_bonus_vs's own 'Holy'/'Bane' shape already established -- against current_target on a successful cast; a target that doesn't match (an ordinary creature, a chest) simply isn't dispellable by that particular cast, the real spell's own 'wrong target just wastes it' shape. {supertypes = [\"spell\"], subtypes = [\"spell\"]} deliberately covers both places \"spell\" can appear: a live spell-catalog entity's own supertype (every spell entity in this file), and a conjured effect object's own subtype (ex: spells.toml's \"flame wall\", supertype = \"object\") -- ANY magical effect opts in by authoring subtype = \"spell\", not narrowly scoped to one particular effect shape like \"hazard\" would be. No difficulty authored on the shipped example, so a mindless conjured effect (no skills of its own, ex: \"flame wall\") offers essentially no resistance via the ordinary opposed roll, while a warded creature's own defenses make it a real contest -- an emergent stand-in for 'harder to dispel a stronger caster's work' with no separate caster-level math needed. Player-only, same scope summon/teleport already keep."
+recipe = '''
+[[entity]]
+name = "dispel magic"
+supertype = "spell"
+subtype = "abjuration"
+skill = "arcane"
+range = 5
+dispel = { supertypes = [ "spell" ], subtypes = [ "spell" ] }
+'''
+shipped_example = "spells.toml's \"dispel magic\", targeting spells.toml's \"flame wall\" via its shared subtype = \"spell\""
+
+[[spell_mechanic]]
 pf_concept = "Area of effect"
 engine_equivalent = "targets = {number, aoe, side}"
 fit = "full"
@@ -574,9 +591,55 @@ notes = "Nothing swaps an entity's skill dice/abilities/supertype/subtype mid-sc
 
 [[spell_mechanic]]
 pf_concept = "Persistent terrain/obstacle spells (Wall of Fire, Web, Wall of Stone)"
-engine_equivalent = "none"
-fit = "none"
-notes = "Distinct from targets = {number, aoe, side}, which widens a single roll once at cast time. This is a standing scene feature -- something occupies a band after the spell resolves, persists across rounds, affects whoever later enters/leaves (recurring damage, blocked movement, forced checks). Plausible as a scoped extension (a band-tagged temporary hazard object with its own duration and an on-entry hook) -- doesn't exist today."
+engine_equivalent = "an ordinary [[entity]] (placed permanently, or conjured via summon) matched by a [[status]] entry authoring the new trigger = \"on_round\""
+fit = "full"
+notes = "Distinct from targets = {number, aoe, side}, which widens a single roll once at cast time -- this needed something that keeps re-checking who's nearby as time passes and entities move in and out, not a one-shot snapshot at cast time. Turned out to need no new field at all: evaluate_proximity_statuses (DM_Status.py), already built for the Fear-aura/Frightful-Presence \"on_action\" trigger, is a pure function of (matched entity, nearby others) -- run_round_upkeep now also calls it once a round, per living scene entity, with trigger = \"on_round\". A [[status]]'s own requirements match the hazard entity itself (by \"name\", same field-comparison every other requirement already uses -- confirmed to survive same-name instance disambiguation, since an instance's own authored \"name\" field is never stripped, only the self.entities/scenario_entities *key* gets a _2/_3 suffix), and its \"apply\" block (unchanged {condition, radius, side, duration, length} shape) lands on whoever currently shares that entity's band. A short duration = \"rounds\"/length = 1 on the applied condition is what makes it a *zone* rather than a one-time hit -- it lapses the instant an entity leaves, reapplied fresh each round they stay. Blocked movement/forced checks (the other half of Wall of Stone) are still out of scope -- the band model still has no terrain-blocking within a room at all (see the medium/Fly creature_ability row above)."
+recipe = '''
+# The condition doing the actual damage (an ordinary Pattern E upkeep_damage, same shape
+# "regenerating" already uses) -- rules.toml.
+[[condition]]
+name = "burning"
+upkeep_damage = { dice = 2, pips = 0, bonus = 0 }
+
+# The status connecting a specific entity to that condition -- requirements match by "name",
+# so every simultaneous instance of "flame wall" (even a disambiguated "flame wall_2") is
+# covered by this one entry. side = "all" since fire doesn't discriminate -- rules.toml.
+[[status]]
+name = "flame wall zone"
+trigger = "on_round"
+requirements = [ { field = "name", operator = "==", value = "flame wall" } ]
+apply = { condition = "burning", duration = "rounds", length = 1, radius = 0, side = "all" }
+
+# The hazard itself -- an ordinary object, no new fields. max_hp only so run_round_upkeep
+# doesn't treat it as already-dead (an entity with no hp field at all reads as 0 HP); without
+# immunity_tags a player could otherwise just target and chop it down in a few ordinary swings
+# (current_target has no is_hostile gate -- items.toml's dart trap already proves a non-hostile
+# object can be targeted/rolled against). "any" is a reserved immunity_tags wildcard (is_immune_
+# to, Combat_Resolution.py): immune to every damage_tags value, present or future, matching the
+# real Wall of Fire's "can't be harmed by mundane means". subtype = "spell" (not a mundane-
+# hazard subtype like "trap") is what marks this as a standing magical effect -- dispel magic
+# (see the Dispel Magic row below) keys on exactly this, so any future magical effect opts into
+# being dispellable the same way -- spells.toml.
+[[entity]]
+name = "flame wall"
+supertype = "object"
+subtype = "spell"
+max_hp = 20
+immunity_tags = [ "any" ]
+
+# Conjured via the ordinary summon mechanism (_summon_creature never cared what kind of entity
+# it places) -- a permanent, scenario-placed hazard needs no spell/summon at all, just the
+# "flame wall" entity sitting in a room's own entities list -- spells.toml.
+[[entity]]
+name = "wall of fire"
+supertype = "spell"
+subtype = "evocation"
+skill = "arcane"
+difficulty = 10
+range = 10
+summon = { name = "flame wall", duration = 5 }
+'''
+shipped_example = "rules.toml's \"flame wall zone\"/\"burning\", spells.toml's \"flame wall\"/\"wall of fire\""
 
 # ============================================================================================
 # 5. Creature special abilities

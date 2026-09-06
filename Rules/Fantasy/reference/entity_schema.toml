@@ -326,7 +326,15 @@ damage_value = { dice = 1, pips = 2, bonus = "strength_damage" }
                                             # equipped weapon instead of a fixed number.
 damage_tags = [ "slashing" ]                # Matched against a defender's resistance_tags/
                                             # immunity_tags/vulnerability_tags and an equipped
-                                            # armor's own armor_tags.
+                                            # armor's own armor_tags. "any" is a reserved wildcard
+                                            # meaning unpreventable damage -- since no real
+                                            # resistance_tags/armor_tags/vulnerability_tags list
+                                            # would ever legitimately contain the literal string
+                                            # "any", this already skips every defender's
+                                            # reduction/vulnerability with no extra code, and is
+                                            # stopped only by a defender's own
+                                            # immunity_tags = ["any"] (is_immune_to,
+                                            # Combat_Resolution.py).
 language_dependent = true                   # Opt-in precondition, not a damage classification --
                                             # deliberately separate from damage_tags (which only
                                             # ever feeds the damage-reduction pipeline above, and
@@ -418,6 +426,31 @@ damage_bonus_vs = { supertypes = ["undead"], value = { dice = 2, pips = 0, bonus
                                             # alone can't express (that only ever checks the
                                             # defender's resistance/immunity/vulnerability, not
                                             # what it *is*).
+dispel = { supertypes = ["spell"], subtypes = ["spell"] }
+                                            # A spell/technique only -- on a successful cast,
+                                            # banishes current_target outright (remove_entity_
+                                            # from_scene) if its own supertype/subtype matches
+                                            # either list (same {supertypes, subtypes} shape and
+                                            # matching rule damage_bonus_vs uses above --
+                                            # matches_supertype_or_subtype, Combat_Resolution.py)
+                                            # -- the Pathfinder "Dispel Magic" shape. The shipped
+                                            # example matches "spell" on BOTH axes deliberately --
+                                            # a live spell-catalog entity's own supertype is
+                                            # always "spell", while a conjured effect object (ex:
+                                            # spells.toml's "flame wall", supertype = "object")
+                                            # instead opts in via subtype = "spell" -- one filter
+                                            # covering "anything magical" rather than narrowly
+                                            # scoped to one particular effect's own subtype value.
+                                            # Aimed at anything that doesn't match (an ordinary
+                                            # creature, a chest) simply does nothing -- "used on
+                                            # the wrong thing wastes the action", not a hard
+                                            # pre-roll gate. No difficulty authored on the shipped
+                                            # example, so it resolves as an ordinary opposed roll
+                                            # against current_target's own defenses -- a mindless
+                                            # effect (ex: "flame wall", no skills of its own at
+                                            # all) offers essentially no resistance, while a
+                                            # warded creature's own skill makes it a real contest.
+                                            # _apply_dispel_if_hit, DM_Core.py.
 cooldown_rounds = 3                         # A behavior-driven ability only (DM_Combat.py's
                                             # resolve_behavior_action) -- once used, sets the
                                             # acting entity's own ability_cooldowns[name] to
@@ -545,6 +578,13 @@ resistance_bypass_tags = [ "magic" ]        # Same shape as armor_bypass_tags, j
 immunity_tags = [ "poison" ]                # Absolute -- zeroes net damage on a matching tag
                                             # regardless of any roll. Wins outright over
                                             # vulnerability if a single attack matches both.
+                                            # "any" is a reserved wildcard meaning immune to
+                                            # every damage_tags value, present or future
+                                            # (including a tagless attack, which an ordinary
+                                            # enumerated list could never match) -- spells.toml's
+                                            # "flame wall" is the shipped example, standing in
+                                            # for "can't be harmed by mundane means at all"
+                                            # without hand-listing every physical/energy type.
 vulnerability_value = { dice = 2, pips = 0 }# Rolled, extra damage added before reduction on a
                                             # matching tag.
 vulnerability_tags = [ "fire" ]

@@ -355,6 +355,18 @@ class StatusMixin(DMCoreProtocol):
             ability authoring "cooldown_rounds" (DM_Combat.py's resolve_behavior_action),
             counted back down to 0 (removed entirely once it gets there) the same once-per-
             round cadence as the condition-duration tick just above.
+
+            Also evaluates every [[status]] authoring trigger = "on_round" against entity_name
+            (evaluate_proximity_statuses) -- the same proximity-apply shape "on_action" already
+            uses for a Frightful-Presence-style aura, just checked once a round for every living
+            entity instead of only the one that just landed a hit. This is the whole mechanism
+            behind a persistent terrain hazard (Rules/Fantasy/reference/pathfinder_mapping.toml's
+            "Persistent terrain/obstacle spells" row, ex: rules.toml's own "flame wall zone",
+            matched by a status requirement naming spells.toml's "flame wall" entity): a status
+            entry names a real entity (by "name", or any other stable field), and while that
+            entity is alive in the scene, whoever shares its band each round gets the status's
+            own "apply" condition -- authored with a short duration/length so it naturally lapses
+            the moment they leave, rather than lingering once they step out.
         """
         for entity_name in list(self.scenario_entities):
             if self.get_current_hp(entity_name) <= 0:
@@ -364,6 +376,7 @@ class StatusMixin(DMCoreProtocol):
             self._expire_summon_if_due(entity_name)
             Combat_Resolution.tick_condition_durations(self.entities, self.event_bus, entity_name, "rounds")
             Combat_Resolution.tick_ability_cooldowns(self.entities, entity_name)
+            self.evaluate_proximity_statuses(entity_name, "on_round")
 
     def _run_round_upkeep_program(self, entity_name):
         """!
@@ -535,9 +548,22 @@ class StatusMixin(DMCoreProtocol):
             its expiry the ordinary way, and re-sweeping every nearby entity each time the
             actor acts again would dismiss a still-fresh application from a different actor's
             own aura sharing the same condition name.
+
+            run_round_upkeep (DM_Status.py) also calls this once a round for every living scene
+            entity with trigger = "on_round" -- the same requirements/apply/radius/side shape,
+            just fired on a per-round cadence rather than off a landed hit, which is what makes
+            a stationary object (ex: spells.toml's "flame wall") into a persistent terrain
+            hazard: its own [[status]] entry's requirements match the hazard entity itself (by
+            "name", same as any other field), and "apply" lands on whoever currently shares its
+            band. Authoring the applied condition with a short duration/length (ex:
+            rules.toml's own "flame wall zone", duration = "rounds"/length = 1) is what makes it
+            a *zone* rather than a one-time blast -- it lapses on its own the moment an entity is
+            no longer co-band, and is simply reapplied fresh each round for as long as they stay.
         @param actor_name The entity whose own action just happened (ex: a dragon that just
-            landed a bite).
-        @param trigger The trigger name to evaluate -- "on_action" for every shipped use today.
+            landed a bite), or -- for "on_round" -- whichever living scene entity is currently
+            being checked.
+        @param trigger The trigger name to evaluate -- "on_action" (a landed hit) or "on_round"
+            (once per combat round, per living scene entity) are the two shipped uses today.
         """
         for status in self.get_applicable_statuses(actor_name, trigger):
             apply_block = status.get("apply")

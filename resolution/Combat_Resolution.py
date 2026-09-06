@@ -778,6 +778,21 @@ def get_vulnerability_bonus(entities, defender_name, damage_tags):
     return 0
 
 
+def matches_supertype_or_subtype(entity, spec):
+    """!
+    @brief Whether entity's own supertype or subtype matches either list in spec -- the shared
+        "what kind of thing is this" filter get_damage_bonus_vs (the Pathfinder "Holy"/"Bane"
+        shape) and _apply_dispel_if_hit (DM_Core.py, the Pathfinder "Dispel Magic" shape) both
+        key on, rather than each re-deriving the same OR-of-two-lists check independently.
+    @param entity The entity dict to check.
+    @param spec A table carrying "supertypes"/"subtypes" (both optional, each a list of
+        strings; either or both absent defaults to an empty list).
+    @return True if entity's own "supertype" is in spec's "supertypes", or its "subtype" is in
+            spec's "subtypes" -- neither key present at all matches nothing, not everything.
+    """
+    return entity.get("supertype") in spec.get("supertypes", []) or entity.get("subtype") in spec.get("subtypes", [])
+
+
 def get_damage_bonus_vs(entities, defender_name, ability):
     """!
     @brief Rolls an ability's own damage_bonus_vs bonus -- extra damage that only applies
@@ -799,7 +814,7 @@ def get_damage_bonus_vs(entities, defender_name, ability):
     if not spec:
         return 0
     defender = entities.get(defender_name, {})
-    if defender.get("supertype") not in spec.get("supertypes", []) and defender.get("subtype") not in spec.get("subtypes", []):
+    if not matches_supertype_or_subtype(defender, spec):
         return 0
     value = spec.get("value", {})
     return roll_dice(value.get("dice", 0), value.get("pips", 0)) + value.get("bonus", 0)
@@ -808,12 +823,25 @@ def get_damage_bonus_vs(entities, defender_name, ability):
 def is_immune_to(entities, defender_name, damage_tags):
     """!
     @brief Whether an entity's immunity_tags fully negate an incoming attack's damage tags.
+        "any" is a reserved wildcard: an entity authoring immunity_tags = ["any"] is immune to
+        every damage_tags value that exists today or gets authored later (no need to enumerate
+        every physical/energy type, or revisit this entity's own list when a new damage_tags
+        value is invented elsewhere), and to a tagless attack too (an empty damage_tags would
+        otherwise never match anything, ordinarily). It's also the only thing that can stop an
+        attack's own damage_tags = ["any"] (true, unpreventable damage) -- get_damage_reduction/
+        get_vulnerability_bonus never special-case "any" at all, since no real resistance_tags/
+        armor_tags/vulnerability_tags list would ever legitimately contain the literal string
+        "any", so an "any"-tagged hit already skips reduction/vulnerability for every defender
+        without any further code, matching purely on ordinary tag membership.
     @param entities The live entities dict.
     @param defender_name The name of the entity taking damage.
     @param damage_tags The damage tags of the incoming attack (ex: ["fire"]).
-    @return True if any damage tag matches the defender's immunity_tags.
+    @return True if the defender's own immunity_tags author the "any" wildcard, or any damage
+            tag matches the defender's immunity_tags.
     """
     immunity_tags = entities.get(defender_name, {}).get("immunity_tags", [])
+    if "any" in immunity_tags:
+        return True
     return any(tag in immunity_tags for tag in damage_tags)
 
 

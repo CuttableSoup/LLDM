@@ -4,10 +4,10 @@ import urllib.request
 import threading
 
 from dm.DM_ActionOutcome import (
-    ActionPreventedOutcome, CraftEffect, DamageEffect, DefenderDetailsEffect, LanguageBarrierOutcome,
-    LootEffect, MissingMaterialsOutcome, MissingSpellMaterialsOutcome, MissingStationOutcome,
-    MovementOutcome, NotCraftableOutcome, OutOfRangeOutcome, RevealEffect, RolledOutcome, SummonEffect,
-    TeleportEffect, TransferOutcome,
+    ActionPreventedOutcome, CraftEffect, DamageEffect, DefenderDetailsEffect, DispelEffect,
+    LanguageBarrierOutcome, LootEffect, MissingMaterialsOutcome, MissingSpellMaterialsOutcome,
+    MissingStationOutcome, MovementOutcome, NotCraftableOutcome, OutOfRangeOutcome, RevealEffect,
+    RolledOutcome, SummonEffect, TeleportEffect, TransferOutcome,
 )
 from intents.registry import HANDLERS as FREE_STANDING_INTENT_HANDLERS
 from llm.LLM_Rag import RagIndex
@@ -47,12 +47,16 @@ def _format_teleport_effect(effect, actor):
     return f" {effect.entity.capitalize()} vanishes and reappears elsewhere in the fight."
 
 
+def _format_dispel_effect(effect, actor):
+    return f" {effect.name.capitalize()} unravels and vanishes."
+
+
 # _describe_outcome's own dispatch table for a RolledOutcome's Effect list -- each formatter
 # takes (effect, actor) and returns a narration fragment (leading with its own space/newline,
 # or "" if it has nothing to add), so a new Effect subtype only ever needs one new entry here,
 # never a change to _describe_outcome's own dispatch logic. Order matters -- narration reads
-# damage first, then what a check revealed, then what was gained/summoned/crafted/teleported,
-# with any defender flavor text trailing last.
+# damage first, then what a check revealed, then what was gained/summoned/crafted/teleported/
+# dispelled, with any defender flavor text trailing last.
 _EFFECT_FORMATTERS = {
     DamageEffect: _format_damage_effect,
     RevealEffect: _format_reveal_effect,
@@ -60,9 +64,13 @@ _EFFECT_FORMATTERS = {
     SummonEffect: _format_summon_effect,
     CraftEffect: _format_craft_effect,
     TeleportEffect: _format_teleport_effect,
+    DispelEffect: _format_dispel_effect,
     DefenderDetailsEffect: _format_defender_details_effect,
 }
-_EFFECT_ORDER = [DamageEffect, RevealEffect, LootEffect, SummonEffect, CraftEffect, TeleportEffect, DefenderDetailsEffect]
+_EFFECT_ORDER = [
+    DamageEffect, RevealEffect, LootEffect, SummonEffect, CraftEffect, TeleportEffect, DispelEffect,
+    DefenderDetailsEffect,
+]
 
 
 def _format_out_of_range_outcome(outcome, actor):

@@ -184,6 +184,30 @@ modifier = { dice = 0, pips = 0, bonus = 0 }
 name = "enraged"
 modifier = { dice = 1, pips = 0, bonus = 0 }
 
+# A per-round upkeep effect (Pattern E, same shape "regenerating" already uses), applied by
+# "flame wall zone" below to whoever currently shares spells.toml's "flame wall" own band --
+# duration = "rounds"/length = 1 there is what makes this a zone rather than a one-time hit: it
+# lapses the instant an entity is no longer co-band, reapplied fresh each round they stay put.
+[[condition]]
+name = "burning"
+upkeep_damage = { dice = 2, pips = 0, bonus = 0 }
+
+# The [[status]] "on_round" trigger (evaluate_proximity_statuses, called once a round per living
+# scene entity from run_round_upkeep -- DM_Status.py) is what turns a stationary object into a
+# persistent terrain hazard (Rules/Fantasy/reference/pathfinder_mapping.toml's "Persistent
+# terrain/obstacle spells" row): requirements match the hazard entity itself (here, by "name"),
+# and "apply" (the same {condition, duration, length, radius, side} shape "on_action" already
+# uses for a Frightful-Presence-style aura) lands on every other living entity sharing its band.
+# side = "all" since fire doesn't care who it burns. spells.toml's "wall of fire" spell conjures
+# the actual "flame wall" entity this matches, via the ordinary "summon" mechanism (same
+# placement/expiry "summon spectral wolf" already uses) -- a permanent, scenario-placed hazard
+# would work identically with no "summon" involved at all.
+[[status]]
+name = "flame wall zone"
+trigger = "on_round"
+requirements = [ { field = "name", operator = "==", value = "flame wall" } ]
+apply = { condition = "burning", duration = "rounds", length = 1, radius = 0, side = "all" }
+
 [strength_damage]
 skill = "strength"
 divisor = 2

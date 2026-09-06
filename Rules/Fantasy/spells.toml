@@ -88,3 +88,69 @@ difficulty = 10
 # spell is.
 range = 10
 summon = { name = "spectral wolf", duration = 4 }
+
+# A persistent terrain hazard, not a creature -- summon (_summon_creature, DM_Summoning.py)
+# doesn't care what kind of entity it places, so the exact same placement/expiry "summon
+# spectral wolf" above already uses (caster's own current band, removed once "duration" combat
+# rounds pass) works unchanged for an inanimate object. max_hp exists purely so run_round_upkeep
+# doesn't treat it as already-dead (get_current_hp returns 0, and upkeep skips hp <= 0 entities,
+# for any entity authoring no hp field at all), NOT so it can meaningfully be fought -- current_
+# target has no is_hostile gate (the dart trap's own disarm check already proves a non-hostile
+# object can be targeted and rolled against), so without immunity_tags a player could just chop
+# this down in a few ordinary swings and cancel the hazard for free. immunity_tags = ["any"] (a
+# reserved wildcard, is_immune_to/Combat_Resolution.py) makes it immune to every damage_tags
+# value that exists today or gets invented later, matching the real Pathfinder Wall of Fire
+# (can't be harmed by mundane means at all) without hand-listing every physical/energy type.
+# rules.toml's own "flame wall zone" ([[status]], trigger = "on_round") is what actually makes
+# standing here dangerous: matched by this entity's own "name", it applies "burning" to whoever
+# shares its band, freshly every round they stay (see docs/combat.md's "Pathfinder-mapping
+# engine extensions"). subtype = "spell" (not a physical-object subtype like "trap"/"prop") is
+# what marks this as a standing magical effect rather than a mundane hazard -- supertype stays
+# "object" (is_hostile's own "objects are never hostile" short-circuit still applies; a live
+# spell-catalog entity is never itself instanced into a scene, so there's no real collision
+# between the two roles "spell" plays across supertype vs. subtype). "dispel magic" below keys
+# on this exact subtype, so ANY future magical effect entity opts into being dispellable the
+# same way, just by authoring subtype = "spell" -- not specific to "hazard"-shaped effects.
+[[entity]]
+name = "flame wall"
+supertype = "object"
+subtype = "spell"
+description = "A sheet of roaring flame hangs in the air, fed by nothing but the magic that conjured it."
+max_hp = 20
+immunity_tags = [ "any" ]
+
+[[entity]]
+name = "wall of fire"
+supertype = "spell"
+subtype = "evocation"
+description = "Conjure a sheet of roaring flame that scorches anyone standing in it."
+skill = "arcane"
+difficulty = 10
+# No damage_value/damage_tags -- same reasoning as "summon spectral wolf" above, this spell's
+# whole effect is the summoned hazard, not a direct hit. Generously high range for the same
+# reason too: conjuring a wall isn't "aimed" at current_target, so is_in_range should never be
+# what blocks the cast.
+range = 10
+summon = { name = "flame wall", duration = 5 }
+
+# Banishes current_target outright if (and only if) its own supertype/subtype matches "dispel"'s
+# {supertypes, subtypes} filter (_apply_dispel_if_hit, DM_Core.py -- the same OR-of-two-lists
+# match damage_bonus_vs's own "Holy"/"Bane" shape already uses, matches_supertype_or_subtype in
+# Combat_Resolution.py). {supertypes = ["spell"], subtypes = ["spell"]} deliberately covers BOTH
+# axes "spell" can appear on: a live spell-catalog entity's own supertype (every spell entity in
+# this file), and a conjured effect object's own subtype (ex: "flame wall" above) -- one filter
+# for "anything magical", not narrowly scoped to one particular effect shape like "hazard" was.
+# Aiming this at anything else (an ordinary creature, a chest) simply does nothing, the same
+# "used on the wrong thing just wastes the action" shape the real Pathfinder spell has, rather
+# than a hard pre-roll gate. No difficulty authored -- resolves as an ordinary opposed roll
+# against current_target's own willpower/arcane, same as any other offensive spell; a mindless
+# effect like "flame wall" (no skills of its own at all) offers essentially no resistance, while
+# a warded creature's own defenses make it a genuine contested roll.
+[[entity]]
+name = "dispel magic"
+supertype = "spell"
+subtype = "abjuration"
+description = "Unravel a nearby magical effect, banishing it outright."
+skill = "arcane"
+range = 5
+dispel = { supertypes = [ "spell" ], subtypes = [ "spell" ] }

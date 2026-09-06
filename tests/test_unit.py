@@ -38,7 +38,7 @@ from resolution.AdHoc_Generation import (
 from gui.Character_Creation_GUI import CharacterCreationDialog
 from resolution.Challenge_Rating import calculate_challenge_rating, calculate_party_challenge_rating, skill_rating
 from dm.DM_ActionOutcome import (
-    ActionOutcome, ActionPreventedOutcome, CraftEffect, DamageEffect, DefenderDetailsEffect,
+    ActionOutcome, ActionPreventedOutcome, CraftEffect, DamageEffect, DefenderDetailsEffect, DispelEffect,
     LanguageBarrierOutcome, LootEffect, MissingMaterialsOutcome, MissingSpellMaterialsOutcome,
     MissingStationOutcome, MovementOutcome, NotCraftableOutcome, OutOfRangeOutcome, RevealEffect,
     RolledOutcome, SummonEffect, TeleportEffect, TransferOutcome,
@@ -1009,6 +1009,31 @@ class TestDamageCalculation(DMTestCase):
         # Immunity is a hard tag match, not a rolled amount -- an entity with no
         # immunity_tags at all (gladstone) is never immune to anything.
         self.assertFalse(self.dm_core.is_immune_to("gladstone", ["fire"]))
+
+    def test_immunity_tags_any_is_a_wildcard_matching_every_damage_tag(self):
+        # "any" (is_immune_to, Combat_Resolution.py) is immune to every damage_tags value,
+        # present or future -- no need to enumerate each physical/energy type by hand, or
+        # revisit this entity's own list when a new damage_tags value is invented elsewhere.
+        self.dm_core.entities["target_dummy"] = {"name": "target_dummy", "immunity_tags": ["any"]}
+        self.assertTrue(self.dm_core.is_immune_to("target_dummy", ["fire"]))
+        self.assertTrue(self.dm_core.is_immune_to("target_dummy", ["slashing"]))
+        self.assertTrue(self.dm_core.is_immune_to("target_dummy", ["a damage type nobody has invented yet"]))
+        # Also immune to a tagless attack -- an ordinary enumerated immunity_tags list could
+        # never match an empty damage_tags, since there's nothing in it to compare against.
+        self.assertTrue(self.dm_core.is_immune_to("target_dummy", []))
+
+    def test_damage_tags_any_is_unpreventable_except_by_immunity_tags_any(self):
+        # damage_tags = ["any"] needs no special-casing of its own: no real resistance_tags/
+        # armor_tags/vulnerability_tags list would ever legitimately contain the literal string
+        # "any", so it already skips every ordinary defender's reduction/vulnerability by
+        # construction -- only a defender's own immunity_tags = ["any"] can stop it.
+        self.dm_core.entities["armored_dummy"] = {
+            "name": "armored_dummy", "resistance_value": {"dice": 5, "pips": 0},
+            "resistance_tags": ["fire", "slashing", "piercing", "bludgeoning"],
+        }
+        self.assertEqual(self.dm_core.get_damage_reduction("armored_dummy", ["any"]), 0)
+        self.dm_core.entities["immune_dummy"] = {"name": "immune_dummy", "immunity_tags": ["any"]}
+        self.assertTrue(self.dm_core.is_immune_to("immune_dummy", ["any"]))
 
 
     @patch("random.randint", return_value=4)
@@ -4489,6 +4514,75 @@ class TestSummoning(DMTestCase):
         self.assertEqual(self.dm_core.entities["spectral wolf"]["summon_expires_in"], 3)  # 4 - 1
 
 
+class TestDispelMagic(DMTestCase):
+    """!
+    @brief A spell's own "dispel" field ({supertypes, subtypes}), matches_supertype_or_subtype
+        (Combat_Resolution.py -- shared with get_damage_bonus_vs's own "Holy"/"Bane" matching),
+        and DM_Core.py's own _apply_dispel_if_hit. Shipped as spells.toml's "dispel magic"
+        ({supertypes = ["spell"], subtypes = ["spell"]} -- "anything magical", not narrowly
+        scoped to one particular effect shape), targeting spells.toml's "flame wall" via its
+        shared subtype = "spell".
+    """
+
+    def setUp(self):
+        super().setUp()
+        # Empty entities list -- see TestPersistentTerrainHazards' own setUp comment for why
+        # "gladstone" is never named explicitly here.
+        self._load_ad_hoc_scenario([])
+        self.dm_core._instance_entities([{"name": "flame wall", "band": 1}])
+        self.dm_core.scenario_entities.append("flame wall")
+
+    def test_matches_supertype_or_subtype_matches_on_either_list(self):
+        wall = self.dm_core.entities["flame wall"]
+        self.assertTrue(Combat_Resolution.matches_supertype_or_subtype(wall, {"subtypes": ["spell"]}))
+        self.assertTrue(Combat_Resolution.matches_supertype_or_subtype(wall, {"supertypes": ["object"]}))
+        self.assertFalse(Combat_Resolution.matches_supertype_or_subtype(wall, {"subtypes": ["trap"]}))
+        # Neither key present at all matches nothing, not everything.
+        self.assertFalse(Combat_Resolution.matches_supertype_or_subtype(wall, {}))
+
+    def test_matches_supertype_or_subtype_also_matches_a_live_spell_catalog_entrys_supertype(self):
+        # The shipped filter matches "spell" on BOTH axes -- a bare spell-catalog entity's own
+        # supertype is always "spell", covering that shape too, not just a conjured effect
+        # object's subtype (flame wall, above).
+        fireball = self.dm_core.entities["fireball"]
+        self.assertTrue(Combat_Resolution.matches_supertype_or_subtype(fireball, {"supertypes": ["spell"]}))
+
+    def test_apply_dispel_if_hit_banishes_a_matching_target(self):
+        ability = {"dispel": {"supertypes": ["spell"], "subtypes": ["spell"]}}
+        result = RolledOutcome(entity="gladstone", skill="arcane", roll=10, difficulty=0, success=True)
+        self.dm_core._apply_dispel_if_hit(result, ability, "flame wall")
+        self.assertNotIn("flame wall", self.dm_core.scenario_entities)
+        self.assertEqual([e.name for e in result.effects if isinstance(e, DispelEffect)], ["flame wall"])
+
+    def test_apply_dispel_if_hit_ignores_a_non_matching_target(self):
+        # Aiming "dispel magic" at gladstone (supertype "creature") does nothing -- the real
+        # Pathfinder "used on the wrong thing just wastes the action" shape, not a hard gate.
+        ability = {"dispel": {"supertypes": ["spell"], "subtypes": ["spell"]}}
+        result = RolledOutcome(entity="gladstone", skill="arcane", roll=10, difficulty=0, success=True)
+        self.dm_core._apply_dispel_if_hit(result, ability, "gladstone")
+        self.assertIn("gladstone", self.dm_core.scenario_entities)
+        self.assertEqual(result.effects, [])
+
+    def test_apply_dispel_if_hit_does_nothing_on_a_failed_roll(self):
+        ability = {"dispel": {"supertypes": ["spell"], "subtypes": ["spell"]}}
+        result = RolledOutcome(entity="gladstone", skill="arcane", roll=1, difficulty=10, success=False)
+        self.dm_core._apply_dispel_if_hit(result, ability, "flame wall")
+        self.assertIn("flame wall", self.dm_core.scenario_entities)
+
+    def test_casting_dispel_magic_end_to_end_banishes_the_flame_wall(self):
+        # "flame wall" has no skills at all, so a high roll always wins the ordinary opposed
+        # check "dispel magic" falls to (no "difficulty" authored on it).
+        self.dm_core.current_target = "flame wall"
+        resolved = self._capture("action_resolved")
+        with patch("random.randint", return_value=6):
+            self.dm_core._on_turn_detected({
+                "clauses": [{"kind": "action", "skill": "dispel magic"}], "input": "I dispel the flame wall",
+            })
+        self.assertNotIn("flame wall", self.dm_core.scenario_entities)
+        action = resolved[-1]["actions"][0]
+        self.assertEqual([e.name for e in action.effects if isinstance(e, DispelEffect)], ["flame wall"])
+
+
 class TestBandit(DMTestCase):
     # "bandit" is debug.toml's own local entity now (creatures.toml no longer carries one --
     # see its own comment) -- booting "field" first is what makes it resolvable at all, before
@@ -4929,6 +5023,87 @@ class TestProximityStatuses(DMTestCase):
         with patch("random.randint", return_value=4):
             self.dm_core.resolve_behavior_action("wolf", "target_dummy")
         self.assertIn("shaken", self.dm_core.entities["target_dummy"]["active_conditions"])
+
+
+class TestPersistentTerrainHazards(DMTestCase):
+    """!
+    @brief The [[status]] "on_round" trigger -- run_round_upkeep (DM_Status.py) now also calls
+        evaluate_proximity_statuses once a round, per living scene entity, the same function
+        TestProximityStatuses' own "on_action" tests already exercise. The Pathfinder
+        "Persistent terrain/obstacle spells" shape (Wall of Fire): rules.toml's own
+        "flame wall zone" ([[status]]) + "burning" ([[condition]]), spells.toml's own
+        "flame wall" (the hazard entity) + "wall of fire" (the spell that conjures it via the
+        ordinary summon mechanism).
+    """
+
+    def setUp(self):
+        super().setUp()
+        # Empty entities list -- naming "gladstone" explicitly here would produce a second,
+        # orphaned "gladstone_2" alongside the one DMTestCase's own default scenario already
+        # instanced (see TestSummoning's own precedent/comment for why); the player is
+        # guaranteed present in the new location regardless (_instance_location_persistent_names).
+        self._load_ad_hoc_scenario([], bands=4, enclosed=True)
+        self.dm_core._instance_entities([{"name": "flame wall", "band": 1}])
+        self.dm_core.scenario_entities.append("flame wall")
+
+    def test_applies_burning_to_a_co_band_entity(self):
+        self.dm_core.evaluate_proximity_statuses("flame wall", "on_round")
+        self.assertIn("burning", self.dm_core.entities["gladstone"]["active_conditions"])
+
+    def test_never_applies_burning_to_the_wall_itself(self):
+        self.dm_core.evaluate_proximity_statuses("flame wall", "on_round")
+        self.assertNotIn("burning", self.dm_core.entities["flame wall"].get("active_conditions", {}))
+
+    def test_an_entity_outside_the_walls_band_is_unaffected(self):
+        self.dm_core.entities["gladstone"]["band"] = 3
+        self.dm_core.evaluate_proximity_statuses("flame wall", "on_round")
+        self.assertNotIn("burning", self.dm_core.entities["gladstone"].get("active_conditions", {}))
+
+    def test_burning_lapses_once_the_entity_leaves_and_is_not_refreshed(self):
+        # "burning" is authored duration = "rounds"/length = 1 specifically so it only ever
+        # outlasts the round it was granted in -- stepping out before the ordinary
+        # tick_condition_durations sweep runs again means it's never refreshed, so it lapses on
+        # its own rather than lingering as a debuff for having merely walked through once.
+        self.dm_core.evaluate_proximity_statuses("flame wall", "on_round")
+        self.assertIn("burning", self.dm_core.entities["gladstone"]["active_conditions"])
+        self.dm_core.entities["gladstone"]["band"] = 3
+        Combat_Resolution.tick_condition_durations(self.dm_core.entities, self.event_bus, "gladstone", "rounds")
+        self.dm_core.evaluate_proximity_statuses("flame wall", "on_round")
+        self.assertNotIn("burning", self.dm_core.entities["gladstone"].get("active_conditions", {}))
+
+    def test_run_round_upkeep_deals_real_damage_over_two_rounds_while_standing_in_the_fire(self):
+        # "burning"'s own upkeep_damage (dice=2, pips=0) always rolls at least 2, so two full
+        # rounds standing in it guarantees at least one real damage tick regardless of which
+        # order scenario_entities happens to process gladstone/the wall in this round.
+        start_hp = self.dm_core.get_current_hp("gladstone")
+        self.dm_core.run_round_upkeep()
+        self.dm_core.run_round_upkeep()
+        self.assertLess(self.dm_core.get_current_hp("gladstone"), start_hp)
+
+    def test_summon_places_a_flame_wall_like_any_other_summoned_entity(self):
+        # _summon_creature (DM_Summoning.py) never cared what kind of entity it was placing --
+        # an inanimate hazard works exactly like "summon spectral wolf"'s own ally creature.
+        name = self.dm_core._summon_creature({"name": "flame wall", "duration": 5})
+        self.assertEqual(name, "flame wall_2")
+        self.assertIn("flame wall_2", self.dm_core.scenario_entities)
+        self.assertEqual(self.dm_core.entities["flame wall_2"]["summon_expires_in"], 5)
+
+    def test_a_summoned_flame_wall_expires_and_is_removed_after_its_duration(self):
+        self.dm_core._summon_creature({"name": "flame wall", "duration": 2})
+        self.dm_core.run_round_upkeep()
+        self.assertIn("flame wall_2", self.dm_core.scenario_entities)
+        self.dm_core.run_round_upkeep()
+        self.assertNotIn("flame wall_2", self.dm_core.scenario_entities)
+
+    def test_flame_wall_cannot_be_chopped_down_by_an_ordinary_weapon(self):
+        # current_target has no is_hostile gate (items.toml's dart trap already proves a
+        # non-hostile object can be targeted/rolled against), so without immunity_tags = ["any"]
+        # a player could just attack and destroy the hazard for free. A generic weapon hit
+        # (any damage_tags at all) should net zero damage against it.
+        sword_swing = {"damage_value": {"dice": 3, "pips": 0, "bonus": 0}, "damage_tags": ["slashing"]}
+        result = self.dm_core.calculate_damage("gladstone", "flame wall", sword_swing)
+        self.assertEqual(result["net_damage"], 0)
+        self.assertEqual(self.dm_core.get_current_hp("flame wall"), 20)
 
 
 class TestConcealment(DMTestCase):
