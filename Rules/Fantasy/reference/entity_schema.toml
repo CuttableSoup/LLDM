@@ -22,7 +22,10 @@
 # skill matching, DM_Core's subtype == "container" gate) interprets by convention, not an enum
 # enforced anywhere. Common supertypes in use: "creature" (characters.toml/npcs.toml/
 # creatures.toml), "object" (items.toml), "spell"/"technique" (spells.toml/techniques.toml),
-# "innate" (a one-off inline ability with no shared catalog entity, ex: gladstone's "punch").
+# "innate" (a one-off inline ability with no shared catalog entity, ex: gladstone's "punch"),
+# "modifier" (a trained combat-trick/metamagic entity stacked onto another named ability at
+# cast time, ex: "power attack"/"empowered" -- see "applies_to"/"skill_divisor"/"damage_bonus"/
+# "damage_multiplier", below).
 # Common subtypes: "humanoid"/"animal"/"elemental"/"undead" (creature), "weapon"/"armor"/
 # "potion"/"container"/"trap"/"trinket" (object), "evocation" (spell school), "martial"
 # (technique), "weapon" (an innate attack's own subtype, ex: wolf's "bite").
@@ -471,6 +474,69 @@ cure = { supertypes = ["affliction"], subtypes = ["disease"] }
                                             # same shape "dispel" above already has, still reported
                                             # (an empty CureEffect) rather than silently skipped.
                                             # _apply_cure_if_hit, DM_Core.py.
+applies_to = { supertypes = ["spell"] }     # A supertype == "modifier" entity only -- the same
+                                            # {supertypes, subtypes} shape/matching rule dispel/
+                                            # cure/damage_bonus_vs already use
+                                            # (matches_supertype_or_subtype). NLPCore matches a
+                                            # modifier's own name literally within the same
+                                            # clause as a base ability (ex: "power attack the
+                                            # goblin", "cast an empowered fireball"), stripped
+                                            # out before the base ability's own match runs
+                                            # (match_modifier, NLP_Core.py); DMCore then only
+                                            # actually applies it if the resolved base ability's
+                                            # own supertype/subtype matches this filter -- aimed
+                                            # at the wrong shape (ex: "power attack" against a
+                                            # spell) just wastes it, same "wrong thing wastes the
+                                            # action" precedent dispel/cure already set. Also
+                                            # gated on ownership: a modifier is deliberately never
+                                            # added to skills.toml's own universal abilities list,
+                                            # so resolve_named_ability only ever resolves one for
+                                            # an entity that actually trained it (its own
+                                            # "abilities" list) -- see maneuvers.toml's own
+                                            # untrained "trip"/"cleave" for the contrasting
+                                            # universal case.
+skill_divisor = 2                           # A supertype == "modifier" entity only -- divides
+                                            # the acting entity's own base skill rating
+                                            # (skill_rating, the same dice*3+pips scale
+                                            # get_opposing_skill/select_ability_skill already
+                                            # use) before dice_penalty/condition_modifier/
+                                            # equip_bonus stack on top, in resolve_action --
+                                            # applied identically whether the roll this turn ends
+                                            # up a flat difficulty check or (via resolve_opposed_
+                                            # action) an opposed one, since both share that one
+                                            # attacker-side pool-building step. This is the
+                                            # modifier's own cost -- "power attack"'s skill_
+                                            # divisor = 2 halves gladstone's own blades rating for
+                                            # this one swing, in exchange for its own damage_bonus
+                                            # below.
+damage_bonus = { dice = 2, pips = 0, bonus = 0 }
+                                            # A supertype == "modifier" entity only -- added onto
+                                            # the matched base ability's own damage_value (a
+                                            # per-cast deep copy, _apply_ability_modifier in
+                                            # DM_Core.py -- the shared spells.toml/creatures.toml/
+                                            # weapon entity itself is never mutated). Absent if
+                                            # the base ability has no damage_value at all (ex: a
+                                            # pure debuff/utility ability) -- nothing for either
+                                            # this or damage_multiplier below to act on, so the
+                                            # modifier's benefit half is simply wasted, same
+                                            # "wrong shape wastes it" precedent as a mismatched
+                                            # "applies_to". Additive, not multiplicative --
+                                            # deliberately the same operation type dice_penalty/
+                                            # condition_modifier already use, since skill_divisor
+                                            # above already covers proportional scaling on the
+                                            # cost side; mixing add/multiply across the cost and
+                                            # benefit halves of the same trade was the original
+                                            # design mistake this field's shape corrects.
+damage_multiplier = 1.5                     # A supertype == "modifier" entity only -- the other
+                                            # valid shape a modifier's own damage benefit can
+                                            # take, applied (after damage_bonus, if both are
+                                            # somehow both authored) to the same per-cast copy of
+                                            # damage_value -- ex: "empowered"'s +50% total damage,
+                                            # a genuinely proportional Pathfinder effect that a
+                                            # flat damage_bonus wouldn't represent faithfully.
+                                            # Author whichever of damage_bonus/damage_multiplier
+                                            # actually fits a given modifier's own fiction, never
+                                            # both at once in practice.
 cooldown_rounds = 3                         # A behavior-driven ability only (DM_Combat.py's
                                             # resolve_behavior_action) -- once used, sets the
                                             # acting entity's own ability_cooldowns[name] to

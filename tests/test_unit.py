@@ -2,6 +2,7 @@ import asyncio
 import copy
 import json
 import os
+import re
 import shutil
 import tempfile
 import threading
@@ -440,19 +441,30 @@ class FakeMatcher:
         one authored just in case.
     """
 
-    def __init__(self, actions=None, items=None, targets=None, sentiments=None, threats=None, familiarities=None):
+    def __init__(self, actions=None, items=None, targets=None, sentiments=None, threats=None, familiarities=None, modifiers=None):
         self._actions = actions or {}
         self._items = items or {}
         self._targets = targets or {}
         self._sentiments = sentiments or {}
         self._threats = threats or {}
         self._familiarities = familiarities or {}
+        # Modifier names to literally match/strip (see match_modifier) -- longest first, same
+        # convention SentenceTransformerMatcher's own self.modifier_names keeps.
+        self._modifier_names = sorted(modifiers or [], key=len, reverse=True)
 
     def on_rules_loaded(self, data):
         pass
 
     def register_item(self, name, description):
         pass
+
+    def match_modifier(self, processed_text):
+        for name in self._modifier_names:
+            match = re.search(rf"\b{re.escape(name)}\b", processed_text)
+            if match:
+                stripped = processed_text[:match.start()] + processed_text[match.end():]
+                return name, re.sub(r"\s+", " ", stripped).strip()
+        return None, processed_text
 
     def map_to_action(self, processed_text):
         return self._actions.get(processed_text, (None, 0.0))
@@ -701,6 +713,48 @@ class TestIntentClassification(unittest.TestCase):
         classifier = IntentClassifier(FakeMatcher())
         _processed, events = classifier.classify("Hey there innkeeper")
         self.assertEqual(events[0]["event"], "action_not_understood")
+
+    def test_modifier_is_stripped_before_the_base_ability_match_and_attached_to_the_clause(self):
+        # "empowered" is stripped out first (match_modifier), leaving "cast an fireball" to
+        # score against map_to_action -- the whole point being that "fireball" alone is what
+        # gets matched, undiluted by the modifier phrase still sitting in the sentence.
+        classifier = IntentClassifier(FakeMatcher(
+            actions={"cast an fireball": ("fireball", 0.9)},
+            modifiers=["empowered"],
+        ))
+        _processed, events = classifier.classify("cast an empowered fireball")
+
+        self.assertEqual(events[0]["event"], "turn_detected")
+        action = events[0]["payload"]["clauses"][0]
+        self.assertEqual(action["skill"], "fireball")
+        self.assertEqual(action["modifier"], "empowered")
+
+    def test_no_modifier_present_leaves_the_clause_without_a_modifier_key(self):
+        classifier = IntentClassifier(FakeMatcher(
+            actions={"cast a fireball": ("fireball", 0.9)},
+            modifiers=["empowered"],
+        ))
+        _processed, events = classifier.classify("cast a fireball")
+
+        action = events[0]["payload"]["clauses"][0]
+        self.assertNotIn("modifier", action)
+
+    def test_modifier_falls_back_to_the_unstripped_clause_when_nothing_else_is_left_to_match(self):
+        # Stripping "power attack" out of "power attack the goblin" leaves only "the goblin" --
+        # nothing there names a weapon skill at all. map_to_action must retry against the
+        # original, unstripped clause (where FakeMatcher's own "power attack the goblin" entry
+        # stands in for a real embedding/keyword match still finding "blades" via the word
+        # "attack" inside the modifier's own name) rather than dropping the clause entirely.
+        classifier = IntentClassifier(FakeMatcher(
+            actions={"power attack the goblin": ("blades", 0.7)},
+            modifiers=["power attack"],
+        ))
+        _processed, events = classifier.classify("power attack the goblin")
+
+        self.assertEqual(events[0]["event"], "turn_detected")
+        action = events[0]["payload"]["clauses"][0]
+        self.assertEqual(action["skill"], "blades")
+        self.assertEqual(action["modifier"], "power attack")
 
     def test_item_and_dialogue_keywords_never_collide_with_a_real_skill_keyword(self):
         # Turns the prose scattered across Intent_Classification.py's own keyword-tuple
@@ -4020,6 +4074,181 @@ class TestUniversalAbilities(DMTestCase):
         # default is unchanged either way.
         for name in ("trip", "sunder"):
             self.assertEqual(self.dm_core.entities[name].get("range", 0), 0)
+
+
+class TestCombatTrickAndMetamagicModifiers(DMTestCase):
+    """!
+    @brief modifiers.toml's "power attack"/"empowered" -- the trained (never universal)
+        counterpart to TestUniversalAbilities above: a supertype == "modifier" [[entity]]
+        stacked onto another named ability at cast time via "applies_to"/"skill_divisor"/
+        "damage_bonus"/"damage_multiplier" (see entity_schema.toml's own field reference and
+        Rules/Fantasy/reference/pathfinder_mapping.toml's Metamagic row).
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.resolved = self._capture("round_resolved")
+
+    # --- resolve_action/resolve_opposed_action: skill_divisor -------------------------------
+
+    def test_skill_divisor_divides_the_base_skill_rating_before_other_modifiers_stack(self):
+        # gladstone's blades is 5D+0 (rating 15) -- power attack's skill_divisor = 2 halves that
+        # rating to 7.5, floored back to {dice, pips} via the same dice*3+pips scale (2D+1).
+        with patch("random.randint", return_value=3):
+            full = self.dm_core.resolve_action("gladstone", "blades")
+            halved = self.dm_core.resolve_action("gladstone", "blades", skill_divisor=2)
+
+        self.assertEqual(full["roll"], 15)   # 5D @ 3 = 15
+        self.assertEqual(halved["roll"], 7)  # 2D+1 @ 3 = 7
+
+    def test_skill_divisor_of_one_is_a_no_op(self):
+        with patch("random.randint", return_value=3):
+            result = self.dm_core.resolve_action("gladstone", "blades", skill_divisor=1)
+        self.assertEqual(result["roll"], 15)
+
+    def test_resolve_opposed_action_skill_divisor_never_touches_the_defenders_roll(self):
+        self.dm_core.entities["test_defender"] = {
+            "name": "test_defender", "skills": {"dodge": {"dice": 6, "pips": 0}},
+        }
+        with patch("random.randint", return_value=3):
+            unmodified = self.dm_core.resolve_opposed_action("gladstone", "blades", "test_defender")
+            halved = self.dm_core.resolve_opposed_action(
+                "gladstone", "blades", "test_defender", skill_divisor=2,
+            )
+
+        self.assertEqual(unmodified["difficulty"], 18)  # defender's own 6D @ 3, unaffected
+        self.assertEqual(halved["difficulty"], 18)
+        self.assertEqual(unmodified["roll"], 15)
+        self.assertEqual(halved["roll"], 7)
+
+    # --- Ownership: trained, never universal -------------------------------------------------
+
+    def test_power_attack_and_empowered_are_owned_by_gladstone_not_universal(self):
+        self.assertNotIn("power attack", self.dm_core.universal_abilities)
+        self.assertNotIn("empowered", self.dm_core.universal_abilities)
+        self.assertIsNotNone(self.dm_core.resolve_named_ability("gladstone", "power attack"))
+        self.assertIsNotNone(self.dm_core.resolve_named_ability("gladstone", "empowered"))
+
+    def test_an_entity_that_never_trained_it_cannot_resolve_it_at_all(self):
+        # wolf owns no abilities list entry named "power attack", and it's not universal either
+        # (unlike "trip"/"cleave") -- resolve_named_ability must come back empty, the same
+        # "untrained" outcome an unowned, non-universal named ability always has.
+        self.assertIsNone(self.dm_core.resolve_named_ability("wolf", "power attack"))
+
+    # --- _resolve_action_modifier: the clause-level lookup _on_turn_detected uses -----------
+
+    def test_resolve_action_modifier_returns_none_for_no_modifier_name(self):
+        self.assertIsNone(self.dm_core._resolve_action_modifier(None))
+
+    def test_resolve_action_modifier_returns_none_for_an_untrained_name(self):
+        self.dm_core.player_name = "wolf"
+        self.assertIsNone(self.dm_core._resolve_action_modifier("power attack"))
+
+    # --- _apply_ability_modifier: the per-cast copy, applies_to gating ----------------------
+
+    def test_applies_to_mismatch_leaves_the_ability_and_skill_divisor_untouched(self):
+        # "empowered" only applies_to supertypes = ["spell"] -- aimed at a weapon strike
+        # (longsword, supertype "object"/subtype "weapon"), it should never actually fire.
+        longsword = self.dm_core.entities["longsword"]
+        empowered = self.dm_core.resolve_named_ability("gladstone", "empowered")
+
+        self.assertFalse(Combat_Resolution.matches_supertype_or_subtype(longsword, empowered["applies_to"]))
+
+    def test_apply_ability_modifier_never_mutates_the_shared_entity(self):
+        longsword = self.dm_core.entities["longsword"]
+        original_damage_value = dict(longsword["damage_value"])
+        power_attack = self.dm_core.resolve_named_ability("gladstone", "power attack")
+
+        modified = self.dm_core._apply_ability_modifier(longsword, power_attack)
+
+        self.assertEqual(longsword["damage_value"], original_damage_value)
+        self.assertNotEqual(modified["damage_value"]["dice"], original_damage_value["dice"])
+        self.assertIsNot(modified, longsword)
+
+    def test_apply_ability_modifier_adds_damage_bonus_dice(self):
+        longsword = self.dm_core.entities["longsword"]
+        power_attack = self.dm_core.resolve_named_ability("gladstone", "power attack")
+
+        modified = self.dm_core._apply_ability_modifier(longsword, power_attack)
+
+        self.assertEqual(modified["damage_value"]["dice"], longsword["damage_value"]["dice"] + 2)
+        self.assertEqual(modified["damage_value"]["pips"], longsword["damage_value"]["pips"])
+
+    def test_apply_ability_modifier_applies_damage_multiplier(self):
+        fireball = self.dm_core.entities["fireball"]
+        empowered = self.dm_core.resolve_named_ability("gladstone", "empowered")
+
+        modified = self.dm_core._apply_ability_modifier(fireball, empowered)
+
+        self.assertEqual(modified["damage_value"]["dice"], fireball["damage_value"]["dice"] * 1.5)
+
+    def test_apply_ability_modifier_is_a_no_op_on_an_ability_with_no_damage_value(self):
+        # "dispel magic" deals no damage at all -- neither damage_bonus nor damage_multiplier
+        # has anything to act on, so the copy comes back with no "damage_value" key either,
+        # same "wrong shape wastes it" precedent a mismatched applies_to already has.
+        dispel_magic = self.dm_core.entities["dispel magic"]
+        empowered = self.dm_core.resolve_named_ability("gladstone", "empowered")
+
+        modified = self.dm_core._apply_ability_modifier(dispel_magic, empowered)
+
+        self.assertNotIn("damage_value", modified)
+
+    # --- End-to-end through _on_turn_detected -------------------------------------------------
+
+    def test_power_attack_costs_accuracy_and_pays_off_in_damage_end_to_end(self):
+        # A no-skills target auto-succeeds (difficulty 0) regardless of skill_divisor, isolating
+        # the damage-bonus half from the accuracy-cost half (already covered above in isolation).
+        self.dm_core.entities["practice_dummy"] = {"name": "practice_dummy", "max_hp": 40, "skills": {}}
+        self._load_ad_hoc_scenario([{"name": "practice_dummy", "band": 1}])
+
+        with patch("random.randint", return_value=3):
+            self.dm_core._on_turn_detected({
+                "clauses": [{"kind": "action", "skill": "blades"}],
+                "input": "I attack the practice dummy",
+            })
+        baseline_damage = [e for e in self.resolved[-1]["actions"][0].effects if isinstance(e, DamageEffect)][0]
+
+        self.dm_core.entities["practice_dummy_2"] = {"name": "practice_dummy_2", "max_hp": 40, "skills": {}}
+        self._load_ad_hoc_scenario([{"name": "practice_dummy_2", "band": 1}])
+        with patch("random.randint", return_value=3):
+            self.dm_core._on_turn_detected({
+                "clauses": [{"kind": "action", "skill": "blades", "modifier": "power attack"}],
+                "input": "I power attack the practice dummy",
+            })
+        power_attack_damage = [e for e in self.resolved[-1]["actions"][0].effects if isinstance(e, DamageEffect)][0]
+
+        # +2 extra damage dice, each stubbed to roll 3 -- the flat, deterministic delta
+        # power attack's own damage_bonus should add on top of whatever the unmodified swing
+        # already dealt (attacker/strength_damage bonus resolution is identical either way, so
+        # it cancels out of the comparison).
+        self.assertEqual(power_attack_damage.net_damage - baseline_damage.net_damage, 6)
+        # The shared longsword entity itself is never mutated by any of this.
+        self.assertEqual(self.dm_core.entities["longsword"]["damage_value"], {"dice": 1, "pips": 2, "bonus": "strength_damage"})
+
+    def test_modifier_aimed_at_the_wrong_shape_of_ability_just_wastes_it(self):
+        # "empowered" only applies_to spells -- naming it alongside a plain weapon swing should
+        # resolve as an ordinary, unmodified attack (no 1.5x damage_multiplier applied) rather
+        # than erroring or silently applying anyway.
+        self.dm_core.entities["practice_dummy"] = {"name": "practice_dummy", "max_hp": 40, "skills": {}}
+        self._load_ad_hoc_scenario([{"name": "practice_dummy", "band": 1}])
+        with patch("random.randint", return_value=3):
+            self.dm_core._on_turn_detected({
+                "clauses": [{"kind": "action", "skill": "blades"}],
+                "input": "I attack the practice dummy",
+            })
+        baseline_damage = [e for e in self.resolved[-1]["actions"][0].effects if isinstance(e, DamageEffect)][0]
+
+        self.dm_core.entities["practice_dummy_2"] = {"name": "practice_dummy_2", "max_hp": 40, "skills": {}}
+        self._load_ad_hoc_scenario([{"name": "practice_dummy_2", "band": 1}])
+        with patch("random.randint", return_value=3):
+            self.dm_core._on_turn_detected({
+                "clauses": [{"kind": "action", "skill": "blades", "modifier": "empowered"}],
+                "input": "I empowered attack the practice dummy",
+            })
+        mismatched_modifier_damage = [e for e in self.resolved[-1]["actions"][0].effects if isinstance(e, DamageEffect)][0]
+
+        self.assertEqual(mismatched_modifier_damage.net_damage, baseline_damage.net_damage)
+        self.assertEqual(self.dm_core.entities["longsword"]["damage_value"], {"dice": 1, "pips": 2, "bonus": "strength_damage"})
 
 
 class TestAbilityOutcomeProgram(DMTestCase):

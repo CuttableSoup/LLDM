@@ -1,3 +1,4 @@
+import copy
 import os
 import re
 
@@ -277,19 +278,24 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             dice_penalty-subject like an item test -- handled by its own explicit branch in the
             loop below rather than either existing path.
         @param data The turn_detected payload from NLPCore ({clauses: [{kind: "item", intent,
-            item_name} | {kind: "action", skill, score, target?}, ...], input}). Item-kind
-            clauses resolve immediately, in clause order, via _on_item_interaction_detected
-            (narrating right away); action-kind clauses accumulate into one batch, resolved
-            and narrated together exactly the way a lone action always has. Each action
-            entry's "skill" is usually a plain skill name, but may also be a named technique/
-            spell the player owns (ex: "cleave") -- resolve_named_ability/select_ability_skill
-            are what convert that into the skill it's actually rolled with, while keeping the
-            named ability itself to use directly for damage further down. Each action entry's
-            own "target", if present, is NLPCore's best-guess entity name match for that one
-            clause (see map_to_target) -- honored as an item-test target (see
-            _resolve_item_test_target) if it names a reachable, testable item; otherwise as a
-            combat redirect if it names a live, hostile, in-scene entity; otherwise the
-            persisted self.current_target is left alone.
+            item_name} | {kind: "action", skill, score, target?, modifier?}, ...], input}).
+            Item-kind clauses resolve immediately, in clause order, via
+            _on_item_interaction_detected (narrating right away); action-kind clauses
+            accumulate into one batch, resolved and narrated together exactly the way a lone
+            action always has. Each action entry's "skill" is usually a plain skill name, but
+            may also be a named technique/spell the player owns (ex: "cleave") --
+            resolve_named_ability/select_ability_skill are what convert that into the skill
+            it's actually rolled with, while keeping the named ability itself to use directly
+            for damage further down. Each action entry's own "target", if present, is NLPCore's
+            best-guess entity name match for that one clause (see map_to_target) -- honored as
+            an item-test target (see _resolve_item_test_target) if it names a reachable,
+            testable item; otherwise as a combat redirect if it names a live, hostile, in-scene
+            entity; otherwise the persisted self.current_target is left alone. Each action
+            entry's own optional "modifier" names a trained combat-trick/metamagic [[entity]]
+            (ex: "power attack", "empowered") NLPCore matched literally within the same clause,
+            stripped out before the ordinary skill/ability match ran on the remainder (see
+            NLP_Core.py's own literal-name pre-pass) -- _resolve_action_modifier resolves it the
+            same owned-ability way resolve_named_ability already does for skill_name.
         """
         clauses = data.get("clauses")
         if not clauses:
@@ -345,6 +351,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             if not skill_name:
                 continue
             skill_name, named_ability = self._resolve_action_skill(skill_name)
+            modifier = self._resolve_action_modifier(entry.get("modifier"))
 
             explicit_target = entry.get("target")
             item_result = self._try_item_test_action(explicit_target, skill_name, input_text, dice_penalty)
@@ -356,7 +363,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             target_name = self.current_target
             engaged_combat_target = True
 
-            result, ability, via_test = self._resolve_roll(skill_name, named_ability, target_name, dice_penalty)
+            result, ability, via_test = self._resolve_roll(skill_name, named_ability, target_name, dice_penalty, modifier)
             self._finish_rolled_outcome(result, skill_name, named_ability, ability, target_name, via_test, input_text)
             player_actions.append(result)
 
@@ -418,6 +425,63 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         if named_ability:
             skill_name = self.select_ability_skill(self.player_name, named_ability) or skill_name
         return skill_name, named_ability
+
+    def _resolve_action_modifier(self, modifier_name):
+        """!
+        @brief Resolves a clause's own "modifier" field (ex: "power attack", "empowered") down
+            to the [[entity]] it names -- reusing resolve_named_ability's own owned/universal
+            check unchanged, the same one a named technique/spell already goes through. A
+            combat-trick/metamagic modifier is deliberately never added to skills.toml's own
+            universal abilities list, so this only ever succeeds for an entity that actually
+            trained it (its own "abilities" list) -- resolve_named_ability's "you don't have to
+            be trained" fallback simply never fires for one of these.
+        @param modifier_name The candidate modifier name from the clause (NLPCore's own literal
+            name match against every live supertype == "modifier" entity), or None.
+        @return The resolved modifier [[entity]] table, or None if absent/untrained.
+        """
+        if not modifier_name:
+            return None
+        return self.resolve_named_ability(self.player_name, modifier_name)
+
+    def _apply_ability_modifier(self, ability, modifier):
+        """!
+        @brief Builds a per-cast copy of ability with modifier's own damage benefit folded in
+            -- never mutates the shared spells.toml/creatures.toml/weapon entity itself, the
+            same "ephemeral copy" precedent multi-action dice_penalty already keeps (it's
+            recomputed per turn, never stored on anything). modifier's own cost half
+            (skill_divisor) isn't applied here at all -- it's returned to the caller
+            (_resolve_roll) to forward into resolve_action/resolve_opposed_action directly,
+            since that's a roll-time parameter, not an ability field.
+        @param ability The resolved weapon/spell/technique table, already confirmed to match
+            modifier's own "applies_to" filter.
+        @param modifier The resolved combat-trick/metamagic [[entity]] (ex: "power attack",
+            "empowered") -- "damage_bonus" ({dice, pips, bonus}, added) and "damage_multiplier"
+            (a plain number, applied after) are both optional; an ability with no damage_value
+            at all (ex: a pure debuff spell) has nothing for either to act on, so it's simply
+            returned unchanged -- the same "wrong shape just wastes it" precedent cure/dispel
+            already set for a mismatched target.
+        @return A deep copy of ability, its own "damage_value" adjusted if present.
+        """
+        modified = copy.deepcopy(ability)
+        damage_value = modified.get("damage_value")
+        if not damage_value:
+            return modified
+
+        damage_bonus = modifier.get("damage_bonus")
+        if damage_bonus:
+            damage_value["dice"] = damage_value.get("dice", 0) + damage_bonus.get("dice", 0)
+            damage_value["pips"] = damage_value.get("pips", 0) + damage_bonus.get("pips", 0)
+            if isinstance(damage_value.get("bonus", 0), (int, float)):
+                damage_value["bonus"] = damage_value.get("bonus", 0) + damage_bonus.get("bonus", 0)
+
+        damage_multiplier = modifier.get("damage_multiplier")
+        if damage_multiplier:
+            damage_value["dice"] = damage_value.get("dice", 0) * damage_multiplier
+            damage_value["pips"] = damage_value.get("pips", 0) * damage_multiplier
+            if isinstance(damage_value.get("bonus", 0), (int, float)):
+                damage_value["bonus"] = damage_value.get("bonus", 0) * damage_multiplier
+
+        return modified
 
     def _try_item_test_action(self, explicit_target, skill_name, input_text, dice_penalty=0):
         """!
@@ -594,7 +658,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
 
         return explicit_target
 
-    def _resolve_roll(self, skill_name, named_ability, target_name, dice_penalty=0):
+    def _resolve_roll(self, skill_name, named_ability, target_name, dice_penalty=0, modifier=None):
         """!
         @brief Rolls the actual check for this action: a flat difficulty check against the
             target's own [entity.test] if one applies (ex: a chest's lock), a range-gated flat
@@ -609,9 +673,15 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             player's own roll only -- see _on_turn_detected's own "Multiple actions" note.
             0 for an ordinary single action, unchanged from this method's behavior before that
             mechanic existed.
+        @param modifier A trained combat-trick/metamagic [[entity]] (ex: "power attack",
+            "empowered"), already resolved by _resolve_action_modifier, or None. Only ever
+            consulted in the range-gated target branch below, once the actual attack ability is
+            known -- see _apply_ability_modifier for how its own "skill_divisor"/"damage_bonus"/
+            "damage_multiplier" fields are folded in.
         @return (result, ability, via_test) -- ability is the attack ability resolved for the
-            roll, if any, needed again by _apply_damage_if_hit; via_test is True if this was a
-            flat [entity.test] check, which must never also roll bonus weapon damage.
+            roll (a per-cast copy with modifier's own damage bonus/multiplier already applied,
+            if one matched), needed again by _apply_damage_if_hit; via_test is True if this was
+            a flat [entity.test] check, which must never also roll bonus weapon damage.
         """
         # Checked ahead of even materials -- an entity unable to act at all this turn (ex: a
         # "pinned" condition, prevents_action = true) can't cast/attack/anything, the most
@@ -680,6 +750,14 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             # rather than a distinct outcome type for what's still fundamentally "can't reach
             # them right now."
             ability = named_ability or self.find_attack_ability(self.player_name, skill_name)
+            skill_divisor = 1
+            if modifier and ability and matches_supertype_or_subtype(ability, modifier.get("applies_to", {})):
+                # The modifier costs the attacker's own skill (skill_divisor, folded into
+                # whichever of resolve_action/resolve_opposed_action fires below -- the same
+                # attacker-side pool math both already share) and pays off in a copied
+                # damage_value -- never the shared spells.toml/creatures.toml entity itself.
+                ability = self._apply_ability_modifier(ability, modifier)
+                skill_divisor = modifier.get("skill_divisor", 1)
             if not self.is_in_range(self.player_name, target_name, ability) or not self.has_medium_access(self.player_name, target_name, ability):
                 result = OutOfRangeOutcome(self.player_name, skill_name, target_name)
             elif (
@@ -704,13 +782,13 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
                 # (skill = [...], difficulty = ...) -- checked above this branch, via_test,
                 # which already takes priority whenever it matches.
                 roll = self.resolve_action(
-                    self.player_name, skill_name, ability["difficulty"], dice_penalty=dice_penalty,
+                    self.player_name, skill_name, ability["difficulty"], dice_penalty=dice_penalty, skill_divisor=skill_divisor,
                 )
                 result = rolled_outcome_from_roll(roll)
                 result.defender = target_name
             else:
                 roll = self.resolve_opposed_action(
-                    self.player_name, skill_name, target_name, dice_penalty=dice_penalty, ability=ability,
+                    self.player_name, skill_name, target_name, dice_penalty=dice_penalty, ability=ability, skill_divisor=skill_divisor,
                 )
                 result = rolled_outcome_from_roll(roll)
         else:

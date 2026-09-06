@@ -43,7 +43,7 @@ COMPARATORS = {
 
 import resolution.Program_Interpreter as Program_Interpreter
 import resolution.Social_Resolution as Social_Resolution
-from resolution.Challenge_Rating import skill_rating
+from resolution.Challenge_Rating import skill_rating, SKILL_RATING_DIVISOR
 
 
 def roll_dice(dice, pips):
@@ -1221,7 +1221,7 @@ def get_opposing_skill(entities, skills, skill_name, defender_name):
     return best_skill
 
 
-def resolve_action(entities, rules, event_bus, entity_name, skill_name, difficulty=0, dice_penalty=0):
+def resolve_action(entities, rules, event_bus, entity_name, skill_name, difficulty=0, dice_penalty=0, skill_divisor=1):
     """!
     @brief Resolves the outcome of an entity using a skill against a difficulty.
     @param entities The live entities dict.
@@ -1232,14 +1232,25 @@ def resolve_action(entities, rules, event_bus, entity_name, skill_name, difficul
     @param difficulty The target number the roll must meet or beat.
     @param dice_penalty Whole dice subtracted from entity_name's own pool before rolling,
         floored at 0 dice.
+    @param skill_divisor Divides entity_name's own base skill rating (skill_rating, the same
+        dice*3+pips scale get_opposing_skill/select_ability_skill already use) before dice_
+        penalty/condition_modifier/equip_bonus stack on top of it -- a trained combat-trick/
+        metamagic [[entity]] modifier's own cost (ex: "power attack"), applied once here so it
+        costs the attacker identically whether this call ends up being a flat difficulty check
+        or (via resolve_opposed_action) an opposed one. 1 (the default) leaves the skill
+        unchanged, exactly as every existing call site behaves.
     @return A dict describing the roll and whether it succeeded.
     """
     entity = entities.get(entity_name, {})
     skill_stats = entity.get("skills", {}).get(skill_name, {"dice": 0, "pips": 0})
+    base_dice = skill_stats.get("dice", 0)
+    base_pips = skill_stats.get("pips", 0)
+    rating = skill_rating(base_dice, base_pips) / skill_divisor
+    base_dice, base_pips = int(rating // SKILL_RATING_DIVISOR), int(rating % SKILL_RATING_DIVISOR)
     condition_modifier = get_condition_modifier(entities, rules, entity_name, skill_name)
     equip_bonus = get_equipped_skill_bonus(entities, rules, entity_name, skill_name)
-    dice = max(0, skill_stats.get("dice", 0) - dice_penalty + condition_modifier["dice"] + equip_bonus["dice"])
-    pips = skill_stats.get("pips", 0) + condition_modifier["pips"] + equip_bonus["pips"]
+    dice = max(0, base_dice - dice_penalty + condition_modifier["dice"] + equip_bonus["dice"])
+    pips = base_pips + condition_modifier["pips"] + equip_bonus["pips"]
     roll = roll_dice(dice, pips) + condition_modifier["bonus"]
     success = roll >= difficulty
     event_bus.publish(
@@ -1255,7 +1266,7 @@ def resolve_action(entities, rules, event_bus, entity_name, skill_name, difficul
     }
 
 
-def resolve_opposed_action(entities, rules, skills, event_bus, attacker_name, skill_name, defender_name, dice_penalty=0, ability=None):
+def resolve_opposed_action(entities, rules, skills, event_bus, attacker_name, skill_name, defender_name, dice_penalty=0, ability=None, skill_divisor=1):
     """!
     @brief Resolves a skill roll opposed by a defending entity's matching skill. Range is
         checked by the caller before this is reached at all.
@@ -1270,6 +1281,9 @@ def resolve_opposed_action(entities, rules, skills, event_bus, attacker_name, sk
     @param ability The attacker's own resolved weapon/spell/technique, if any -- consulted only
         for its optional "ignores_concealment" flag (see below); every other field is unused
         here. None (the default, every pre-existing caller) never bypasses concealment.
+    @param skill_divisor Forwarded to resolve_action for attacker_name's own roll only -- same
+        "costs the acting side, never the defender" scope dice_penalty already keeps; the
+        defender's own difficulty roll below is computed independently of it.
     @return A dict describing the roll, the opposing skill used (if any), and the outcome. An
         otherwise-successful roll can still come back with "success": False and its own
         "concealed_miss": True if defender_name's own concealment (get_concealment) rolls a hit
@@ -1288,7 +1302,7 @@ def resolve_opposed_action(entities, rules, skills, event_bus, attacker_name, sk
     else:
         difficulty = 0
 
-    result = resolve_action(entities, rules, event_bus, attacker_name, skill_name, difficulty, dice_penalty=dice_penalty)
+    result = resolve_action(entities, rules, event_bus, attacker_name, skill_name, difficulty, dice_penalty=dice_penalty, skill_divisor=skill_divisor)
     result["defender"] = defender_name
     result["opposing_skill"] = opposing_skill
     if result["success"] and not (ability and ability.get("ignores_concealment")):

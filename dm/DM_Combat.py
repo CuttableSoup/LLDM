@@ -264,7 +264,7 @@ class CombatMixin(DMCoreProtocol):
             pips += stats.get("pips", 0)
         return self.roll_dice(dice, pips)
 
-    def resolve_action(self, entity_name, skill_name, difficulty=0, dice_penalty=0):
+    def resolve_action(self, entity_name, skill_name, difficulty=0, dice_penalty=0, skill_divisor=1):
         """!
         @brief Resolves the outcome of an entity using a skill against a difficulty. A skill
             entity_name's own [entity.skills] doesn't list at all is untrained -- 0D/0 pips,
@@ -285,10 +285,14 @@ class CombatMixin(DMCoreProtocol):
             "bonus" is added straight to the final roll, after dice are rolled. Also folds in
             get_equipped_skill_bonus(entity_name, skill_name) -- a worn item's own
             equipped_skill_bonus (ex: a ring granting +1D to observation).
+        @param skill_divisor Divides entity_name's own base skill rating before dice_penalty/
+            condition_modifier/equip_bonus stack on top -- a trained combat-trick/metamagic
+            modifier's own cost (ex: "power attack"'s skill_divisor). 1 (the default) leaves
+            the skill unchanged.
         @return A dict describing the roll and whether it succeeded.
         """
         return Combat_Resolution.resolve_action(
-            self.entities, self.rules, self.event_bus, entity_name, skill_name, difficulty, dice_penalty,
+            self.entities, self.rules, self.event_bus, entity_name, skill_name, difficulty, dice_penalty, skill_divisor,
         )
 
     def get_equipped_skill_bonus(self, entity_name, skill_name):
@@ -314,7 +318,7 @@ class CombatMixin(DMCoreProtocol):
         """
         return Combat_Resolution.get_opposing_skill(self.entities, self.skills, skill_name, defender_name)
 
-    def resolve_opposed_action(self, attacker_name, skill_name, defender_name, dice_penalty=0, ability=None):
+    def resolve_opposed_action(self, attacker_name, skill_name, defender_name, dice_penalty=0, ability=None, skill_divisor=1):
         """!
         @brief Resolves a skill roll opposed by a defending entity's matching skill. Range
             (see DM_Movement.py's is_in_range) is checked by the caller *before* this is
@@ -335,6 +339,9 @@ class CombatMixin(DMCoreProtocol):
         @param ability The attacker's own resolved weapon/spell/technique, if any -- consulted
             only for its optional "ignores_concealment" flag (ex: a ghost touch/seeking
             weapon), letting it bypass the defender's own concealment/miss_chance below.
+        @param skill_divisor Forwarded to resolve_action for attacker_name's own roll only --
+            same attacker-only scope dice_penalty already keeps; never touches the defender's
+            own roll above.
         @return A dict describing the roll, the opposing skill used (if any), and the outcome
             -- "success" can still come back False with its own "concealed_miss": True if the
             defender's own concealment (get_concealment) rolls a hit on an otherwise-successful
@@ -342,7 +349,7 @@ class CombatMixin(DMCoreProtocol):
         """
         return Combat_Resolution.resolve_opposed_action(
             self.entities, self.rules, self.skills, self.event_bus,
-            attacker_name, skill_name, defender_name, dice_penalty, ability,
+            attacker_name, skill_name, defender_name, dice_penalty, ability, skill_divisor,
         )
 
     def find_attack_ability(self, entity_name, skill_name):

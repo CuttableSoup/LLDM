@@ -464,10 +464,28 @@ fit = "none"
 notes = "Skip -- already redundant with the existing opposed roll (see magic_item's spell-resistance-item row)."
 
 [[spell_mechanic]]
-pf_concept = "Metamagic (Empower/Maximize/Quicken/etc.)"
-engine_equivalent = "none"
-fit = "none"
-notes = "Spells are static TOML entities, not built at cast-time from a base spell + modifiers. A 'quickened fireball' is just a second, separate spell entity with adjusted numbers -- no mechanism for the player to apply a metamagic modifier at the point of casting."
+pf_concept = "Metamagic (Empower/Maximize/etc.) and its martial counterpart (Power Attack)"
+engine_equivalent = "a supertype = \"modifier\" [[entity]] (\"applies_to\"/\"skill_divisor\"/\"damage_bonus\"/\"damage_multiplier\"), stacked onto another named ability at cast time -- NLP_Core.py's own match_modifier + DM_Core.py's _resolve_action_modifier/_apply_ability_modifier"
+fit = "full"
+notes = "The 'spells are static TOML entities, not built at cast-time from a base spell + modifiers' objection this row used to raise turned out not to require rebuilding a spell at all -- a modifier is its own small, separate [[entity]] (the same catalog spells/items/techniques already share), matched by NLPCore literally within the same clause as the base ability (ex: \"cast an empowered fireball\", \"power attack the goblin\") and stripped out before the base ability's own semantic match runs, so the modifier phrase never dilutes it. Matched modifiers are deliberately never embedded as candidate base abilities themselves (on_rules_loaded's own supertype == \"modifier\" exclusion) -- a modifier has no \"skill\" of its own to roll, so if \"power attack\" ever won map_to_action's own argmax there'd be nothing underneath it to actually swing; if stripping leaves nothing else to match (ex: \"power attack the goblin\" -> \"the goblin\"), map_to_action retries against the original, unstripped clause instead. DMCore then only actually applies a resolved modifier if the resolved base ability's own supertype/subtype matches the modifier's own \"applies_to\" ({supertypes, subtypes}, the same shape/matching rule dispel/cure/damage_bonus_vs already use) -- aimed at the wrong shape (ex: \"empowered\" against a plain weapon swing) just wastes it, same \"wrong thing wastes the action\" precedent those rows already set. Training is ownership, not a new mechanism: a modifier is simply never added to any skills.toml [[skill]]'s own universal \"abilities\" list, so resolve_named_ability's existing owned-ability check already refuses it for anyone who hasn't trained it (added it to their own \"abilities\" list) -- the same distinction maneuvers.toml's untrained \"trip\"/\"cleave\" already draws, just landing on the other side of it. The one real design question -- how a modifier's own cost applies uniformly whether the roll it's attached to ends up a flat difficulty check (a spell with its own authored \"difficulty\") or an opposed one (an ordinary weapon swing, no \"difficulty\" field to multiply at all) -- is skill_divisor: it divides the acting entity's own base skill rating (skill_rating, the same dice*3+pips scale get_opposing_skill/select_ability_skill already use) before dice_penalty/condition_modifier/equip_bonus stack on top, inside resolve_action itself -- the one pool-building step both a flat check and (via resolve_opposed_action) an opposed one share, so the cost never needs to know which kind of check it's about to become. The payoff half (damage_bonus, additive -- the same operation type dice_penalty/condition_modifier already use; or damage_multiplier, proportional, for a genuinely percentage-based effect like Empower's own +50%) is applied to a deep-copied damage_value (_apply_ability_modifier) -- the shared spells.toml/creatures.toml/weapon entity itself is never mutated, the same 'ephemeral, recomputed per turn' precedent multi-action dice_penalty already set."
+recipe = '''
+[[entity]]
+name = "power attack"
+supertype = "modifier"
+subtype = "combat trick"
+applies_to = { subtypes = [ "weapon" ] }
+skill_divisor = 2
+damage_bonus = { dice = 2, pips = 0, bonus = 0 }
+
+[[entity]]
+name = "empowered"
+supertype = "modifier"
+subtype = "metamagic"
+applies_to = { supertypes = [ "spell" ] }
+skill_divisor = 1.5
+damage_multiplier = 1.5
+'''
+shipped_example = "modifiers.toml's \"power attack\"/\"empowered\", both owned by characters.toml's gladstone"
 
 [[spell_mechanic]]
 pf_concept = "Dispel Magic (end a standing magical effect/summon outright)"

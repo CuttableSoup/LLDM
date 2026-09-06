@@ -46,6 +46,8 @@ abilities = [
     "dispel magic",
     "cure disease",
     "cleave",
+    "power attack",
+    "empowered",
     { name = "punch", supertype = "innate", subtype = "weapon", skill = "brawling", damage_tags = [ "bludgeoning" ], damage_value = { dice = 0, pips = 0, bonus = "user.strength_damage" } },
 ]
 

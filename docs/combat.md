@@ -493,6 +493,45 @@ absent/inert unless a piece of content actually authors it.
   `"break enchantment"` (`cure = {subtypes = ["transmutation"]}`) reverse either one without
   ever naming them directly, the same trick `"cure disease"` already uses against `"filth
   fever"`.
+- **`supertype = "modifier"`** (`applies_to`, `skill_divisor`, `damage_bonus`/`damage_multiplier`)
+  -- the Pathfinder metamagic (Empower/Maximize/etc.) and its martial counterpart, Power Attack:
+  a trained combat-trick/metamagic entity stacked onto another named ability at the moment it's
+  cast/swung, rather than a spell rebuilt at cast-time from a base spell plus modifiers (which
+  this row used to call unbuildable, since spells are static TOML entities). `NLP_Core.py`'s own
+  `match_modifier` matches a modifier's own name literally within the same clause as the base
+  ability (ex: `"cast an empowered fireball"`, `"power attack the goblin"`), stripped out before
+  the base ability's own semantic `map_to_action` match runs, so the modifier phrase never
+  dilutes it -- and if stripping leaves nothing else to match (ex: `"power attack the goblin"` ->
+  `"the goblin"`, once the only weapon-identifying word was inside the modifier's own name),
+  `map_to_action` retries against the original, unstripped clause instead. A modifier is
+  deliberately never itself embedded as a candidate base ability (`on_rules_loaded`'s own
+  `supertype == "modifier"` exclusion) -- it has no `"skill"` field to roll with, so if it ever
+  won `map_to_action`'s own argmax there'd be nothing underneath it to actually swing.
+  `DM_Core.py`'s `_resolve_action_modifier` resolves a matched modifier name the same
+  owned-ability way `resolve_named_ability` already resolves a named spell/technique; training is
+  therefore ownership, not a new mechanism -- a modifier is simply never added to any
+  `skills.toml` `[[skill]]`'s own universal `"abilities"` list, the same distinction
+  `maneuvers.toml`'s untrained `"trip"`/`"cleave"` already draws, just landing on the other side
+  of it. Once resolved, `_apply_ability_modifier` only actually applies it if the resolved base
+  ability's own supertype/subtype matches the modifier's own `applies_to`
+  (`{supertypes, subtypes}`, the same shape/matching rule `dispel`/`cure`/`damage_bonus_vs`
+  already use) -- aimed at the wrong shape (ex: `"empowered"` against a plain weapon swing) just
+  wastes it, the same "wrong thing wastes the action" precedent those rows already set. The cost
+  half, `skill_divisor`, divides the acting entity's own base skill rating (`skill_rating`, the
+  same `dice*3+pips` scale `get_opposing_skill`/`select_ability_skill` already use) before
+  `dice_penalty`/`condition_modifier`/`equip_bonus` stack on top, inside `resolve_action` itself
+  -- the one pool-building step a flat-`difficulty` check and (via `resolve_opposed_action`) an
+  opposed one both share, so the same field costs the attacker identically either way with no
+  branching on which kind of roll this turns out to be. The payoff half is applied to a
+  deep-copied `damage_value` (`_apply_ability_modifier` never mutates the shared
+  `spells.toml`/`creatures.toml`/weapon entity itself, the same "ephemeral, recomputed per turn"
+  precedent multi-action `dice_penalty` already set) -- `damage_bonus` (`{dice, pips, bonus}`,
+  additive, the same operation type `dice_penalty`/`condition_modifier` already use) for a flat
+  bonus, or `damage_multiplier` (proportional) for a genuinely percentage-based effect Empower's
+  own "+50% damage" actually is. `modifiers.toml`'s own `"power attack"`
+  (`applies_to = {subtypes = ["weapon"]}`, `skill_divisor = 2`, `damage_bonus`) and `"empowered"`
+  (`applies_to = {supertypes = ["spell"]}`, `skill_divisor = 1.5`, `damage_multiplier`), both
+  owned by `characters.toml`'s gladstone, are the shipped examples.
 
 
 ## Damage and healing

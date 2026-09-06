@@ -131,6 +131,7 @@ class SentenceTransformerMatcher(IntentMatcher):
         self.item_indices = []
         self.target_embeddings = None
         self.target_indices = []
+        self.modifier_names = []
         # Below this cosine-similarity score, treat the input as not matching any skill at
         # all rather than forcing it onto whatever phrase happened to score highest
         self.confidence_threshold = 0.5
@@ -188,6 +189,17 @@ class SentenceTransformerMatcher(IntentMatcher):
         self.skill_names = list(self.skills_data.keys())
         entities_data = data.get("entities", {})
 
+        # Every live supertype == "modifier" entity's own name (ex: "power attack",
+        # "empowered") -- matched literally (match_modifier), not semantically, so a modifier
+        # phrase can be stripped out of a clause before map_to_action ever sees the rest.
+        # Longest names first, so a modifier whose name is a substring/prefix of another's
+        # (none shipped today, but nothing stops future data from doing so) is never partially
+        # matched by the shorter one first.
+        self.modifier_names = sorted(
+            (name for name, entity in entities_data.items() if entity.get("supertype") == "modifier"),
+            key=len, reverse=True,
+        )
+
         if not self.skill_names:
             self.event_bus.publish("log_warning", "NLPCore: No skills loaded.")
             return
@@ -204,10 +216,16 @@ class SentenceTransformerMatcher(IntentMatcher):
         # with a plain weapon -- see DMCore.resolve_named_ability, which gates an *owned* match
         # on the acting entity actually owning that ability, and falls back to a *universal*
         # match by exact name only, before treating the match as anything but a skill name.
-        # Deliberately never gated on supertype -- the old technique/spell-only filter also
-        # meant an inline ability with no shared catalog entity (ex: gladstone's own "punch")
-        # was never embedded at all, regardless of supertype. The replacement source is the
-        # union of two scans, both resolved without checking supertype:
+        # Deliberately never gated on supertype otherwise -- the old technique/spell-only filter
+        # also meant an inline ability with no shared catalog entity (ex: gladstone's own
+        # "punch") was never embedded at all, regardless of supertype. The one exception is
+        # supertype == "modifier" (ex: "power attack", "empowered"): those are matched purely by
+        # literal name (match_modifier, below), never semantically here -- a modifier has no
+        # "skill" field of its own to roll with, so if it were embedded here and happened to win
+        # map_to_action's own argmax (ex: "power attack the goblin" scoring closer to its own
+        # embedded name than to "blades"), it would come back as the resolved *base* ability
+        # instead of the modifier it actually is, with nothing underneath it to actually swing.
+        # The replacement source is the union of two scans, both resolved the same way:
         #   1. Every name appearing in any entity's own "abilities" list (owned/trained) -- a
         #      string entry resolves via entities_data, an inline table entry (no shared entity
         #      to look up) is used directly.
@@ -218,16 +236,16 @@ class SentenceTransformerMatcher(IntentMatcher):
             for ability_entry in entity.get("abilities", []):
                 if isinstance(ability_entry, str):
                     resolved_ability = entities_data.get(ability_entry)
-                    if resolved_ability:
+                    if resolved_ability and resolved_ability.get("supertype") != "modifier":
                         ability_catalog[ability_entry] = resolved_ability
                 elif isinstance(ability_entry, dict):
                     ability_name = ability_entry.get("name")
-                    if ability_name:
+                    if ability_name and ability_entry.get("supertype") != "modifier":
                         ability_catalog[ability_name] = ability_entry
         for skill in self.skills_data.values():
             for ability_name in skill.get("abilities", []):
                 resolved_ability = entities_data.get(ability_name)
-                if resolved_ability:
+                if resolved_ability and resolved_ability.get("supertype") != "modifier":
                     ability_catalog[ability_name] = resolved_ability
 
         # Added *before* the skill phrases below -- map_to_action's own argmax breaks an exact
@@ -421,6 +439,27 @@ class SentenceTransformerMatcher(IntentMatcher):
             if score > best_score:
                 best_skill, best_score = name, score
         return best_skill, best_score
+
+    def match_modifier(self, processed_text):
+        """!
+        @brief Checks processed_text for a literal, whole-word/phrase hit against
+            self.modifier_names (every live supertype == "modifier" entity, ex: "power attack",
+            "empowered") -- same word-boundary regex shape Intent_Classification.py's own
+            _phrase_matches uses for keyword gating, just against a data-driven vocabulary
+            instead of a fixed keyword tuple. Checked before map_to_action runs, so a matched
+            phrase is stripped out first, rather than diluting the embedding match on the base
+            ability (ex: "cast an empowered fireball" -> "empowered" stripped, "cast an
+            fireball" scored against "fireball" cleanly).
+        @param processed_text The clause text being classified.
+        @return (modifier_name, stripped_text) -- modifier_name is None and stripped_text is
+            processed_text unchanged if none of self.modifier_names appears.
+        """
+        for name in self.modifier_names:
+            match = re.search(rf"\b{re.escape(name)}\b", processed_text)
+            if match:
+                stripped = processed_text[:match.start()] + processed_text[match.end():]
+                return name, re.sub(r"\s+", " ", stripped).strip()
+        return None, processed_text
 
     def map_to_action(self, processed_text):
         """!

@@ -303,6 +303,22 @@ class IntentMatcher:
         """!@brief Returns (skill_name, score); skill_name is None below confidence."""
         raise NotImplementedError
 
+    def match_modifier(self, processed_text):
+        """!
+        @brief Checks processed_text for a literal, whole-word/phrase hit against any live
+            supertype == "modifier" entity's own name (ex: "power attack", "empowered") --
+            checked and stripped BEFORE map_to_action runs on the remainder, so a modifier
+            phrase never dilutes the base ability's own semantic match (ex: "cast an empowered
+            fireball" still embeds cleanly against "fireball" alone once "empowered" is gone).
+            Ownership (whether the acting entity actually trained this modifier) is a DMCore-
+            side concern, not this method's -- this only ever answers "did the player's own
+            words name one at all."
+        @param processed_text The clause text being classified.
+        @return (modifier_name, stripped_text) -- modifier_name is None and stripped_text is
+            processed_text unchanged if no modifier name is present.
+        """
+        raise NotImplementedError
+
     def map_to_item(self, processed_text):
         """!@brief Returns (item_name, score); item_name is None below confidence."""
         raise NotImplementedError
@@ -693,18 +709,36 @@ class IntentClassifier:
         """
         best_score = 0.0
         for clause in remaining_clauses:
-            clause_skill, clause_score = self.matcher.map_to_action(clause)
+            # A trained combat-trick/metamagic modifier (ex: "power attack", "empowered") is
+            # named literally, not semantically -- checked and stripped before map_to_action
+            # runs on the remainder, so its own phrase never dilutes the base ability's match
+            # (see match_modifier's own docstring). Matched clause text (post-strip) is what
+            # both map_to_action and map_to_target score against below.
+            modifier_name, matched_clause = self.matcher.match_modifier(clause)
+            clause_skill, clause_score = self.matcher.map_to_action(matched_clause)
+            if modifier_name and not clause_skill:
+                # Stripping the modifier's own name left nothing map_to_action could match at
+                # all (ex: "power attack the goblin" -> "the goblin", once "power attack"
+                # itself -- the only word that named a weapon skill at all -- is gone). Retry
+                # against the original, unstripped clause instead; modifier entities are never
+                # themselves embedded (see on_rules_loaded's own supertype == "modifier"
+                # exclusion), so this can only resolve to a real base ability/skill, never back
+                # to the modifier itself. "empowered fireball" never reaches this branch --
+                # "fireball" alone already matches confidently once "empowered" is stripped.
+                clause_skill, clause_score = self.matcher.map_to_action(clause)
             best_score = max(best_score, clause_score)
             if not clause_skill:
                 continue
             action = {"kind": "action", "skill": clause_skill, "score": clause_score}
+            if modifier_name:
+                action["modifier"] = modifier_name
             # A confidently-matched creature name (ex: "attack the second wolf") is attached
             # as a target hint alongside the matched skill -- unlike item/save-load intent,
             # this never gates or replaces skill matching, it only enriches the same turn
             # entry. DMCore is what actually decides whether to honor it. Resolved per clause,
             # not against the whole input, so "attack the orc and cast a ward on thane" can
             # redirect each action at its own named target.
-            target_name, _target_score = self.matcher.map_to_target(clause)
+            target_name, _target_score = self.matcher.map_to_target(matched_clause)
             if target_name:
                 action["target"] = target_name
             turn_clauses.append(action)
