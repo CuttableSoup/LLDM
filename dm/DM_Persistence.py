@@ -1,6 +1,7 @@
 import json
 import os
 
+import resolution.Combat_Resolution as Combat_Resolution
 from dm.DM_Types import DMCoreProtocol
 from paths import PROJECT_ROOT
 
@@ -221,6 +222,20 @@ class PersistenceMixin(DMCoreProtocol):
                 # own description already saves above; the two flags never need to stack.
                 state["edited"] = True
                 state["description"] = entity.get("description", "")
+            # A live polymorph/shapeshift (Combat_Resolution.py's "form" condition field) has
+            # already overwritten FORM_OVERRIDE_FIELDS on this instance; "active_conditions"
+            # above saves the _form snapshot needed to revert it, but load_scenario/_enter_
+            # location/enter_room re-instance every non-ad-hoc entity fresh from its own static
+            # template first (see load_game, below) -- without this, a mid-polymorph save would
+            # come back in base form with the condition still live, silently losing the
+            # transformation until it happens to expire/dismiss. "any" rather than gating on a
+            # single condition name -- whichever condition most recently applied a form is the
+            # one currently in effect, and only its overridden fields are still live on the
+            # entity regardless of which condition's own _form entry they came from.
+            if any(entry.get("_form") for entry in entity.get("active_conditions", {}).values()):
+                state["form_override"] = {
+                    field: entity[field] for field in Combat_Resolution.FORM_OVERRIDE_FIELDS if field in entity
+                }
             return state
 
         ground_state = {}
@@ -549,6 +564,20 @@ class PersistenceMixin(DMCoreProtocol):
             elif state.get("edited"):
                 entity["edited"] = True
                 entity["description"] = state.get("description", entity.get("description", ""))
+            # Mirrors the save-side comment above -- entity has just been re-instanced fresh
+            # from its own static template (base form), so a saved form_override has to be
+            # reapplied on top the same way active_conditions was, or a mid-polymorph save
+            # would load back in base form with the shapeshifting condition still ticking.
+            # Absent from FORM_OVERRIDE_FIELDS means it was absent on the live entity too (the
+            # form template didn't define it) -- popped again here rather than left at
+            # whatever the freshly re-instanced base template happens to provide.
+            if "form_override" in state:
+                form_override = state["form_override"]
+                for field in Combat_Resolution.FORM_OVERRIDE_FIELDS:
+                    if field in form_override:
+                        entity[field] = form_override[field]
+                    else:
+                        entity.pop(field, None)
 
         # load_scenario()/enter_room (above) already reset current_target to a freshly-
         # computed default -- overlay the saved value on top, same pattern as player_name, so

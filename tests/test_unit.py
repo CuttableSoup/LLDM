@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import json
 import os
 import shutil
@@ -5339,6 +5340,91 @@ class TestStatDrain(DMTestCase):
     def test_condition_with_no_drain_field_is_unaffected(self):
         self.dm_core.apply_condition("gladstone", "wounded", duration="permanent", dismiss="")
         self.assertEqual(self.dm_core.entities["gladstone"]["skills"]["athletics"], {"dice": 2, "pips": 2})
+
+
+class TestFormOverride(DMTestCase):
+    """!
+    @brief form (a [[condition]] field) + _apply_form_override/dismiss_condition
+        (Combat_Resolution.py) -- a whole stat-block swap, distinct from both the ordinary
+        roll-time-only "modifier" and the permanent-but-single-skill "drain" (the Pathfinder
+        Polymorph/Baleful Polymorph shape). rules.toml's own "polymorphed" (form = "coyote")
+        is used directly rather than a throwaway condition, exercising the shipped content.
+    """
+
+    def test_applying_the_condition_overrides_the_form_fields(self):
+        self.dm_core.apply_condition("gladstone", "polymorphed", duration="permanent", dismiss="")
+        gladstone = self.dm_core.entities["gladstone"]
+        self.assertEqual(gladstone["name"], "coyote")
+        self.assertEqual(gladstone["supertype"], "creature")
+        self.assertEqual(gladstone["subtype"], "animal")
+        self.assertEqual(gladstone["max_hp"], 10)
+        self.assertEqual(gladstone["skills"]["brawling"], {"dice": 3, "pips": 0})
+        self.assertEqual([a["name"] for a in gladstone["abilities"]], ["bite"])
+
+    def test_applying_the_condition_leaves_gear_and_current_hp_untouched(self):
+        gladstone = self.dm_core.entities["gladstone"]
+        original_inventory = list(gladstone["inventory"])
+        original_equipped = dict(gladstone["equipped"])
+        original_hp = self.dm_core.get_current_hp("gladstone")
+
+        self.dm_core.apply_condition("gladstone", "polymorphed", duration="permanent", dismiss="")
+
+        self.assertEqual(gladstone["inventory"], original_inventory)
+        self.assertEqual(gladstone["equipped"], original_equipped)
+        self.assertEqual(self.dm_core.get_current_hp("gladstone"), original_hp)
+
+    def test_dismissing_restores_the_exact_pre_transform_fields(self):
+        gladstone = self.dm_core.entities["gladstone"]
+        original_name = gladstone["name"]
+        original_supertype = gladstone["supertype"]
+        original_subtype = gladstone["subtype"]
+        original_max_hp = gladstone["max_hp"]
+        original_skills = copy.deepcopy(gladstone["skills"])
+        original_abilities = copy.deepcopy(gladstone["abilities"])
+
+        self.dm_core.apply_condition("gladstone", "polymorphed", duration="permanent", dismiss="")
+        self.dm_core.dismiss_condition("gladstone", "polymorphed")
+
+        self.assertEqual(gladstone["name"], original_name)
+        self.assertEqual(gladstone["supertype"], original_supertype)
+        self.assertEqual(gladstone["subtype"], original_subtype)
+        self.assertEqual(gladstone["max_hp"], original_max_hp)
+        self.assertEqual(gladstone["skills"], original_skills)
+        self.assertEqual(gladstone["abilities"], original_abilities)
+
+    def test_reapplying_an_already_active_form_does_not_resnapshot(self):
+        self.dm_core.apply_condition("gladstone", "polymorphed", duration="permanent", dismiss="")
+        # Mutate the live (already-coyote) skills the way an intervening drain/damage might --
+        # a re-snapshot on refresh would clobber this back to the coyote's own base value.
+        self.dm_core.entities["gladstone"]["skills"]["brawling"] = {"dice": 1, "pips": 0}
+        self.dm_core.apply_condition("gladstone", "polymorphed", duration="permanent", length=5, dismiss="")
+        self.assertEqual(self.dm_core.entities["gladstone"]["skills"]["brawling"], {"dice": 1, "pips": 0})
+
+    def test_condition_with_no_form_field_is_unaffected(self):
+        self.dm_core.apply_condition("gladstone", "wounded", duration="permanent", dismiss="")
+        self.assertEqual(self.dm_core.entities["gladstone"]["name"], "gladstone")
+
+    def test_form_override_survives_save_and_load(self):
+        slot_name = "test_form_override_round_trip_slot"
+        self.addCleanup(shutil.rmtree, self.dm_core._save_slot_dir(slot_name), ignore_errors=True)
+        self.dm_core.apply_condition("gladstone", "polymorphed", duration="permanent", dismiss="")
+
+        self.dm_core.save_game(slot_name)
+        self.dm_core.load_game(slot_name)
+
+        gladstone = self.dm_core.entities["gladstone"]
+        self.assertEqual(gladstone["name"], "coyote")
+        self.assertEqual(gladstone["max_hp"], 10)
+        self.assertIn("polymorphed", gladstone["active_conditions"])
+
+        self.dm_core.dismiss_condition("gladstone", "polymorphed")
+        self.assertEqual(self.dm_core.entities["gladstone"]["name"], "gladstone")
+
+    def test_break_enchantment_cures_polymorph_by_kind(self):
+        self.dm_core.apply_condition("gladstone", "polymorphed", duration="permanent", dismiss="")
+        self.dm_core.cure_conditions("gladstone", {"subtypes": ["transmutation"]})
+        self.assertEqual(self.dm_core.entities["gladstone"]["name"], "gladstone")
+        self.assertNotIn("polymorphed", self.dm_core.entities["gladstone"]["active_conditions"])
 
 
 class TestPeriodicTest(DMTestCase):

@@ -453,6 +453,46 @@ absent/inert unless a piece of content actually authors it.
   `[entity.conditions.armed]`) + `rules.toml`'s own `"warding glyph shock"`/`"warding glyph
   blast"` (`self_dismiss = "armed"` on both, applying `"shaken"` and `"burning"` respectively)
   is the shipped example -- one hazard demonstrating both the debuff and the blast shape.
+- **`form`** (a `[[condition]]` field, an entity name) -- the Pathfinder Polymorph/Baleful
+  Polymorph "form override" shape: `[[condition]]`'s own `modifier` is only ever a flat delta on
+  an unchanged base, never a stat-block replacement, so nothing before this could swap an
+  entity's skills/abilities/supertype/subtype mid-scene and revert it later at all.
+  `_apply_form_override` (`Combat_Resolution.py`) snapshots a fixed set of fields
+  (`FORM_OVERRIDE_FIELDS`: `name`, `description`, `supertype`, `subtype`, `skills`, `abilities`,
+  `max_hp`, `medium`, `damage_value`, `damage_tags`, `tags`, `resistance_value`/
+  `resistance_tags`/`resistance_bypass_tags`, `immunity_tags`, `vulnerability_value`/
+  `vulnerability_tags`) off the target the first time the condition is gained (never on a
+  refresh, the same guard `drain`/`periodic_test` already use), overwrites them with a deep copy
+  of the same fields off the entity named by `form`, and stashes the exact original values
+  (`None` standing in for "field was absent") as the condition instance's own `_form` entry.
+  `dismiss_condition` restores that snapshot verbatim, last (after any `_drained`/`_periodic`
+  restore already run) and wholesale -- no `rules` lookup needed at restore time, the same
+  precedent `drain` already set. `form` looks the target up directly in the live `entities`
+  dict (the same flat namespace `_instance_entities`'s own `"name"`-branch templates come from)
+  rather than a separate pristine-template cache `Combat_Resolution.py` has no access to --
+  naming a form that's already alive and mutated elsewhere in the scene copies that live
+  instance's current stats rather than a pristine template's, the same edge case `_instance_
+  entities`'s own docstring already documents for ordinary instancing, not a new risk this
+  introduces. Deliberately untouched: `equipped`/`inventory`/`currency`/`attitudes`/`hp`/`band`/
+  `active_conditions` all stay with the person, not the form -- a polymorphed fighter keeps
+  their sword even though `get_equip_slots` is never re-checked against it (nothing re-audits
+  already-equipped items against a new supertype/subtype, only a fresh equip attempt consults
+  it), and current `hp` is left alone so a beefier form grants no free healing (`get_current_hp`
+  already only ever seeds `hp` from `max_hp` if `hp` is absent). Two form-shaped conditions
+  active on the same entity at once, or a `form` condition and a `drain` condition both touching
+  `skills` at the same time, leaves restore order undefined -- not solved here, the same
+  pre-existing gap `drain` already has for concurrent effects. Persistence: `DM_Persistence.py`'s
+  `_instance_state` saves the currently-overridden `FORM_OVERRIDE_FIELDS` values (as
+  `form_override`) whenever any active condition carries a `_form` snapshot, and `load_game`
+  reapplies them on top of the freshly re-instanced base template -- without this, a save made
+  mid-polymorph would reload in base form with the condition still ticking, silently losing the
+  transformation until it happened to expire or be dismissed. `rules.toml`'s own `"polymorphed"`
+  (`form = "coyote"`, `spells.toml`'s `"baleful polymorph"`, permanent) and `"wild shape"`
+  (`form = "wild boar"`, `spells.toml`'s own `"wild shape"`, `duration = "rounds"`) are the
+  shipped examples -- the same `subtype = "transmutation"` classification lets `spells.toml`'s
+  `"break enchantment"` (`cure = {subtypes = ["transmutation"]}`) reverse either one without
+  ever naming them directly, the same trick `"cure disease"` already uses against `"filth
+  fever"`.
 
 
 ## Damage and healing

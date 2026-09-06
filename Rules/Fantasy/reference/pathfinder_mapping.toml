@@ -620,9 +620,37 @@ override_target = "the guard captain"   # a literal target name, chosen at cast 
 
 [[spell_mechanic]]
 pf_concept = "Polymorph / shapeshifting (Baleful Polymorph, the Polymorph line)"
-engine_equivalent = "none"
-fit = "none"
-notes = "Nothing swaps an entity's skill dice/abilities/supertype/subtype mid-scene and reverts it later. [[condition]]'s modifier is a flat delta on an unchanged base, not a stat-block replacement -- would need a new 'form override' mechanism (snapshot + later restore)."
+engine_equivalent = "form (a [[condition]] field) + _apply_form_override/dismiss_condition (Combat_Resolution.py)"
+fit = "full"
+notes = "The 'form override' mechanism this row used to call unbuildable ([[condition]]'s own modifier is only ever a flat delta on an unchanged base, never a stat-block replacement): a [[condition]]'s own optional 'form' field names another [[entity]], and on first gain _apply_form_override snapshots a fixed field list (FORM_OVERRIDE_FIELDS -- name/description/supertype/subtype/skills/abilities/max_hp/medium/damage_value/damage_tags/tags/resistance_*/immunity_tags/vulnerability_*) off the target, overwrites them with a deep copy of the same fields off the named form, and stashes the exact originals (None standing in for 'was absent') on the condition's own active_conditions entry as '_form'. dismiss_condition restores that snapshot verbatim -- no rules lookup needed at restore time, the same precedent 'drain' already set for a permanent stat mutation. Deliberately untouched: equipped/inventory/currency/attitudes/hp/band/active_conditions all stay with the person, not the form (a polymorphed fighter keeps their sword even though get_equip_slots is never re-checked against it), and current hp is left alone so a beefier form grants no free healing. subtype = 'transmutation' on the condition classifies it by kind the same way 'filth fever' classifies itself as a 'disease', so a single 'break enchantment'-style cure spell reverses any transmutation without naming it. See docs/combat.md's 'Pathfinder-mapping engine extensions' for the full writeup, including the two known edge cases left unsolved (restore order when two form/drain conditions touch 'skills' at once; a form name colliding with an already-live, mutated instance elsewhere in the scene)."
+recipe = '''
+[[condition]]
+name = "polymorphed"
+subtype = "transmutation"
+form = "coyote"
+
+[[entity]]
+name = "baleful polymorph"
+supertype = "spell"
+subtype = "transmutation"
+skill = "arcane"
+difficulty = 12
+range = 5
+targets = { number = 1, aoe = 0 }
+on_hit_condition = { condition = "polymorphed", chance = 100, duration = "permanent" }
+
+# The one authored way back -- reverses by KIND (subtype = "transmutation"), the same shape
+# "cure disease" already uses against "filth fever" (subtype = "disease").
+[[entity]]
+name = "break enchantment"
+supertype = "spell"
+subtype = "abjuration"
+skill = "arcane"
+difficulty = 10
+range = 5
+cure = { subtypes = [ "transmutation" ] }
+'''
+shipped_example = "rules.toml's \"polymorphed\" (form = \"coyote\") and \"wild shape\" (form = \"wild boar\", a beneficial counterpart), spells.toml's \"baleful polymorph\"/\"wild shape\"/\"break enchantment\""
 
 [[spell_mechanic]]
 pf_concept = "Persistent terrain/obstacle spells (Wall of Fire, Web, Wall of Stone)"

@@ -232,6 +232,33 @@ drain = [
     { skill = "fortitude", dice = 1, pips = 0 },
 ]
 
+# Pathfinder's Polymorph/Baleful Polymorph line -- the "form" field (Combat_Resolution.py's own
+# _apply_form_override) is the "form override" mechanism Rules/Fantasy/reference/
+# pathfinder_mapping.toml's own Polymorph row used to flag as having no engine equivalent: on
+# first gain it snapshots FORM_OVERRIDE_FIELDS (name/description/supertype/subtype/skills/
+# abilities/max_hp/medium/damage_value/damage_tags/tags/resistance_*/immunity_tags/
+# vulnerability_*) off the target, overwrites them with the named entity's own values, and
+# dismiss_condition restores the exact snapshot the moment this condition ends -- gear,
+# inventory, currency, attitudes, and current hp all stay with the person, not the form (see
+# FORM_OVERRIDE_FIELDS' own comment). subtype = "transmutation" classifies this by KIND, the
+# same way "filth fever" above classifies itself as a "disease" -- spells.toml's own "break
+# enchantment" targets {subtypes = ["transmutation"]} without ever naming either condition
+# below directly, the same trick "cure disease" already uses against filth fever.
+[[condition]]
+name = "polymorphed"
+subtype = "transmutation"
+form = "coyote"
+
+# A beneficial counterpart sharing the exact same mechanism, authored as its own condition (a
+# fixed "form" per condition rather than a caster's free choice of any creature -- the engine
+# has no per-cast form-picking UI, the same static-TOML-spell simplification already accepted
+# elsewhere) so the same primitive covers both directions of a Polymorph line, not just the
+# hostile one.
+[[condition]]
+name = "wild shape"
+subtype = "transmutation"
+form = "wild boar"
+
 # The [[status]] "on_round" trigger (evaluate_proximity_statuses, called once a round per living
 # scene entity from run_round_upkeep -- DM_Status.py) is what turns a stationary object into a
 # persistent terrain hazard (Rules/Fantasy/reference/pathfinder_mapping.toml's "Persistent

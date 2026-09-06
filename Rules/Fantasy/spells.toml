@@ -176,3 +176,52 @@ skill = "miracles"
 difficulty = 8
 range = 5
 cure = { subtypes = [ "disease" ] }
+
+# Pathfinder's Baleful Polymorph -- a hostile, permanent transformation into a harmless animal
+# (rules.toml's own "polymorphed" condition, form = "coyote"). on_hit_condition applies it
+# directly on a successful cast, no [entity.test] detour needed (the same shape "filth fever"'s
+# own exposure vector already uses). duration = "permanent" since nothing about the spell
+# itself reverses it -- see "break enchantment" below for the one authored way back.
+[[entity]]
+name = "baleful polymorph"
+supertype = "spell"
+subtype = "transmutation"
+description = "Twist a foe's very shape, folding them down into a lean, harmless coyote."
+skill = "arcane"
+difficulty = 12
+range = 5
+targets = { number = 1, aoe = 0 }
+on_hit_condition = { condition = "polymorphed", chance = 100, duration = "permanent" }
+
+# The beneficial counterpart, cast on a willing ally rather than a resisting foe -- rules.toml's
+# own "wild shape" condition, form = "wild boar". "difficulty" forces a flat, unopposed check
+# the same way "dimension door"/"cure disease" already do -- a willing transformation must never
+# roll opposed against the target's own defenses the way baleful polymorph's hostile cast does.
+# duration = "rounds"/length = 10 keeps this a real Wild Shape, a temporary battle form rather
+# than a permanent one like the hostile line above.
+[[entity]]
+name = "wild shape"
+supertype = "spell"
+subtype = "transmutation"
+description = "Take on the sturdy, tusked shape of a wild boar for the span of a fight."
+skill = "arcane"
+difficulty = 5
+range = 5
+on_hit_condition = { condition = "wild shape", chance = 100, duration = "rounds", length = 10 }
+
+# Reverses a standing transmutation on current_target by KIND, not by name -- the same shape
+# "cure disease" above uses against "filth fever" (subtype = "disease"), reused here for
+# subtype = "transmutation" instead. Cures "polymorphed" (rules.toml) without ever naming it,
+# so any future transmutation condition opts into being reversible by this spell for free, just
+# by authoring the same subtype. "difficulty" forces a flat, unopposed check -- a beneficial
+# cast on a willing, already-transformed ally must never roll opposed against that ally's own
+# (polymorphed-into-something-weaker) defenses.
+[[entity]]
+name = "break enchantment"
+supertype = "spell"
+subtype = "abjuration"
+description = "Unravel a lingering transmutation, restoring the target to their true shape."
+skill = "arcane"
+difficulty = 10
+range = 5
+cure = { subtypes = [ "transmutation" ] }

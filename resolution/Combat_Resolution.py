@@ -21,6 +21,7 @@
     ActionOutcome's own producers follow (see DM_ActionOutcome.py).
 """
 
+import copy
 import random
 
 # Defined before the Program_Interpreter import just below, on purpose: that module reads
@@ -157,6 +158,60 @@ def _find_condition_def(rules, condition_name):
     return next((c for c in (rules or {}).get("condition", []) if c.get("name") == condition_name), None)
 
 
+# The fields a "form" override (below) swaps wholesale -- what actually makes something a
+# different creature, not the person wearing/carrying/feeling it. Deliberately excludes
+# inventory/equipped/currency/attitudes/active_conditions/band/hp: gear and relationships stay
+# with the person, not the form (a polymorphed fighter keeps their sword even if a coyote has no
+# real use for it -- get_equip_slots is never re-checked against it, so it simply stops matching
+# any real [[equip_slot]] for the new supertype/subtype until unequipped), and "hp" is left alone
+# so a beefier form grants no free healing (see get_current_hp's own max_hp-only-if-absent rule).
+FORM_OVERRIDE_FIELDS = (
+    "name", "description", "supertype", "subtype", "skills", "abilities", "max_hp", "medium",
+    "damage_value", "damage_tags", "tags",
+    "resistance_value", "resistance_tags", "resistance_bypass_tags",
+    "immunity_tags", "vulnerability_value", "vulnerability_tags",
+)
+
+
+def _apply_form_override(entities, rules, entity_name, condition_name):
+    """!
+    @brief Replaces entity_name's own FORM_OVERRIDE_FIELDS with the [[entity]] named by
+        condition_name's own [[condition]] entry's optional "form" field -- the Pathfinder
+        Polymorph/shapeshifting shape ([[condition]]'s ordinary "modifier" is only ever a flat
+        delta on an unchanged base, never a stat-block replacement). Looks the form up in
+        entities itself (the same flat namespace DM_Rules.py's own _instance_entities reads
+        "name"-branch templates from) rather than a separate pristine-template cache Combat_
+        Resolution.py has no access to -- naming a form already alive and mutated elsewhere in
+        the scene (rather than a name nobody's instanced yet) copies that live instance's
+        current stats instead of a pristine template's, the same edge case _instance_entities'
+        own docstring already documents for ordinary instancing, not a new risk this introduces.
+    @param entities The live entities dict.
+    @param rules The loaded rules dict (may be None/{} -- no [[condition]] entry found, or no
+        "form" field, means nothing to override).
+    @param entity_name The name of the entity taking on the new form.
+    @param condition_name The name of the condition being newly applied.
+    @return A {field: original_value_or_None} snapshot of exactly what was overwritten (for
+        dismiss_condition to restore later, None meaning the field was absent beforehand and
+        should be removed again on restore) -- or None if this condition authors no "form" at
+        all, or the named form/entity doesn't exist.
+    """
+    condition_def = _find_condition_def(rules, condition_name)
+    form_name = condition_def.get("form") if condition_def else None
+    if not form_name:
+        return None
+    entity = entities.get(entity_name)
+    form_template = entities.get(form_name)
+    if entity is None or form_template is None:
+        return None
+    snapshot = {field: entity[field] if field in entity else None for field in FORM_OVERRIDE_FIELDS}
+    for field in FORM_OVERRIDE_FIELDS:
+        if field in form_template:
+            entity[field] = copy.deepcopy(form_template[field])
+        else:
+            entity.pop(field, None)
+    return snapshot
+
+
 def _convert_periodic_phase(rules, phase):
     """!
     @brief Normalizes a periodic_test phase ({"unit", "length"}) the same way apply_condition
@@ -239,14 +294,18 @@ def apply_condition(entities, event_bus, entity_name, condition_name, duration=N
     if condition_name in active_conditions:
         drained = active_conditions[condition_name].get("_drained")
         periodic = active_conditions[condition_name].get("_periodic")
+        form = active_conditions[condition_name].get("_form")
     else:
         drained = _apply_stat_drain(entities, rules, entity_name, condition_name)
         periodic = _init_periodic_state(rules, condition_name)
+        form = _apply_form_override(entities, rules, entity_name, condition_name)
     entry = {"duration": duration, "length": length, "dismiss": dismiss}
     if drained:
         entry["_drained"] = drained
     if periodic:
         entry["_periodic"] = periodic
+    if form:
+        entry["_form"] = form
     active_conditions[condition_name] = entry
     event_bus.publish("log_info", f"{entity_name} gains condition '{condition_name}'.")
 
@@ -455,6 +514,22 @@ def dismiss_condition(entities, event_bus, entity_name, condition_name):
             if skill_stats is not None:
                 skill_stats["dice"] = skill_stats.get("dice", 0) + amount.get("dice", 0)
                 skill_stats["pips"] = skill_stats.get("pips", 0) + amount.get("pips", 0)
+    # Restored last, and wholesale -- unlike drain/periodic's additive restores above, a form
+    # override replaces FORM_OVERRIDE_FIELDS entirely, so restoring it after them is what makes
+    # this entity end up exactly its pre-transform self even if a drain/periodic_test also
+    # touched "skills" while polymorphed (that condition's own restore, run first, into the
+    # form's skills dict, is simply overwritten here rather than double-applied to the base
+    # skills). Two form-shaped conditions active on the same entity at once, or one applied
+    # while a drain is already active, still leaves restore order undefined -- not solved here,
+    # same as drain's own pre-existing lack of a general conflict-resolution story.
+    entity = entities.get(entity_name)
+    form = entry.get("_form")
+    if form and entity is not None:
+        for field, value in form.items():
+            if value is None:
+                entity.pop(field, None)
+            else:
+                entity[field] = value
     event_bus.publish("log_info", f"{entity_name} loses condition '{condition_name}'.")
     return True
 
