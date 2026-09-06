@@ -253,19 +253,19 @@ apply = { condition = "burning", duration = "rounds", length = 1, radius = 0, si
 # turns a stationary hazard into a delayed/triggered ward instead of a persistent zone (contrast
 # "flame wall zone" above, which re-checks every combat round): fires once, the moment someone
 # arrives, matching Rules/Fantasy/reference/pathfinder_mapping.toml's "Delayed/triggered magic"
-# row (Glyph of Warding). requirements match items.toml's "warding glyph" by name AND require
-# its own seeded "armed" flag ([entity.conditions.armed]) still active; side = "all" since a
-# glyph doesn't discriminate between party and any other creature that stumbles onto it. Real
-# Glyph of Warding is a one-time discharge, not a lingering hazard like flame wall -- "shaken"
-# is authored with duration = "rounds"/length = 3 purely as the DEBUFF's own lifespan on whoever
-# it hits (an honest simplification: a genuine damage-dealing "Blast" glyph isn't expressible
-# today, since a [[status]]'s own "apply" block only ever applies a condition, not a direct
-# one-time damage roll -- a debuff-shaped ward sidesteps that rather than faking a damage number
-# through an upkeep-tick condition that would never actually tick outside an active combat
-# round). "self_dismiss = 'armed'" is what makes the glyph spend itself the first time it
-# actually catches someone -- re-entering this same room afterward no longer triggers it, the
-# same "seed a flag, dismiss it once solved" shape items.toml's dart trap already uses via
-# [entity.test], just spent automatically here instead of by a deliberate disarm attempt.
+# row (Glyph of Warding). Both entries below match items.toml's "warding glyph" by name AND
+# require its own seeded "armed" flag ([entity.conditions.armed]) still active; side = "all"
+# since a glyph doesn't discriminate between party and any other creature that stumbles onto
+# it. Real Glyph of Warding is a one-time discharge, not a lingering hazard like flame wall --
+# "self_dismiss = 'armed'" on both entries is what makes the glyph spend itself the first time
+# it actually catches someone (only one dismiss call is needed; the second is a harmless no-op,
+# dismiss_condition already tolerates dismissing an already-gone condition), re-entering this
+# same room afterward no longer triggering it -- the same "seed a flag, dismiss it once solved"
+# shape items.toml's dart trap already uses via [entity.test], just spent automatically here
+# instead of by a deliberate disarm attempt.
+#
+# "warding glyph shock" is the lingering-debuff half -- "shaken", duration = "rounds"/length =
+# 3, the DEBUFF's own lifespan on whoever it hits.
 [[status]]
 name = "warding glyph shock"
 trigger = "on_arrival"
@@ -274,6 +274,23 @@ requirements = [
     { field = "has_condition:armed", operator = "==", value = true },
 ]
 apply = { condition = "shaken", duration = "rounds", length = 3, radius = 0, side = "all" }
+self_dismiss = "armed"
+
+# "warding glyph blast" is the instant-damage half (the real Pathfinder "Blast" glyph shape) --
+# reuses "burning" (upkeep_damage = 2D per round, the exact same condition "flame wall zone"
+# already applies) directly, no new condition needed at all: duration = "rounds"/length = 1
+# means _evaluate_arrival_statuses's own immediate upkeep resolution (DM_Rules.py -- otherwise
+# nothing would ever roll "burning"'s own upkeep_damage outside an actual combat round) deals
+# its damage and dismisses it in that same call, a real one-time blast rather than a lingering
+# fire.
+[[status]]
+name = "warding glyph blast"
+trigger = "on_arrival"
+requirements = [
+    { field = "name", operator = "==", value = "warding glyph" },
+    { field = "has_condition:armed", operator = "==", value = true },
+]
+apply = { condition = "burning", duration = "rounds", length = 1, radius = 0, side = "all" }
 self_dismiss = "armed"
 
 [strength_damage]

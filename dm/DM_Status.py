@@ -606,7 +606,14 @@ class StatusMixin(DMCoreProtocol):
         @param trigger The trigger name to evaluate -- "on_action" (a landed hit), "on_round"
             (once per combat round, per living scene entity), and "on_arrival" (once per scene
             entry, per living scene entity) are the three shipped uses today.
+        @return The set of target names a condition was actually applied to this call (possibly
+            empty) -- "on_arrival"'s own caller (_evaluate_arrival_statuses, DM_Rules.py) uses
+            this to resolve one implicit round of upkeep for exactly those targets immediately
+            (see its own docstring for why outside a real combat round nothing else ever would).
+            Every existing caller ("on_action"/"on_round") already ignored this method's return
+            value entirely, so adding one is purely additive.
         """
+        newly_affected = set()
         for status in self.get_applicable_statuses(actor_name, trigger):
             apply_block = status.get("apply")
             if not apply_block or not apply_block.get("condition"):
@@ -629,8 +636,10 @@ class StatusMixin(DMCoreProtocol):
                     dismiss=apply_block.get("dismiss"),
                 )
                 applied_to_anyone = True
+                newly_affected.add(target_name)
             if applied_to_anyone and status.get("self_dismiss"):
                 self.dismiss_condition(actor_name, status["self_dismiss"])
+        return newly_affected
 
     def evaluate_statuses(self, entity_name, trigger):
         """!

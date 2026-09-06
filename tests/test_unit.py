@@ -5212,6 +5212,31 @@ class TestDelayedTriggeredMagic(DMTestCase):
         self.dm_core._evaluate_arrival_statuses()
         self.assertTrue(self.dm_core.has_condition("warding glyph", "armed"))
 
+    def test_a_freshly_applied_upkeep_damage_condition_is_resolved_immediately(self):
+        # "warding glyph blast" applies "burning" (upkeep_damage), which would otherwise just
+        # sit inert -- apply_round_upkeep is normally only ever called from an actual combat
+        # round or a completed rest, neither guaranteed to happen soon (or at all) after simply
+        # walking into a room. _evaluate_arrival_statuses resolves one implicit round of upkeep
+        # immediately instead, which is what makes a real damage-dealing "Blast" glyph shape
+        # possible by reusing "burning" directly, no new field needed.
+        start_hp = self.dm_core.get_current_hp("gladstone")
+        self.dm_core._evaluate_arrival_statuses()
+        self.assertLess(self.dm_core.get_current_hp("gladstone"), start_hp)
+
+    def test_a_one_round_blast_condition_is_dismissed_in_the_same_call(self):
+        # "burning" is authored duration = "rounds"/length = 1 specifically so the same implicit
+        # upkeep tick that deals its damage also ticks it straight to 0 and dismisses it -- an
+        # instant blast, not a lingering fire.
+        self.dm_core._evaluate_arrival_statuses()
+        self.assertNotIn("burning", self.dm_core.entities["gladstone"].get("active_conditions", {}))
+
+    def test_a_non_upkeep_condition_is_unaffected_by_the_immediate_upkeep_resolution(self):
+        # "shaken" carries no upkeep_damage/upkeep_heal of its own -- resolving one implicit
+        # round of upkeep for it is a harmless no-op, it still just sits active for its own
+        # authored length the ordinary way.
+        self.dm_core._evaluate_arrival_statuses()
+        self.assertIn("shaken", self.dm_core.entities["gladstone"]["active_conditions"])
+
 
 class TestDelayedTriggeredMagicWiring(DMTestCase):
     """!

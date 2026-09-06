@@ -569,7 +569,7 @@ notes = "Most don't resolve through a roll in Pathfinder either. The gap isn't m
 pf_concept = "Delayed/triggered magic (Magic Mouth, Contingency, Glyph of Warding)"
 engine_equivalent = "the [[status]] \"on_arrival\" trigger + evaluate_proximity_statuses's own \"self_dismiss\" field"
 fit = "full"
-notes = "No new 'world trigger' entity type turned out to be needed -- DM_Rules.py's _evaluate_arrival_statuses (called from both _enter_location and enter_room, the only two 'a scene was just entered' moments this engine has) fires evaluate_proximity_statuses once per present scene entity with trigger = \"on_arrival\", the exact same function/shape \"on_round\"'s own persistent-terrain-hazard row above already reuses, just triggered by scene entry instead of a combat-round tick or a landed hit. A hazard entity sitting in a room (placed permanently, or conjured via summon) opts in via an ordinary [[status]] entry matching it by name; \"apply\" lands the condition on whoever just arrived, not on the hazard itself (distinct from the pre-existing [entity.on_enter] program hook, which always targets the entity ITSELF, never the party -- see entity_schema.toml). The new \"self_dismiss\" field (a condition name, dismissed on the matched hazard once its effect actually lands on someone) is what makes a glyph a one-time discharge rather than a repeating hazard -- pairs with a has_condition:<name> requirement against a seeded [entity.conditions.<name>] flag, the same 'seed a flag, dismiss it once solved' shape the dart trap's own [entity.test] already uses. One real simplification: a [[status]]'s own apply block only ever applies a condition, never a direct one-time damage roll, so a genuine damage-dealing 'Blast'-type glyph isn't expressible -- the shipped example is a debuff-shaped ward instead. Magic Mouth's own 'deliver an arbitrary spoken message' half is still a narrative/ADaM question (whatever gets narrated off the applied condition's own flavor text), not a structured payload -- Contingency (an effect that waits on the CASTER's own future action, not a location) is out of scope entirely, a different trigger shape this doesn't cover."
+notes = "No new 'world trigger' entity type turned out to be needed -- DM_Rules.py's _evaluate_arrival_statuses (called from both _enter_location and enter_room, the only two 'a scene was just entered' moments this engine has) fires evaluate_proximity_statuses once per present scene entity with trigger = \"on_arrival\", the exact same function/shape \"on_round\"'s own persistent-terrain-hazard row above already reuses, just triggered by scene entry instead of a combat-round tick or a landed hit. A hazard entity sitting in a room (placed permanently, or conjured via summon) opts in via an ordinary [[status]] entry matching it by name; \"apply\" lands the condition on whoever just arrived, not on the hazard itself (distinct from the pre-existing [entity.on_enter] program hook, which always targets the entity ITSELF, never the party -- see entity_schema.toml). The new \"self_dismiss\" field (a condition name, dismissed on the matched hazard once its effect actually lands on someone) is what makes a glyph a one-time discharge rather than a repeating hazard -- pairs with a has_condition:<name> requirement against a seeded [entity.conditions.<name>] flag, the same 'seed a flag, dismiss it once solved' shape the dart trap's own [entity.test] already uses. A genuine damage-dealing 'Blast'-type glyph turned out to be expressible too, by reusing an ordinary upkeep_damage-bearing condition directly (ex: \"burning\", the same one \"flame wall zone\" already applies) rather than needing a new field: apply_round_upkeep (which actually rolls upkeep_damage/upkeep_heal) is only ever called from a real combat round or a completed rest today, neither guaranteed to happen soon (or at all) after simply walking into a room, so evaluate_proximity_statuses now returns the set of newly-affected targets and _evaluate_arrival_statuses immediately resolves one implicit round of upkeep (apply_round_upkeep + tick_condition_durations) for them -- duration = \"rounds\"/length = 1 on the applied condition is what makes it a true instant blast, dealt and dismissed in that same call, rather than a lingering burn. Magic Mouth's own 'deliver an arbitrary spoken message' half is still a narrative/ADaM question (whatever gets narrated off the applied condition's own flavor text), not a structured payload -- Contingency (an effect that waits on the CASTER's own future action, not a location) is out of scope entirely, a different trigger shape this doesn't cover."
 recipe = '''
 [[status]]
 name = "warding glyph shock"
@@ -579,6 +579,19 @@ requirements = [
     { field = "has_condition:armed", operator = "==", value = true },
 ]
 apply = { condition = "shaken", duration = "rounds", length = 3, radius = 0, side = "all" }
+self_dismiss = "armed"
+
+# The instant-damage half -- reuses "burning" (upkeep_damage) directly, no new condition
+# needed. duration = "rounds"/length = 1 means the immediate upkeep resolution above deals its
+# damage and dismisses it in the same call.
+[[status]]
+name = "warding glyph blast"
+trigger = "on_arrival"
+requirements = [
+    { field = "name", operator = "==", value = "warding glyph" },
+    { field = "has_condition:armed", operator = "==", value = true },
+]
+apply = { condition = "burning", duration = "rounds", length = 1, radius = 0, side = "all" }
 self_dismiss = "armed"
 
 [[entity]]
@@ -591,7 +604,7 @@ immunity_tags = [ "any" ]
 [entity.conditions.armed]
 duration = "permanent"
 '''
-shipped_example = "items.toml's \"warding glyph\", rules.toml's \"warding glyph shock\""
+shipped_example = "items.toml's \"warding glyph\", rules.toml's \"warding glyph shock\"/\"warding glyph blast\""
 
 [[spell_mechanic]]
 pf_concept = "Mind-affecting control (Charm Person, Dominate Person)"

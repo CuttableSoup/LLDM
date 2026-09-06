@@ -433,12 +433,26 @@ absent/inert unless a piece of content actually authors it.
   (`"flame wall"`) is meant to. Pairs with a `has_condition:<name>` requirement against a hazard
   seeded with `[entity.conditions.<name>]` -- the same "seed a flag, dismiss it once solved"
   shape `items.toml`'s dart trap already uses via `[entity.test]`, just spent automatically here
-  instead of by a deliberate disarm attempt. Honest simplification: a `[[status]]`'s own `apply`
-  block only ever applies a *condition*, never a direct one-time damage roll, so a genuine
-  damage-dealing "Blast"-type glyph isn't expressible today -- the shipped example is a
-  debuff-shaped ward instead. `items.toml`'s own `"warding glyph"` (the hazard, seeded with
-  `[entity.conditions.armed]`) + `rules.toml`'s own `"warding glyph shock"`
-  (`self_dismiss = "armed"`, applying `"shaken"`) is the shipped example.
+  instead of by a deliberate disarm attempt.
+
+  A genuine damage-dealing "Blast"-type glyph turns out to be expressible too, by reusing an
+  ordinary `upkeep_damage`-bearing condition directly (ex: `"burning"`, the same one
+  `"flame wall zone"` already applies) rather than needing a new field: `apply_round_upkeep`
+  (which actually rolls `upkeep_damage`/`upkeep_heal`) is only ever *called* from an actual
+  combat round (`run_round_upkeep`) or a completed rest (`apply_downtime_upkeep`) today, neither
+  of which is guaranteed to happen soon -- or at all -- after simply walking into a room, so a
+  freshly-applied `"burning"` would otherwise just sit inert. `_evaluate_arrival_statuses`
+  closes that by resolving one implicit round of upkeep (`apply_round_upkeep` +
+  `tick_condition_durations("rounds")`) immediately for whoever `evaluate_proximity_statuses`
+  (now returning the set of newly-affected targets) just applied a condition to. Authoring the
+  condition with `duration = "rounds"`/`length = 1` is what makes it a true instant blast --
+  dealt and dismissed in that same call -- rather than a lingering burn; a longer length instead
+  leaves it genuinely active afterward. A condition with no upkeep fields at all (ex:
+  `"shaken"`) is unaffected -- `get_condition_upkeep` totals to zero for it, so this step is a
+  harmless no-op. `items.toml`'s own `"warding glyph"` (the hazard, seeded with
+  `[entity.conditions.armed]`) + `rules.toml`'s own `"warding glyph shock"`/`"warding glyph
+  blast"` (`self_dismiss = "armed"` on both, applying `"shaken"` and `"burning"` respectively)
+  is the shipped example -- one hazard demonstrating both the debuff and the blast shape.
 
 
 ## Damage and healing

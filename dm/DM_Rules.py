@@ -985,9 +985,28 @@ class RulesMixin(DMCoreProtocol):
             arrivals. Called once per _enter_location and once per enter_room -- the two
             "a scene was just entered" moments this engine has, since there's no round clock
             running at all outside combat for a hazard to otherwise hook a periodic tick off of.
+
+            Whoever a status just applied a condition to (evaluate_proximity_statuses's own
+            return value) also gets one implicit round of upkeep resolved immediately
+            (apply_round_upkeep + tick_condition_durations("rounds")) -- without this, a
+            freshly-applied upkeep_damage-bearing condition (ex: rules.toml's "burning", the
+            same one "flame wall zone" uses) would just sit there inert: apply_round_upkeep is
+            normally only ever called from an actual combat round (run_round_upkeep) or a
+            completed rest (apply_downtime_upkeep), neither of which is guaranteed to happen
+            soon (or at all) after simply walking into a room. This is what makes a genuine
+            damage-dealing "Blast"-type glyph expressible after all, by reusing an ordinary
+            upkeep_damage condition directly rather than needing a new field: authoring it with
+            duration = "rounds"/length = 1 means it deals its damage right here and is dismissed
+            in the same call, an instant blast rather than a lingering burn -- a longer length
+            instead leaves it genuinely active afterward, ticking down via whatever combat/rest/
+            arrival tick comes next. A condition with no upkeep fields at all (ex: "shaken",
+            the shipped "warding glyph shock" debuff) is unaffected -- get_condition_upkeep
+            simply totals to zero for it, so this step is a harmless no-op.
         """
         for entity_name in list(self.scenario_entities):
-            self.evaluate_proximity_statuses(entity_name, "on_arrival")
+            for target_name in self.evaluate_proximity_statuses(entity_name, "on_arrival"):
+                self.apply_round_upkeep(target_name)
+                Combat_Resolution.tick_condition_durations(self.entities, self.event_bus, target_name, "rounds")
 
     def enter_room(self, room_key, arrival_band=1, skip_llm_generation=False):
         """!
