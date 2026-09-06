@@ -199,6 +199,10 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         self.load_scenario_definition(scenario_name)
         if start_location is not None:
             self.scenario["start_location"] = start_location
+        # A fresh start only -- load_game sets current_block from the save file directly and
+        # never calls __init__ again, so this never runs on a reload (see DM_Time.py's own
+        # docstring for why re-deriving this here would otherwise clobber a restored save).
+        self._seed_starting_date()
         self.apply_character_creation(character)
         self.validate_loaded_data()
         self.load_scenario()

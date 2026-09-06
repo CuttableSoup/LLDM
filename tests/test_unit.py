@@ -2192,6 +2192,8 @@ class TestDowntime(DMTestCase):
         self.assertEqual(state, {
             "day": 0, "block_in_day": 0, "hour": 0.0, "is_day": True,
             "blocks_per_day": 3, "hours_per_day": 24,
+            "year": 4726, "month": "Abadius", "day_of_month": 1,
+            "date_label": "day 1 of Abadius, Year 4726",
         })
         self.assertTrue(self.dm_core.is_daytime())
 
@@ -2271,6 +2273,127 @@ class TestDowntime(DMTestCase):
         # TAKE_KEYWORDS' own "take " is checked well ahead of REST_KEYWORDS -- documented,
         # deliberate ordering (see REST_KEYWORDS' own module comment), not an oversight.
         self.assertEqual(detect_item_intent("take a rest"), "take")
+
+
+class TestCalendar(DMTestCase):
+    """!
+    @brief rules.toml's own [[calendar_month]] table + _calendar_date_from_day/get_calendar_date
+        (DM_Time.py) -- converts get_time_state()'s own absolute "day" counter into a
+        year/month/day_of_month against Golarion's real calendar (Abadius..Kuthona, 365 days,
+        no leap year), folded into get_time_state()'s own "date_label" for narration.
+    """
+
+    # Rules/Fantasy's own [time] authors starting_year = 4726 (Golarion's current year, Age of
+    # Lost Omens) -- day 0 falls in that year, not a generic "year 1".
+
+    def test_day_zero_is_the_first_of_the_first_month_in_the_starting_year(self):
+        self.assertEqual(
+            self.dm_core.get_calendar_date(), {"year": 4726, "month": "Abadius", "day_of_month": 1},
+        )
+
+    def test_a_date_mid_month_lands_on_the_right_day_of_month(self):
+        # Abadius (31 days) + Calistril (28 days) = 59 -- day 60 is the 2nd day past both,
+        # i.e. Pharast 2.
+        self.dm_core.advance_blocks(60 * 3)  # 3 blocks/day
+        self.assertEqual(
+            self.dm_core.get_calendar_date(), {"year": 4726, "month": "Pharast", "day_of_month": 2},
+        )
+
+    def test_the_year_rolls_over_after_all_twelve_months(self):
+        self.dm_core.advance_blocks(365 * 3)
+        self.assertEqual(
+            self.dm_core.get_calendar_date(), {"year": 4727, "month": "Abadius", "day_of_month": 1},
+        )
+
+    def test_date_label_is_folded_into_get_time_state(self):
+        self.dm_core.advance_blocks(60 * 3)
+        self.assertEqual(self.dm_core.get_time_state()["date_label"], "day 2 of Pharast, Year 4726")
+
+    def test_starting_year_defaults_to_one_when_a_setting_authors_no_time_table_at_all(self):
+        del self.dm_core.rules["time"]
+        self.assertEqual(
+            self.dm_core.get_calendar_date(), {"year": 1, "month": "Abadius", "day_of_month": 1},
+        )
+
+    def test_a_setting_with_no_calendar_table_falls_back_to_a_bare_day_count(self):
+        self.dm_core.rules["calendar_month"] = []
+        self.assertIsNone(self.dm_core.get_calendar_date())
+        state = self.dm_core.get_time_state()
+        self.assertIsNone(state["year"])
+        self.assertIsNone(state["month"])
+        self.assertIsNone(state["day_of_month"])
+        self.assertEqual(state["date_label"], "day 0")
+
+    # _seed_starting_date (a scenario's own [scenario] "start_month"/"start_day") -- exercised
+    # by calling it directly against debug.toml's already-booted dm_core rather than
+    # constructing a second DMCore, the same "call the private method directly" pattern other
+    # boot-time-only behavior in this file already uses.
+
+    def test_seed_starting_date_sets_current_block_from_start_month_and_day(self):
+        # Abadius (31) + Calistril (28) + Pharast (31) + Gozran (30) + Desnus (31) +
+        # Sarenith (30) = 181 days before Erastus -- Erastus 1 is day-of-year 181 (0-indexed).
+        self.dm_core.scenario["start_month"] = "Erastus"
+        self.dm_core.scenario["start_day"] = 1
+        self.dm_core._seed_starting_date()
+        self.assertEqual(self.dm_core.current_block, 181 * 3)
+        self.assertEqual(
+            self.dm_core.get_calendar_date(), {"year": 4726, "month": "Erastus", "day_of_month": 1},
+        )
+
+    def test_seed_starting_date_start_day_defaults_to_one(self):
+        self.dm_core.scenario["start_month"] = "Calistril"
+        self.dm_core._seed_starting_date()
+        self.assertEqual(
+            self.dm_core.get_calendar_date(), {"year": 4726, "month": "Calistril", "day_of_month": 1},
+        )
+
+    def test_seed_starting_date_is_a_noop_when_the_scenario_authors_neither_field(self):
+        self.dm_core._seed_starting_date()
+        self.assertEqual(self.dm_core.current_block, 0)
+
+    def test_seed_starting_date_logs_an_error_and_leaves_current_block_alone_for_an_unknown_month(self):
+        errors = self._capture("log_error")
+        self.dm_core.scenario["start_month"] = "Notamonth"
+        self.dm_core._seed_starting_date()
+        self.assertEqual(self.dm_core.current_block, 0)
+        self.assertTrue(errors)
+
+    def test_seed_starting_date_logs_an_error_for_a_day_out_of_range(self):
+        errors = self._capture("log_error")
+        self.dm_core.scenario["start_month"] = "Calistril"
+        self.dm_core.scenario["start_day"] = 29  # Calistril only has 28
+        self.dm_core._seed_starting_date()
+        self.assertEqual(self.dm_core.current_block, 0)
+        self.assertTrue(errors)
+
+
+class TestLostCoastStartingDate(DMTestCase):
+    """!
+    @brief lost_coast.toml's own shipped start_month/start_day worked example ("Erastus 1" --
+        Sandpoint's Swallowtail Festival) -- exercises _seed_starting_date through a real boot
+        rather than a direct call, and proves a reload restores the save's own elapsed time
+        rather than re-seeding the scenario's start date on top of it.
+    """
+    scenario_name = "lost_coast"
+    start_location = None  # leaves lost_coast.toml's own [scenario].start_location alone.
+
+    def test_booting_the_scenario_seeds_the_shipped_start_date(self):
+        self.assertEqual(self.dm_core.current_block, 181 * 3)
+        self.assertEqual(
+            self.dm_core.get_calendar_date(), {"year": 4726, "month": "Erastus", "day_of_month": 1},
+        )
+
+    def test_reloading_a_save_restores_elapsed_time_not_the_scenario_start_date(self):
+        slot_name = "test_lost_coast_start_date_round_trip_slot"
+        self.addCleanup(shutil.rmtree, self.dm_core._save_slot_dir(slot_name), ignore_errors=True)
+        self.dm_core.advance_blocks(10)
+        elapsed_block = self.dm_core.current_block
+        self.dm_core.save_game(slot_name)
+
+        self.dm_core.current_block = 0  # prove load restores the save, not the scenario default
+        self.dm_core.load_game(slot_name)
+
+        self.assertEqual(self.dm_core.current_block, elapsed_block)
 
 
 class TestGridTravel(DMTestCase):
@@ -3032,7 +3155,7 @@ class TestFreeStandingIntentHandlers(unittest.TestCase):
             "time": {"is_day": False, "day": 1},
         })
         self.assertIn("gladstone recovers 10 HP (now at 26 HP)", prompt)
-        self.assertIn("night on day 1", prompt)
+        self.assertIn("night, day 1", prompt)
 
     def test_narrate_rest_never_claims_recovery_that_didnt_happen(self):
         prompt = self._narrate("rest", {

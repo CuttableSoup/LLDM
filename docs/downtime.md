@@ -23,6 +23,41 @@ hours, not a fixed block-index parity, so a `daylight_hours` that doesn't evenly
 `daylight_hours`). `is_daytime()` is a one-line convenience over `get_time_state()["is_day"]`.
 `advance_blocks(blocks)` is the only place `current_block` is ever mutated.
 
+**The calendar.** `rules.toml`'s own optional `[[calendar_month]]` table (`{name, days}` entries,
+in calendar order) is what turns the raw `day` counter above into an actual date — `Rules/Fantasy`'s
+own table matches Golarion's real calendar (Abadius through Kuthona, 365 days, no leap year), but
+`_calendar_date_from_day` (`DM_Time.py`) assumes nothing about that specific shape: any ordered
+list of `{name, days}` entries works the same way, wrapping into a new year once every authored
+month's own `days` (summed, not hardcoded to 365) has been used up. `day` 0 is the 1st of the
+first authored month, in `[time]`'s own `starting_year` (default `1`; `Rules/Fantasy`'s own `[time]`
+sets `4726` — Golarion's current year as of the Age of Lost Omens). `get_time_state()` folds the
+result straight into its own return dict as `year`/`month`/`day_of_month` (all `None` for a setting
+that authors no calendar at all, ex: `Rules/Zombie/` — the same "still works unauthored" fallback
+every other optional table already follows) plus a ready-made `date_label` string (`"day 4 of
+Calistril, Year 4726"`, or the bare `"day N"` when no calendar applies) that
+`intents/travel.py`/`intents/rest.py` splice directly into their own arrival/rest narration instead
+of each re-deriving the calendar-vs-bare-day branch itself. `get_calendar_date()` is a one-line
+convenience over the same conversion for any other caller that just wants today's date without the
+rest of `get_time_state()`.
+
+**A scenario's own starting date.** `[time]`'s `starting_year` is a setting-wide fact (what year
+it currently is in this world, true across every scenario) — *which day of that year* a
+particular story opens on is a per-scenario choice instead, the same way `start_location` already
+is: a scenario's own `[scenario]` table may author `start_month`/`start_day` (1-indexed,
+`start_day` defaulting to `1` when only `start_month` is given), converted once, at boot, into a
+day-of-year offset (`_day_of_year_from_calendar_date`, the inverse of `_calendar_date_from_day`'s
+own month-walk) and used to seed `self.current_block` directly (`DM_Core.__init__`'s own
+`_seed_starting_date`, called right after `load_scenario_definition`). A scenario authoring
+neither field (every scenario shipped before this existed, ex: `debug.toml`) is completely
+unaffected — `current_block` stays at its existing default of `0`, the 1st of the first authored
+month. Deliberately seeded only from `__init__`, never from `load_game`: a reload sets
+`current_block` from the save file itself, and re-deriving a scenario's own starting date on top
+of that would silently overwrite wherever the player actually left off. An unresolvable date (an
+unknown month name, an out-of-range day, or a setting with no `[[calendar_month]]` table at all)
+logs an error and leaves `current_block` at its default rather than guessing.
+`lost_coast.toml`'s own `start_month = "Erastus"`/`start_day = 1` (Sandpoint's Swallowtail
+Festival, the real date that stretch of coast road's own story opens on) is the shipped example.
+
 ## Rest
 
 `rest(blocks=1)` (`DM_Time.py`) first looks up the current location's own environment once

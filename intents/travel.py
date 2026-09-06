@@ -78,9 +78,10 @@ def narrate_travel(llm_core, data):
     if blocks_spent:
         time_state = data.get("time") or {}
         time_of_day = "day" if time_state.get("is_day", True) else "night"
+        date_label = time_state.get("date_label", f"day {time_state.get('day', 0)}")
         journey_text = (
             f" The journey took {blocks_spent} block(s) of travel time; it's now "
-            f"{time_of_day} on day {time_state.get('day', 0)}."
+            f"{time_of_day}, {date_label}."
         )
     else:
         journey_text = ""

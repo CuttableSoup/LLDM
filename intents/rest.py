@@ -61,9 +61,10 @@ def narrate_rest(llm_core, data):
     else:
         healed_text = "no one recovers any HP"
     time_of_day = "day" if time_state.get("is_day", True) else "night"
+    date_label = time_state.get("date_label", f"day {time_state.get('day', 0)}")
     return (
         f"The party rests for {data.get('blocks_spent', 1)} block(s): {healed_text}. "
-        f"It's now {time_of_day} on day {time_state.get('day', 0)}.\n"
+        f"It's now {time_of_day}, {date_label}.\n"
         f"Narrate this brief rest in 1-2 sentences as the Game Master -- no roll was "
         f"visible to the player, just its outcome."
     )

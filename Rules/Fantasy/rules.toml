@@ -384,10 +384,70 @@ divide_between_party = false
 # a block counts as daytime if it starts before daylight_hours (16 here, so the first two 8-hour
 # blocks are day and the third, starting at hour 16, is night). Absent entirely defaults to
 # exactly these three values, the same "still works with nothing authored" fallback [xp] gets.
+# starting_year is the calendar year (see [[calendar_month]] below) day 0 falls in -- 4726 AR,
+# Golarion's current year as of the Age of Lost Omens (Pathfinder 2e core).
 [time]
 hours_per_day = 24
 daylight_hours = 16
 blocks_per_day = 3
+starting_year = 4726
+
+# Golarion's own real-world calendar (Pathfinder core) -- 12 months, 365 days, no leap year, in
+# calendar order. get_calendar_date/get_time_state (DM_Time.py) convert get_time_state()'s own
+# absolute "day" counter (days elapsed since the scenario started, day 0 = [time]'s own
+# starting_year's Abadius 1 -- 4726 AR above) into {year, month, day_of_month} against this
+# table, wrapping into a new year once every month's own "days" (summed, not hardcoded to 365)
+# has been used up. Entirely optional, the same "still works unauthored" fallback every other
+# optional rules.toml table already follows -- absent entirely (ex: Rules/Zombie/, which
+# authors no calendar at all), get_calendar_date returns None and get_time_state's own
+# "date_label" falls back to the bare "day N" text it always used before this existed.
+[[calendar_month]]
+name = "Abadius"
+days = 31
+
+[[calendar_month]]
+name = "Calistril"
+days = 28
+
+[[calendar_month]]
+name = "Pharast"
+days = 31
+
+[[calendar_month]]
+name = "Gozran"
+days = 30
+
+[[calendar_month]]
+name = "Desnus"
+days = 31
+
+[[calendar_month]]
+name = "Sarenith"
+days = 30
+
+[[calendar_month]]
+name = "Erastus"
+days = 31
+
+[[calendar_month]]
+name = "Arodus"
+days = 31
+
+[[calendar_month]]
+name = "Rova"
+days = 30
+
+[[calendar_month]]
+name = "Lamashan"
+days = 31
+
+[[calendar_month]]
+name = "Neth"
+days = 30
+
+[[calendar_month]]
+name = "Kuthona"
+days = 31
 
 # Overworld travel speed (see docs/downtime.md's "Travel") -- distinct from combat's own
 # per-band-action "speed" (DM_Movement.py's advance_or_retreat), which never applies outside a

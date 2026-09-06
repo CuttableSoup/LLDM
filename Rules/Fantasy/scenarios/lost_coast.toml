@@ -28,6 +28,13 @@ name = "The Lost Coast"
 description = "A ribbon of coast road runs between weathered cliffs and the cold grey sea, linking a handful of small Varisian towns against the wilderness at their backs."
 start_location = "sandpoint"
 known_locations = [ "sandpoint", "magnimar" ]
+# The shipped worked example for [scenario]'s own optional "start_month"/"start_day"
+# (DM_Time.py's _seed_starting_date) -- Sandpoint's own Swallowtail Festival, the real
+# Golarion date this stretch of coast road's own story canonically opens on, rather than the
+# generic "1st of Abadius" every scenario authoring neither field still starts on (ex:
+# debug.toml). "start_day" defaults to 1 when omitted -- authored here anyway for clarity.
+start_month = "Erastus"
+start_day = 1
 
 [[location]]
 key = "sandpoint"
