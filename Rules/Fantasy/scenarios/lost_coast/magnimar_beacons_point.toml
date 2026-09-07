@@ -1,0 +1,182 @@
+# Magnimar's Beacon's Point district (see magnimar_alabaster.toml's own docstring for why this
+# scenario splits one file per district, and lost_coast.toml's "magnimar" location for the hub
+# these district entries hang off of). Pulled from "Magnimar, City of Monuments"
+# (Settings/Fantasy/) via its own extracted text -- descriptions below are original paraphrases,
+# never the book's own copyrighted prose. Beacon's Point (B1-B9 in the book's own gazetteer) is
+# Magnimar's harborside working district, its outer rim of shipping guilds wrapped around the
+# slum core known as Rag's End.
+
+[[location]]
+key = "beacons_point"
+name = "Beacon's Point"
+aliases = [ "Rag's End", "the Shipyard", "the Worker's District" ]
+description = "A harborside district of shipwrights, dockhands, and warehouses, its outer rim of trade sinking into the cramped slum of Rag's End."
+return_to = "magnimar"
+entities = []
+
+[[location.exit]]
+destination = "wyrmwatch"
+aliases = [ "the wyrmwatch", "the lighthouse" ]
+
+[[location.exit]]
+destination = "battle_of_charda"
+aliases = [ "the battle of charda", "the charda monument" ]
+
+[[location.exit]]
+destination = "outcast_fishery"
+aliases = [ "outcast fishery", "the fishery" ]
+
+[[location.exit]]
+destination = "shipmakers_guild"
+aliases = [ "the shipmakers' guild", "shipmakers guild" ]
+
+[[location.exit]]
+destination = "harbormaster_beacons_point"
+aliases = [ "the harbormaster", "the harbormaster's office" ]
+
+[[location.exit]]
+destination = "jaijarko_castle"
+aliases = [ "jaijarko castle" ]
+
+[[location.exit]]
+destination = "lost_lane"
+aliases = [ "lost lane" ]
+
+[[location.exit]]
+destination = "washers_row"
+aliases = [ "washers' row", "washers row" ]
+
+[[location.exit]]
+destination = "the_pig"
+aliases = [ "the pig" ]
+
+[[location]]
+key = "wyrmwatch"
+name = "The Wyrmwatch"
+description = "An 82-foot stone lighthouse shaped around a coiled dragon of glass and bronze, its beacon warding ships off the rocks on the worst nights."
+entities = []
+return_to = "beacons_point"
+
+[[location]]
+key = "battle_of_charda"
+name = "The Battle of Charda"
+description = "A monument to Magnimar's first great naval battle against Riddleport's pirates, its stone chardas exaggerated far past their true size."
+entities = []
+return_to = "beacons_point"
+
+[[location]]
+key = "outcast_fishery"
+name = "Outcast Fishery"
+description = "Three warehouses and drydocks serving Magnimar's fishing fleet, its sociable crews increasingly resentful of the merchant navy crowding their waters."
+entities = []
+return_to = "beacons_point"
+
+[[location]]
+key = "shipmakers_guild"
+name = "Shipmakers' Guild"
+description = "A Scarnetti-owned shipyard, one of Magnimar's most powerful guilds, a third of its docks still on semipermanent loan to the city navy."
+entities = []
+return_to = "beacons_point"
+
+[[location]]
+key = "harbormaster_beacons_point"
+name = "Harbormaster's Office"
+description = "A stout stone building overseeing Outcast's Cove, run by a well-loved former Varisian traveler who knows every ship's schedule by heart."
+entities = [
+    { name = "Vert Aigerd" },
+]
+return_to = "beacons_point"
+
+[[location]]
+key = "jaijarko_castle"
+name = "Jaijarko Castle"
+description = "A sprawling, interconnected block of shanties at Rag's End's heart, its shabby exterior hiding a slumlord's secretly luxurious lair."
+entities = [
+    { name = "Rassimeri Jaijarko" },
+]
+return_to = "beacons_point"
+
+[[location]]
+key = "lost_lane"
+name = "Lost Lane"
+description = "A run of derelict-looking shops and shacks hiding the Night Scales' underground headquarters, tunnels running clear to the city sewers."
+entities = [
+    { name = "Therhyn Raccas" },
+]
+return_to = "beacons_point"
+
+[[location]]
+key = "washers_row"
+name = "Washers' Row"
+description = "A reeking tangle of open-air washhouses and dye vats, its bleaching trade a poor cover for a Sczarni smuggling ring."
+entities = [
+    { name = "Mother Flytongue" },
+]
+return_to = "beacons_point"
+
+[[location]]
+key = "the_pig"
+name = "The Pig"
+description = "A condemned former slaughterhouse turned tavern, its leaky walls and butcher-heavy clientele making it Rag's End's least appetizing drinking hole."
+entities = []
+return_to = "beacons_point"
+
+[[entity]]
+name = "Vert Aigerd"
+supertype = "creature"
+subtype = "humanoid"
+description = "Magnimar's elderly harbormaster, a former Varisian traveler whose memory for ship schedules earned him the post over a bitter predecessor."
+
+max_hp = 24
+
+[entity.attitudes]
+default = [ 30, 20, 10 ]
+
+[entity.skills]
+navigation = { dice = 3, pips = 0 }
+streetwise = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Rassimeri Jaijarko"
+supertype = "creature"
+subtype = "humanoid"
+description = "Rag's End's greasy slumlord, owner of nearly two hundred shacks, who built his fortune on a lucky card game rather than the diabolic pact he claims."
+
+max_hp = 26
+
+[entity.attitudes]
+default = [ 10, 20, -15 ]
+
+[entity.skills]
+streetwise = { dice = 3, pips = 0 }
+intimidation = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Therhyn Raccas"
+supertype = "creature"
+subtype = "humanoid"
+description = "The even-tempered, one-armed leader of the Night Scales, Magnimar's oldest thieves' guild, running smuggling and extortion out of Rag's End."
+
+max_hp = 40
+
+[entity.attitudes]
+default = [ 10, 25, -10 ]
+
+[entity.skills]
+stealth = { dice = 3, pips = 0 }
+trickery = { dice = 3, pips = 0 }
+
+[[entity]]
+name = "Mother Flytongue"
+supertype = "creature"
+subtype = "humanoid"
+description = "The foul-mouthed matron running the Washside Wringers' smuggling operation behind Washers' Row's laundry fronts."
+
+max_hp = 22
+
+[entity.attitudes]
+default = [ 15, 20, -10 ]
+
+[entity.skills]
+trickery = { dice = 2, pips = 0 }
+streetwise = { dice = 2, pips = 0 }

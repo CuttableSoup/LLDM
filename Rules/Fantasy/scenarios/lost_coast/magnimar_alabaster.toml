@@ -1,0 +1,431 @@
+# Magnimar's Alabaster District, one of the city's nine districts (see lost_coast.toml's own
+# "magnimar" location, which exits to each district hub below it, and this directory's own
+# magnimar_*.toml siblings for the other eight) -- split one file per district because the
+# source material ("Magnimar, City of Monuments", Settings/Fantasy/) organizes the whole city
+# that way itself (each district gets its own stat block and lettered gazetteer, exactly like
+# sandpoint.toml's flat "Exploring Sandpoint" numbered list, just one level deeper), and even a
+# single district's worth of named villas/NPCs already runs long enough to want its own file.
+# Pulled from the book's own extracted text (its RAG chunk cache), not general foreknowledge of
+# the setting: each landmark description below is an original paraphrase, never the book's own
+# copyrighted prose, though names/addresses/NPCs/rumor and quest hooks are drawn directly from
+# its real content. Alabaster District (A1-A13 in the book's own gazetteer) is Magnimar's
+# aristocratic quarter -- the great families' villas, its public hippodrome, and the district's
+# own Pathfinder lodge.
+
+[[location]]
+key = "alabaster_district"
+name = "Alabaster District"
+aliases = [ "the Marble District", "the Stylobate" ]
+description = "A hillside quarter of walled villas and marble facades where Magnimar's oldest and richest families keep their estates."
+return_to = "magnimar"
+entities = []
+
+[[location.exit]]
+destination = "fort_indros"
+aliases = [ "fort indros", "the fortress" ]
+
+[[location.exit]]
+destination = "kaddren_villa"
+aliases = [ "kaddren villa" ]
+
+[[location.exit]]
+destination = "nirodin_villa"
+aliases = [ "nirodin villa" ]
+
+[[location.exit]]
+destination = "alabaster_park"
+aliases = [ "the park", "alabaster park" ]
+
+[[location.exit]]
+destination = "serpents_run"
+aliases = [ "the serpent's run", "the hippodrome" ]
+
+[[location.exit]]
+destination = "vanderale_villa"
+aliases = [ "vanderale villa" ]
+
+[[location.exit]]
+destination = "scarnetti_villa"
+aliases = [ "scarnetti villa" ]
+
+[[location.exit]]
+destination = "mindurian_villa"
+aliases = [ "mindurian villa" ]
+
+[[location.exit]]
+destination = "valdemar_villa"
+aliases = [ "valdemar villa" ]
+
+[[location.exit]]
+destination = "versade_villa"
+aliases = [ "versade villa" ]
+
+[[location.exit]]
+destination = "derexhi_villa"
+aliases = [ "derexhi villa" ]
+
+[[location.exit]]
+destination = "heidmarch_manor"
+aliases = [ "heidmarch manor", "the pathfinder lodge" ]
+
+[[location.exit]]
+destination = "house_of_lords"
+aliases = [ "the house of lords" ]
+
+[[location]]
+key = "fort_indros"
+name = "Fort Indros"
+description = "A basalt fortress bristling with siege engines at the district's northern point, watching Magnimar's eastern waters against pirate raids."
+entities = [
+    { name = "Vanns Wynmerd" },
+]
+return_to = "alabaster_district"
+
+[[location]]
+key = "kaddren_villa"
+name = "Kaddren Villa"
+description = "The founding Kaddren family's estate, its scholars and mages sent abroad for training and recalled home to serve the family's magical interests."
+entities = [
+    { name = "Zimandi Kaddren" },
+]
+return_to = "alabaster_district"
+
+[[location]]
+key = "nirodin_villa"
+name = "Nirodin Villa"
+description = "A fine estate whose mistress patronizes Magnimar's artists, trailed by rumors of a lingering fondness for Korvosan fashion."
+entities = [
+    { name = "Cheiskaia Nirodin" },
+]
+return_to = "alabaster_district"
+
+[[location]]
+key = "alabaster_park"
+name = "Alabaster Park"
+description = "A small public garden beside the Serpent's Run, where crowds linger to talk over whatever just happened inside."
+entities = []
+return_to = "alabaster_district"
+
+[[location]]
+key = "serpents_run"
+name = "Serpent's Run"
+description = "A vast snake-motif hippodrome seating thousands, hosting decathlons, races, golem battles, and mock gladiatorial bouts several times a month."
+entities = [
+    { name = "Jorston Droaeb" },
+]
+return_to = "alabaster_district"
+
+[[location]]
+key = "vanderale_villa"
+name = "Vanderale Villa"
+description = "Seat of the trade-minded Vanderale family, whose fleet and Merchants' Guild connections built one of Magnimar's great fortunes."
+entities = [
+    { name = "Mivonis Vanderale" },
+]
+return_to = "alabaster_district"
+
+[[location]]
+key = "scarnetti_villa"
+name = "Scarnetti Villa"
+description = "The shipbuilding Scarnetti family's estate, formally led by a humorless son but truly run by his shrewder, watchful mother."
+entities = [
+    { name = "Gradon Scarnetti" },
+    { name = "Urtilia Mendion Scarnetti" },
+]
+return_to = "alabaster_district"
+
+[[location]]
+key = "mindurian_villa"
+name = "Mindurian Villa"
+description = "Home of the stonemason family who carved much of early Magnimar and parlayed the work into an aristocratic title."
+entities = [
+    { name = "Filuvia Mindurian" },
+]
+return_to = "alabaster_district"
+
+[[location]]
+key = "valdemar_villa"
+name = "Valdemar Villa"
+description = "A once-great shipping and fishing family's villa, its fortunes fallen and its current heir hiding a darker secret behind polite manners."
+entities = [
+    { name = "Kaleb Valdemar" },
+]
+return_to = "alabaster_district"
+
+[[location]]
+key = "versade_villa"
+name = "Versade Villa"
+description = "The Versade estate, famous for the district's most lavish parties, thrown by a hostess who fears a dull evening more than an empty coffer."
+entities = [
+    { name = "Savasha Versade" },
+]
+return_to = "alabaster_district"
+
+[[location]]
+key = "derexhi_villa"
+name = "Derexhi Villa"
+description = "Home of a mercenary aristocratic family whose adventuring scions hire out to solve other nobles' dangerous problems."
+entities = [
+    { name = "Randred Derexhi" },
+    { name = "Luma Derexhi" },
+]
+return_to = "alabaster_district"
+
+[[location]]
+key = "heidmarch_manor"
+name = "Heidmarch Manor"
+description = "A retired adventuring couple's manor, opened as Varisia's first Pathfinder Society lodge, with a library and visiting explorers in residence."
+entities = [
+    { name = "Sheila Heidmarch" },
+    { name = "Canayven Heidmarch" },
+    { name = "Almya Gorangal" },
+    { name = "Joadric Heimurl" },
+]
+return_to = "alabaster_district"
+
+[[location]]
+key = "house_of_lords"
+name = "House of Lords"
+description = "A stately public hall where representatives of the great families field grievances and favors so the aristocrats themselves need not."
+entities = []
+return_to = "alabaster_district"
+
+[[entity]]
+name = "Vanns Wynmerd"
+supertype = "creature"
+subtype = "humanoid"
+description = "The dwarven commander of Fort Indros, keeping a garrison of soldiers and siege engineers watching Magnimar's coast."
+
+max_hp = 38
+
+[entity.attitudes]
+default = [ 30, 30, 10 ]
+
+[entity.skills]
+axes = { dice = 3, pips = 0 }
+observation = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Zimandi Kaddren"
+supertype = "creature"
+subtype = "humanoid"
+description = "The Kaddren family's matriarch, a wizard who inherited the position after her parents vanished exploring a Varisian ruin."
+
+max_hp = 40
+
+[entity.attitudes]
+default = [ 15, 20, -5 ]
+
+[entity.skills]
+arcane = { dice = 4, pips = 0 }
+charisma = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Cheiskaia Nirodin"
+supertype = "creature"
+subtype = "humanoid"
+description = "A well-to-do patron of the arts and Council of Ushers member, dogged by whispers of divided loyalties."
+
+max_hp = 24
+
+[entity.attitudes]
+default = [ 20, 15, 0 ]
+
+[entity.skills]
+charisma = { dice = 2, pips = 0 }
+artistry = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Jorston Droaeb"
+supertype = "creature"
+subtype = "humanoid"
+description = "The aged but spry dwarven Master of Games at the Serpent's Run, who refuses to book true battles to the death no matter who asks."
+
+max_hp = 34
+
+[entity.attitudes]
+default = [ 25, 25, 5 ]
+
+[entity.skills]
+athletics = { dice = 2, pips = 0 }
+observation = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Mivonis Vanderale"
+supertype = "creature"
+subtype = "humanoid"
+description = "The watchful head of the Vanderale trading fleet, minding nearly two dozen ships and the family's Merchants' Guild interests."
+
+max_hp = 38
+
+[entity.attitudes]
+default = [ 20, 20, 0 ]
+
+[entity.skills]
+appraise = { dice = 3, pips = 0 }
+trickery = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Gradon Scarnetti"
+supertype = "creature"
+subtype = "humanoid"
+description = "The severe, humorless nominal head of the Scarnetti shipyards, unafraid of burning bridges to protect the family's control."
+
+max_hp = 34
+
+[entity.attitudes]
+default = [ 10, 25, -10 ]
+
+[entity.skills]
+intimidation = { dice = 3, pips = 0 }
+appraise = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Urtilia Mendion Scarnetti"
+supertype = "creature"
+subtype = "humanoid"
+description = "The Scarnetti family's true power, a keen-witted elderly matriarch content to let her son manage the estate until he errs."
+
+max_hp = 26
+
+[entity.attitudes]
+default = [ 15, 25, -5 ]
+
+[entity.skills]
+observation = { dice = 3, pips = 0 }
+charisma = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Filuvia Mindurian"
+supertype = "creature"
+subtype = "humanoid"
+description = "An elderly stonemason-turned-aristocrat, and one of the district's most reliable sources of gossip."
+
+max_hp = 22
+
+[entity.attitudes]
+default = [ 30, 15, 10 ]
+
+[entity.skills]
+streetwise = { dice = 2, pips = 0 }
+charisma = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Kaleb Valdemar"
+supertype = "creature"
+subtype = "humanoid"
+description = "The Valdemar family's current master, a wizard whose family's run of tragedies hides a far darker secret than anyone in the district suspects."
+
+max_hp = 34
+
+[entity.attitudes]
+default = [ 10, 20, -15 ]
+
+[entity.skills]
+arcane = { dice = 3, pips = 0 }
+trickery = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Savasha Versade"
+supertype = "creature"
+subtype = "humanoid"
+description = "The Versade family's hostess, who would rather empty the family coffers than throw a disappointing party."
+
+max_hp = 22
+
+[entity.attitudes]
+default = [ 30, 15, 15 ]
+
+[entity.skills]
+charisma = { dice = 3, pips = 0 }
+artistry = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Randred Derexhi"
+supertype = "creature"
+subtype = "humanoid"
+description = "Head of the mercenary Derexhi family and a member of the Justice Council, whose income comes from hired blades rather than trade."
+
+max_hp = 40
+
+[entity.attitudes]
+default = [ 15, 25, -5 ]
+
+[entity.skills]
+blades = { dice = 3, pips = 0 }
+streetwise = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Luma Derexhi"
+supertype = "creature"
+subtype = "humanoid"
+description = "The eldest Derexhi scion, a half-elf druid treated as the family's least valued member despite her unusual devotion to the city."
+
+max_hp = 28
+
+[entity.attitudes]
+default = [ 30, 20, 10 ]
+
+[entity.skills]
+survival = { dice = 2, pips = 0 }
+observation = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Sheila Heidmarch"
+supertype = "creature"
+subtype = "humanoid"
+description = "A retired Taldan adventurer who opened her manor as Varisia's first Pathfinder Society lodge."
+
+max_hp = 40
+
+[entity.attitudes]
+default = [ 30, 25, 10 ]
+
+[entity.skills]
+brawling = { dice = 3, pips = 0 }
+athletics = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Canayven Heidmarch"
+supertype = "creature"
+subtype = "humanoid"
+description = "Sheila's husband and fellow retired ranger, sagely welcoming to every Pathfinder who passes through the lodge."
+
+max_hp = 46
+
+[entity.attitudes]
+default = [ 35, 25, 15 ]
+
+[entity.skills]
+missiles = { dice = 3, pips = 0 }
+survival = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Almya Gorangal"
+supertype = "creature"
+subtype = "humanoid"
+description = "A sour Chelish wizard using Heidmarch Manor as a base while she maps the ruins of the Mushfens."
+
+max_hp = 18
+
+[entity.attitudes]
+default = [ 10, 20, -10 ]
+
+[entity.skills]
+arcane = { dice = 2, pips = 0 }
+navigation = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Joadric Heimurl"
+supertype = "creature"
+subtype = "humanoid"
+description = "A bombastic Kellid barbarian lodging at Heidmarch Manor while he organizes an expedition into the Malgorian Mountains."
+
+max_hp = 36
+
+[entity.attitudes]
+default = [ 30, 20, 10 ]
+
+[entity.skills]
+axes = { dice = 3, pips = 0 }
+intimidation = { dice = 2, pips = 0 }

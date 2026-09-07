@@ -1,0 +1,203 @@
+# Magnimar's Lowcleft district (see magnimar_alabaster.toml's own docstring for why this scenario
+# splits one file per district). Pulled from "Magnimar, City of Monuments" (Settings/Fantasy/)
+# via its own extracted text -- descriptions below are original paraphrases, never the book's own
+# copyrighted prose. Lowcleft (L1-L8 in the book's own gazetteer), also called the Rubble, is
+# Magnimar's nightlife and avant-garde district, cut into the base of the Seacleft itself.
+
+[[location]]
+key = "lowcleft"
+name = "Lowcleft"
+aliases = [ "the Rubble" ]
+description = "A nightlife district cut into the base of the Seacleft, quiet by day and one of the city's busiest by dusk."
+return_to = "magnimar"
+entities = []
+
+[[location.exit]]
+destination = "matadors_lodge"
+aliases = [ "the matador's lodge" ]
+
+[[location.exit]]
+destination = "the_fish_tank"
+aliases = [ "the fish tank" ]
+
+[[location.exit]]
+destination = "gilded_cage"
+aliases = [ "the gilded cage" ]
+
+[[location.exit]]
+destination = "fancy_reefclaw"
+aliases = [ "the fancy reefclaw" ]
+
+[[location.exit]]
+destination = "courtesan_and_unicorn"
+aliases = [ "the courtesan and unicorn" ]
+
+[[location.exit]]
+destination = "dreaming_dryad"
+aliases = [ "the dreaming dryad" ]
+
+[[location.exit]]
+destination = "mapstone_monument"
+aliases = [ "the mapstone monument" ]
+
+[[location.exit]]
+destination = "celwynvian_charge"
+aliases = [ "the celwynvian charge" ]
+
+[[location]]
+key = "matadors_lodge"
+name = "Matador's Lodge"
+description = "Part tavern, part year-round rodeo training ground for the Serpent's Run's bullfights, run by a showman whose cruelty runs deeper than the arena."
+entities = [
+    { name = "Basaalee Minvandu" },
+]
+return_to = "lowcleft"
+
+[[location]]
+key = "the_fish_tank"
+name = "The Fish Tank"
+description = "A sea-blue caravan wagon in the Lowcleft Varisian camp, home to the Gallowed's merciless boss and his three pet swamp barracuda."
+entities = [
+    { name = "Jaster Frallino" },
+]
+return_to = "lowcleft"
+
+[[location]]
+key = "gilded_cage"
+name = "Gilded Cage"
+description = "A garish gambling den cut into the Seacleft's face, quietly owned by Summit aristocrats who enjoy its scandal as much as its profits."
+entities = [
+    { name = "Jayleen Mordove" },
+]
+return_to = "lowcleft"
+
+[[location]]
+key = "fancy_reefclaw"
+name = "The Fancy Reefclaw"
+description = "A red-and-yellow brewery famous across Magnimar for its raspberry ale, its mascot mural impossible to miss."
+entities = [
+    { name = "Golliver Haskinswurth" },
+]
+return_to = "lowcleft"
+
+[[location]]
+key = "courtesan_and_unicorn"
+name = "The Courtesan and Unicorn"
+description = "A harrow parlor and brothel run by a self-loathing Varisian sorcerer, guarded by fiercely loyal Shoanti bouncers."
+entities = [
+    { name = "Vanyavi Czanji" },
+]
+return_to = "lowcleft"
+
+[[location]]
+key = "dreaming_dryad"
+name = "The Dreaming Dryad"
+description = "An illusion-fronted drug den disguised as a licensed inn, its careful owner increasingly wary of a strange new drug's suppliers."
+entities = [
+    { name = "Vert Klydus" },
+]
+return_to = "lowcleft"
+
+[[location]]
+key = "mapstone_monument"
+name = "Mapstone Monument"
+description = "A block of marble carved into a living scale model of Magnimar, touched up yearly to track the city's rise and fall."
+entities = []
+return_to = "lowcleft"
+
+[[location]]
+key = "celwynvian_charge"
+name = "The Celwynvian Charge"
+description = "An elven seedpod-turned-tree sculpture, a diplomatic gift that grows real leaves each year though the alliance it promised never came."
+entities = []
+return_to = "lowcleft"
+
+[[entity]]
+name = "Basaalee Minvandu"
+supertype = "creature"
+subtype = "humanoid"
+description = "Matador's Lodge's owner, a sadist who dresses his cruelty toward the ring's animals as a philosophy of pride."
+
+max_hp = 30
+
+[entity.attitudes]
+default = [ 10, 25, -15 ]
+
+[entity.skills]
+missiles = { dice = 3, pips = 0 }
+intimidation = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Jaster Frallino"
+supertype = "creature"
+subtype = "humanoid"
+description = "The scarred, merciless boss of the Gallowed, Magnimar's largest Sczarni gang, who feeds enemies to his pet barracuda."
+
+max_hp = 40
+
+[entity.attitudes]
+default = [ 10, 30, -15 ]
+
+[entity.skills]
+intimidation = { dice = 3, pips = 0 }
+blades = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Jayleen Mordove"
+supertype = "creature"
+subtype = "humanoid"
+description = "A former Triodea prima donna who now runs the Gilded Cage, still trading on her old ties to Magnimar's artistic elite."
+
+max_hp = 24
+
+[entity.attitudes]
+default = [ 25, 15, 5 ]
+
+[entity.skills]
+charisma = { dice = 3, pips = 0 }
+artistry = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Golliver Haskinswurth"
+supertype = "creature"
+subtype = "humanoid"
+description = "A Taldan ex-soldier running the Fancy Reefclaw day to day, forever chasing a rare berry that grows only in monster-infested swamp."
+
+max_hp = 32
+
+[entity.attitudes]
+default = [ 30, 15, 10 ]
+
+[entity.skills]
+appraise = { dice = 2, pips = 0 }
+blades = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Vanyavi Czanji"
+supertype = "creature"
+subtype = "humanoid"
+description = "A self-loathing Varisian sorcerer running a harrow parlor and brothel, hiding from the death threats her own people send her."
+
+max_hp = 26
+
+[entity.attitudes]
+default = [ 10, 20, -10 ]
+
+[entity.skills]
+arcane = { dice = 3, pips = 0 }
+trickery = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Vert Klydus"
+supertype = "creature"
+subtype = "humanoid"
+description = "The Dreaming Dryad's careful proprietor, quietly investigating the suspicious suppliers behind a new drug he no longer wants near his business."
+
+max_hp = 28
+
+[entity.attitudes]
+default = [ 15, 20, -5 ]
+
+[entity.skills]
+trickery = { dice = 2, pips = 0 }
+streetwise = { dice = 2, pips = 0 }

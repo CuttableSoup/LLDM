@@ -1,0 +1,159 @@
+# Magnimar's Ordellia district (see magnimar_alabaster.toml's own docstring for why this
+# scenario splits one file per district). Pulled from "Magnimar, City of Monuments"
+# (Settings/Fantasy/) via its own extracted text -- descriptions below are original paraphrases,
+# never the book's own copyrighted prose. Ordellia (O1-O7 in the book's own gazetteer), named for
+# founder Ordellia Whilwren and also called the Foreign District or the "Mush," sits across the
+# Yondabakari from the rest of the city and runs its own semi-independent affairs.
+
+[[location]]
+key = "ordellia"
+name = "Ordellia"
+aliases = [ "the Foreign District", "Kyver's Islet", "the Mush" ]
+description = "A river-island district of foreign traders and embassies, run almost as a town apart from the rest of Magnimar."
+return_to = "magnimar"
+entities = []
+
+[[location.exit]]
+destination = "sevens_sawmill"
+aliases = [ "seven's sawmill" ]
+
+[[location.exit]]
+destination = "red_kestrel_imports"
+aliases = [ "red kestrel imports" ]
+
+[[location.exit]]
+destination = "billivins"
+aliases = [ "billivin's" ]
+
+[[location.exit]]
+destination = "embassy_building"
+aliases = [ "the embassy building" ]
+
+[[location.exit]]
+destination = "rose_and_rake"
+aliases = [ "the rose and rake" ]
+
+[[location.exit]]
+destination = "mistress_of_angels"
+aliases = [ "the mistress of angels" ]
+
+[[location.exit]]
+destination = "pugs_contraptions"
+aliases = [ "pug's contraptions" ]
+
+[[location]]
+key = "sevens_sawmill"
+name = "Seven's Sawmill"
+description = "Kyver's Islet's oldest lumber mill, the only one never to change hands, secretly doubling as a hidden society's meeting place."
+entities = []
+return_to = "ordellia"
+
+[[location]]
+key = "red_kestrel_imports"
+name = "Red Kestrel Imports"
+description = "A waterfront warehouse flying six nations' flags, its sweating branch manager a shrewder businessman than he looks."
+entities = [
+    { name = "Anton Ghanafini" },
+]
+return_to = "ordellia"
+
+[[location]]
+key = "billivins"
+name = "Billivin's Benevolent Balms and Effulgent Elixirs"
+description = "A cluttered, chaotic apothecary whose scatterbrained gnome owner's one genuine masterpiece is a foul but effective cure-all tonic."
+entities = [
+    { name = "Billiver Billivin" },
+]
+return_to = "ordellia"
+
+[[location]]
+key = "embassy_building"
+name = "Embassy Building"
+description = "A sprawling hall of foreign offices from nearly a dozen nations, its long-empty Korvosan wing a quiet snub nobody's bothered to fix."
+entities = []
+return_to = "ordellia"
+
+[[location]]
+key = "rose_and_rake"
+name = "Rose and Rake"
+description = "An open-air playhouse doubling as Ordellia's unofficial capitol, its satires as sharp as its politics."
+entities = [
+    { name = "Annsa Shivarlu" },
+]
+return_to = "ordellia"
+
+[[location]]
+key = "mistress_of_angels"
+name = "Mistress of Angels"
+description = "A marble statue of founder Ordellia Whilwren, gazing out over the gulf as if still watching for threats to the city she helped save."
+entities = []
+return_to = "ordellia"
+
+[[location]]
+key = "pugs_contraptions"
+name = "Pug's Contraptions"
+description = "A halfling family's shop of windup toys and clever clockwork gadgets, its aging owner still mourning a son who vanished on a delivery."
+entities = [
+    { name = "Morgamer Pug" },
+]
+return_to = "ordellia"
+
+[[entity]]
+name = "Anton Ghanafini"
+supertype = "creature"
+subtype = "humanoid"
+description = "The florid, perpetually sweating Chelish manager of Red Kestrel Imports' Magnimar branch, shrewder than his nervous manner suggests."
+
+max_hp = 22
+
+[entity.attitudes]
+default = [ 20, 15, 0 ]
+
+[entity.skills]
+appraise = { dice = 3, pips = 0 }
+charisma = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Billiver Billivin"
+supertype = "creature"
+subtype = "humanoid"
+description = "Magnimar's most disorganized spellcasting merchant, a gnome obsessed with magical curios who brews one genuinely miraculous tonic."
+
+max_hp = 20
+
+[entity.attitudes]
+default = [ 30, 10, 10 ]
+
+[entity.skills]
+arcane = { dice = 2, pips = 0 }
+trickery = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Annsa Shivarlu"
+supertype = "creature"
+subtype = "humanoid"
+description = "The Small Council's Lady and the Rose and Rake's playwright-director, six terms into a career built on real political skill."
+
+max_hp = 28
+
+[entity.attitudes]
+default = [ 30, 20, 10 ]
+
+[entity.skills]
+charisma = { dice = 3, pips = 0 }
+artistry = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Morgamer Pug"
+supertype = "creature"
+subtype = "humanoid"
+description = "The aging halfling proprietor of Pug's Contraptions, planning to leave the shop to his grandson after his own son vanished years ago."
+
+max_hp = 22
+
+[entity.attitudes]
+default = [ 25, 15, 5 ]
+
+[entity.skills]
+arcane = { dice = 2, pips = 0 }
+appraise = { dice = 2, pips = 0 }

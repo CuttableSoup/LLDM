@@ -1,0 +1,164 @@
+# A grid-based overworld scenario (see docs/downtime.md's "Travel", debug.toml's own
+# trailhead/border_stones worked example) using real Golarion place names and their
+# well-documented relative geography, in place
+# of importing pf-wikis' own GIS map data directly -- that data is real-world-scale vector
+# geometry (polygons/lines/points across the whole of Golarion, stored in Kart's binary
+# .table-dataset format) with no meaningful translation onto this engine's own grid, which only
+# ever measures relative travel time between the handful of locations a scenario author places by
+# hand. Unlike that GIS data's own real projection, though, this grid's "1 unit = 1 mile"
+# convention (rules.toml's own [travel] comment) lets Sandpoint and Magnimar actually sit at their
+# real canonical ~60-mile separation along the Lost Coast Road -- at the default_speed of 24
+# miles/block, that's exactly 3 blocks, a single day. known_locations seeds both as already known
+# from the very first turn, the same "a map the player starts with" rationale debug.toml's own
+# trailhead/border_stones already uses.
+#
+# Also the worked example for world_map.toml's own "terrain"/"polity" region fields and its
+# [[road]] table (see docs/downtime.md's "Terrain, roads, and polities"): "the Lost Coast" region
+# authors terrain = "coastal_forest" (a 0.6 speed_multiplier, terrain.toml) and polity = "Varisia"
+# (polities.toml), and world_map.toml's own coast-road [[road]] entry runs the exact Sandpoint-to-
+# Magnimar line at speed_multiplier = 1.0 -- overriding the forest's slowdown back to the plain
+# default_speed, so this trip still costs exactly the same 3 blocks its real mileage always
+# implied, now demonstrably because of the road rather than because nothing was authored at all.
+# The dockhand below (Magnimar's own entities list) authors no "languages" field of her own on
+# purpose, to exercise DM_Rules.py's polity-seeded default (_current_polity_language) through a
+# real instancing path -- she speaks Varisian, not the ["common"] every other shipped NPC falls
+# back to.
+#
+# This is also the shipped worked example for a scenario split across multiple files
+# (DM_Rules.py's scenario_component_files): "lost_coast" is this directory, not a single
+# lost_coast.toml, because Sandpoint's own build-out (in sandpoint.toml) grew past comfortably
+# fitting alongside Magnimar in one document. This file is the one that carries the [scenario]
+# table -- exactly one component file may -- plus whatever's small/scenario-wide rather than tied
+# to one particular town (Magnimar's own hub location below, and the coast road's own shared
+# "goblin" encounter). Magnimar itself got the same treatment Sandpoint did, built out from
+# "Magnimar, City of Monuments" (Settings/Fantasy/) the way sandpoint.toml was built from
+# "Sandpoint, Light of the Lost Coast" -- but where Sandpoint's own sourcebook was one flat
+# numbered list of landmarks, Magnimar's own book frames the whole city as nine real districts
+# (each with its own stat block and lettered gazetteer), so the split went one level deeper than
+# Sandpoint's single sandpoint.toml: magnimar's own [[location.exit]] list below leads to nine
+# district hubs (alabaster_district, beacons_point, capital_district, dockway, keystone,
+# lowcleft, naos, ordellia, underbridge), one per magnimar_<district>.toml sibling file, each
+# hub then exiting to that district's own numbered landmarks -- a ward-hub layer Sandpoint's flat
+# town crawl never needed. [[location]]/[[entity]] tables merge across every *.toml in this
+# directory by key exactly like load_rules already merges Rules/Fantasy/'s own shared files,
+# which is why magnimar's own exit list has to live here (in the same file as its [[location]]
+# table) rather than in any of those nine sibling files -- a location's "exit" list is read
+# as-is off whichever single component file defines that location's key, never merged piecemeal
+# across files the way top-level [[location]]/[[entity]] tables are.
+[scenario]
+name = "The Lost Coast"
+description = "A ribbon of coast road runs between weathered cliffs and the cold grey sea, linking a handful of small Varisian towns against the wilderness at their backs."
+start_location = "sandpoint"
+known_locations = [ "sandpoint", "magnimar" ]
+# The shipped worked example for [scenario]'s own optional "start_month"/"start_day"
+# (DM_Time.py's _seed_starting_date) -- Sandpoint's own Swallowtail Festival, the real
+# Golarion date this stretch of coast road's own story canonically opens on, rather than the
+# generic "1st of Abadius" every scenario authoring neither field still starts on (ex:
+# debug.toml). "start_day" defaults to 1 when omitted -- authored here anyway for clarity.
+start_month = "Erastus"
+start_day = 1
+
+[[location]]
+key = "magnimar"
+name = "Magnimar"
+aliases = [ "the City of Monuments" ]
+description = "A sprawling port city of cliffside terraces and salvaged Thassilonian monuments, its harbor crowded with trade ships from up and down the coast."
+grid = { x = 210, y = 0 }
+entities = [
+    { name = "dockhand", band = 1 },
+]
+
+[[location.exit]]
+destination = "alabaster_district"
+aliases = [ "the alabaster district", "the marble district" ]
+
+[[location.exit]]
+destination = "beacons_point"
+aliases = [ "beacon's point", "rag's end" ]
+
+[[location.exit]]
+destination = "capital_district"
+aliases = [ "the capital district", "bridgeward" ]
+
+[[location.exit]]
+destination = "dockway"
+aliases = [ "the bazaar of sails" ]
+
+[[location.exit]]
+destination = "keystone"
+aliases = [ "the marches", "silver shore", "castlegate" ]
+
+[[location.exit]]
+destination = "lowcleft"
+aliases = [ "the rubble" ]
+
+[[location.exit]]
+destination = "naos"
+aliases = [ "the grand arch", "the new-money district" ]
+
+[[location.exit]]
+destination = "ordellia"
+aliases = [ "the foreign district", "kyver's islet" ]
+
+[[location.exit]]
+destination = "underbridge"
+aliases = [ "the shadow" ]
+
+# A friendly local, authoring no "languages" field of her own -- see this file's own docstring
+# above for why (DM_Rules.py's _instance_entities/_current_polity_language,
+# DM_Travel.py). A real, non-hostile [entity.attitudes] default is required here since an entity
+# with none at all defaults to hostile (entity_schema.toml's own "Attitudes" comment).
+[[entity]]
+name = "dockhand"
+supertype = "creature"
+subtype = "humanoid"
+description = "A sun-weathered dockhand coiling rope at the quayside, keeping half an eye on the newly arrived ship."
+
+max_hp = 10
+
+[entity.attitudes]
+default = [ 30, 20, 0 ]
+
+[entity.skills]
+observation = { dice = 2, pips = 0 }
+
+# Local copy of the environment's own signature encounter (see environments.toml's own
+# "lost_coast_wilds"), following the same self-containment convention every scenario file
+# follows for scenario-local npc/creature entities -- a lightly armed raider scaled a notch below
+# creatures.toml's own wild boar/coyote (lower fortitude, higher dodge/reflexes), matching
+# Golarion's own portrayal of goblins as individually weak but quick and vicious.
+[[entity]]
+name = "goblin"
+supertype = "creature"
+subtype = "humanoid"
+description = "A wiry, sharp-toothed goblin, cackling as it darts closer, a notched dogslicer in hand."
+
+max_hp = 8
+
+[[entity.abilities]]
+name = "dogslicer"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "slashing" ]
+damage_value = { dice = 1, pips = 0, bonus = "user.strength_damage" }
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+    { field = "hp_per_remain", operator = "<", value = 0.40 },
+]
+action = "retreat"
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "dogslicer"
+
+[entity.skills]
+fortitude = { dice = 1, pips = 0 }
+reflexes = { dice = 3, pips = 0 }
+dodge = { dice = 3, pips = 0 }
+strength = { dice = 1, pips = 0 }
+brawling = { dice = 2, pips = 0 }

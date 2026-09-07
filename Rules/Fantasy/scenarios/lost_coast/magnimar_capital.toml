@@ -1,0 +1,262 @@
+# Magnimar's Capital District (see magnimar_alabaster.toml's own docstring for why this scenario
+# splits one file per district). Pulled from "Magnimar, City of Monuments" (Settings/Fantasy/)
+# via its own extracted text -- descriptions below are original paraphrases, never the book's own
+# copyrighted prose. The Capital District (C1-C8, plus a C6a sub-location, in the book's own
+# gazetteer) rings the ruined Irespan bridge and houses both the city's government and its
+# artisan guilds.
+
+[[location]]
+key = "capital_district"
+name = "Capital District"
+aliases = [ "the Artisan's Quarter", "Bridgeward", "the Irespan District" ]
+description = "The dusty blocks ringing the ruined Irespan, home to Magnimar's government, its museums, and its finest artisans."
+return_to = "magnimar"
+entities = []
+
+[[location.exit]]
+destination = "irespan"
+aliases = [ "the irespan", "the giant's bridge" ]
+
+[[location.exit]]
+destination = "golemworks"
+aliases = [ "the golemworks" ]
+
+[[location.exit]]
+destination = "cenotaph"
+aliases = [ "the cenotaph" ]
+
+[[location.exit]]
+destination = "founders_archive"
+aliases = [ "the founder's archive", "the museum of ages" ]
+
+[[location.exit]]
+destination = "indros_cul_vydrarch"
+aliases = [ "indros cul vydrarch" ]
+
+[[location.exit]]
+destination = "pediment_building"
+aliases = [ "the pediment building", "the justice court" ]
+
+[[location.exit]]
+destination = "ushers_hall"
+aliases = [ "usher's hall" ]
+
+[[location.exit]]
+destination = "lord_mayors_menagerie"
+aliases = [ "the lord-mayor's menagerie", "the menagerie" ]
+
+[[location]]
+key = "irespan"
+name = "The Irespan"
+description = "An ancient Thassilonian causeway jutting nearly 400 feet from the Seacleft, its hollow pilings sealed off by a century-old law after a swarm of spider-legged horrors once poured out of a quarrying breach."
+entities = []
+return_to = "capital_district"
+
+[[location]]
+key = "golemworks"
+name = "The Golemworks"
+description = "A row of crow-haunted warehouses where salvaged Irespan stone is worked into golems and angelic guardian constructs for sale."
+entities = [
+    { name = "Toth Bhreacher" },
+]
+return_to = "capital_district"
+
+[[location]]
+key = "cenotaph"
+name = "The Cenotaph"
+description = "A ten-story memorial tomb to Magnimar's founder, its catacombs now a coveted burial ground and postmortem status symbol for the wealthy."
+entities = []
+return_to = "capital_district"
+
+[[location]]
+key = "founders_archive"
+name = "Founder's Archive and Museum of Ages"
+description = "A campus of museum halls holding the city's history and its scholars' private collections, including a petrified cyclops eye and a captive king's regalia."
+entities = [
+    { name = "Ernst Landis" },
+    { name = "Irba Demerios" },
+    { name = "Archisa Aparna" },
+]
+return_to = "capital_district"
+
+[[location]]
+key = "indros_cul_vydrarch"
+name = "Indros cul Vydrarch"
+description = "A towering marble sculpture of the city's founder locked in battle with the legendary sea monster he once slew."
+entities = []
+return_to = "capital_district"
+
+[[location]]
+key = "pediment_building"
+name = "The Pediment Building"
+description = "A gray fortress of a courthouse housing the Justice Court and the office of the lord-mayor, its halls lined with stern gargoyles. The lord-mayor himself is rarely here, preferring his estate at Defiant's Garden in Naos."
+entities = [
+    { name = "Bayl Argentine" },
+    { name = "Valanni Krinst" },
+]
+return_to = "capital_district"
+
+[[location.exit]]
+destination = "the_hells"
+aliases = [ "the hells", "the sealed levels" ]
+
+[[location]]
+key = "the_hells"
+name = "The Hells"
+description = "Magnimar's only prison, its sweltering lower levels sealed off years ago after a riot and now ruled from within by a horrifying prisoner."
+entities = [
+    { name = "Aeryn Darvengian" },
+]
+return_to = "pediment_building"
+
+[[location]]
+key = "ushers_hall"
+name = "Usher's Hall"
+description = "Seat of the sprawling, bureaucracy-choked Council of Ushers, its 117 members reached only through a jealously territorial secretary."
+entities = [
+    { name = "Verrine Caiteil" },
+    { name = "Jacildria Quildarmo" },
+]
+return_to = "capital_district"
+
+[[location]]
+key = "lord_mayors_menagerie"
+name = "Lord-Mayor's Menagerie"
+description = "A public zoo curated by the Heidmarchs, its cages holding a blinded basilisk, a linnorm egg, and a fourteen-foot tame ape."
+entities = []
+return_to = "capital_district"
+
+[[entity]]
+name = "Toth Bhreacher"
+supertype = "creature"
+subtype = "humanoid"
+description = "The wizard who discovered the Irespan's stone was ideal for constructs, and whose Golemworks now employs two dozen spellcasters."
+
+max_hp = 55
+
+[entity.attitudes]
+default = [ 20, 20, 0 ]
+
+[entity.skills]
+arcane = { dice = 4, pips = 0 }
+artistry = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Ernst Landis"
+supertype = "creature"
+subtype = "humanoid"
+description = "The Museum of Ages' esteemed curator, a scholar of Varisian history."
+
+max_hp = 34
+
+[entity.attitudes]
+default = [ 25, 15, 5 ]
+
+[entity.skills]
+linguistics = { dice = 3, pips = 0 }
+arcane = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Irba Demerios"
+supertype = "creature"
+subtype = "humanoid"
+description = "The stern, half-Shoanti archivist who effectively rules the Founder's Archive, and the only keeper of its Forbidden Collection's key."
+
+max_hp = 28
+
+[entity.attitudes]
+default = [ 15, 20, -5 ]
+
+[entity.skills]
+linguistics = { dice = 3, pips = 0 }
+streetwise = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Archisa Aparna"
+supertype = "creature"
+subtype = "humanoid"
+description = "A renowned Vudrani explorer and Pathfinder funded by the museum, lecturing on ancient Varisian monuments between expeditions."
+
+max_hp = 26
+
+[entity.attitudes]
+default = [ 30, 20, 10 ]
+
+[entity.skills]
+navigation = { dice = 3, pips = 0 }
+charisma = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Bayl Argentine"
+supertype = "creature"
+subtype = "humanoid"
+description = "The Pediment Building's Lord Justice, leading a court of thirteen judges who must often interpret Magnimar's few laws creatively."
+
+max_hp = 40
+
+[entity.attitudes]
+default = [ 20, 25, 0 ]
+
+[entity.skills]
+blades = { dice = 2, pips = 0 }
+willpower = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Valanni Krinst"
+supertype = "creature"
+subtype = "humanoid"
+description = "The lord-mayor's personal secretary, who quietly and illegally vets many of Grobaras's more damaging orders before they go out."
+
+max_hp = 20
+
+[entity.attitudes]
+default = [ 25, 15, 5 ]
+
+[entity.skills]
+forgery = { dice = 2, pips = 0 }
+trickery = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Aeryn Darvengian"
+supertype = "creature"
+subtype = "humanoid"
+description = "A suave, charismatic mass murderer imprisoned in the Hells' lowest level, secretly ruling its sealed madhouse with unnerving ease."
+
+max_hp = 46
+
+[entity.attitudes]
+default = [ 10, 30, -20 ]
+
+[entity.skills]
+arcane = { dice = 3, pips = 0 }
+trickery = { dice = 3, pips = 0 }
+
+[[entity]]
+name = "Verrine Caiteil"
+supertype = "creature"
+subtype = "humanoid"
+description = "The elf wizard serving as executive moderator of the sprawling, 117-member Council of Ushers."
+
+max_hp = 36
+
+[entity.attitudes]
+default = [ 20, 20, 0 ]
+
+[entity.skills]
+arcane = { dice = 3, pips = 0 }
+charisma = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Jacildria Quildarmo"
+supertype = "creature"
+subtype = "humanoid"
+description = "Usher's Hall's pinch-faced Seneschal of Dates, gatekeeper to any councilmember and visibly fond of the power that gives her."
+
+max_hp = 22
+
+[entity.attitudes]
+default = [ 10, 20, -10 ]
+
+[entity.skills]
+trickery = { dice = 2, pips = 0 }
+charisma = { dice = 2, pips = 0 }

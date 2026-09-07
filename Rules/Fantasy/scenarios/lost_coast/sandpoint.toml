@@ -1,0 +1,1391 @@
+# Sandpoint, one of two towns in the "lost_coast" scenario (see this directory's own
+# lost_coast.toml for the [scenario] table and the scenario's overall docstring) -- split into
+# its own file because it grew past comfortably fitting alongside Magnimar in one document (see
+# DM_Rules.py's scenario_component_files for how a scenario's own [[location]]/[[entity]] tables
+# merge across every *.toml sibling in its directory). Nothing in here needs its own [scenario]
+# table -- only one component file may define it, and lost_coast.toml already does.
+#
+# The 52 numbered "Exploring Sandpoint" landmarks from the Paizo sourcebook "Sandpoint, Light
+# of the Lost Coast" (Settings/Fantasy/), pulled from the book's own extracted text (its RAG
+# chunk cache) rather than general foreknowledge of the setting -- flat hub-and-spoke off
+# sandpoint itself, exactly like debug.toml's own debug_hub, since sandpoint already carries a
+# grid for the Magnimar road trip and _resolve_travel_intent now tries a location's own named
+# exits before falling back to grid travel. Each landmark below is its own freeform
+# [[location]] (no rooms -- a town crawl needs no band positioning) with return_to = "sandpoint";
+# each description is an original paraphrase, never the book's own copyrighted prose, though
+# names/addresses/NPCs/rumor and quest hooks are drawn directly from the book's real content.
+
+[[location]]
+key = "sandpoint"
+name = "Sandpoint"
+aliases = [ "the town of Sandpoint" ]
+description = "A small, rebuilt fishing town on the Lost Coast, its streets of shops, taverns, and noble manors overlooked by the glassworks and the ruined Old Light."
+grid = { x = 150, y = 0 }
+entities = []
+
+[[location.exit]]
+destination = "cathedral"
+aliases = [ "the cathedral", "the church" ]
+
+[[location.exit]]
+destination = "boneyard"
+aliases = [ "the boneyard", "the cemetery", "the graveyard" ]
+
+[[location.exit]]
+destination = "white_deer"
+aliases = [ "the white deer", "white deer inn" ]
+
+[[location.exit]]
+destination = "way_north"
+aliases = [ "the cartographer", "the map shop" ]
+
+[[location.exit]]
+destination = "rings_and_things"
+aliases = [ "the jeweler", "the moneylender" ]
+
+[[location.exit]]
+destination = "junkers_edge"
+aliases = [ "the town dump", "junk beach" ]
+
+[[location.exit]]
+destination = "gorvis_shack"
+aliases = [ "gorvi's home" ]
+
+[[location.exit]]
+destination = "quinks_house"
+aliases = [ "quink's home", "the historian's house" ]
+
+[[location.exit]]
+destination = "locksmith_shop"
+aliases = [ "the locksmith", "lock and key shop" ]
+
+[[location.exit]]
+destination = "garrison"
+aliases = [ "the garrison", "the jail", "the guardpost" ]
+
+[[location.exit]]
+destination = "town_hall"
+aliases = [ "the town hall", "the courthouse" ]
+
+[[location.exit]]
+destination = "savahs_armory"
+aliases = [ "the armory", "the weapon shop" ]
+
+[[location.exit]]
+destination = "risas_place"
+aliases = [ "risa's", "risa's tavern" ]
+
+[[location.exit]]
+destination = "rovanky_tannery"
+aliases = [ "the tannery" ]
+
+[[location.exit]]
+destination = "red_dog_smithy"
+aliases = [ "the blacksmith", "the smithy" ]
+
+[[location.exit]]
+destination = "pillbugs_pantry"
+aliases = [ "pillbug's pantry", "the pillbug" ]
+
+[[location.exit]]
+destination = "bottled_solutions"
+aliases = [ "bottled solutions", "nisk's shop" ]
+
+[[location.exit]]
+destination = "cracktooths_tavern"
+aliases = [ "cracktooth's", "cracktooth's tavern" ]
+
+[[location.exit]]
+destination = "house_of_blue_stones"
+aliases = [ "the blue stones", "the monastery" ]
+
+[[location.exit]]
+destination = "glassworks"
+aliases = [ "the glassworks" ]
+
+[[location.exit]]
+destination = "sandpoint_savories"
+aliases = [ "the bakery", "savories" ]
+
+[[location.exit]]
+destination = "curious_goblin"
+aliases = [ "the curious goblin", "the bookshop" ]
+
+[[location.exit]]
+destination = "sandpoint_theater"
+aliases = [ "the theater", "the playhouse" ]
+
+[[location.exit]]
+destination = "carpenters_guild"
+aliases = [ "the carpenters guild", "carpenter's guild" ]
+
+[[location.exit]]
+destination = "lumber_mill"
+aliases = [ "the lumber mill", "the sawmill" ]
+
+[[location.exit]]
+destination = "general_store"
+aliases = [ "the general store", "ven's store" ]
+
+[[location.exit]]
+destination = "turandarok_academy"
+aliases = [ "the academy", "the orphanage" ]
+
+[[location.exit]]
+destination = "madame_mvashtis"
+aliases = [ "madame mvashti's", "the fortune teller" ]
+
+[[location.exit]]
+destination = "grocers_hall"
+aliases = [ "the grocer's hall", "grocer's guild" ]
+
+[[location.exit]]
+destination = "vernahs_clothing"
+aliases = [ "vernah's", "the clothing shop" ]
+
+[[location.exit]]
+destination = "wheens_wagons"
+aliases = [ "wheen's wagons", "the wheelwright" ]
+
+[[location.exit]]
+destination = "scarnetti_mill"
+aliases = [ "scarnetti mill", "the grain mill" ]
+
+[[location.exit]]
+destination = "hagfish"
+aliases = [ "the hagfish", "hagfish tavern" ]
+
+[[location.exit]]
+destination = "fish_market"
+aliases = [ "the fish market", "valdemar fish market" ]
+
+[[location.exit]]
+destination = "sandpoint_market"
+aliases = [ "the market", "the town market" ]
+
+[[location.exit]]
+destination = "meat_market"
+aliases = [ "the meat market", "the butcher" ]
+
+[[location.exit]]
+destination = "rusty_dragon"
+aliases = [ "the rusty dragon", "rusty dragon inn" ]
+
+[[location.exit]]
+destination = "goblin_squash_stables"
+aliases = [ "the stables", "goblin squash stables" ]
+
+[[location.exit]]
+destination = "two_knight_brewery"
+aliases = [ "the brewery", "two knight brewery" ]
+
+[[location.exit]]
+destination = "mercantile_league"
+aliases = [ "the mercantile league", "the caravan office" ]
+
+[[location.exit]]
+destination = "sandpoint_boutique"
+aliases = [ "the boutique" ]
+
+[[location.exit]]
+destination = "fatmans_feedbag"
+aliases = [ "fatman's feedbag", "the feedbag" ]
+
+[[location.exit]]
+destination = "pixies_kitten"
+aliases = [ "the pixie's kitten", "the brothel" ]
+
+[[location.exit]]
+destination = "feathered_serpent"
+aliases = [ "the feathered serpent", "the curio shop" ]
+
+[[location.exit]]
+destination = "hannahs"
+aliases = [ "hannah's shop", "the herbalist", "the midwife" ]
+
+[[location.exit]]
+destination = "shipyard"
+aliases = [ "the shipyard", "the docks" ]
+
+[[location.exit]]
+destination = "valdemar_manor"
+aliases = [ "valdemar manor", "the abandoned manor" ]
+
+[[location.exit]]
+destination = "scarnetti_manor"
+aliases = [ "scarnetti manor" ]
+
+[[location.exit]]
+destination = "kaijitsu_manor"
+aliases = [ "kaijitsu manor" ]
+
+[[location.exit]]
+destination = "deverin_manor"
+aliases = [ "deverin manor", "the mayor's manor" ]
+
+[[location.exit]]
+destination = "choppers_isle"
+aliases = [ "chopper's isle", "the isle" ]
+
+[[location.exit]]
+destination = "old_light"
+aliases = [ "the old light", "the lighthouse", "the ruined tower" ]
+
+[[location]]
+key = "cathedral"
+name = "Sandpoint Cathedral"
+description = "A many-winged stone-and-glass cathedral sharing its roof between six faiths, built over a ring of far older standing stones."
+entities = [
+    { name = "Abstalar Zantus" },
+]
+return_to = "sandpoint"
+
+[[location]]
+key = "boneyard"
+name = "Sandpoint Boneyard"
+description = "The town cemetery east of the cathedral, its stone vaults and quiet rows of graves kept meticulously by one devoted gravedigger."
+entities = [
+    { name = "Naffer Vosk" },
+]
+return_to = "sandpoint"
+
+[[location]]
+key = "white_deer"
+name = "The White Deer Tavern and Inn"
+description = "A grand three-story tavern and inn overlooking the gulf, rebuilt after the old fire, run by a gruff but generous Shoanti innkeeper."
+entities = [
+    { name = "Garridan Viskalai" },
+]
+return_to = "sandpoint"
+
+[[location]]
+key = "way_north"
+name = "The Way North"
+description = "A cramped map shop crowded with charts and 'novelty' treasure maps, run by an aging gnome who came to town chasing one map too many."
+entities = [
+    { name = "Veznutt Parooh" },
+]
+return_to = "sandpoint"
+
+[[location]]
+key = "rings_and_things"
+name = "Rings and Things"
+description = "A squat stone jewelry shop and moneylending counter, its profits quietly guarded by a jeweler's sharp-eyed wife."
+entities = [
+    { name = "Pennae Kesk" },
+]
+return_to = "sandpoint"
+
+[[location]]
+key = "junkers_edge"
+name = "Junker's Edge"
+description = "A cliffside dump where the town's refuse is tipped onto the beach below, drawing scavenging children and, unseen, raiding goblins."
+entities = []
+return_to = "sandpoint"
+
+[[location]]
+key = "gorvis_shack"
+name = "Gorvi's Shack"
+description = "A ramshackle shack belonging to Sandpoint's foul-tempered but well-paid dungsweeper."
+entities = [
+    { name = "Gorvi" },
+]
+return_to = "sandpoint"
+
+[[location]]
+key = "quinks_house"
+name = "Quink's House"
+description = "The cluttered home of an elderly scholar consumed by theories about the ruined lighthouse's true, ancient purpose."
+entities = [
+    { name = "Brodert Quink" },
+]
+return_to = "sandpoint"
+
+[[location]]
+key = "locksmith_shop"
+name = "Locksmith"
+description = "A dwarf-run lock-and-key shop, its flamboyant owner famously tight-lipped about his life before Sandpoint."
+entities = [
+    { name = "Volioker Briskalberd" },
+]
+return_to = "sandpoint"
+
+[[location]]
+key = "garrison"
+name = "Sandpoint Garrison"
+description = "Sandpoint's stone guard barracks and jail, its underground wing still scarred from a sinkhole that swallowed part of the old cells."
+entities = [
+    { name = "Belor Hemlock" },
+    { name = "Vachedi" },
+]
+return_to = "sandpoint"
+
+[[location]]
+key = "town_hall"
+name = "Sandpoint Town Hall"
+description = "The town's meeting hall, council chambers, and vault all under one roof, doubling as Sandpoint's bank."
+entities = []
+return_to = "sandpoint"
+
+[[location]]
+key = "savahs_armory"
+name = "Savah's Armory"
+description = "Sandpoint's weapon-and-armor shop, its shelves discreetly guarded by more than they let on."
+entities = [
+    { name = "Savah Bevaniky" },
+]
+return_to = "sandpoint"
+
+[[location]]
+key = "risas_place"
+name = "Risa's Place"
+description = "An out-of-the-way tavern known for spiced potatoes and its blind old owner's improbable travel stories."
+entities = [
+    { name = "Risa Magravi" },
+]
+return_to = "sandpoint"
+
+[[location]]
+key = "rovanky_tannery"
+name = "Rovanky Tannery"
+description = "A tannery at the edge of town, its leather and fur goods prized despite a perfectionist owner's short temper with hired help."
+entities = [
+    { name = "Larz Rovanky" },
+]
+return_to = "sandpoint"
+
+[[location]]
+key = "red_dog_smithy"
+name = "Red Dog Smithy"
+description = "A blacksmith's forge named for its owner's beloved red mastiffs, its bald and short-tempered smith kept just civil by steady work."
+entities = [
+    { name = "Das Korvut" },
+]
+return_to = "sandpoint"
+
+[[location]]
+key = "pillbugs_pantry"
+name = "The Pillbug's Pantry"
+description = "A modest herbalist's shop tucked against a cliff, selling potions and medicine -- and, to those who know the passphrase, rather less legal wares."
+entities = [
+    { name = "Aliver Podiker" },
+]
+return_to = "sandpoint"
+
+[[location]]
+key = "bottled_solutions"
+name = "Bottled Solutions"
+description = "A cluttered alchemy shop whose smooth-talking owner oversells his own skill at the trade."
+entities = [
+    { name = "Nisk Tander" },
+]
+return_to = "sandpoint"
+
+[[location]]
+key = "cracktooths_tavern"
+name = "Cracktooth's Tavern"
+description = "A stage-fronted tavern packed after every show at the theater next door, famous for its themed performance nights."
+entities = [
+    { name = "Jesk Berinni" },
+]
+return_to = "sandpoint"
+
+[[location]]
+key = "house_of_blue_stones"
+name = "House of Blue Stones"
+description = "A quiet stone monastery of polished blue stones and reed mats, its basement library open to fellow scholars and worshipers of Irori."
+entities = [
+    { name = "Jabyl Sorn" },
+]
+return_to = "sandpoint"
+
+[[location]]
+key = "glassworks"
+name = "Sandpoint Glassworks"
+description = "The Kaijitsu family's shuttered glassworks, boarded up since a betrayal and massacre years back -- locals swear the furnaces still fire up at night."
+entities = []
+return_to = "sandpoint"
+
+[[location]]
+key = "sandpoint_savories"
+name = "Sandpoint Savories"
+description = "A family bakery that fills the morning air with fresh pastry smells, quietly run these days by two identical twin sisters."
+entities = [
+    { name = "Alma Avertin" },
+]
+return_to = "sandpoint"
+
+[[location]]
+key = "curious_goblin"
+name = "The Curious Goblin"
+description = "A bookshop crowded with fiction and local history, its sign showing a wide-eyed goblin puzzling over an upside-down book."
+entities = [
+    { name = "Chask Haladan" },
+]
+return_to = "sandpoint"
+
+[[location]]
+key = "sandpoint_theater"
+name = "Sandpoint Theater"
+description = "An outsized playhouse rivaling Magnimar's own, home to the town's most flamboyant showman and his ambitious original productions."
+entities = [
+    { name = "Cyrdak Drokkus" },
+]
+return_to = "sandpoint"
+
+[[location]]
+key = "carpenters_guild"
+name = "Carpenter's Guild"
+description = "The headquarters of Sandpoint's ever-busy union of carpenters, responsible for most of the buildings standing in town."
+entities = [
+    { name = "Aesrick Battlehorn" },
+]
+return_to = "sandpoint"
+
+[[location]]
+key = "lumber_mill"
+name = "Sandpoint Lumber Mill"
+description = "The Scarnetti-owned lumber mill on the riverbank, its mechanized logsplitter long since dismantled and quietly missed by no one but its haunted operator."
+entities = [
+    { name = "Ibor Thorn" },
+]
+return_to = "sandpoint"
+
+[[location]]
+key = "general_store"
+name = "General Store"
+description = "Sandpoint's oldest and best-stocked general store, its high stone foundation built to survive the worst of the harbor's storm surges."
+entities = [
+    { name = "Ven Vinder" },
+]
+return_to = "sandpoint"
+
+[[location]]
+key = "turandarok_academy"
+name = "Turandarok Academy"
+description = "Sandpoint's combined school and orphanage, its basement a private museum of curiosities kept by a retired-adventurer headmaster."
+entities = [
+    { name = "Ilsoari Gandethus" },
+]
+return_to = "sandpoint"
+
+[[location]]
+key = "madame_mvashtis"
+name = "Madame Mvashti's House"
+description = "An old, seemingly decrepit manor housing a single ancient and unsettlingly perceptive Varisian seer."
+entities = [
+    { name = "Niska Mvashti" },
+]
+return_to = "sandpoint"
+
+[[location]]
+key = "grocers_hall"
+name = "Grocer's Hall"
+description = "A farmers' market storefront piled with produce and feed, run by a jovial halfling famous for his weekly candy-grab for the town's children."
+entities = [
+    { name = "Olmur Danvakus" },
+]
+return_to = "sandpoint"
+
+[[location]]
+key = "vernahs_clothing"
+name = "Vernah's Fine Clothing"
+description = "A tailoring shop and guildhall for the town's seamstresses and crafters, run by a beautiful, quietly asexual proprietor uninterested in the suitors who court her."
+entities = [
+    { name = "Rynshinn Povalli" },
+]
+return_to = "sandpoint"
+
+[[location]]
+key = "wheens_wagons"
+name = "Wheen's Wagons"
+description = "A modest wheelwright's workshop, its owner's family worn thin by grief and one son's dares."
+entities = [
+    { name = "Bilivar Wheen" },
+]
+return_to = "sandpoint"
+
+[[location]]
+key = "scarnetti_mill"
+name = "Scarnetti Mill"
+description = "The Scarnettis' grain mill, the only one left standing in the region after a string of mysterious fires claimed its rivals."
+entities = [
+    { name = "Courrin Whesterwill" },
+]
+return_to = "sandpoint"
+
+[[location]]
+key = "hagfish"
+name = "The Hagfish"
+description = "Sandpoint's most popular waterfront tavern, home to a foul-tempered pet hagfish and a leather pouch of prize coin for anyone brave enough to drink her tank water."
+entities = [
+    { name = "Jargie Quinn" },
+]
+return_to = "sandpoint"
+
+[[location]]
+key = "fish_market"
+name = "Valdemar Fish Market"
+description = "A long, open-air fish market on the harbor, run in all but name by a crotchety old fisherman the Valdemars have mostly forgotten about."
+entities = [
+    { name = "Turch Sterglus" },
+]
+return_to = "sandpoint"
+
+[[location]]
+key = "sandpoint_market"
+name = "Sandpoint Market"
+description = "The open town square, empty most days but for playing children, transformed twice a week into a bustling farmers' and traveling merchants' market."
+entities = []
+return_to = "sandpoint"
+
+[[location]]
+key = "meat_market"
+name = "Sandpoint Meat Market"
+description = "A butcher shop and slaughterhouse whose owner never stops embellishing the story of his missing finger."
+entities = [
+    { name = "Chod Bevuk" },
+]
+return_to = "sandpoint"
+
+[[location]]
+key = "rusty_dragon"
+name = "The Rusty Dragon"
+description = "Sandpoint's oldest inn, a rusted iron dragon looming over its roof, run with warmth and open arms for adventurers passing through."
+entities = [
+    { name = "Ameiko Kaijitsu" },
+    { name = "Bethana Corwin" },
+]
+return_to = "sandpoint"
+
+[[location]]
+key = "goblin_squash_stables"
+name = "Goblin Squash Stables"
+description = "A stable sharing a wall with the Rusty Dragon, its entrance hung with a grim trophy collection of preserved goblin ears."
+entities = [
+    { name = "Daviren Hosk" },
+]
+return_to = "sandpoint"
+
+[[location]]
+key = "two_knight_brewery"
+name = "Two Knight Brewery"
+description = "The brewery behind most of the ale, mead, and cider served across town, its seasonal batches a point of local pride."
+entities = [
+    { name = "Gaven Deverin" },
+]
+return_to = "sandpoint"
+
+[[location]]
+key = "mercantile_league"
+name = "Mercantile League"
+description = "The town's shipping, caravan, and land-office business all handled under one roof by a devout, quietly married town planner."
+entities = [
+    { name = "Jasper Korvaski" },
+]
+return_to = "sandpoint"
+
+[[location]]
+key = "sandpoint_boutique"
+name = "Sandpoint Boutique"
+description = "A large boutique of imported goods and Varisian art, its owner as outspoken about the Scarnettis as she is generous with everyone else."
+entities = [
+    { name = "Hayliss Korvaski" },
+]
+return_to = "sandpoint"
+
+[[location]]
+key = "fatmans_feedbag"
+name = "Fatman's Feedbag"
+description = "Sandpoint's rowdiest tavern, its bar fights a weekly routine for the sheriff and its true ownership carefully hidden behind a rotund front man."
+entities = [
+    { name = "Jubrayl Vhiski" },
+]
+return_to = "sandpoint"
+
+[[location]]
+key = "pixies_kitten"
+name = "The Pixie's Kitten"
+description = "A respectable, well-run house of companionship, its basement rooms quietly rented to anyone needing to disappear for a while."
+entities = [
+    { name = "Kaye Tesarani" },
+]
+return_to = "sandpoint"
+
+[[location]]
+key = "feathered_serpent"
+name = "The Feathered Serpent"
+description = "A cramped, incense-heavy curio shop half museum, half black market for magic items brought in from Riddleport and beyond."
+entities = [
+    { name = "Vorvashali Voon" },
+]
+return_to = "sandpoint"
+
+[[location]]
+key = "hannahs"
+name = "Hannah's"
+description = "A modest herbalist's home and shop, its owner tending Sandpoint's aches, births, and quiet women's troubles alike."
+entities = [
+    { name = "Hannah Velerin" },
+]
+return_to = "sandpoint"
+
+[[location]]
+key = "shipyard"
+name = "Sandpoint Shipyard"
+description = "A row of dry docks along the harbor where the town's shipwrights work, now run day-to-day by a foul-mouthed but capable harbormaster."
+entities = [
+    { name = "Jhalevia Stensin" },
+]
+return_to = "sandpoint"
+
+[[location]]
+key = "valdemar_manor"
+name = "Valdemar Manor"
+description = "A boarded-up manor on the bluff above town, dark since its last owner's death, its windows rumored to still show lantern light some nights."
+entities = []
+return_to = "sandpoint"
+
+[[location]]
+key = "scarnetti_manor"
+name = "Scarnetti Manor"
+description = "The rebuilt manor of Sandpoint's most conservative and ambitious noble family, its patriarch nursing old grudges and secret Korvosan sponsors."
+entities = [
+    { name = "Titus Scarnetti" },
+]
+return_to = "sandpoint"
+
+[[location]]
+key = "kaijitsu_manor"
+name = "Kaijitsu Manor"
+description = "The smallest but richest of Sandpoint's noble houses, its exotic furnishings kept dusted by a caretaking couple for an owner who's stopped coming home."
+entities = [
+    { name = "Velarie Neserin" },
+]
+return_to = "sandpoint"
+
+[[location]]
+key = "deverin_manor"
+name = "Deverin Manor"
+description = "The grandest manor on Schooner Gulch Road, home to the mayor and the large, rambunctious family she's inherited along with the title."
+entities = [
+    { name = "Kendra Deverin" },
+]
+return_to = "sandpoint"
+
+[[location]]
+key = "choppers_isle"
+name = "Chopper's Isle"
+description = "A haunted, wind-scoured tidal island north of town, once home to a beloved woodcarver revealed as Sandpoint's most infamous killer."
+entities = []
+return_to = "sandpoint"
+
+[[location]]
+key = "old_light"
+name = "The Old Light"
+description = "The crumbling stub of an ancient stone tower atop the sea cliffs, Sandpoint's oldest and most iconic landmark."
+entities = []
+return_to = "sandpoint"
+
+[[entity]]
+name = "Abstalar Zantus"
+supertype = "creature"
+subtype = "humanoid"
+description = "Sandpoint's even-tempered high priest, welcoming to worshipers of every faith under his cathedral's roof."
+
+max_hp = 16
+
+[entity.attitudes]
+default = [ 35, 25, 10 ]
+
+[entity.skills]
+miracles = { dice = 2, pips = 0 }
+charisma = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Naffer Vosk"
+supertype = "creature"
+subtype = "humanoid"
+description = "A gravedigger with a lurching gait and a smuggler's past, who rings the cathedral bells and keeps the boneyard immaculate."
+
+max_hp = 18
+
+[entity.attitudes]
+default = [ 25, 20, 5 ]
+
+[entity.skills]
+miracles = { dice = 2, pips = 0 }
+stealth = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Garridan Viskalai"
+supertype = "creature"
+subtype = "humanoid"
+description = "The White Deer's somber Shoanti owner, gruff company but scrupulously fair with his prices and his rooms."
+
+max_hp = 20
+
+[entity.attitudes]
+default = [ 20, 20, 0 ]
+
+[entity.skills]
+streetwise = { dice = 2, pips = 0 }
+survival = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Veznutt Parooh"
+supertype = "creature"
+subtype = "humanoid"
+description = "An aged, spry gnome cartographer who swears his fanciful treasure maps are all fakes -- mostly."
+
+max_hp = 15
+
+[entity.attitudes]
+default = [ 30, 15, 10 ]
+
+[entity.skills]
+navigation = { dice = 2, pips = 0 }
+arcane = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Pennae Kesk"
+supertype = "creature"
+subtype = "humanoid"
+description = "The shrewd moneylender who keeps Rings and Things profitable and its vault locked, no matter how careless her husband gets."
+
+max_hp = 12
+
+[entity.attitudes]
+default = [ 25, 20, 0 ]
+
+[entity.skills]
+appraise = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Gorvi"
+supertype = "creature"
+subtype = "humanoid"
+description = "A big, foul-mouthed half-orc dungsweeper who's grown increasingly obnoxious down at the boardwalk."
+
+max_hp = 22
+
+[entity.attitudes]
+default = [ 10, 25, -10 ]
+
+[entity.skills]
+intimidation = { dice = 2, pips = 0 }
+strength = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Brodert Quink"
+supertype = "creature"
+subtype = "humanoid"
+description = "A balding, obsessive scholar of Thassilonian ruins, forever certain the Old Light was once a weapon."
+
+max_hp = 14
+
+[entity.attitudes]
+default = [ 25, 15, 10 ]
+
+[entity.skills]
+linguistics = { dice = 2, pips = 0 }
+arcane = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Volioker Briskalberd"
+supertype = "creature"
+subtype = "humanoid"
+description = "A flamboyant dwarven locksmith, the longest-settled resident in town and no fan of the Bunyip Club's thieves."
+
+max_hp = 18
+
+[entity.attitudes]
+default = [ 25, 20, 5 ]
+
+[entity.skills]
+trickery = { dice = 2, pips = 0 }
+appraise = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Belor Hemlock"
+supertype = "creature"
+subtype = "humanoid"
+description = "Sandpoint's Shoanti sheriff, who stopped a killer's rampage and inherited both the post and the name Hemlock."
+
+max_hp = 30
+
+[entity.attitudes]
+default = [ 30, 30, 10 ]
+
+[entity.skills]
+intimidation = { dice = 2, pips = 0 }
+athletics = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Vachedi"
+supertype = "creature"
+subtype = "humanoid"
+description = "A heavily scarred Shoanti jailer saving every coin to buy his sons free from slavers."
+
+max_hp = 32
+
+[entity.attitudes]
+default = [ 15, 25, -5 ]
+
+[entity.skills]
+intimidation = { dice = 2, pips = 0 }
+strength = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Savah Bevaniky"
+supertype = "creature"
+subtype = "humanoid"
+description = "A quietly nervous armorer who's taken to hiding a construct guardian among her weapon racks after a theft."
+
+max_hp = 21
+
+[entity.attitudes]
+default = [ 25, 20, 5 ]
+
+[entity.skills]
+appraise = { dice = 2, pips = 0 }
+blades = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Risa Magravi"
+supertype = "creature"
+subtype = "humanoid"
+description = "A blind old sorcerer who's run this tavern for thirty years, spinning tales of dream-travels no one quite believes."
+
+max_hp = 16
+
+[entity.attitudes]
+default = [ 25, 20, 10 ]
+
+[entity.skills]
+arcane = { dice = 2, pips = 0 }
+charisma = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Larz Rovanky"
+supertype = "creature"
+subtype = "humanoid"
+description = "An exacting, hard-driving tanner who fires his own help more often than anyone else in town."
+
+max_hp = 16
+
+[entity.attitudes]
+default = [ 15, 20, -5 ]
+
+[entity.skills]
+artistry = { dice = 2, pips = 0 }
+strength = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Das Korvut"
+supertype = "creature"
+subtype = "humanoid"
+description = "A powerfully built, foul-tempered blacksmith who tolerates customers only as long as they mind their own business."
+
+max_hp = 25
+
+[entity.attitudes]
+default = [ 10, 25, -15 ]
+
+[entity.skills]
+artistry = { dice = 2, pips = 0 }
+strength = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Aliver Podiker"
+supertype = "creature"
+subtype = "humanoid"
+description = "A short, rotund alchemist and secret poisoner, pleasant to customers and hiding a much darker second trade."
+
+max_hp = 20
+
+[entity.attitudes]
+default = [ 20, 15, -15 ]
+
+[entity.skills]
+arcane = { dice = 2, pips = 0 }
+trickery = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Nisk Tander"
+supertype = "creature"
+subtype = "humanoid"
+description = "A quick-talking half-elf alchemist better at sales than at brewing -- his wares aren't always quite what they claim."
+
+max_hp = 15
+
+[entity.attitudes]
+default = [ 20, 20, 0 ]
+
+[entity.skills]
+trickery = { dice = 2, pips = 0 }
+arcane = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Jesk Berinni"
+supertype = "creature"
+subtype = "humanoid"
+description = "A thick-necked, surprisingly well-read tavern keeper who runs raucous performance nights and nurses ambitions as a playwright."
+
+max_hp = 18
+
+[entity.attitudes]
+default = [ 25, 20, 5 ]
+
+[entity.skills]
+charisma = { dice = 2, pips = 0 }
+artistry = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Jabyl Sorn"
+supertype = "creature"
+subtype = "humanoid"
+description = "A monk and caretaker of Irori's local monastery, tending a library of old books she guards from casual visitors."
+
+max_hp = 25
+
+[entity.attitudes]
+default = [ 20, 15, 5 ]
+
+[entity.skills]
+linguistics = { dice = 2, pips = 0 }
+acrobatics = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Alma Avertin"
+supertype = "creature"
+subtype = "humanoid"
+description = "The bakery's matriarch, still grieving a son lost to Chopper's killing spree years back, letting her twin daughters run the day-to-day."
+
+max_hp = 20
+
+[entity.attitudes]
+default = [ 30, 20, 10 ]
+
+[entity.skills]
+artistry = { dice = 2, pips = 0 }
+observation = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Chask Haladan"
+supertype = "creature"
+subtype = "humanoid"
+description = "A venerable, book-obsessed shopkeeper who funds his shelves from a small fortune saved during a long-past adventuring youth."
+
+max_hp = 18
+
+[entity.attitudes]
+default = [ 30, 20, 10 ]
+
+[entity.skills]
+linguistics = { dice = 2, pips = 0 }
+charisma = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Cyrdak Drokkus"
+supertype = "creature"
+subtype = "humanoid"
+description = "The theater's larger-than-life director, always hunting new scripts and secretly one half of Sandpoint's most enduring inside joke of a rivalry."
+
+max_hp = 30
+
+[entity.attitudes]
+default = [ 25, 20, 10 ]
+
+[entity.skills]
+charisma = { dice = 2, pips = 0 }
+artistry = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Aesrick Battlehorn"
+supertype = "creature"
+subtype = "humanoid"
+description = "A bald, bearded dwarven guildmaster who left his mountain home for an unusual love of working wood instead of stone."
+
+max_hp = 24
+
+[entity.attitudes]
+default = [ 25, 20, 5 ]
+
+[entity.skills]
+artistry = { dice = 2, pips = 0 }
+strength = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Ibor Thorn"
+supertype = "creature"
+subtype = "humanoid"
+description = "A traumatized mill operator still haunted by nightmares of the murders he discovered here years ago."
+
+max_hp = 14
+
+[entity.attitudes]
+default = [ 20, 20, -5 ]
+
+[entity.skills]
+survival = { dice = 2, pips = 0 }
+observation = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Ven Vinder"
+supertype = "creature"
+subtype = "humanoid"
+description = "The store's grieving proprietor, increasingly retreating to his hidden 'wine cellar' since one daughter's murder and the other's growing distance."
+
+max_hp = 20
+
+[entity.attitudes]
+default = [ 20, 20, -5 ]
+
+[entity.skills]
+appraise = { dice = 2, pips = 0 }
+streetwise = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Ilsoari Gandethus"
+supertype = "creature"
+subtype = "humanoid"
+description = "A retired adventurer turned headmaster, hoarding trophies and old regrets about a dungeon he never got to finish exploring."
+
+max_hp = 20
+
+[entity.attitudes]
+default = [ 25, 20, 10 ]
+
+[entity.skills]
+arcane = { dice = 2, pips = 0 }
+trickery = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Niska Mvashti"
+supertype = "creature"
+subtype = "humanoid"
+description = "An ancient Varisian harrower who has outlived every prediction of her own death, now fixated on the ghosts she senses haunting the region."
+
+max_hp = 16
+
+[entity.attitudes]
+default = [ 20, 15, 5 ]
+
+[entity.skills]
+arcane = { dice = 2, pips = 0 }
+observation = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Olmur Danvakus"
+supertype = "creature"
+subtype = "humanoid"
+description = "A perpetually smiling halfling guildmaster who spends a quietly inherited fortune on sweets for Sandpoint's kids."
+
+max_hp = 15
+
+[entity.attitudes]
+default = [ 35, 20, 15 ]
+
+[entity.skills]
+appraise = { dice = 2, pips = 0 }
+husbandry = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Rynshinn Povalli"
+supertype = "creature"
+subtype = "humanoid"
+description = "A skilled tailor who's built her mother's old shop into a guild of local crafters, still wondering who leaves her mysterious birthday gifts."
+
+max_hp = 18
+
+[entity.attitudes]
+default = [ 30, 20, 10 ]
+
+[entity.skills]
+artistry = { dice = 2, pips = 0 }
+appraise = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Bilivar Wheen"
+supertype = "creature"
+subtype = "humanoid"
+description = "A down-on-his-luck wheelwright who spends more time at the Hagfish these days than at his own workbench."
+
+max_hp = 15
+
+[entity.attitudes]
+default = [ 15, 20, -5 ]
+
+[entity.skills]
+artistry = { dice = 2, pips = 0 }
+strength = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Courrin Whesterwill"
+supertype = "creature"
+subtype = "humanoid"
+description = "A constantly sneezing, worn-down miller quietly saving every coin to escape the Scarnettis' thumb."
+
+max_hp = 14
+
+[entity.attitudes]
+default = [ 20, 20, -5 ]
+
+[entity.skills]
+appraise = { dice = 2, pips = 0 }
+observation = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Jargie Quinn"
+supertype = "creature"
+subtype = "humanoid"
+description = "A gregarious one-legged tavern keeper with an ever-changing story of how he lost the leg."
+
+max_hp = 30
+
+[entity.attitudes]
+default = [ 30, 20, 10 ]
+
+[entity.skills]
+charisma = { dice = 2, pips = 0 }
+streetwise = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Turch Sterglus"
+supertype = "creature"
+subtype = "humanoid"
+description = "A retired fisherman with a wild beard and a lazy eye, running the fish market as if it were his own though it isn't, quite."
+
+max_hp = 20
+
+[entity.attitudes]
+default = [ 25, 20, 5 ]
+
+[entity.skills]
+appraise = { dice = 2, pips = 0 }
+survival = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Chod Bevuk"
+supertype = "creature"
+subtype = "humanoid"
+description = "A butcher and shameless gossip who insists Chopper himself took his missing finger -- and for once, he's telling the truth."
+
+max_hp = 17
+
+[entity.attitudes]
+default = [ 25, 20, 10 ]
+
+[entity.skills]
+streetwise = { dice = 2, pips = 0 }
+appraise = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Ameiko Kaijitsu"
+supertype = "creature"
+subtype = "humanoid"
+description = "A former adventurer turned innkeeper, endlessly welcoming to travelers and hiding old grief behind an easy smile."
+
+max_hp = 22
+
+[entity.attitudes]
+default = [ 35, 25, 15 ]
+
+[entity.skills]
+charisma = { dice = 2, pips = 0 }
+streetwise = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Bethana Corwin"
+supertype = "creature"
+subtype = "humanoid"
+description = "A quiet old halfling who handles the Rusty Dragon's rooms and errands while Ameiko charms the taproom."
+
+max_hp = 8
+
+[entity.attitudes]
+default = [ 30, 20, 10 ]
+
+[entity.skills]
+observation = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Daviren Hosk"
+supertype = "creature"
+subtype = "humanoid"
+description = "A one-eyed retired hunter whose hatred of goblins has only sharpened since he lost the eye to one."
+
+max_hp = 30
+
+[entity.attitudes]
+default = [ 20, 20, 0 ]
+
+[entity.skills]
+survival = { dice = 2, pips = 0 }
+missiles = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Gaven Deverin"
+supertype = "creature"
+subtype = "humanoid"
+description = "A paladin-turned-brewer whose craft has never quite tasted the same to locals since his brother's murder."
+
+max_hp = 25
+
+[entity.attitudes]
+default = [ 25, 25, 10 ]
+
+[entity.skills]
+artistry = { dice = 2, pips = 0 }
+miracles = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Jasper Korvaski"
+supertype = "creature"
+subtype = "humanoid"
+description = "A former paladin turned town planner, openly and happily married despite one prominent family's disapproval."
+
+max_hp = 20
+
+[entity.attitudes]
+default = [ 30, 25, 10 ]
+
+[entity.skills]
+charisma = { dice = 2, pips = 0 }
+appraise = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Hayliss Korvaski"
+supertype = "creature"
+subtype = "humanoid"
+description = "A sharp-tongued cleric and shopkeeper who wears her disdain for the Scarnetti family openly."
+
+max_hp = 18
+
+[entity.attitudes]
+default = [ 20, 20, -5 ]
+
+[entity.skills]
+appraise = { dice = 2, pips = 0 }
+miracles = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Jubrayl Vhiski"
+supertype = "creature"
+subtype = "humanoid"
+description = "A lanky Sczarni thug who secretly owns the Feedbag and leads the Bunyip Club from behind a hired front man's back."
+
+max_hp = 25
+
+[entity.attitudes]
+default = [ 15, 20, -10 ]
+
+[entity.skills]
+streetwise = { dice = 2, pips = 0 }
+trickery = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Kaye Tesarani"
+supertype = "creature"
+subtype = "humanoid"
+description = "A graceful madam running Sandpoint's brothel with class, and quietly courting the town's sheriff."
+
+max_hp = 15
+
+[entity.attitudes]
+default = [ 25, 20, 10 ]
+
+[entity.skills]
+charisma = { dice = 2, pips = 0 }
+trickery = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Vorvashali Voon"
+supertype = "creature"
+subtype = "humanoid"
+description = "An exotic, gregarious curio dealer whose ever-changing stock makes his shop Sandpoint's best bet for a strange magic item."
+
+max_hp = 18
+
+[entity.attitudes]
+default = [ 25, 20, 10 ]
+
+[entity.skills]
+appraise = { dice = 2, pips = 0 }
+arcane = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Hannah Velerin"
+supertype = "creature"
+subtype = "humanoid"
+description = "An elf herbalist and midwife who gathers Gozreh's bounty each morning and treats Sandpoint's sick each afternoon."
+
+max_hp = 20
+
+[entity.attitudes]
+default = [ 30, 20, 10 ]
+
+[entity.skills]
+medicine = { dice = 2, pips = 0 }
+survival = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Jhalevia Stensin"
+supertype = "creature"
+subtype = "humanoid"
+description = "A foul-mouthed, fair harbormaster from distant Thuvia, quietly hoping to impress the mayor who hired her."
+
+max_hp = 18
+
+[entity.attitudes]
+default = [ 25, 20, 10 ]
+
+[entity.skills]
+navigation = { dice = 2, pips = 0 }
+appraise = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Titus Scarnetti"
+supertype = "creature"
+subtype = "humanoid"
+description = "The cold, ambitious patriarch of Sandpoint's most traditional noble family, quietly rebuilding influence he still resents having lost."
+
+max_hp = 28
+
+[entity.attitudes]
+default = [ 10, 20, -15 ]
+
+[entity.skills]
+intimidation = { dice = 2, pips = 0 }
+appraise = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Velarie Neserin"
+supertype = "creature"
+subtype = "humanoid"
+description = "The steward who airs out Kaijitsu Manor's mostly empty rooms each week, waiting for its last surviving heir to decide its fate."
+
+max_hp = 14
+
+[entity.attitudes]
+default = [ 25, 20, 5 ]
+
+[entity.skills]
+observation = { dice = 2, pips = 0 }
+husbandry = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Kendra Deverin"
+supertype = "creature"
+subtype = "humanoid"
+description = "Sandpoint's even-keeled mayor, who set aside romance for politics after losing her intended to Chopper's blade."
+
+max_hp = 25
+
+[entity.attitudes]
+default = [ 30, 25, 15 ]
+
+[entity.skills]
+charisma = { dice = 2, pips = 0 }
+appraise = { dice = 2, pips = 0 }

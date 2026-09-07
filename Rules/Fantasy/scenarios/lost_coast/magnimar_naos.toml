@@ -1,0 +1,375 @@
+# Magnimar's Naos district (see magnimar_alabaster.toml's own docstring for why this scenario
+# splits one file per district). Pulled from "Magnimar, City of Monuments" (Settings/Fantasy/)
+# via its own extracted text -- descriptions below are original paraphrases, never the book's own
+# copyrighted prose. Naos (N1-N13 in the book's own gazetteer), disparagingly called the
+# "New-Money District," is Magnimar's military and merchant-aristocrat quarter, home to the
+# towering Arvensoar and the lord-mayor's own estate.
+
+[[location]]
+key = "naos"
+name = "Naos"
+aliases = [ "Grand Arch", "the New-Money District", "Vista" ]
+description = "A well-kept district of new-money merchants and military garrisons beneath the towering Arvensoar, its street signs deliberately left unmarked."
+return_to = "magnimar"
+entities = []
+
+[[location.exit]]
+destination = "osprey_club"
+aliases = [ "the osprey club" ]
+
+[[location.exit]]
+destination = "cathedral_of_abadar"
+aliases = [ "the cathedral of abadar" ]
+
+[[location.exit]]
+destination = "kaijitsu_villa"
+aliases = [ "kaijitsu villa" ]
+
+[[location.exit]]
+destination = "deverin_villa"
+aliases = [ "deverin villa" ]
+
+[[location.exit]]
+destination = "house_of_welcome"
+aliases = [ "the house of welcome" ]
+
+[[location.exit]]
+destination = "defiants_garden"
+aliases = [ "defiant's garden" ]
+
+[[location.exit]]
+destination = "arvensoar"
+aliases = [ "the arvensoar" ]
+
+[[location.exit]]
+destination = "temple_of_iomedae"
+aliases = [ "the temple of iomedae" ]
+
+[[location.exit]]
+destination = "founders_flame"
+aliases = [ "founder's flame" ]
+
+[[location.exit]]
+destination = "the_guardians"
+aliases = [ "the guardians" ]
+
+[[location.exit]]
+destination = "bastion_of_the_nail"
+aliases = [ "the bastion of the nail" ]
+
+[[location.exit]]
+destination = "borias"
+aliases = [ "boria's", "the wine shop" ]
+
+[[location.exit]]
+destination = "triodea"
+aliases = [ "the triodea" ]
+
+[[location]]
+key = "osprey_club"
+name = "Osprey Club"
+description = "An invitation-only tavern and gambling den behind a wrought-iron fence, its faerie-fire glow marking Magnimar's most prestigious nightspot."
+entities = [
+    { name = "Kayasi Zivatchi" },
+]
+return_to = "naos"
+
+[[location]]
+key = "cathedral_of_abadar"
+name = "Cathedral of Abadar"
+description = "Magnimar's largest temple, functioning as the city's primary bank and moneylender for all of western Varisia."
+entities = [
+    { name = "Jyronn Imikar" },
+]
+return_to = "naos"
+
+[[location]]
+key = "kaijitsu_villa"
+name = "Kaijitsu Villa"
+description = "The Kaijitsu family's Magnimar estate, quietly falling into disrepair as the family's attention shifts to their holdings in Sandpoint."
+entities = []
+return_to = "naos"
+
+[[location]]
+key = "deverin_villa"
+name = "Deverin Villa"
+description = "Home of Magnimar's most easygoing aristocratic family, its patient, well-loved patriarch nicknamed the Simple Lord."
+entities = [
+    { name = "Hobart Deverin" },
+]
+return_to = "naos"
+
+[[location]]
+key = "house_of_welcome"
+name = "House of Welcome"
+description = "Magnimar's most exclusive and expensive brothel, occupying a villa its current madam wishes she'd inherited as a home instead."
+entities = [
+    { name = "Remeka Abantiir" },
+]
+return_to = "naos"
+
+[[location]]
+key = "defiants_garden"
+name = "Defiant's Garden"
+description = "A lavish, city-owned diplomatic estate the lord-mayor claimed for himself, its four staffed floors far grander than his old public residence."
+entities = [
+    { name = "Haldmeer Grobaras" },
+    { name = "Khonderian" },
+]
+return_to = "naos"
+
+[[location]]
+key = "arvensoar"
+name = "The Arvensoar"
+description = "Magnimar's tallest structure, a four-hundred-foot tower garrisoning the city watch and military, connecting the Shore to the Summit."
+entities = [
+    { name = "Ismeir Odinburge" },
+    { name = "Acacia Uriana" },
+]
+return_to = "naos"
+
+[[location]]
+key = "temple_of_iomedae"
+name = "Temple of Iomedae"
+description = "A fortresslike temple sounding a daily call to glory, preaching honor and sacrifice to Magnimar's laity."
+entities = [
+    { name = "Tira Ronnova" },
+]
+return_to = "naos"
+
+[[location]]
+key = "founders_flame"
+name = "Founder's Flame"
+description = "A perpetual fountain of magical fire, a founding-era gift to the city, its colors cycling in an arcane rhythm."
+entities = []
+return_to = "naos"
+
+[[location]]
+key = "the_guardians"
+name = "The Guardians"
+description = "Twin two-hundred-foot statues of young heroes forming a great arch over the road into the district."
+entities = []
+return_to = "naos"
+
+[[location]]
+key = "bastion_of_the_nail"
+name = "Bastion of the Nail"
+description = "A small, tenacious Hellknight garrison invited into the city by frustrated justices, now here to stay whether the Ushers like it or not."
+entities = [
+    { name = "Darean Halst" },
+]
+return_to = "naos"
+
+[[location]]
+key = "borias"
+name = "Boria's"
+description = "A deliberately unremarkable wine shop whose real trade, sold only to those it trusts, is rare and deadly poison."
+entities = [
+    { name = "Todoban Boria" },
+]
+return_to = "naos"
+
+[[location]]
+key = "triodea"
+name = "The Triodea"
+description = "Magnimar's most renowned playhouse, its three halls hosting opera, concerts, and solo performance under one roof."
+entities = [
+    { name = "Durstin Versade" },
+    { name = "Kassiel Iylmrain" },
+]
+return_to = "naos"
+
+[[entity]]
+name = "Kayasi Zivatchi"
+supertype = "creature"
+subtype = "humanoid"
+description = "The garrulous Chelaxian bard who administers the Osprey Club, delighting in scandal nearly as much as a good joke."
+
+max_hp = 24
+
+[entity.attitudes]
+default = [ 25, 15, 10 ]
+
+[entity.skills]
+charisma = { dice = 3, pips = 0 }
+trickery = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Jyronn Imikar"
+supertype = "creature"
+subtype = "humanoid"
+description = "The commanding, fair-minded proctor of the Cathedral of Abadar, once an acolyte to the Ruby Prince of Osirion himself."
+
+max_hp = 48
+
+[entity.attitudes]
+default = [ 25, 20, 5 ]
+
+[entity.skills]
+miracles = { dice = 3, pips = 0 }
+appraise = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Hobart Deverin"
+supertype = "creature"
+subtype = "humanoid"
+description = "Deverin Villa's leader, nicknamed the Simple Lord, proudly patient with commonfolk and proud of his niece's mayorship of Sandpoint."
+
+max_hp = 30
+
+[entity.attitudes]
+default = [ 35, 15, 15 ]
+
+[entity.skills]
+charisma = { dice = 2, pips = 0 }
+appraise = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Remeka Abantiir"
+supertype = "creature"
+subtype = "humanoid"
+description = "The House of Welcome's current madam, running the family brothel she resents inheriting in place of the manor it once was."
+
+max_hp = 30
+
+[entity.attitudes]
+default = [ 20, 15, -5 ]
+
+[entity.skills]
+charisma = { dice = 3, pips = 0 }
+miracles = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Haldmeer Grobaras"
+supertype = "creature"
+subtype = "humanoid"
+description = "Magnimar's paunchy, self-serving lord-mayor, more attentive to bribery and comfort than the needs of the city he's led for a decade."
+
+max_hp = 30
+
+[entity.attitudes]
+default = [ 15, 15, -5 ]
+
+[entity.skills]
+charisma = { dice = 3, pips = 0 }
+trickery = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Khonderian"
+supertype = "creature"
+subtype = "humanoid"
+description = "The lord-mayor's dour chief bodyguard, notable in Magnimar for having no last or middle name."
+
+max_hp = 34
+
+[entity.attitudes]
+default = [ 10, 30, -10 ]
+
+[entity.skills]
+blades = { dice = 3, pips = 0 }
+intimidation = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Ismeir Odinburge"
+supertype = "creature"
+subtype = "humanoid"
+description = "The Arvensoar's competent, inflexible commander, honestly devoted to leading Magnimar's military forces."
+
+max_hp = 42
+
+[entity.attitudes]
+default = [ 20, 25, 0 ]
+
+[entity.skills]
+blades = { dice = 3, pips = 0 }
+willpower = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Acacia Uriana"
+supertype = "creature"
+subtype = "humanoid"
+description = "The fiery, opinionated captain of the city watch, reporting to Odinburge from the Arvensoar."
+
+max_hp = 36
+
+[entity.attitudes]
+default = [ 20, 25, 5 ]
+
+[entity.skills]
+blades = { dice = 3, pips = 0 }
+observation = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Tira Ronnova"
+supertype = "creature"
+subtype = "humanoid"
+description = "The devout chaplain presiding over the Temple of Iomedae, preaching honor and sacrifice to the district's laity."
+
+max_hp = 40
+
+[entity.attitudes]
+default = [ 30, 20, 10 ]
+
+[entity.skills]
+miracles = { dice = 3, pips = 0 }
+blades = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Darean Halst"
+supertype = "creature"
+subtype = "humanoid"
+description = "The disciplined Hellknight commanding the Order of the Nail's small Magnimarian contingent at the Bastion."
+
+max_hp = 38
+
+[entity.attitudes]
+default = [ 10, 30, -15 ]
+
+[entity.skills]
+blades = { dice = 3, pips = 0 }
+intimidation = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Todoban Boria"
+supertype = "creature"
+subtype = "humanoid"
+description = "The blandly forgettable owner of Boria's, whose true trade in rare poisons pays far better than the wine on his shelves."
+
+max_hp = 34
+
+[entity.attitudes]
+default = [ 10, 20, -10 ]
+
+[entity.skills]
+trickery = { dice = 3, pips = 0 }
+appraise = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Durstin Versade"
+supertype = "creature"
+subtype = "humanoid"
+description = "The nominal owner of the Triodea, content to let its true creative force run the stage."
+
+max_hp = 22
+
+[entity.attitudes]
+default = [ 25, 15, 5 ]
+
+[entity.skills]
+appraise = { dice = 2, pips = 0 }
+charisma = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Kassiel Iylmrain"
+supertype = "creature"
+subtype = "humanoid"
+description = "The Triodea's temperamental true master, a masterful elf dancer prone to fits of jealousy over his fading favorite production."
+
+max_hp = 30
+
+[entity.attitudes]
+default = [ 15, 15, -10 ]
+
+[entity.skills]
+artistry = { dice = 3, pips = 0 }
+charisma = { dice = 2, pips = 0 }

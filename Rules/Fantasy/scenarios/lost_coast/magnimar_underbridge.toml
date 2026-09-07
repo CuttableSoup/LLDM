@@ -1,0 +1,169 @@
+# Magnimar's Underbridge district (see magnimar_alabaster.toml's own docstring for why this
+# scenario splits one file per district). Pulled from "Magnimar, City of Monuments"
+# (Settings/Fantasy/) via its own extracted text -- descriptions below are original paraphrases,
+# never the book's own copyrighted prose. Underbridge (U1-U8 in the book's own gazetteer), also
+# called the Shadow, is the slum beneath the Irespan and Magnimar's most dangerous district.
+
+[[location]]
+key = "underbridge"
+name = "Underbridge"
+aliases = [ "the Shadow" ]
+description = "A lightless slum crouched beneath the Irespan's ruined pilings, its shanties and flophouses the most dangerous streets in Magnimar."
+return_to = "magnimar"
+entities = []
+
+[[location.exit]]
+destination = "the_gull"
+aliases = [ "the gull" ]
+
+[[location.exit]]
+destination = "friendly_merchant"
+aliases = [ "the friendly merchant" ]
+
+[[location.exit]]
+destination = "the_rat"
+aliases = [ "the rat" ]
+
+[[location.exit]]
+destination = "swift_dolphin_warehouse"
+aliases = [ "the swift dolphin warehouse" ]
+
+[[location.exit]]
+destination = "the_harpy"
+aliases = [ "the harpy" ]
+
+[[location.exit]]
+destination = "shadow_clock"
+aliases = [ "the shadow clock" ]
+
+[[location.exit]]
+destination = "the_gecko"
+aliases = [ "the gecko" ]
+
+[[location.exit]]
+destination = "shrine_of_sarenrae"
+aliases = [ "the shrine of sarenrae" ]
+
+[[location]]
+key = "the_gull"
+name = "The Gull"
+description = "An Irespan piling turned Creepers stronghold, its chambers a workhouse for stolen children kept loyal through terror."
+entities = [
+    { name = "Haugen" },
+]
+return_to = "underbridge"
+
+[[location]]
+key = "friendly_merchant"
+name = "Friendly Merchant"
+description = "A dilapidated tavern whose real money comes from its owner's tight grip on one of Underbridge's best smuggling piers."
+entities = [
+    { name = "Siov Cassimeel" },
+]
+return_to = "underbridge"
+
+[[location]]
+key = "the_rat"
+name = "The Rat"
+description = "A rodent-carved Irespan piling housing Doolun's Lads, Magnimar's most wretched Sczarni gang, now hollowed out from within by something worse."
+entities = [
+    { name = "Doolun Corveshku" },
+]
+return_to = "underbridge"
+
+[[location]]
+key = "swift_dolphin_warehouse"
+name = "Swift Dolphin Warehouse"
+description = "A failed exporter's sagging warehouse, abandoned above ground but quietly busy in the catacombs below."
+entities = []
+return_to = "underbridge"
+
+[[location]]
+key = "the_harpy"
+name = "The Harpy"
+description = "The Irespan piling home to Underbridge's one legitimate artisan, a reclusive sculptor whose carvings are prized far beyond the city she hides in."
+entities = [
+    { name = "Ayavah" },
+]
+return_to = "underbridge"
+
+[[location]]
+key = "shadow_clock"
+name = "The Shadow Clock"
+description = "A teetering, 250-foot clocktower frozen at three o'clock, closed to the public after too many fatal falls and rumored to hide something far worse inside."
+entities = []
+return_to = "underbridge"
+
+[[location]]
+key = "the_gecko"
+name = "The Gecko"
+description = "An Irespan piling carved with a thousand leering geckos, its only entrance a high window that few who enter ever return from."
+entities = []
+return_to = "underbridge"
+
+[[location]]
+key = "shrine_of_sarenrae"
+name = "Shrine of Sarenrae"
+description = "A small shrine abandoned since its founding priest and his acolytes were beaten to death by Sczarni thugs generations ago."
+entities = []
+return_to = "underbridge"
+
+[[entity]]
+name = "Haugen"
+supertype = "creature"
+subtype = "humanoid"
+description = "The sallow, vile-smelling leader of the Creepers, ruling his stolen children through fear of worse things below."
+
+max_hp = 28
+
+[entity.attitudes]
+default = [ 10, 25, -15 ]
+
+[entity.skills]
+intimidation = { dice = 3, pips = 0 }
+streetwise = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Siov Cassimeel"
+supertype = "creature"
+subtype = "humanoid"
+description = "The Friendly Merchant's cowardly, scheming owner, whose private smuggling pier earns him more than his tavern or his crimes."
+
+max_hp = 30
+
+[entity.attitudes]
+default = [ 15, 20, -10 ]
+
+[entity.skills]
+trickery = { dice = 3, pips = 0 }
+arcane = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Doolun Corveshku"
+supertype = "creature"
+subtype = "humanoid"
+description = "One of the last true members of Doolun's Lads, kept alive as a prisoner in his own gang's headquarters for reasons only his captors understand."
+
+max_hp = 18
+
+[entity.attitudes]
+default = [ 25, 10, -5 ]
+
+[entity.skills]
+stealth = { dice = 2, pips = 0 }
+streetwise = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Ayavah"
+supertype = "creature"
+subtype = "humanoid"
+description = "A reclusive, exceptionally talented sculptor dwelling at the Harpy, hiding secrets more dangerous than her striking appearance."
+
+max_hp = 32
+
+[entity.attitudes]
+default = [ 20, 20, -10 ]
+
+[entity.skills]
+artistry = { dice = 3, pips = 0 }
+arcane = { dice = 2, pips = 0 }

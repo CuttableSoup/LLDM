@@ -1,0 +1,264 @@
+# Magnimar's Dockway district (see magnimar_alabaster.toml's own docstring for why this scenario
+# splits one file per district). Pulled from "Magnimar, City of Monuments" (Settings/Fantasy/)
+# via its own extracted text -- descriptions below are original paraphrases, never the book's own
+# copyrighted prose. Dockway (D1-D12 in the book's own gazetteer) is Magnimar's waterfront trade
+# district, home to the Bazaar of Sails and Outcast's Cove.
+
+[[location]]
+key = "dockway"
+name = "Dockway"
+aliases = [ "the Bazaar of Sails", "Eagle's Quarter", "the Trade District" ]
+description = "A bustling waterfront district of salt-blasted storefronts and free-trade wharves, its heart the sprawling Bazaar of Sails."
+return_to = "magnimar"
+entities = []
+
+[[location.exit]]
+destination = "old_fang"
+aliases = [ "the old fang" ]
+
+[[location.exit]]
+destination = "eyes_of_the_hawk"
+aliases = [ "eyes of the hawk" ]
+
+[[location.exit]]
+destination = "no_horn"
+aliases = [ "no-horn" ]
+
+[[location.exit]]
+destination = "carents_camp"
+aliases = [ "carent's camp" ]
+
+[[location.exit]]
+destination = "bazaar_of_sails"
+aliases = [ "the bazaar of sails", "the bazaar" ]
+
+[[location.exit]]
+destination = "captains_club"
+aliases = [ "the captain's club" ]
+
+[[location.exit]]
+destination = "shucked_oyster"
+aliases = [ "the shucked oyster" ]
+
+[[location.exit]]
+destination = "bronze_house"
+aliases = [ "the bronze house" ]
+
+[[location.exit]]
+destination = "impound_yard"
+aliases = [ "the impound yard" ]
+
+[[location.exit]]
+destination = "merchants_guildhall"
+aliases = [ "the merchants' guildhall" ]
+
+[[location.exit]]
+destination = "fifth_wind"
+aliases = [ "the fifth wind" ]
+
+[[location.exit]]
+destination = "outcasts_cove"
+aliases = [ "outcast's cove" ]
+
+[[location]]
+key = "old_fang"
+name = "The Old Fang"
+description = "A barnacled taproom and cheap inn on the docks, run by a burly, no-nonsense matron who keeps her late husband's nautical trophies on the wall."
+entities = [
+    { name = "Ol' Mam Grottle" },
+]
+return_to = "dockway"
+
+[[location]]
+key = "eyes_of_the_hawk"
+name = "Eyes of the Hawk"
+description = "A monument to the twin wizards who once slew a monstrous, spidery horror erupting from the Irespan."
+entities = []
+return_to = "dockway"
+
+[[location]]
+key = "no_horn"
+name = "No-Horn"
+description = "A leaning tavern built from a scrapped ship's hull, its cheap drinks and disfigured bartender as unpleasant as each other."
+entities = []
+return_to = "dockway"
+
+[[location]]
+key = "carents_camp"
+name = "Carent's Camp"
+description = "A Varisian encampment that doubles as a Sczarni gang's hideout, its leader keeping up a cobbler's cover trade between jobs."
+entities = [
+    { name = "Donal Carent" },
+]
+return_to = "dockway"
+
+[[location]]
+key = "bazaar_of_sails"
+name = "Bazaar of Sails"
+description = "Varisia's largest free market, a dockside plaza of ever-changing tents and wagons policed by its own self-appointed 'court' of toughs."
+entities = [
+    { name = "Sabriyya Kalmeralm" },
+]
+return_to = "dockway"
+
+[[location]]
+key = "captains_club"
+name = "Captain's Club"
+description = "Dockway's most exclusive tavern, catering only to ship captains, kept exquisitely decorated by its independently wealthy owner."
+entities = [
+    { name = "Leruu Kantiki" },
+]
+return_to = "dockway"
+
+[[location]]
+key = "shucked_oyster"
+name = "The Shucked Oyster"
+description = "A flamboyant four-story brothel overlooking the piers, notorious even among Magnimar's many, its madam well-connected enough to fend off every attempt to shut it down."
+entities = [
+    { name = "Seeshah Raccas" },
+]
+return_to = "dockway"
+
+[[location]]
+key = "bronze_house"
+name = "Bronze House"
+description = "A shipping-and-lending front for the Aspis Consortium's century-old presence in Magnimar, increasingly rattled by Pathfinder Society attention."
+entities = [
+    { name = "Maiveer Sloan" },
+]
+return_to = "dockway"
+
+[[location]]
+key = "impound_yard"
+name = "Impound Yard"
+description = "Government-run piers where abandoned ships are docked, cataloged, and eventually auctioned off sight-unseen."
+entities = []
+return_to = "dockway"
+
+[[location]]
+key = "merchants_guildhall"
+name = "Merchants' Guildhall"
+description = "A stark, utilitarian stronghold for Magnimar's most powerful trade guild, its true wealth spread across the city rather than kept on site."
+entities = [
+    { name = "Khet Igersen" },
+]
+return_to = "dockway"
+
+[[location]]
+key = "fifth_wind"
+name = "The Fifth Wind"
+description = "A towering stone weather vane carved with battling air elementals and cloud dragons, giving the whole cove an easy read on the wind."
+entities = []
+return_to = "dockway"
+
+[[location]]
+key = "outcasts_cove"
+name = "Outcast's Cove"
+description = "The cove where the Yondabakari meets the sea, its waters crowded with trade ships and the Quarriers' Guild's floats over sunken Irespan stone."
+entities = []
+return_to = "dockway"
+
+[[entity]]
+name = "Ol' Mam Grottle"
+supertype = "creature"
+subtype = "humanoid"
+description = "The burly, no-nonsense Varisian matron running the Old Fang, decorated with the trophies of her late husband's last, fatal hunt."
+
+max_hp = 24
+
+[entity.attitudes]
+default = [ 30, 20, 10 ]
+
+[entity.skills]
+brawling = { dice = 2, pips = 0 }
+athletics = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Donal Carent"
+supertype = "creature"
+subtype = "humanoid"
+description = "The Wreckwash Blades' leader, posing as a cobbler in the best tent of the Sczarni camp he commands."
+
+max_hp = 26
+
+[entity.attitudes]
+default = [ 15, 20, -10 ]
+
+[entity.skills]
+trickery = { dice = 3, pips = 0 }
+streetwise = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Sabriyya Kalmeralm"
+supertype = "creature"
+subtype = "humanoid"
+description = "The Bazaar of Sails' self-styled Princess of the Market, a fiery, silver-tongued gang leader who keeps the peace between squabbling traders."
+
+max_hp = 52
+
+[entity.attitudes]
+default = [ 25, 25, 5 ]
+
+[entity.skills]
+charisma = { dice = 3, pips = 0 }
+intimidation = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Leruu Kantiki"
+supertype = "creature"
+subtype = "humanoid"
+description = "The Taldan expatriate owner of the Captain's Club, famous for her pale makeup and exclusive taste."
+
+max_hp = 28
+
+[entity.attitudes]
+default = [ 20, 20, 0 ]
+
+[entity.skills]
+charisma = { dice = 2, pips = 0 }
+appraise = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Seeshah Raccas"
+supertype = "creature"
+subtype = "humanoid"
+description = "The Shucked Oyster's well-connected madam, whose brother happens to run the Night Scales thieves' guild."
+
+max_hp = 32
+
+[entity.attitudes]
+default = [ 20, 15, -5 ]
+
+[entity.skills]
+arcane = { dice = 2, pips = 0 }
+charisma = { dice = 3, pips = 0 }
+
+[[entity]]
+name = "Maiveer Sloan"
+supertype = "creature"
+subtype = "humanoid"
+description = "A gaunt Aspis Consortium agent increasingly forced into the open to counter the Pathfinder Society's growing influence in Varisia."
+
+max_hp = 46
+
+[entity.attitudes]
+default = [ 10, 25, -15 ]
+
+[entity.skills]
+trickery = { dice = 3, pips = 0 }
+streetwise = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Khet Igersen"
+supertype = "creature"
+subtype = "humanoid"
+description = "The industrious administrator of Magnimar's Merchants' Guild, backed by Vanderale money."
+
+max_hp = 26
+
+[entity.attitudes]
+default = [ 20, 15, 0 ]
+
+[entity.skills]
+appraise = { dice = 3, pips = 0 }
+charisma = { dice = 2, pips = 0 }

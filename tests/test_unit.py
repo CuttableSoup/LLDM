@@ -3031,6 +3031,35 @@ class TestWorldMapExpansion(DMTestCase):
     def test_resolve_road_multiplier_is_none_off_the_roads_own_width(self):
         self.assertIsNone(self.dm_core._resolve_road_multiplier(180, 5))
 
+    def _stub_bent_road(self, path, width=2, speed_multiplier=1.0):
+        # A synthetic multi-leg [[road]] pushed directly onto the already-loaded rules dict --
+        # cheaper than authoring a whole new world_map.toml region just to exercise "path", and
+        # restored automatically so it can't leak into any other test in this class.
+        original = list(self.dm_core.rules.get("road", []))
+        self.dm_core.rules["road"] = original + [
+            {"path": [{"x": x, "y": y} for x, y in path], "width": width, "speed_multiplier": speed_multiplier},
+        ]
+        self.addCleanup(lambda: self.dm_core.rules.__setitem__("road", original))
+
+    def test_road_points_falls_back_to_from_to_when_no_path_authored(self):
+        # The shipped Sandpoint-Magnimar road still authors "from"/"to", not "path" -- the
+        # two-point degenerate case _road_points must keep producing unchanged.
+        road = self.dm_core.rules["road"][0]
+        self.assertEqual(self.dm_core._road_points(road), [(150, 0), (210, 0)])
+
+    def test_resolve_road_multiplier_follows_a_bent_path(self):
+        # An L-shaped road (0,0) -> (10,0) -> (10,10): a straight from/to line would cut the
+        # corner and miss (10,0) entirely by more than its own width -- only per-leg checking
+        # (not one straight shot between the endpoints) can ever match this point.
+        self._stub_bent_road([(0, 0), (10, 0), (10, 10)], width=1)
+        self.assertEqual(self.dm_core._resolve_road_multiplier(10, 0), 1.0)
+        self.assertEqual(self.dm_core._resolve_road_multiplier(5, 0), 1.0)
+        self.assertEqual(self.dm_core._resolve_road_multiplier(10, 5), 1.0)
+        # (5, 5) is off both legs -- more than 1 unit from either the x-axis or the x=10 line --
+        # proof this isn't secretly falling back to a single from-first-to-last segment, which
+        # would place it well within a wide straight-line tolerance instead.
+        self.assertIsNone(self.dm_core._resolve_road_multiplier(5, 5))
+
     def test_grid_travel_costs_the_same_3_blocks_the_road_always_promised(self):
         self._stub_encounter_roll("nothing")
         resolved_events = self._capture("item_interaction_resolved")
@@ -3043,6 +3072,56 @@ class TestWorldMapExpansion(DMTestCase):
         self.assertTrue(result["found"])
         self.assertEqual(result["blocks_spent"], 3)
         self.assertEqual(result["distance"], 60.0)
+
+    def _stub_exit_off_sandpoint(self, destination_key, destination_location):
+        # A synthetic non-gridded [[location.exit]] pushed directly onto the already-loaded
+        # "sandpoint" location (grid 150,0) -- cheaper than authoring a whole new scenario file
+        # just to prove a gridded location's own exit graph is actually reachable.
+        self.dm_core.locations[destination_key] = destination_location
+        self.addCleanup(self.dm_core.locations.pop, destination_key, None)
+        original_exits = list(self.dm_core.locations["sandpoint"].get("exit", []))
+        self.dm_core.locations["sandpoint"]["exit"] = original_exits + [
+            {"destination": destination_key},
+        ]
+        self.addCleanup(self.dm_core.locations["sandpoint"].__setitem__, "exit", original_exits)
+
+    def test_gridded_location_still_honors_its_own_named_exit(self):
+        # Confirms the fix for the exit-graph/grid-travel conflict: sandpoint carries "grid"
+        # for its Magnimar trip, but that must not swallow a named move to a local, non-gridded
+        # exit the way it did before _resolve_travel_intent tried the exit graph first.
+        self._stub_exit_off_sandpoint("dock_shop", {
+            "key": "dock_shop", "name": "The Dock Shop",
+            "description": "A cramped shop smelling of tar and fish.", "entities": [],
+            "return_to": "sandpoint",
+        })
+        resolved_events = self._capture("item_interaction_resolved")
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "travel", "item_name": None, "input": "i travel to the dock shop",
+        })
+
+        result = resolved_events[-1]
+        self.assertTrue(result["found"])
+        self.assertEqual(self.dm_core.current_location_key, "dock_shop")
+
+    def test_gridded_location_with_exits_still_falls_back_to_grid_travel(self):
+        # The same sandpoint, now also carrying a local exit, must still resolve an unrelated,
+        # explicitly-named grid destination through grid travel rather than denying "no_exit".
+        self._stub_encounter_roll("nothing")
+        self._stub_exit_off_sandpoint("dock_shop", {
+            "key": "dock_shop", "name": "The Dock Shop",
+            "description": "A cramped shop smelling of tar and fish.", "entities": [],
+            "return_to": "sandpoint",
+        })
+        resolved_events = self._capture("item_interaction_resolved")
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "travel", "item_name": None, "input": "i travel to magnimar",
+        })
+
+        result = resolved_events[-1]
+        self.assertTrue(result["found"])
+        self.assertEqual(result["blocks_spent"], 3)
 
     def test_grid_travel_arrival_names_its_own_polity(self):
         self._stub_encounter_roll("nothing")
@@ -3134,6 +3213,68 @@ class TestWorldMapExpansion(DMTestCase):
         self.dm_core.entities["gladstone"]["mount"] = "rowboat"
 
         self.assertEqual(self.dm_core._resolve_conveyance_tags("gladstone"), {"aquatic"})
+
+    def test_sandpoint_expansion_added_the_exploring_sandpoint_landmarks(self):
+        # sandpoint + magnimar (2) plus the 52 numbered "Exploring Sandpoint" landmarks pulled
+        # from the "Sandpoint, Light of the Lost Coast" sourcebook (see lost_coast.toml's own
+        # comment above sandpoint's [[location.exit]] list) -- not one test per landmark, just
+        # proof the location count actually grew roughly as expected.
+        self.assertGreaterEqual(len(self.dm_core.locations), 54)
+        self.assertIn("rusty_dragon", self.dm_core.locations)
+
+    def test_travel_to_a_real_sandpoint_landmark_resolves_via_its_own_named_exit(self):
+        # Mirrors test_gridded_location_still_honors_its_own_named_exit above, but against real
+        # authored content instead of a stubbed exit: sandpoint carries "grid" for its Magnimar
+        # trip, yet a named move to one of its own [[location.exit]] landmarks must still resolve
+        # through the exit graph rather than falling through to (or being swallowed by) grid
+        # travel.
+        resolved_events = self._capture("item_interaction_resolved")
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "travel", "item_name": None, "input": "i travel to the rusty dragon",
+        })
+
+        result = resolved_events[-1]
+        self.assertTrue(result["found"])
+        self.assertEqual(self.dm_core.current_location_key, "rusty_dragon")
+
+    def test_magnimar_expansion_added_its_nine_districts_and_their_landmarks(self):
+        # Magnimar's own sourcebook ("Magnimar, City of Monuments") frames the whole city as
+        # nine districts, each with its own lettered gazetteer -- unlike Sandpoint's single flat
+        # landmark list, so the split went one level deeper (magnimar_<district>.toml siblings,
+        # each a district hub exiting to that district's own landmarks -- see lost_coast.toml's
+        # own comment above magnimar's [[location.exit]] list). Not one test per landmark, just
+        # proof the location count actually grew roughly as expected and a couple of real
+        # district hubs/landmarks are really there.
+        self.assertGreaterEqual(len(self.dm_core.locations), 150)
+        self.assertIn("dockway", self.dm_core.locations)
+        self.assertIn("old_fang", self.dm_core.locations)
+
+    def test_travel_to_a_real_magnimar_landmark_resolves_via_its_own_named_exit(self):
+        # sandpoint -> magnimar is the shipped grid trip (3 blocks); magnimar -> dockway ->
+        # old_fang are both real authored [[location.exit]] hops one and two levels down the
+        # district hub-and-spoke -- proof the whole nested exit graph resolves end to end, not
+        # just magnimar's own top-level district exits.
+        self._stub_encounter_roll("nothing")
+        resolved_events = self._capture("item_interaction_resolved")
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "travel", "item_name": None, "input": "i travel to magnimar",
+        })
+        self.assertEqual(self.dm_core.current_location_key, "magnimar")
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "travel", "item_name": None, "input": "i travel to dockway",
+        })
+        self.assertEqual(self.dm_core.current_location_key, "dockway")
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "travel", "item_name": None, "input": "i travel to the old fang",
+        })
+
+        result = resolved_events[-1]
+        self.assertTrue(result["found"])
+        self.assertEqual(self.dm_core.current_location_key, "old_fang")
 
 
 class TestFreeStandingIntentHandlers(unittest.TestCase):

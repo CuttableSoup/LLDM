@@ -1,0 +1,276 @@
+# Magnimar's Keystone district (see magnimar_alabaster.toml's own docstring for why this scenario
+# splits one file per district). Pulled from "Magnimar, City of Monuments" (Settings/Fantasy/)
+# via its own extracted text -- descriptions below are original paraphrases, never the book's own
+# copyrighted prose. Keystone (K1-K10 in the book's own gazetteer) is Magnimar's most temple-dense
+# district and its main overland gateway, spanning the middle-class Marches and the wealthier
+# riverside Silver Shore.
+
+[[location]]
+key = "keystone"
+name = "Keystone"
+aliases = [ "the Marches", "Silver Shore" ]
+description = "A temple-studded district straddling Castlegate, Magnimar's main overland entrance, from the modest Marches to riverside Silver Shore."
+return_to = "magnimar"
+entities = []
+
+[[location.exit]]
+destination = "our_lady_of_blessed_waters"
+aliases = [ "our lady of blessed waters", "seerspring garden" ]
+
+[[location.exit]]
+destination = "deadeye_lodge"
+aliases = [ "deadeye lodge" ]
+
+[[location.exit]]
+destination = "dome_of_the_savored_sting"
+aliases = [ "the dome of the savored sting" ]
+
+[[location.exit]]
+destination = "founders_honor"
+aliases = [ "founder's honor" ]
+
+[[location.exit]]
+destination = "stone_of_the_seers"
+aliases = [ "the stone of the seers", "the wizard school" ]
+
+[[location.exit]]
+destination = "church_of_pharasma_keystone"
+aliases = [ "the church of pharasma" ]
+
+[[location.exit]]
+destination = "aquaretum"
+aliases = [ "the aquaretum" ]
+
+[[location.exit]]
+destination = "the_burn"
+aliases = [ "the burn" ]
+
+[[location.exit]]
+destination = "varisian_council"
+aliases = [ "the varisian council" ]
+
+[[location.exit]]
+destination = "cynosure_tower"
+aliases = [ "cynosure tower" ]
+
+[[location]]
+key = "our_lady_of_blessed_waters"
+name = "Our Lady of Blessed Waters"
+description = "A bronze statue standing in the clear spring waters of Seerspring Garden, its unknown maker as much a mystery as the spirit it depicts."
+entities = []
+return_to = "keystone"
+
+[[location]]
+key = "deadeye_lodge"
+name = "Deadeye Lodge"
+description = "A rustic wooden lodge housing Erastil's worship, its volunteer archers keeping Keystone's streets safe and occasionally sparring with Calistria's toughs."
+entities = [
+    { name = "Lorgell Fendus" },
+]
+return_to = "keystone"
+
+[[location]]
+key = "dome_of_the_savored_sting"
+name = "Dome of the Savored Sting"
+description = "A garish black-and-gold-domed temple to Calistria doubling as a brothel and a house of arranged vengeance."
+entities = [
+    { name = "Ayamyra" },
+]
+return_to = "keystone"
+
+[[location]]
+key = "founders_honor"
+name = "Founder's Honor"
+description = "A fifty-foot statue of Alcaydian Indros, one of the city's most beloved monuments, its feet perpetually strewn with offerings."
+entities = []
+return_to = "keystone"
+
+[[location]]
+key = "stone_of_the_seers"
+name = "Stone of the Seers"
+description = "Magnimar's most esteemed and most exclusive school of abjuration and divination magic, kept deliberately small by its founder."
+entities = [
+    { name = "Leis Nivlandis" },
+]
+return_to = "keystone"
+
+[[location]]
+key = "church_of_pharasma_keystone"
+name = "Church of Pharasma"
+description = "A modest, spike-roofed church whose acolytes tend Magnimar's scattered graveyards and serve as midwives to those who need them."
+entities = [
+    { name = "Annamentus Jivorus" },
+]
+return_to = "keystone"
+
+[[location]]
+key = "aquaretum"
+name = "The Aquaretum"
+description = "A glass-and-metal, helmet-shaped building displaying a gnome collector's aquariums and sunken curiosities to any visitor with a silver piece."
+entities = [
+    { name = "Nireed Wadincoast" },
+]
+return_to = "keystone"
+
+[[location]]
+key = "the_burn"
+name = "The Burn"
+description = "The scorched ruin of a mad artist's fire eleven years past, shunned by locals and secretly rebuilt below as the Gargoyles' hideout."
+entities = [
+    { name = "Vammiera Symirkova" },
+    { name = "Mizmina Symirkova" },
+]
+return_to = "keystone"
+
+[[location]]
+key = "varisian_council"
+name = "Varisian Council"
+description = "The city's overlooked third government, run from a colorful Varisian camp, fighting for a fair place for Magnimar's Shoanti as well as its own people."
+entities = [
+    { name = "Remeria Callinova" },
+]
+return_to = "keystone"
+
+[[location]]
+key = "cynosure_tower"
+name = "Cynosure Tower"
+description = "A ring-shaped, open-roofed shrine to Desna, tended by a lone priestess who leaves for a month each year to commune with the stars."
+entities = [
+    { name = "Bevaluu Zimantiu" },
+]
+return_to = "keystone"
+
+[[entity]]
+name = "Lorgell Fendus"
+supertype = "creature"
+subtype = "humanoid"
+description = "Deadeye Lodge's comforting, welcoming priest, delivering thrice-weekly sermons to Erastil's Keystone faithful."
+
+max_hp = 26
+
+[entity.attitudes]
+default = [ 35, 20, 15 ]
+
+[entity.skills]
+miracles = { dice = 2, pips = 0 }
+charisma = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Ayamyra"
+supertype = "creature"
+subtype = "humanoid"
+description = "The Dome of the Savored Sting's current mistress, an elf cleric who takes personal delight in customizing revenge for her contractors."
+
+max_hp = 32
+
+[entity.attitudes]
+default = [ 15, 25, -5 ]
+
+[entity.skills]
+miracles = { dice = 3, pips = 0 }
+trickery = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Leis Nivlandis"
+supertype = "creature"
+subtype = "humanoid"
+description = "The half-elf wizard who founded the Stone of the Seers, keeping his classes small and personal despite no shortage of eager students."
+
+max_hp = 42
+
+[entity.attitudes]
+default = [ 20, 20, 0 ]
+
+[entity.skills]
+arcane = { dice = 4, pips = 0 }
+observation = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Annamentus Jivorus"
+supertype = "creature"
+subtype = "humanoid"
+description = "The solemn cleric leading Pharasma's acolytes as they tend Magnimar's graveyards and serve as neighborhood midwives."
+
+max_hp = 32
+
+[entity.attitudes]
+default = [ 25, 20, 5 ]
+
+[entity.skills]
+miracles = { dice = 3, pips = 0 }
+medicine = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Nireed Wadincoast"
+supertype = "creature"
+subtype = "humanoid"
+description = "The gnome proprietor of the Aquaretum, whose modest entry fees never seem to explain his very comfortable finances."
+
+max_hp = 30
+
+[entity.attitudes]
+default = [ 30, 15, 5 ]
+
+[entity.skills]
+navigation = { dice = 2, pips = 0 }
+observation = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Vammiera Symirkova"
+supertype = "creature"
+subtype = "humanoid"
+description = "An elderly, venerable noblewoman with a very active public life, and the secret leader of the Gargoyles cat-burglar ring beneath the Burn."
+
+max_hp = 44
+
+[entity.attitudes]
+default = [ 15, 25, -10 ]
+
+[entity.skills]
+trickery = { dice = 3, pips = 0 }
+arcane = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Mizmina Symirkova"
+supertype = "creature"
+subtype = "humanoid"
+description = "Lady Symirkova's rarely-seen, icy young protege, who personally leads the Gargoyles on their most daring heists."
+
+max_hp = 42
+
+[entity.attitudes]
+default = [ 5, 30, -20 ]
+
+[entity.skills]
+stealth = { dice = 4, pips = 0 }
+blades = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Remeria Callinova"
+supertype = "creature"
+subtype = "humanoid"
+description = "The aging Varisian who runs the Varisian Council, working to see the city's often-persecuted Shoanti finally win a fair place in Magnimar."
+
+max_hp = 26
+
+[entity.attitudes]
+default = [ 30, 20, 10 ]
+
+[entity.skills]
+charisma = { dice = 2, pips = 0 }
+streetwise = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "Bevaluu Zimantiu"
+supertype = "creature"
+subtype = "humanoid"
+description = "Cynosure Tower's lone priestess, content with a quiet life tending the grounds between her twice-yearly pilgrimages under the stars."
+
+max_hp = 38
+
+[entity.attitudes]
+default = [ 30, 15, 10 ]
+
+[entity.skills]
+miracles = { dice = 3, pips = 0 }
+navigation = { dice = 2, pips = 0 }
