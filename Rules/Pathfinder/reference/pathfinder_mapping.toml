@@ -2,7 +2,7 @@
 #
 # Reference only -- never loaded as game data, same reason entity_schema.toml/
 # template_schema.toml aren't: load_rules (DM_Rules.py) only os.listdir()s the top level of
-# Rules/Fantasy/, one directory shallower than reference/.
+# Rules/Pathfinder/, one directory shallower than reference/.
 #
 # This is the machine-readable "Stage 1" lookup for a PF1e -> D6 conversion pipeline: a
 # reconstruction of a prose survey doc (git history: Rules/Fantasy/reference/
@@ -221,8 +221,9 @@ fit = "full"
 [[condition]]
 pf_name = "Incorporeal"
 pattern = "F"
-fit = "full"
-notes = "immunity_tags = [\"physical\"] layered with a narrower resistance_tags for magic damage."
+fit = "partial"
+notes = "Not actually a [[condition]] at all -- Incorporeal is a permanent creature trait, not something applied/removed mid-encounter, so it's authored directly on the entity the same way immunity_tags/vulnerability_tags already are for a fire elemental. The real damage_resistance-section 'DR-with-bypass' primitive (resistance_value/resistance_tags/resistance_bypass_tags = [\"magic\"]) is what actually ships this, not a bare immunity_tags = [\"physical\"] (no shipped weapon ever tags its own damage that generically, only the specific slashing/piercing/bludgeoning types, so that would just be inert). See the damage_resistance table's own \"DR-with-bypass\" row below for the real recipe."
+shipped_example = "creatures.toml's \"wraith\" (resistance_tags = [\"slashing\", \"piercing\", \"bludgeoning\"], resistance_bypass_tags = [\"magic\"])"
 
 [[condition]]
 pf_name = "Invisible"
@@ -234,6 +235,7 @@ recipe = '''
 name = "invisible"
 miss_chance = 50
 '''
+shipped_example = "rules.toml's \"invisible\" (miss_chance = 50), \"blurred\" (20), \"displaced\" (50), \"mirror image\" (50, derived from the real spell's own image count), and \"blinking\" (50); spells_pathfinder.toml's \"invisibility\"/\"blur\"/\"displacement\"/\"mirror image\"/\"blink\""
 
 [[condition]]
 pf_name = "Petrified"
@@ -301,10 +303,11 @@ fit = "partial"
 notes = "resistance_value works identically if authored on an object-supertype entity (a door, a container) -- just not a conceptually distinct field today."
 
 [[damage_resistance]]
-pf_concept = "DR-with-bypass (\"DR 10/magic\", \"DR 5/silver\", \"DR 15/cold iron and good\")"
+pf_concept = "DR-with-bypass (\"DR 10/magic\", \"DR 5/silver\", \"DR 15/cold iron and good\"); also this engine's own stand-in for Incorporeal (harmed normally by magic, a real chance to shrug off anything mundane)"
 engine_equivalent = "resistance_bypass_tags (defender) / armor_bypass_tags (equipped item)"
 fit = "full"
 notes = "A matching bypass tag on the incoming hit skips that side's reduction entirely, even though resistance_tags/armor_tags would otherwise have matched. Absent/empty by default -- purely additive."
+shipped_example = "creatures.toml's \"wraith\" (resistance_bypass_tags = [\"magic\"], the Incorporeal case)"
 recipe = '''
 # A creature that shrugs off mundane weapons but not enchanted ones -- "DR 10/magic".
 resistance_value = { dice = 3, pips = 1 }
@@ -425,9 +428,9 @@ supertype = "object"
 subtype = "container"
 container_capacity = 50
 # container_allowed_supertypes / container_allowed_subtypes optionally restrict WHAT the
-# container may hold at all (ex: items.toml's "spellbook", spell entities only).
+# container may hold at all (ex: equipment.toml's "spellbook", spell entities only).
 '''
-shipped_example = "items.toml's bag of holding"
+shipped_example = "equipment.toml's bag of holding"
 
 # ============================================================================================
 # 4. Spellcasting
@@ -523,7 +526,7 @@ targets = { number = 0, aoe = 3, side = "allies" }
 pf_concept = "Teleportation / movement-warping (Teleport, Dimension Door)"
 engine_equivalent = "teleport_to_band / teleport_to_location (ability fields, DM_Core.py's _apply_teleport_if_hit)"
 fit = "full"
-notes = "The band model (DM_Movement.py) has no 'jump past intervening bands' op, but a teleport effect never needed one -- band is just a field, so setting it directly (via a computed delta into the existing move_entity, which keeps its own floor/ceiling clamp) is the whole trick; no new movement verb required. Dimension Door is teleport_to_band (a direct band jump within the current room); Teleport is teleport_to_location (a jump to a different, already-known location via _enter_location, called directly so it skips the ordinary travel path's own hostile-gate/grid-cost checks -- instant, works mid-combat). Both fire unconditionally on a successful cast, the same 'not really against anyone' scope summon already has. Player-only, same scope summon/materials-consumption already keep -- not wired into a creature's own behavior."
+notes = "The band model (DM_Movement.py) has no 'jump past intervening bands' op, but a teleport effect never needed one -- band is just a field, so setting it directly (via a computed delta into the existing move_entity, which keeps its own floor/ceiling clamp) is the whole trick; no new movement verb required. Dimension Door is teleport_to_band (a direct band jump within the current room); Teleport is teleport_to_location (a jump to a different, already-known location via _enter_location, called directly so it skips the ordinary travel path's own hostile-gate/grid-cost checks -- instant, works mid-combat). Both fire unconditionally on a successful cast, the same 'not really against anyone' scope summon already has. Player-only, same scope summon/materials-consumption already keep -- not wired into a creature's own behavior. Only teleport_to_band ever actually shipped as a generic spell, though (Dimension Door, and Phase Door alongside it): teleport_to_location names a fixed {location, room, band}, which is honest for a scenario's own bespoke escape hatch but not for a shared, setting-wide spell catalog entry every game session would cast identically -- Teleport's (and Plane Shift's) whole point is an arbitrary destination picked at cast time, which this engine's static-TOML spells have no per-cast UI for, so neither was actually converted; the recipe below stays as illustration of the field only."
 recipe = '''
 # Dimension Door -- a short, instant band jump within the current room. "difficulty" (any
 # small nonzero number -- _resolve_roll's own flat-check branch is gated on ability.get(
@@ -622,7 +625,7 @@ immunity_tags = [ "any" ]
 [entity.conditions.armed]
 duration = "permanent"
 '''
-shipped_example = "items.toml's \"warding glyph\", rules.toml's \"warding glyph shock\"/\"warding glyph blast\""
+shipped_example = "equipment.toml's \"warding glyph\", rules.toml's \"warding glyph shock\"/\"warding glyph blast\""
 
 [[spell_mechanic]]
 pf_concept = "Mind-affecting control (Charm Person, Dominate Person)"
@@ -694,7 +697,7 @@ apply = { condition = "burning", duration = "rounds", length = 1, radius = 0, si
 # The hazard itself -- an ordinary object, no new fields. max_hp only so run_round_upkeep
 # doesn't treat it as already-dead (an entity with no hp field at all reads as 0 HP); without
 # immunity_tags a player could otherwise just target and chop it down in a few ordinary swings
-# (current_target has no is_hostile gate -- items.toml's dart trap already proves a non-hostile
+# (current_target has no is_hostile gate -- equipment.toml's dart trap already proves a non-hostile
 # object can be targeted/rolled against). "any" is a reserved immunity_tags wildcard (is_immune_
 # to, Combat_Resolution.py): immune to every damage_tags value, present or future, matching the
 # real Wall of Fire's "can't be harmed by mundane means". subtype = "spell" (not a mundane-
@@ -768,7 +771,7 @@ duration = "permanent"
 [[condition]]
 name = "regenerating"
 upkeep_heal = { dice = 2, pips = 0, bonus = 0 }
-upkeep_blocked_by_tags = ["fire"]   # "Regeneration 10 (fire)" shape
+upkeep_blocked_by_tags = ["fire", "acid"]   # matches the troll's real "Regeneration 5 (fire and acid)"
 '''
 
 [[creature_ability]]

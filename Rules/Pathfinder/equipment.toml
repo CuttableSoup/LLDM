@@ -1,23 +1,30 @@
 # Pathfinder 1e Core Rulebook (Chapter 6: Equipment) weapons/armor/shields, converted to this
-# engine's D6 format. A separate catalog from items.toml on purpose: items.toml is the small,
-# hand-curated set of narrative items the debug scenario actually references (and stays that
-# way); this file is the full mundane-gear catalog a shop/loot table can draw from. load_rules
-# scans every *.toml under Rules/Fantasy/ (Rules/Fantasy/reference/ is one directory too deep to
-# be included), so no code change was needed to pick this up.
+# engine's D6 format, PLUS (from the "Merged from items.toml" divider on down) the small,
+# hand-curated set of narrative items the debug scenario actually references -- potions, locked
+# containers, traps, crafting materials, a spellbook, a bag of holding, a warding glyph. The two
+# used to be separate files (items.toml deliberately kept apart from this one's own bulk PF
+# conversion pass) but items.toml was never actually Pathfinder-sourced content to begin with --
+# every entry in it was written purely to exercise an engine mechanic (a container, a trap, a
+# craftable good) for the debug scenario, not converted from any Chapter 6 table the way
+# everything above the divider is -- so keeping it a separate top-level catalog stopped making
+# sense once this file existed at all, and it was folded in here rather than left as a second,
+# smaller "equipment-shaped" file for no real reason. load_rules scans every *.toml under
+# Rules/Pathfinder/ (Rules/Pathfinder/reference/ is one directory too deep to be included), so no
+# code change was needed for either the original split or this merge.
 #
-# Eight PF weapons/armor already have a shipped items.toml equivalent under the exact same name
-# (longsword, spear, long bow, short bow, hand axe, club, dagger, chain mail) and are
-# deliberately NOT duplicated here -- reuse those instead of authoring a second, slightly
-# different "longsword". A few PF weapons (shortsword/shortbow's own generic martial-weapon
-# stats) are close enough to an existing items.toml reflavor (rusty shortsword / short bow) that
-# a second entry would just be redundant; PF's real "Shortsword"/"Shortbow" numbers are covered
-# by the new "short sword" entry below instead, since items.toml's own "rusty shortsword" is a
+# Eight PF weapons/armor already have a shipped equivalent under the exact same name (longsword,
+# spear, long bow, short bow, hand axe, club, dagger, chain mail, all below the "Merged from
+# items.toml" divider) and are deliberately NOT duplicated above it -- reuse those instead of
+# authoring a second, slightly different "longsword". A few PF weapons (shortsword/shortbow's own
+# generic martial-weapon stats) are close enough to an existing reflavor there (rusty shortsword /
+# short bow) that a second entry would just be redundant; PF's real "Shortsword"/"Shortbow"
+# numbers are covered by the new "short sword" entry below instead, since "rusty shortsword" is a
 # deliberately weakened debug-scenario reflavor, not the base weapon. Ammunition (arrows, bolts,
 # sling bullets) is out of scope -- this engine has no ammo-tracking mechanic; a ranged weapon
-# just works once equipped, the same way items.toml's own "long bow"/"short bow" already ship
-# with no separate ammunition item. "Net" (pure entangle, no direct damage) is also out of scope
-# -- it would need a bespoke restraining condition, not just a damage_value/armor_value
-# conversion, so it's left as a "needs a human call" gap rather than authored badly.
+# just works once equipped, the same way "long bow"/"short bow" already ship with no separate
+# ammunition item. "Net" (pure entangle, no direct damage) is also out of scope -- it would need a
+# bespoke restraining condition, not just a damage_value/armor_value conversion, so it's left as a
+# "needs a human call" gap rather than authored badly.
 #
 # ============================================================================================
 # Conversion formulas (weapons & armor/shields only -- see AskUserQuestion decisions this file
@@ -49,14 +56,14 @@
 # weapon (PF applies Str to thrown-weapon damage same as melee) and for the missile weapons PF
 # itself grants Str to (sling, halfling sling staff, composite longbow, composite shortbow) --
 # bonus = 0 for every other "missiles"-skill weapon (ordinary bows, all crossbows, blowgun),
-# matching items.toml's own shipped "long bow"/"short bow" precedent exactly.
+# matching this file's own shipped "long bow"/"short bow" precedent exactly.
 #
 # Range: PF's range increment (feet) divided by ~16 ft/band and rounded, calibrated against
-# items.toml's own shipped long bow (100 ft -> 6 bands) and short bow (60 ft -> 4 bands) so this
-# file's bands line up with what's already in play. A weapon with PF's own "reach" property
-# (longspear, glaive, guisarme, lance, ranseur, whip) gets range = 1 outright -- one band beyond
-# plain melee -- the same fixed value items.toml's own shipped "spear" already uses for reach,
-# rather than trying to derive a band count from "reach doubles a 5 ft square".
+# this file's own shipped long bow (100 ft -> 6 bands) and short bow (60 ft -> 4 bands) so every
+# other weapon's bands line up with what's already in play. A weapon with PF's own "reach"
+# property (longspear, glaive, guisarme, lance, ranseur, whip) gets range = 1 outright -- one band
+# beyond plain melee -- the same fixed value this file's own shipped "spear" already uses for
+# reach, rather than trying to derive a band count from "reach doubles a 5 ft square".
 #
 # Armor/shield AC bonus -> armor_value: PF's own AC bonus is already a clean small integer, so
 # it's a direct lookup rather than an average-matching exercise:
@@ -71,7 +78,7 @@
 #   +8         3D+0
 #   +9         3D+1
 # armor_tags is always [ "physical", "piercing", "bludgeoning", "slashing" ], matching
-# items.toml's own shipped "chain mail" -- this engine's armor doesn't discriminate by damage
+# this file's own shipped "chain mail" -- this engine's armor doesn't discriminate by damage
 # type the way PF's DR does, it's a flat physical-hit reducer. Shields use equip_slot = "lhand"
 # (this engine has no separate shield slot -- rules.toml's own [[equip_slot]] gives a humanoid
 # "rhand"/"lhand" only, same as any off-hand item) and subtype = "shield" (new, purely
@@ -80,22 +87,22 @@
 #
 # Skill assignment: blades = swords, kukri, picks, starknife; axes = axes/waraxes; polearms =
 # reach/pole weapons + spiked chain + trident; brawling = blunt one- and two-handed weapons
-# (matching items.toml's own shipped "club" -> brawling precedent) + monk-flavor blunt weapons;
+# (matching this file's own shipped "club" -> brawling precedent) + monk-flavor blunt weapons;
 # finesse = the dagger family, whip, and the remaining light monk weapons (sai/siangham/kama/
 # nunchaku); throwing = weapons PF itself calls out as thrown (dart, javelin, throwing axe,
 # light hammer, bolas, shuriken); missiles = every bow/crossbow/sling/blowgun.
 #
 # max_hp/bulk/[entity.skills].fortitude (the item's own durability, checked by a "sunder"
 # attempt) scale by a simple three-tier ladder rather than PF's own per-item weight in lbs,
-# matching items.toml's own shipped items (bulk=1 flat regardless of real-world weight): light/
-# one-handed weapons and ranged weapons get bulk=1, two-handed weapons and heavy armor/tower
-# shield get bulk=2 -- the one place this file diverges from items.toml's fully-flat bulk=1,
-# since a full plate suit and a dagger sharing one bulk unit loses too much fidelity at this
-# catalog's scale, while still keeping only two tiers to match the existing convention's
-# simplicity.
+# matching this file's own shipped weapons/armor below the divider (bulk=1 flat regardless of
+# real-world weight): light/one-handed weapons and ranged weapons get bulk=1, two-handed weapons
+# and heavy armor/tower shield get bulk=2 -- the one place the weapons/armor above the divider
+# diverge from the fully-flat bulk=1 below it, since a full plate suit and a dagger sharing one
+# bulk unit loses too much fidelity at this catalog's scale, while still keeping only two tiers
+# to match the existing convention's simplicity.
 #
 # value is the PF gp price entirely unscaled (a fractional gp, ex: a 5 sp dart = 0.5, stays
-# fractional rather than rounding) -- items.toml's own existing values (longsword=15,
+# fractional rather than rounding) -- the values already shipped below the divider (longsword=15,
 # chain mail=15, etc.) don't track PF gp consistently, so no existing conversion ratio was being
 # preserved either way; starting-gold/loot-currency amounts elsewhere may need separate
 # re-tuning against this file's much larger prices, but that's a one-time constant change, not
@@ -1217,22 +1224,22 @@ fortitude = { dice = 3, pips = 0 }
 # Table 6-3), added in a follow-up pass to the weapons/armor above. Most of this is genuinely
 # flavor-only in this engine -- no skill check, damage roll, or condition hooks onto a torch or
 # a peasant's outfit -- but it's still worth having as plain [[entity]] objects (bulk + value +
-# a subtype) so a shop or loot table can actually stock them, the same role items.toml's own
-# "iron ingot"/"leather strip" crafting materials already play.
+# a subtype) so a shop or loot table can actually stock them, the same role the "iron ingot"/
+# "leather strip" crafting materials below the "Merged from items.toml" divider already play.
 #
 # Renamed on collision with an existing name elsewhere in this setting's own catalog: PF's plain
-# "Chest" -> "storage chest" (items.toml's own "chest" is the locked debug-scenario treasure
-# chest); PF's plain "Vial" is skipped outright rather than renamed -- items.toml's own
-# "glass vial" already covers that exact object (the empty husk left behind by a drunk health
+# "Chest" -> "storage chest" ("chest", below the divider, is the locked debug-scenario treasure
+# chest); PF's plain "Vial" is skipped outright rather than renamed -- "glass vial", below the
+# divider, already covers that exact object (the empty husk left behind by a drunk health
 # potion).
 #
 # subtype is a new, purely descriptive value per category (gear/alchemical/tool/clothing/food/
 # trade_good) -- nothing in the engine gates on it, same non-enforcement as "shield" above.
 # A few gain a real engine hook where it costs nothing extra to add: "backpack"/"sack"/
 # "belt pouch"/"map case"/"storage chest" get container_capacity (this engine's own bounded-
-# container primitive, items.toml's own shipped "bag of holding"); "wizard's spellbook" gets
-# container_allowed_supertypes = ["spell"] (matching items.toml's own shipped "spellbook", which
-# this reuses the exact same restriction from rather than inventing a second one); "signet ring"
+# container primitive, matching "bag of holding" below the divider); "wizard's spellbook" gets
+# container_allowed_supertypes = ["spell"] (matching "spellbook" below the divider, which this
+# reuses the exact same restriction from rather than inventing a second one); "signet ring"
 # gets equip_slot = "ring" (a real, already-defined slot with nothing else claiming it); clothing
 # gets equip_slot = "chest" -- narratively you wear an outfit OR armor, never both, the same
 # single-slot contention that's already true of any two chest-slot items.
@@ -1241,7 +1248,7 @@ fortitude = { dice = 3, pips = 0 }
 #   - Mounts and vehicles (horses, carts, ships) -- these aren't inventory objects at all in
 #     this engine's own model (see docs/downtime.md's "Mounts and conveyance" -- a mount is a
 #     live creature entity with its own "mount" field, a cart/wagon likewise), so converting
-#     them belongs with that subsystem, not a flat items.toml-style catalog entry.
+#     them belongs with that subsystem, not a flat catalog entry.
 #   - "Spellcasting and Services" (hireling wages, tolls, ship's passage, paying an NPC
 #     spellcaster) -- pure narrative pricing information, never an object anyone carries.
 #   - Multiple lock/manacle quality tiers, masterwork tool variants, and armor special
@@ -2104,3 +2111,599 @@ supertype = "object"
 subtype = "trade_good"
 bulk = 1
 value = 500
+
+# ============================================================================================
+# Merged from items.toml -- the small, hand-curated set of narrative items the debug scenario
+# actually references (locked containers, traps, a spellbook, a bag of holding, crafting
+# materials, a warding glyph, and the handful of weapons/armor named as "shipped" precedent
+# throughout the header above). This was never actually Pathfinder-sourced content -- nothing
+# below this divider was converted from a Chapter 6 table the way everything above it was, it
+# was written purely to exercise engine mechanics (a container, a trap, a curse, a craft recipe)
+# for the debug scenario to demonstrate against. Keeping it in a separate items.toml file made
+# sense back when this setting had no equipment catalog of its own to fold it into; once this
+# file existed, splitting "real Pathfinder gear" from "everything else objects can do" stopped
+# reflecting any actual difference in kind, so the two were merged into this one catalog instead.
+# ============================================================================================
+
+[[entity]]
+name = "longsword"
+supertype = "object"
+subtype = "weapon"
+skill = "blades"
+description = "A well-balanced steel blade, kept sharp and ready."
+# A single candidate slot, or a list -- resolve_equip_slot (DM_Inventory.py) picks the first
+# one valid for the equipping entity's own supertype/subtype (rules.toml's [[equip_slot]]).
+# One-handed, so either hand will do.
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 10
+# No "range" field at all -- melee, usable only in the same band as the target (see
+# DM_Movement.py's "Movement and range"; is_in_range treats a missing range as 0).
+damage_value = { dice = 1, pips = 2, bonus = "strength_damage" }
+damage_tags = [ "slashing" ]
+bulk = 1
+value = 15
+[entity.skills]
+fortitude = { dice = 3, pips = 0 }
+
+[[entity]]
+name = "spear"
+supertype = "object"
+subtype = "weapon"
+skill = "polearms"
+description = "A long-hafted spear, its iron head kept honed for thrusting."
+equip_slot = "rhand"
+max_hp = 8
+# Reach weapon -- usable one band beyond plain melee (see DM_Movement.py's "Movement and
+# range"), the one deliberate exception to "melee only works in the same band as the target".
+range = 1
+damage_value = { dice = 1, pips = 1, bonus = "strength_damage" }
+damage_tags = [ "piercing" ]
+bulk = 1
+value = 12
+[entity.skills]
+fortitude = { dice = 3, pips = 0 }
+
+[[entity]]
+name = "long bow"
+supertype = "object"
+subtype = "weapon"
+skill = "missiles"
+description = "A polished longbow, strung and ready to loose an arrow."
+equip_slot = "rhand"
+max_hp = 5
+# In bands, not meters -- reaches every band a typical room/field has (see the "bands"
+# scenario field), same "no per-tier accuracy modifier, just in-range-or-not" rule every
+# ranged ability follows now.
+range = 6
+damage_value = { dice = 2, pips = 2, bonus = 0 }
+damage_tags = [ "piercing" ]
+bulk = 1
+value = 10
+[entity.skills]
+fortitude = { dice = 1, pips = 0 }
+
+[[entity]]
+name = "short bow"
+supertype = "object"
+subtype = "weapon"
+skill = "missiles"
+description = "A stubby hunting bow, its string frayed but still taut."
+equip_slot = "rhand"
+max_hp = 4
+# Shorter reach than the long bow -- still well past melee, just not the same all-room
+# coverage (see DM_Movement.py's "Movement and range").
+range = 4
+damage_value = { dice = 1, pips = 2, bonus = 0 }
+damage_tags = [ "piercing" ]
+bulk = 1
+value = 6
+[entity.skills]
+fortitude = { dice = 1, pips = 0 }
+
+[[entity]]
+name = "rusty shortsword"
+supertype = "object"
+subtype = "weapon"
+skill = "blades"
+description = "A pitted, poorly maintained blade, more intimidating than sharp."
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 6
+damage_value = { dice = 1, pips = 1, bonus = "strength_damage" }
+damage_tags = [ "slashing" ]
+bulk = 1
+value = 3
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "hand axe"
+supertype = "object"
+subtype = "weapon"
+skill = "axes"
+description = "A well-worn hand axe, its edge notched from hard use."
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 8
+damage_value = { dice = 1, pips = 1, bonus = "strength_damage" }
+damage_tags = [ "slashing" ]
+bulk = 1
+value = 12
+[entity.skills]
+fortitude = { dice = 3, pips = 0 }
+
+[[entity]]
+name = "club"
+supertype = "object"
+subtype = "weapon"
+skill = "brawling"
+description = "A heavy wooden club, crude but effective."
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 8
+damage_value = { dice = 1, pips = 0, bonus = "strength_damage" }
+damage_tags = [ "bludgeoning" ]
+bulk = 1
+value = 5
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "dagger"
+supertype = "object"
+subtype = "weapon"
+skill = "finesse"
+description = "A slim, balanced dagger built for speed rather than force."
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 6
+damage_value = { dice = 1, pips = 0, bonus = "strength_damage" }
+damage_tags = [ "piercing" ]
+bulk = 1
+value = 8
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "chain mail"
+supertype = "object"
+subtype = "armor"
+description = "A shirt of interlocking steel rings, worn for protection in battle."
+equip_slot = "chest"
+max_hp = 20
+armor_value = { dice = 2, pips = 0 }
+armor_tags = [ "physical", "piercing", "bludgeoning", "slashing" ]
+bulk = 1
+value = 15
+[entity.skills]
+fortitude = { dice = 5, pips = 0 }
+
+[[entity]]
+name = "health potion"
+supertype = "object"
+subtype = "potion"
+# Nondescript on purpose -- "healing" (below) is a hidden property revealed only once
+# identified, same mechanism as the cursed dagger's own [entity.test] ("reveal" -> tags
+# read back once is_identified is true). The description here still needs to be non-empty
+# (an empty one gets silently dropped from a container's "contents" -- see this file's own
+# comment history), just not one that gives away the answer up front.
+description = "A small glass vial holding a swirl of murky liquid. Whatever it does isn't obvious just by looking."
+tags = [ "healing" ]
+# Opts into DMCore._resolve_use_intent's generic "use" handling (see the module note there --
+# gated on this flag, not subtype, so a future non-potion usable item, ex: a wand, doesn't
+# need a "potion" subtype just to qualify). No "charges" field -- absent means single-use,
+# spent entirely on the one use (see _consume_charge). "replace_with" is what's left in
+# inventory afterward: an empty vial, not nothing.
+usable = true
+replace_with = "glass vial"
+bulk = 0
+value = 15
+[entity.skills]
+healing = { dice = 5, pips = 0 }
+fortitude = { dice = 1, pips = 0 }
+
+# Untrained-friendly on purpose (difficulty 4, vs the cursed dagger's 8) -- neither appraise
+# nor medicine is anything gladstone starts trained in, and a mundane potion shouldn't need
+# real expertise to eventually work out, unlike confirming a magical curse.
+[entity.test]
+difficulty = 4
+skill = [ "appraise", "medicine" ]
+blocks_if_condition = "identified"
+
+[entity.test.pass]
+reveal = true
+
+[[entity]]
+name = "chest"
+supertype = "object"
+subtype = "container"
+description = "A stout, iron-bound chest, padlocked shut."
+max_hp = 50
+bulk = 5
+value = 10
+currency = 20
+inventory = [ "cursed dagger" ]
+
+[entity.conditions.locked]
+duration = "permanent"
+
+[entity.conditions.closed]
+duration = "permanent"
+
+[entity.test]
+difficulty = 12
+skill = [ "finesse" ]
+requires_condition = "locked"
+blocks_if_condition = "jammed"
+
+[entity.test.pass]
+dismiss_condition = "locked"
+
+[entity.test.fail]
+condition = "jammed"
+duration = "permanent"
+dismiss = ""
+
+[entity.skills]
+fortitude = { dice = 5, pips = 0 }
+
+[[entity]]
+name = "cursed dagger"
+supertype = "object"
+subtype = "weapon"
+skill = "blades"
+description = "A wickedly curved dagger, its blade etched with faintly glowing runes that seem to shift when unwatched."
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 8
+damage_value = { dice = 1, pips = 1, bonus = "strength_damage" }
+damage_tags = [ "slashing" ]
+tags = [ "cursed" ]
+bulk = 1
+value = 5
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+
+# An arcane check against the item itself (not the chest/scene it's sitting in) -- reachable
+# once the dagger is either in the player's own inventory or sitting in an unlocked, open
+# container (see DMCore._resolve_item_test_target). blocks_if_condition stops a repeat check
+# from re-rolling something already known. "reveal" (apply_test_outcome) marks it "identified"
+# but doesn't itself say *what* was revealed -- narration reads that back off the entity's own
+# "tags" field once identified, rather than duplicating it here.
+[entity.test]
+difficulty = 8
+skill = [ "arcane" ]
+blocks_if_condition = "identified"
+
+[entity.test.pass]
+reveal = true
+
+# Makes the curse real, not just flavor. "target" here is the dagger itself (the
+# entity this program lives on); "actor" is whoever just equipped it. Equipping an
+# *unidentified* cursed dagger actually curses the wearer -- the [entity.test] above (an arcane
+# check) becomes something worth doing before putting the thing on, not just flavor text.
+[entity.on_interact.equip]
+if = "target.has_condition:identified == false"
+then = { do = "condition", entity = "actor", name = "cursed", duration = "permanent" }
+
+# Traps: a skill check against the object itself, same [entity.test] mechanism as a chest's
+# lock, but "fail" now carries a "damage" key (apply_test_outcome, DM_Status.py) that deals
+# real damage to the player via the same calculate_damage/evaluate_statuses path any weapon
+# hit takes. "armed" starts active (like a chest's own "locked"); a pass dismisses it (the
+# trap is now safe forever); a fail applies "triggered" instead, which blocks_if_condition
+# then keeps future attempts from re-rolling and re-damaging the exact same spent trap.
+#
+# "hidden" starts active too -- unlike "armed" (a mechanical gate on [entity.test]), it's
+# purely about the LLM's own narration prompt: while active, this entity is left out of the
+# roster _describe_scenario_characters builds (and out of any action's own "defender_details"
+# -- see is_hidden/DM_Core.py's _attach_defender_details), so the trap isn't spoiled to the
+# player before they'd have any in-fiction reason to know it's there. [entity.notice] is the
+# check that clears it: rolled automatically, with no player input, the moment this entity is
+# instanced (RulesMixin._auto_roll_notice, DM_Rules.py) -- not player-initiated like
+# [entity.test]'s own disarm check below, which still requires "armed" and works whether or
+# not "hidden" has cleared yet (a lucky blind stab can disarm something never noticed).
+[[entity]]
+name = "dart trap"
+supertype = "object"
+subtype = "trap"
+description = "A row of pinprick holes lines the wall at waist height, aimed squarely across the doorway."
+max_hp = 5
+# Custom XP grant (_award_xp_for_defeat, DM_Combat.py) -- get_challenge_rating would be a poor
+# stand-in for a trap, which has no skills/damage-dealing ability the usual way, so this is a
+# flat value instead, matching this trap's own test difficulty rather than anything CR-scaled.
+exp = 9
+
+[entity.conditions.armed]
+duration = "permanent"
+
+[entity.conditions.hidden]
+duration = "permanent"
+
+[entity.notice]
+skill = "observation"
+difficulty = 4
+
+[entity.test]
+difficulty = 9
+skill = [ "finesse", "acrobatics" ]
+requires_condition = "armed"
+blocks_if_condition = "triggered"
+
+# xp = true opts this pass outcome into _award_xp_for_defeat -- surviving or disarming a real
+# hazard is worth XP the same declarative way loot/reveal/damage already are (see this trap's
+# own top-level "exp" above for the actual amount).
+[entity.test.pass]
+dismiss_condition = "armed"
+xp = true
+
+[entity.test.fail]
+condition = "triggered"
+duration = "permanent"
+dismiss = ""
+# 3 dice, not 2 -- chain mail's own armor_value/armor_tags already reduces "piercing" by
+# 2 dice, and a trap that a full suit of armor shrugs off entirely wouldn't be much of a
+# trap. Still less than the scythe trap's own 3 dice against "slashing" armor coverage --
+# no difference there, this is just about clearing chain mail's reduction, not escalation.
+damage = { dice = 3, pips = 0, bonus = 0 }
+damage_tags = [ "piercing" ]
+
+[[entity]]
+name = "scythe trap"
+supertype = "object"
+subtype = "trap"
+description = "A rusted blade hangs half-hidden in the shadows overhead, strung on a taut wire across the passage."
+max_hp = 8
+# Custom XP grant -- see the dart trap's own "exp" comment above for why a trap authors this
+# explicitly rather than relying on get_challenge_rating.
+exp = 10
+
+[entity.conditions.armed]
+duration = "permanent"
+
+[entity.conditions.hidden]
+duration = "permanent"
+
+# Overhead, not waist-height like the dart trap -- a step harder to catch on a glance, hence
+# the steeper notice difficulty (6 vs. the dart trap's 4).
+[entity.notice]
+skill = "observation"
+difficulty = 6
+
+[entity.test]
+difficulty = 10
+# reflexes is listed first since it's what gladstone (and any similarly-built character) is
+# actually trained in -- 2 dice, vs untrained 1d6 for dodge/acrobatics, which would make this
+# trap nearly unbeatable on its own (max roll 6, never clearing a difficulty above 6). "dodge"
+# is still included because it's the single most natural verb for evading a swinging blade --
+# without it, "I dodge the trap" wouldn't match this test.skill list at all and would
+# silently fall through to a harmless, mechanically-meaningless auto-success instead of a
+# real (if difficult) attempt.
+skill = [ "reflexes", "dodge", "acrobatics" ]
+requires_condition = "armed"
+blocks_if_condition = "triggered"
+
+[entity.test.pass]
+dismiss_condition = "armed"
+xp = true
+
+[entity.test.fail]
+condition = "triggered"
+duration = "permanent"
+dismiss = ""
+damage = { dice = 3, pips = 0, bonus = 0 }
+damage_tags = [ "slashing" ]
+
+[[entity]]
+name = "iron chest"
+supertype = "object"
+subtype = "container"
+description = "A dented iron strongbox, left behind by whatever guard once manned this post."
+max_hp = 40
+bulk = 5
+value = 8
+currency = 15
+inventory = [ "health potion" ]
+
+[entity.conditions.locked]
+duration = "permanent"
+
+[entity.conditions.closed]
+duration = "permanent"
+
+[entity.test]
+difficulty = 10
+skill = [ "finesse" ]
+requires_condition = "locked"
+blocks_if_condition = "jammed"
+
+[entity.test.pass]
+dismiss_condition = "locked"
+
+[entity.test.fail]
+condition = "jammed"
+duration = "permanent"
+dismiss = ""
+
+[entity.skills]
+fortitude = { dice = 4, pips = 0 }
+
+[[entity]]
+name = "ornate reliquary"
+supertype = "object"
+subtype = "container"
+description = "A carved stone reliquary, sealed with a heavier lock than anything else found so far down here."
+max_hp = 60
+bulk = 5
+value = 20
+currency = 40
+inventory = [ "health potion", "health potion", "spear" ]
+
+[entity.conditions.locked]
+duration = "permanent"
+
+[entity.conditions.closed]
+duration = "permanent"
+
+[entity.test]
+difficulty = 14
+skill = [ "finesse" ]
+requires_condition = "locked"
+blocks_if_condition = "jammed"
+
+[entity.test.pass]
+dismiss_condition = "locked"
+
+[entity.test.fail]
+condition = "jammed"
+duration = "permanent"
+dismiss = ""
+
+[entity.skills]
+fortitude = { dice = 6, pips = 0 }
+
+[[entity]]
+name = "dusty coffer"
+supertype = "object"
+subtype = "container"
+description = "A small, unassuming coffer tucked into a crack in the wall, easy to miss unless you're looking for it."
+max_hp = 20
+bulk = 3
+value = 5
+currency = 10
+inventory = [ "health potion" ]
+
+[entity.conditions.locked]
+duration = "permanent"
+
+[entity.conditions.closed]
+duration = "permanent"
+
+[entity.test]
+difficulty = 8
+skill = [ "finesse" ]
+requires_condition = "locked"
+blocks_if_condition = "jammed"
+
+[entity.test.pass]
+dismiss_condition = "locked"
+
+[entity.test.fail]
+condition = "jammed"
+duration = "permanent"
+dismiss = ""
+
+[entity.skills]
+fortitude = { dice = 3, pips = 0 }
+
+# What a health potion becomes once drunk (see its own "replace_with") -- an empty husk left
+# in inventory rather than the potion just vanishing outright. Not usable itself (no "usable"
+# field), and worth little.
+[[entity]]
+name = "glass vial"
+supertype = "object"
+subtype = "trinket"
+description = "An empty glass vial, its contents long since consumed."
+bulk = 0
+value = 1
+
+# Raw crafting material -- no [entity.test]/abilities of its own, just a plain, stackable
+# (duplicate-inventory-entries-represent-quantity) good.
+[[entity]]
+name = "iron ingot"
+supertype = "object"
+subtype = "material"
+description = "A rough-cast bar of iron, still faintly warm from the forge."
+bulk = 1
+value = 3
+
+[[entity]]
+name = "leather strip"
+supertype = "object"
+subtype = "material"
+description = "A length of cured leather, cut for binding a grip or hilt."
+bulk = 0
+value = 1
+
+# Worked example of [entity.craft] (see CLAUDE.md's "Crafting" and reference/entity_schema.toml)
+# -- craftable via either strength or finesse (whichever gladstone is better-trained in gets
+# auto-selected), needs the blacksmith's own forge (debug.toml) nearby, and consumes its own
+# materials whether the roll succeeds or fails.
+[[entity]]
+name = "iron dagger"
+supertype = "object"
+subtype = "weapon"
+skill = "blades"
+description = "A plain iron dagger, hastily forged but serviceable."
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 6
+damage_value = { dice = 1, pips = 0, bonus = "strength_damage" }
+damage_tags = [ "slashing" ]
+bulk = 1
+value = 8
+
+[entity.craft]
+skill = [ "strength", "finesse" ]
+difficulty = 10
+requires_station = "forge"
+materials = [
+    { item = "iron ingot", quantity = 2 },
+    { item = "leather strip", quantity = 1 },
+]
+
+# Spell component -- same [entity.craft]-style "materials" shape, just consumed by a named
+# ability's own cast (DM_Core.py's _resolve_roll/_consume_spell_materials_if_rolled) instead of
+# a craft attempt. See spells.toml's "arc lance".
+[[entity]]
+name = "iron filings"
+supertype = "object"
+subtype = "material"
+description = "A small pouch of fine iron filings, faintly magnetic."
+bulk = 0
+value = 2
+
+# Worked example of container_capacity (see docs/inventory-items.md's "Carry capacity (bulk)"
+# and reference/pathfinder_mapping.toml's magic_item table, "Bag of Holding / Handy
+# Haversack / Portable Hole") -- get_current_bulk never recurses into an item's own nested
+# "inventory" in the first place, so whatever's stored inside already doesn't count against
+# whoever's carrying this bag; container_capacity is what actually bounds how much can go
+# into the bag itself, enforced by transfer_item/place_new_item.
+[[entity]]
+name = "bag of holding"
+supertype = "object"
+subtype = "container"
+description = "A worn leather bag, its inside somehow far roomier than its outside."
+bulk = 2
+value = 50
+container_capacity = 40
+inventory = [ "health potion" ]
+
+# Worked example of container_allowed_supertypes (see reference/pathfinder_mapping.toml's
+# magic_item table) -- a spellbook only ever holds spell entities; transfer_item/
+# place_new_item refuse "wrong_item_type" for anything else, whether that's a player-driven
+# give/take/trade, a loot sweep, or an ad hoc ADaM placement.
+[[entity]]
+name = "spellbook"
+supertype = "object"
+subtype = "container"
+description = "A leather-bound spellbook, its pages dense with arcane notation."
+bulk = 1
+value = 30
+container_allowed_supertypes = [ "spell" ]
+inventory = [ "fireball" ]
+
+# The "on_arrival" shipped worked example (reference/pathfinder_mapping.toml's
+# "Delayed/triggered magic" row -- Glyph of Warding/Magic Mouth): an ordinary hazard, placed
+# permanently like any other room prop (or conjured via "summon", same as spells.toml's "flame
+# wall"), with no mechanism of its own beyond the [[status]] entry (rules.toml's own "warding
+# glyph shock") that matches it by name. subtype = "spell" (not "trap") marks it as a standing
+# magical effect the same way "flame wall" does -- "dispel magic" already banishes any entity
+# sharing that subtype, so no separate dispel wiring is needed here. immunity_tags = ["any"]
+# for the same reason "flame wall" carries it: current_target has no is_hostile gate, so a
+# non-hostile object can be targeted/attacked like anything else -- a glyph shouldn't be
+# choppable down by an ordinary weapon, only dispelled or its own [entity.conditions.armed]
+# flag cleared some other way.
+[[entity]]
+name = "warding glyph"
+supertype = "object"
+subtype = "spell"
+description = "Faint silver sigils are scratched into the stone underfoot, waiting for an unworthy footstep."
+max_hp = 10
+immunity_tags = [ "any" ]
+
+[entity.conditions.armed]
+duration = "permanent"

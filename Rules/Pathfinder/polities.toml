@@ -1,5 +1,5 @@
 # Shared polity catalog (see docs/downtime.md's "Terrain, roads, and polities") -- a flat
-# Rules/Fantasy/*.toml file like environments.toml/terrain.toml, referenced by name from
+# Rules/Pathfinder/*.toml file like environments.toml/terrain.toml, referenced by name from
 # world_map.toml's own [[region]] "polity" field. A third, independent axis alongside that same
 # region's "environment" (encounter tables) and "terrain" (travel speed/passability): "polity"
 # only ever seeds a freshly-instanced entity's own default "languages" (DM_Rules.py's

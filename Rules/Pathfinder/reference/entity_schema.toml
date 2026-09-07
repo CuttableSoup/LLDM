@@ -1,8 +1,8 @@
 # Reference only -- every field the engine currently understands on an [[entity]] table, in
 # one place. Not real game data and never loaded: load_rules (DM_Rules.py) only os.listdir()s
-# the top level of Rules/Fantasy/, the same reason Rules/Fantasy/scenarios/ is safe to hold its
+# the top level of Rules/Pathfinder/, the same reason Rules/Pathfinder/scenarios/ is safe to hold its
 # own *.toml files -- this file lives one directory deeper for the same reason. Copy the
-# fields you need into characters.toml/npcs.toml/creatures.toml/items.toml/spells.toml/
+# fields you need into characters.toml/npcs.toml/creatures.toml/equipment.toml/spells.toml/
 # techniques.toml; nothing here is required, and no single real entity uses all of it at once
 # (a wolf has no [entity.test], a chest has no [entity.skills]) -- see those files for
 # realistic combinations. NPC-generation stubs are a different top-level table entirely --
@@ -21,7 +21,7 @@
 # rest of the data (attitudes' supertype override, is_hostile's "object" check, an ability's
 # skill matching, DM_Core's subtype == "container" gate) interprets by convention, not an enum
 # enforced anywhere. Common supertypes in use: "creature" (characters.toml/npcs.toml/
-# creatures.toml), "object" (items.toml), "spell"/"technique" (spells.toml/techniques.toml),
+# creatures.toml), "object" (equipment.toml), "spell"/"technique" (spells.toml/techniques.toml),
 # "innate" (a one-off inline ability with no shared catalog entity, ex: gladstone's "punch"),
 # "modifier" (a trained combat-trick/metamagic entity stacked onto another named ability at
 # cast time, ex: "power attack"/"empowered" -- see "applies_to"/"skill_divisor"/"damage_bonus"/
@@ -121,11 +121,11 @@ container_capacity = 40                     # Object only. Caps the total "bulk"
                                             # nested "inventory" in the first place, so whatever
                                             # this field lets a container hold never counts
                                             # against whoever's carrying it (the Pathfinder "Bag
-                                            # of Holding" shape -- see items.toml's own "bag of
+                                            # of Holding" shape -- see equipment.toml's own "bag of
                                             # holding").
 container_allowed_supertypes = [ "spell" ]  # Object only. If set, transfer_item/place_new_item
                                             # refuse "wrong_item_type" for anything whose own
-                                            # "supertype" isn't in this list -- ex: items.toml's
+                                            # "supertype" isn't in this list -- ex: equipment.toml's
                                             # "spellbook" only ever holds spell entities. Checked
                                             # independently of container_allowed_subtypes, below
                                             # -- both, if both are authored, must pass.
@@ -240,7 +240,7 @@ terrain_tags = [ "aquatic" ]                 # See docs/downtime.md's "Terrain, 
 # doesn't list defaults to untrained (0 dice, 0 pips) wherever it's rolled -- unattemptable
 # against anything but an auto-success (difficulty 0) check. "healing" here (not
 # a top-level field) is what _resolve_use_intent rolls for a usable item's healing effect (ex:
-# items.toml's health potion) -- same {dice, pips} shape as any other skill entry, just never
+# equipment.toml's health potion) -- same {dice, pips} shape as any other skill entry, just never
 # actually rolled as a skill check.
 [entity.skills]
 blades = { dice = 4, pips = 0 }
@@ -254,7 +254,7 @@ inventory = [ "longsword", "health potion", "health potion" ]
                                             # A flat list of item entity names; duplicates
                                             # represent quantity (transfer_item moves one
                                             # matching entry per call). Also doubles as a
-                                            # container's own contents (ex: items.toml's chest).
+                                            # container's own contents (ex: equipment.toml's chest).
 
 [entity.equipped]
                                             # slot name -> item entity name. Slot names are
@@ -288,7 +288,7 @@ equipped_skill_bonus = { skill = "observation", dice = 1, pips = 0 }
 
 # ---------------------------------------------------------------------------------------------
 # Ability/weapon/spell/technique fields -- present directly on a weapon/armor object
-# (items.toml), a spell/technique (spells.toml/techniques.toml), or an inline table inside
+# (equipment.toml), a spell/technique (spells.toml/techniques.toml), or an inline table inside
 # another entity's own "abilities" list (below). Not every field applies to every kind of
 # ability -- a plain weapon has no "targets", a non-damaging ability has no damage_value.
 skill = "blades"                            # A single skill name, or a list (ex: techniques.
@@ -782,7 +782,7 @@ duration = "permanent"
                                             # roster, and any action's own "defender_details")
                                             # while active -- is_hidden (DM_Status.py). Paired
                                             # with [entity.notice] below, this is how a hazard
-                                            # like items.toml's dart trap stays unspoiled until
+                                            # like equipment.toml's dart trap stays unspoiled until
                                             # the player would actually have a reason to know
                                             # about it.
 duration = "permanent"
@@ -836,7 +836,7 @@ difficulty = 4                              # Same resolve_action semantics as [
 # common "my one attack can't reach" case (the implicit "advance" fallback above already
 # handles that with no TOML at all) -- it's for a creature choosing *between* more than one
 # attack option by range. creatures.toml's "bandit" (in the "field" scenario) is the shipped
-# example -- both "short bow" and "rusty shortsword" below are real items.toml entities, named
+# example -- both "short bow" and "rusty shortsword" below are real equipment.toml entities, named
 # directly (no [[entity.abilities]] duplication needed -- see resolve_ability):
 #   [[entity.behavior]]
 #   requirements = [ { field = "distance_to_target", operator = ">", value = 0 } ]
@@ -914,7 +914,7 @@ damage_tags = [ "piercing" ]
 xp = true                                   # Truthy -> awards XP via _award_xp_for_defeat
                                             # (DM_Combat.py) -- the same primitive a combat kill
                                             # triggers, just called from here instead (ex:
-                                            # items.toml's dart trap/scythe trap, whose own
+                                            # equipment.toml's dart trap/scythe trap, whose own
                                             # [entity.test.pass] pairs this with
                                             # dismiss_condition = "armed"). Only ever fires once
                                             # per entity: dismissing this test's own

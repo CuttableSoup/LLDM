@@ -1,19 +1,22 @@
 # Pathfinder 1e Sorcerer/Wizard spell list, converted to this engine's D6 format using the D6
 # Fantasy Rulebook's own point-buy spell-design system (Chapter XII: Magic) as the source of
-# each spell's `difficulty`, rather than a hand-picked number the way items.toml's own shipped
-# "fireball" was. A separate catalog from spells.toml on purpose, same reason equipment.toml
-# split off from items.toml: spells.toml stays the small, hand-authored set the debug scenario
-# actually references; this file is the bulk conversion pass.
+# each spell's `difficulty`, rather than a hand-picked number the way spells.toml's own shipped
+# "fireball" was. A separate catalog from spells.toml on purpose, same reason equipment.toml's
+# own bulk PF weapon/armor conversion pass stays separate from the small, hand-curated items it
+# now also carries: spells.toml stays the small, hand-authored set the debug scenario actually
+# references; this file is the bulk conversion pass.
 #
-# Scope: only the DIRECT-DAMAGE spells on the Sorcerer/Wizard list (0th-8th level) converted so
-# far -- illusions, buffs/debuffs, summons, polymorphs, and utility spells (the large majority of
-# the list) are NOT here yet. Each of those needs its own [[condition]]/[[status]] authoring the
-# way Rules/Fantasy/reference/pathfinder_mapping.toml's condition_pattern/spell_mechanic sections
-# already worked out category-by-category -- a flat damage-dice conversion can't honestly capture
-# "makes one person your friend" or "turns you into a Large dragon", so those are left for that
-# pass rather than faked here. Two spells from this list are skipped outright because
-# Rules/Fantasy/spells.toml already ships an equivalent under the same name: "fireball" and
-# "wall of fire" (the latter as the summon-based hazard shape, not a direct-damage spell at all).
+# Scope so far: the direct-damage spells (0th-8th level), plus four non-damage batches converted
+# category-by-category the way reference/pathfinder_mapping.toml's condition_pattern/spell_mechanic
+# sections already worked out per-category -- attribute/skill buffs, mind-affecting control,
+# dispel/cure/triggered wards (all three below the "Attribute/skill buffs" divider), and now
+# illusions-with-a-real-combat-effect plus same-room teleportation (below the "Illusions" and
+# "Teleportation" dividers). Still NOT here: polymorph/Summon Monster (blocked on new creature
+# content this engine doesn't have yet), and pure divination/narrative-utility/protective-buff/
+# movement-buff spells that were already flagged as having no honest engine hook at all. Two
+# spells from this list are skipped outright because spells.toml already ships an equivalent under
+# the same name: "fireball" and "wall of fire" (the latter as the summon-based hazard shape, not a
+# direct-damage spell at all).
 # A further handful of damage-*mentioning* spells were excluded even though a plain-text search
 # would flag them, because the damage is incidental to a different primary effect this pass
 # doesn't yet model: black tentacles/mage's faithful hound (grapple/summon), fire trap (a warding
@@ -71,7 +74,7 @@
 # pathfinder_mapping.toml's own creature_ability section already set for multiple natural
 # attacks in one action. A line/cone/persistent-AoE spell (Lightning Bolt's line, Acid Fog's
 # per-round lingering damage) is likewise flattened to this engine's ordinary one-shot AoE burst
-# shape (`targets = {number=0, aoe, side="all"}`, matching items.toml/spells.toml's own shipped
+# shape (`targets = {number=0, aoe, side="all"}`, matching spells.toml's own shipped
 # "fireball") rather than inventing a new shape or a persistent hazard entity for each one.
 #
 # engine `range`/`targets.aoe` (in bands) are a SEPARATE conversion from the D6 Magic Range/Area
@@ -856,7 +859,7 @@ on_pass = { do = "attitude", entity = "target", toward = "actor", event = "charm
 # three-part shape spells.toml's own "wall of fire"/"flame wall" pair already established: a
 # spell that `summon`s a placed hazard object, a matching [[status]] `on_arrival` trigger that
 # lands a condition on whoever sets it off, and `self_dismiss` so it's a one-shot discharge, not
-# a repeating trap (items.toml's dart trap's own "armed"/self_dismiss shape). Difficulty reuses
+# a repeating trap (equipment.toml's dart trap's own "armed"/self_dismiss shape). Difficulty reuses
 # the mind-affecting batch's own type-multiplier convention against each symbol's own Pathfinder
 # level (3 x level x multiplier), but Casting Time here is the real 10-minutes-to-inscribe value
 # (-14, not the ordinary standard-action -4) plus a "very rare" destroyed-material cost (-10, not
@@ -1098,3 +1101,143 @@ description = "Inscribe a rune that unleashes a killing blast on whoever reads i
 skill = "arcane"
 difficulty = 10
 summon = { name = "rune of death", duration = 999999 }  # no true "permanent" sentinel for summon.duration (an integer round-countdown, DM_Summoning.py) -- a very large number stands in
+
+# ============================================================================================
+# Illusions with a real combat effect -- Phase 2's first batch (see reference/
+# pathfinder_mapping.toml's own condition_pattern "F"/"Invisible" row, fit = "full"). Each casts a
+# miss_chance [[condition]] (get_concealment, resolve_opposed_action -- an otherwise-successful
+# attack can still whiff outright), the same self-buff on_hit_condition shape the attribute-buff
+# batch above already uses, so every entry here floors at this pass's own established minimum
+# difficulty of 10 for exactly the reason "heroism"/"bear's endurance" etc. do: a single-target
+# personal-or-touch buff's own Range/Duration/Casting-Time/Component costs never climb anywhere
+# near the Spell Total's own floor-20 threshold regardless of level, and miss_chance has no table
+# entry of its own on the Vade Mecum's "Value Characteristic Type Multiplier" list to push it any
+# higher with -- there's no honest way to compute a bigger Effect value for "you might miss
+# outright" than for a flat skill modifier, so the same floor this pass already established for
+# every other single-target self-buff applies here too rather than inventing a new sub-formula.
+# Caster level keeps this pass's own "2 x spell level - 1" convention; duration keeps its own
+# "1 min/level" -> rounds conversion (12 rounds/minute, confirmed against "heroism"'s own
+# length = 600 = 10 min/level x CL5 x 12 above) wherever the real spell's duration scales that way.
+#
+# Two real Pathfinder effects were left out of this batch rather than converted misleadingly:
+# Invisibility, Greater and Invisibility Sphere. Greater Invisibility's entire reason to exist over
+# the base spell is that attacking no longer ends it -- a clause this engine's miss_chance
+# condition has no "survives an attack" flag to preserve, so a straight conversion would just be
+# base Invisibility's own "invisible" condition at a shorter, higher-spell-level-gated duration:
+# strictly worse for a strictly higher casting cost, which is actively misleading rather than
+# merely incomplete. Invisibility Sphere is a moving 10-ft.-radius emanation centered on the caster
+# that catches whichever allies happen to be nearby at any moment -- this engine's targets.aoe is a
+# one-time burst rolled at cast time, not a following zone, so there's no honest way to model
+# "keeps working as everyone moves around" with the existing primitive.
+# ============================================================================================
+
+[[entity]]
+name = "invisibility"
+supertype = "spell"
+subtype = "illusion"
+description = "Bend light around a creature until it vanishes from sight."
+skill = "arcane"
+difficulty = 10
+targets = { number = 1, aoe = 0 }
+on_hit_condition = { condition = "invisible", chance = 100, duration = "rounds", length = 36 }
+
+[[entity]]
+name = "blur"
+supertype = "spell"
+subtype = "illusion"
+description = "Wrap yourself in a shifting blur that throws off attackers' aim."
+skill = "arcane"
+difficulty = 10
+targets = { number = 1, aoe = 0 }
+on_hit_condition = { condition = "blurred", chance = 100, duration = "rounds", length = 36 }
+
+[[entity]]
+name = "displacement"
+supertype = "spell"
+subtype = "illusion"
+description = "Cast a creature's true position a few feet from where it appears to stand."
+skill = "arcane"
+difficulty = 10
+targets = { number = 1, aoe = 0 }
+on_hit_condition = { condition = "displaced", chance = 100, duration = "rounds", length = 60 }
+
+# miss_chance = 50 comes from the real spell's own number-of-images table, not a flat re-use of
+# Invisibility's own concealment value: images scale at one per three caster levels (max eight),
+# and at this spell's own natural CL3 that floors to exactly one image -- the real spell's own
+# table gives a single image a 50% chance of drawing an attack instead of you, which is the same
+# number Invisible/Displaced already use, so no new condition-field shape is needed to capture it.
+[[entity]]
+name = "mirror image"
+supertype = "spell"
+subtype = "illusion"
+description = "Conjure illusory duplicates of yourself to soak up an attacker's blows."
+skill = "arcane"
+difficulty = 10
+targets = { number = 1, aoe = 0 }
+on_hit_condition = { condition = "mirror image", chance = 100, duration = "rounds", length = 36 }
+
+# Flattens Blink's own "spend odd rounds half-shifted onto the Ethereal Plane" shape into a flat
+# miss_chance for the spell's whole duration -- the same "drop the clause the engine has no primitive
+# for, keep the piece that survives" precedent "haste"/"rage" above already set. Dropped: passing
+# through solid objects, ignoring nonmagical attacks entirely, and the caster's own attacks ignoring
+# a defender's concealment while blinking -- none of those have an engine hook, so only the
+# defensive 50% miss chance (matching the real spell's own melee-attack-against-you number) survives.
+# Duration is already in rounds (1 round/level, no minute conversion needed), same as "hasted"/
+# "raging" above.
+[[entity]]
+name = "blink"
+supertype = "spell"
+subtype = "illusion"
+description = "Flicker in and out of reality, dodging blows by slipping half out of the world."
+skill = "arcane"
+difficulty = 10
+targets = { number = 1, aoe = 0 }
+on_hit_condition = { condition = "blinking", chance = 100, duration = "rounds", length = 5 }
+
+# ============================================================================================
+# Same-room teleportation -- Phase 2's second batch (see reference/pathfinder_mapping.toml's own
+# "Teleportation / movement-warping" spell_mechanic row, fit = "full"). teleport_to_band (an
+# ability field, DM_Core.py's _apply_teleport_if_hit) jumps the player directly to that band
+# within the CURRENT room on a successful cast -- band is just a field, so no new movement verb is
+# needed, and move_entity's own existing floor/ceiling clamp means an oversized value never breaks
+# anything, it just lands on whichever end of the room is closer. difficulty = 10 reuses this
+# pass's own established floor rather than inventing a new Effect-line number: "relocate the
+# caster" has no entry on the Vade Mecum's own Value Characteristic Type Multiplier table the way
+# a damage die or flat modifier does, and the primitive's own mapping-doc recipe already accepts
+# "any small nonzero number" here since difficulty's only real job for a teleport-shaped cast is
+# forcing _resolve_roll's flat-check branch rather than an opposed roll against current_target.
+# teleport_to_band = 4 for Dimension Door is the mapping doc's own worked value, reused verbatim
+# rather than re-derived, since no separate ft-per-band scale has been established for this field
+# the way spells.toml's own fireball calibrated one for targets.aoe; Phase Door's own value is set
+# lower only to preserve Dimension Door's real "medium range" edge over Phase Door's own real
+# "personal range" -- relative, not a computed absolute.
+#
+# Teleport and Plane Shift are NOT converted here, and not because no primitive exists -- because
+# the primitive that DOES exist (teleport_to_location, an ability field naming a fixed {location,
+# room, band}) can't honestly represent either spell's real defining feature: an arbitrary,
+# player-chosen destination picked at cast time. This engine's spells are static TOML entities with
+# no per-cast destination-picking UI (the same "no per-cast form-picking UI" gap already flagged
+# for Polymorph), so a generic, setting-wide "teleport" entry could only ever jump to one hardcoded
+# place -- fine for a scenario's own bespoke escape hatch, dishonest as a shared spell every game
+# session would cast identically. Plane Shift additionally has nowhere to send anyone: this
+# engine's world_map/polities model a single plane of locations, with no plane-of-existence concept
+# at all for a Pathfinder-standard destination (the Astral Plane, an Elemental Plane, etc.) to be.
+# ============================================================================================
+
+[[entity]]
+name = "dimension door"
+supertype = "spell"
+subtype = "conjuration"
+description = "Vanish and instantly reappear somewhere else nearby."
+skill = "arcane"
+difficulty = 10
+teleport_to_band = 4
+
+[[entity]]
+name = "phase door"
+supertype = "spell"
+subtype = "conjuration"
+description = "Slip sideways through the space between things, stepping out just past whatever was in the way."
+skill = "arcane"
+difficulty = 10
+teleport_to_band = 2

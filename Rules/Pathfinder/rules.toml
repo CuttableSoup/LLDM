@@ -106,12 +106,14 @@ modifier = { dice = 0, pips = 0, bonus = 0 }
 # upkeep_heal once per combat round for every entity carrying this condition and heals it,
 # unless upkeep_blocked_by_tags overlaps whatever damage tags it was hit with this same round
 # (recorded by calculate_damage, DM_Combat.py -- see creatures.toml's "troll", which seeds this
-# permanently via its own [entity.conditions.regenerating]). The Pathfinder "Regeneration
-# 10 (fire)" shape: heals every round, except a round it's touched by fire at all.
+# permanently via its own [entity.conditions.regenerating]). Real Pathfinder Trolls have
+# Regeneration 5 (fire and acid), not fire alone -- corrected from an earlier "fire only, 10"
+# version of this entry that predates the Pathfinder split and was never actually checked
+# against the Bestiary.
 [[condition]]
 name = "regenerating"
 upkeep_heal = { dice = 2, pips = 0, bonus = 0 }
-upkeep_blocked_by_tags = [ "fire" ]
+upkeep_blocked_by_tags = [ "fire", "acid" ]
 
 # The conditions maneuvers.toml's universal abilities apply via their own on_pass programs --
 # what gives "shaken"/"prone"/"sundered_weapon" real mechanical teeth rather than
@@ -172,7 +174,7 @@ modifier = { dice = -4, pips = 0, bonus = 0 }
 prevents_action = true
 
 # A presence flag only, same "no modifier at all" shape "locked"/"jammed" already use -- being
-# cursed (items.toml's cursed dagger, via its own on_interact.equip) is a narrative/mechanical
+# cursed (equipment.toml's cursed dagger, via its own on_interact.equip) is a narrative/mechanical
 # fact read elsewhere (a future curse-specific check), not itself a dice penalty.
 [[condition]]
 name = "cursed"
@@ -194,7 +196,7 @@ name = "burning"
 upkeep_damage = { dice = 2, pips = 0, bonus = 0 }
 
 # Pathfinder's Filth Fever (Core Rulebook) -- the "periodic_test" shipped worked example
-# (Rules/Fantasy/reference/pathfinder_mapping.toml's Poison/Dying-Stable-Disabled rows), applied
+# (reference/pathfinder_mapping.toml's Poison/Dying-Stable-Disabled rows), applied
 # by creatures.toml's "giant rat" bite. Real Filth Fever: Fortitude DC 12; onset 1d3 days;
 # frequency 1/day; 1d3 Dex/1d3 Con damage on a failed save; cured by 2 CONSECUTIVE successes.
 # "onset" is flattened from "1d3 days" to a fixed 2 -- the same "flatten a die roll into one
@@ -234,7 +236,7 @@ drain = [
 ]
 
 # Pathfinder's Polymorph/Baleful Polymorph line -- the "form" field (Combat_Resolution.py's own
-# _apply_form_override) is the "form override" mechanism Rules/Fantasy/reference/
+# _apply_form_override) is the "form override" mechanism reference/
 # pathfinder_mapping.toml's own Polymorph row used to flag as having no engine equivalent: on
 # first gain it snapshots FORM_OVERRIDE_FIELDS (name/description/supertype/subtype/skills/
 # abilities/max_hp/medium/damage_value/damage_tags/tags/resistance_*/immunity_tags/
@@ -436,9 +438,43 @@ applies_to = [ "strength" ]
 name = "death rune blast"
 upkeep_damage = { dice = 10, pips = 0, bonus = 0 }
 
+# Illusions-with-a-real-combat-effect (Phase 2 of the non-damage conversion pass, first batch) --
+# each a Pattern F miss_chance condition (reference/pathfinder_mapping.toml's own "Invisible" row:
+# get_concealment/resolve_opposed_action let an otherwise-successful attack still whiff outright),
+# applied by spells_pathfinder.toml's matching self-buff spell the same way "bull's strength"/
+# "heroism" already apply their own condition via on_hit_condition. Kept as five separate names
+# despite three of them sharing the identical 50 value -- the same "a held creature narrates
+# differently from an asleep one" reasoning "asleep"/"held"/"laughing"/"dazed"/"dancing" above
+# already established for otherwise-identical conditions.
+[[condition]]
+name = "invisible"
+miss_chance = 50
+
+[[condition]]
+name = "blurred"
+miss_chance = 20
+
+[[condition]]
+name = "displaced"
+miss_chance = 50
+
+# 50 here isn't a re-use of "invisible"'s own number so much as the same number arrived at from a
+# different real-spell mechanic -- see spells_pathfinder.toml's own "mirror image" spell comment
+# for the one-image-at-CL3 derivation.
+[[condition]]
+name = "mirror image"
+miss_chance = 50
+
+# Flattens Blink's whole "half-shifted onto the Ethereal Plane" shape down to the one number that
+# actually maps onto an existing field -- see spells_pathfinder.toml's own "blink" spell comment
+# for what got dropped along the way.
+[[condition]]
+name = "blinking"
+miss_chance = 50
+
 # The [[status]] "on_round" trigger (evaluate_proximity_statuses, called once a round per living
 # scene entity from run_round_upkeep -- DM_Status.py) is what turns a stationary object into a
-# persistent terrain hazard (Rules/Fantasy/reference/pathfinder_mapping.toml's "Persistent
+# persistent terrain hazard (reference/pathfinder_mapping.toml's "Persistent
 # terrain/obstacle spells" row): requirements match the hazard entity itself (here, by "name"),
 # and "apply" (the same {condition, duration, length, radius, side} shape "on_action" already
 # uses for a Frightful-Presence-style aura) lands on every other living entity sharing its band.
@@ -456,8 +492,8 @@ apply = { condition = "burning", duration = "rounds", length = 1, radius = 0, si
 # -- DM_Rules.py's _evaluate_arrival_statuses, from both _enter_location and enter_room) is what
 # turns a stationary hazard into a delayed/triggered ward instead of a persistent zone (contrast
 # "flame wall zone" above, which re-checks every combat round): fires once, the moment someone
-# arrives, matching Rules/Fantasy/reference/pathfinder_mapping.toml's "Delayed/triggered magic"
-# row (Glyph of Warding). Both entries below match items.toml's "warding glyph" by name AND
+# arrives, matching reference/pathfinder_mapping.toml's "Delayed/triggered magic"
+# row (Glyph of Warding). Both entries below match equipment.toml's "warding glyph" by name AND
 # require its own seeded "armed" flag ([entity.conditions.armed]) still active; side = "all"
 # since a glyph doesn't discriminate between party and any other creature that stumbles onto
 # it. Real Glyph of Warding is a one-time discharge, not a lingering hazard like flame wall --
@@ -465,7 +501,7 @@ apply = { condition = "burning", duration = "rounds", length = 1, radius = 0, si
 # it actually catches someone (only one dismiss call is needed; the second is a harmless no-op,
 # dismiss_condition already tolerates dismissing an already-gone condition), re-entering this
 # same room afterward no longer triggering it -- the same "seed a flag, dismiss it once solved"
-# shape items.toml's dart trap already uses via [entity.test], just spent automatically here
+# shape equipment.toml's dart trap already uses via [entity.test], just spent automatically here
 # instead of by a deliberate disarm attempt.
 #
 # "warding glyph shock" is the lingering-debuff half -- "shaken", duration = "rounds"/length =
@@ -656,7 +692,7 @@ days = 31
 # 24 -- not an arbitrary round number, but the one that lets a grid unit read as a literal mile:
 # Pathfinder's own core rule is 3 miles/hour of normal (x1) overland movement, and an 8-hour
 # block (see [time] above, blocks_per_day = 3) is 24 miles at that pace. Every gridded
-# [[location]]/[[region]]/[[road]] in Rules/Fantasy/ is placed under this same "1 unit = 1 mile"
+# [[location]]/[[region]]/[[road]] in Rules/Pathfinder/ is placed under this same "1 unit = 1 mile"
 # convention (see docs/downtime.md's "Terrain, roads, and polities").
 [travel]
 default_speed = 24
@@ -746,7 +782,7 @@ familiarity = "is utterly infatuated with them"
 # nudge_attitude_from_event) -- distinct from [[attitude_tier]] above, which only ever renders
 # an already-resolved value into prose. Each entry's own axis values are the *full-strength*
 # delta, applied at magnitude = 1.0 (ex: combat_hit at a killing blow, or theft/favor against
-# items.toml's own single most valuable item) -- an ordinary occurrence scales down from there
+# equipment.toml's own single most valuable item) -- an ordinary occurrence scales down from there
 # (see nudge_attitude_from_event's own magnitude param, 0..1). A missing axis defaults to 0.
 [[attitude_event]]
 name = "combat_hit"

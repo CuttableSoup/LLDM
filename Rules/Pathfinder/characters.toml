@@ -89,7 +89,7 @@ age = 35
 # resolve_action), not the race's own 2D baseline -- unable to clear anything but an
 # auto-success (difficulty 0) check, which is exactly why every skill needs its own line here
 # rather than only the "trained" ones. observation stays at the plain 2D human baseline
-# (deliberately not boosted further) so items.toml's dart trap/scythe trap [entity.notice]
+# (deliberately not boosted further) so equipment.toml's dart trap/scythe trap [entity.notice]
 # checks -- rolled the moment either is instanced, DM_Rules.py's _auto_roll_notice -- stay a
 # real, uncertain roll rather than a foregone conclusion either way.
 [entity.skills]

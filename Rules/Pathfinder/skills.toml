@@ -174,8 +174,11 @@ name = "survival"
 description = "Staying alive in hostile wilderness environments."
 keywords = ["wilderness", "exploration", "foraging", "camp", "nature", "track", "outdoor"]
 opposes = ["survival"]
-# See arcane's own lore_types comment.
-lore_types = { subtypes = ["animal"] }
+# See arcane's own lore_types comment. "giant" added alongside "animal" -- Pathfinder's own
+# Knowledge (nature) covers both animals and giants, and creatures.toml's "troll" was corrected
+# from subtype = "monstrous humanoid" to the real "giant" (see that entity's own comment), so it
+# needs a lore_types home here rather than under arcane's monstrous-humanoid entry.
+lore_types = { subtypes = ["animal", "giant"] }
 
 [[skill]]
 name = "willpower"

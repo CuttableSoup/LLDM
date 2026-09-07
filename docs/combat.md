@@ -90,7 +90,7 @@ filtering, above).
 recalls a currently-present creature's own weaknesses/abilities — no new skill for it: a
 `[[skill]]` entry (`skills.toml`) can author `lore_types = {supertypes, subtypes}` (the same
 shape `damage_bonus_vs`/`dispel`/`cure` already use) naming which creature kinds it covers —
-`arcane` (elementals/monstrous humanoids), `miracles` (undead), and `survival` (animals) each do
+`arcane` (elementals/monstrous humanoids), `miracles` (undead), and `survival` (animals/giants) each do
 today — rather than adding a standalone "knowledge" skill or splitting into several PF-shaped
 Knowledge-X skills the way this engine's own domain-consolidated skill list otherwise avoids. An
 unmatched creature subtype (ex: an ordinary humanoid) simply has no lore check available.

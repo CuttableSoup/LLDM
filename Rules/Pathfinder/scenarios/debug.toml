@@ -279,7 +279,7 @@ arrival_band = 1
 
 # ---------------------------------------------------------------------------------------------
 # cellar -- formerly dungeon.toml. Never authors any local [[entity]] of its own -- "chest"
-# resolves against the shared Rules/Fantasy/items.toml entry, same as it always has.
+# resolves against the shared Rules/Pathfinder/equipment.toml entry, same as it always has.
 [[location]]
 key = "cellar"
 name = "The Forgotten Cellar"

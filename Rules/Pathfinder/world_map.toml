@@ -6,7 +6,7 @@
 # which is what "safe" looks like everywhere in this design: no watch check, no encounter roll,
 # full stop, the same "absence means safe" default basic rest already follows.
 #
-# Every grid coordinate in this file (and every gridded [[location]] across Rules/Fantasy/) uses
+# Every grid coordinate in this file (and every gridded [[location]] across Rules/Pathfinder/) uses
 # "1 grid unit = 1 mile" -- rules.toml's own [travel] default_speed = 24 is chosen specifically so
 # that reads as literal Pathfinder mileage (3 miles/hour of normal overland pace x an 8-hour
 # block). "the open plains" below is a wholly invented location with no real-world distance to

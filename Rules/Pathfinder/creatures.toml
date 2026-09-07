@@ -31,11 +31,18 @@ max_hp = 30
 # "poison damage tagged so undead are immune" example, applied to fire).
 immunity_tags = [ "fire" ]
 # Partial, rolled reduction against non-fire physical damage -- same shape as an item's
-# armor_value/armor_tags, just innate to the creature instead of worn equipment.
+# armor_value/armor_tags, just innate to the creature instead of worn equipment. ("physical" was
+# dropped from this list -- no shipped weapon ever tags its own damage that generically, only
+# the three specific types below, so it never matched anything.)
 resistance_value = { dice = 2, pips = 0 }
-resistance_tags = [ "physical", "piercing", "bludgeoning", "slashing" ]
+resistance_tags = [ "piercing", "bludgeoning", "slashing" ]
 # Mirror image of resistance_value/resistance_tags: rolled bonus damage instead of
-# reduction, on a matching tag -- a fire elemental takes extra damage from water.
+# reduction, on a matching tag -- a fire elemental takes extra damage from water. Not a real
+# Pathfinder Bestiary trait (core elementals are immune to their own element but have no written
+# vulnerability to the opposing one) -- kept anyway as deliberate genre flavor, and because
+# TestDamageCalculation's own test_immunity_overrides_vulnerability_when_both_tags_present relies
+# on this exact fire/water pairing to exercise a real, unrelated engine rule (immunity always wins
+# over vulnerability) without a dedicated dummy fixture.
 vulnerability_value = { dice = 2, pips = 0 }
 vulnerability_tags = [ "water" ]
 
@@ -63,15 +70,21 @@ description = "A robed, faceless shape of cold shadow, drifting a hand's breadth
 
 max_hp = 24
 
-# Rolled reduction against ordinary weapons -- but a hit tagged "silver" bypasses it outright,
-# regardless of also carrying a matching resistance tag (Pathfinder's "DR 10/silver"; see
-# Rules/Fantasy/reference/pathfinder_mapping.toml's damage_resistance table and DM_Combat.py's
-# get_damage_reduction). A silvered blade's own damage_tags would be
-# ["slashing", "silver"] -- the "slashing" tag alone still matches resistance_tags below on an
-# ordinary weapon, but "silver" short-circuits the reduction entirely once present.
+# A wraith is Incorporeal, not DR/silver -- corrected from an earlier version of this entry that
+# used "silver" (a lycanthrope trait Pathfinder never gives a wraith) and predates the Pathfinder
+# split ever reconciling it against reference/pathfinder_mapping.toml's own condition_pattern "F"/
+# "Incorporeal" row. Real Incorporeal creatures are harmed normally by magic weapons/effects but
+# have a real chance to shrug off an ordinary one entirely -- resistance_value/resistance_tags/
+# resistance_bypass_tags (DM_Combat.py's get_damage_reduction) is this engine's own closest
+# working primitive for that (a rolled reduction a matching "magic" tag skips outright), the same
+# "don't try to force an exact PF percentage/number" latitude the mapping doc's own "Energy
+# Resistance N"/"Vulnerability" rows already claim for their own rolled stand-ins. An enchanted
+# blade's own damage_tags would be ["slashing", "magic"] -- the "slashing" tag alone still
+# matches resistance_tags below on an ordinary weapon, but "magic" short-circuits the reduction
+# entirely once present.
 resistance_value = { dice = 3, pips = 0 }
-resistance_tags = [ "physical", "slashing", "piercing", "bludgeoning" ]
-resistance_bypass_tags = [ "silver" ]
+resistance_tags = [ "slashing", "piercing", "bludgeoning" ]
+resistance_bypass_tags = [ "magic" ]
 
 [entity.skills]
 brawling = { dice = 4, pips = 0 }
@@ -119,7 +132,11 @@ action = "chilling claw"
 [[entity]]
 name = "troll"
 supertype = "creature"
-subtype = "monstrous humanoid"
+# Pathfinder's own creature type is "giant", not "monstrous humanoid" -- corrected along with
+# skills.toml's own "survival" lore_types (Knowledge (nature) covers giants in Pathfinder, the
+# same way it already covers animals), so a lore check on a troll now rolls survival rather than
+# the wrong skill entirely.
+subtype = "giant"
 description = "A gangly, warty brute with a lantern jaw and long, ragged claws -- its wounds already knitting shut as it advances."
 
 max_hp = 40
@@ -270,7 +287,7 @@ strength = { dice = 2, pips = 0 }
 brawling = { dice = 3, pips = 0 }
 
 # Pathfinder Bestiary's giant rat -- the shipped disease-vector worked example
-# (Rules/Fantasy/reference/pathfinder_mapping.toml's Poison/Dying-Stable-Disabled rows):
+# (reference/pathfinder_mapping.toml's Poison/Dying-Stable-Disabled rows):
 # on_hit_condition applies rules.toml's own "filth fever" unconditionally on a landed bite (see
 # that condition's own comment for why exposure itself is unconditional, with onset/frequency
 # doing the real work of "did it actually take hold").

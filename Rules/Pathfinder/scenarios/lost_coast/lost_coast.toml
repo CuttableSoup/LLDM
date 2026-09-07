@@ -40,7 +40,7 @@
 # lowcleft, naos, ordellia, underbridge), one per magnimar_<district>.toml sibling file, each
 # hub then exiting to that district's own numbered landmarks -- a ward-hub layer Sandpoint's flat
 # town crawl never needed. [[location]]/[[entity]] tables merge across every *.toml in this
-# directory by key exactly like load_rules already merges Rules/Fantasy/'s own shared files,
+# directory by key exactly like load_rules already merges Rules/Pathfinder/'s own shared files,
 # which is why magnimar's own exit list has to live here (in the same file as its [[location]]
 # table) rather than in any of those nine sibling files -- a location's "exit" list is read
 # as-is off whichever single component file defines that location's key, never merged piecemeal

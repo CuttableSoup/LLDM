@@ -1,5 +1,5 @@
 # Shared terrain catalog (see docs/downtime.md's "Terrain, roads, and polities") -- a flat
-# Rules/Fantasy/*.toml file like environments.toml, referenced by name from world_map.toml's own
+# Rules/Pathfinder/*.toml file like environments.toml, referenced by name from world_map.toml's own
 # [[region]] "terrain" field. A genuinely separate axis from that same region's "environment"
 # field: "environment" only ever picks an encounter table (DM_Travel.py's
 # _resolve_environment_block); "terrain" only ever governs how fast a block of travel crosses that

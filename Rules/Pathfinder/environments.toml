@@ -1,4 +1,4 @@
-# Shared environment catalog (see docs/downtime.md's "Travel") -- a flat Rules/Fantasy/*.toml
+# Shared environment catalog (see docs/downtime.md's "Travel") -- a flat Rules/Pathfinder/*.toml
 # file like npc_keywords.toml, referenced by name from world_map.toml's own [[region]] entries,
 # never instanced or entered directly itself.
 #
