@@ -206,8 +206,8 @@ max_hp = 48
 default = [ 25, 20, 5 ]
 
 [entity.skills]
-miracles = { dice = 3, pips = 0 }
-appraise = { dice = 2, pips = 0 }
+miracles = { dice = 6, pips = 0 }
+appraise = { dice = 5, pips = 0 }
 
 [[entity]]
 name = "Hobart Deverin"
@@ -221,7 +221,7 @@ max_hp = 30
 default = [ 35, 15, 15 ]
 
 [entity.skills]
-charisma = { dice = 2, pips = 0 }
+charisma = { dice = 3, pips = 0 }
 appraise = { dice = 2, pips = 0 }
 
 [[entity]]
@@ -236,8 +236,8 @@ max_hp = 30
 default = [ 20, 15, -5 ]
 
 [entity.skills]
-charisma = { dice = 3, pips = 0 }
-miracles = { dice = 2, pips = 0 }
+charisma = { dice = 3, pips = 1 }
+miracles = { dice = 2, pips = 1 }
 
 [[entity]]
 name = "Haldmeer Grobaras"
@@ -251,8 +251,8 @@ max_hp = 30
 default = [ 15, 15, -5 ]
 
 [entity.skills]
-charisma = { dice = 3, pips = 0 }
-trickery = { dice = 2, pips = 0 }
+charisma = { dice = 3, pips = 2 }
+trickery = { dice = 2, pips = 2 }
 
 [[entity]]
 name = "Khonderian"
@@ -266,8 +266,8 @@ max_hp = 34
 default = [ 10, 30, -10 ]
 
 [entity.skills]
-blades = { dice = 3, pips = 0 }
-intimidation = { dice = 2, pips = 0 }
+blades = { dice = 4, pips = 1 }
+intimidation = { dice = 3, pips = 1 }
 
 [[entity]]
 name = "Ismeir Odinburge"
@@ -281,8 +281,8 @@ max_hp = 42
 default = [ 20, 25, 0 ]
 
 [entity.skills]
-blades = { dice = 3, pips = 0 }
-willpower = { dice = 2, pips = 0 }
+blades = { dice = 5, pips = 1 }
+willpower = { dice = 4, pips = 1 }
 
 [[entity]]
 name = "Acacia Uriana"
@@ -296,8 +296,8 @@ max_hp = 36
 default = [ 20, 25, 5 ]
 
 [entity.skills]
-blades = { dice = 3, pips = 0 }
-observation = { dice = 2, pips = 0 }
+blades = { dice = 4, pips = 1 }
+observation = { dice = 3, pips = 1 }
 
 [[entity]]
 name = "Tira Ronnova"
@@ -311,8 +311,8 @@ max_hp = 40
 default = [ 30, 20, 10 ]
 
 [entity.skills]
-miracles = { dice = 3, pips = 0 }
-blades = { dice = 2, pips = 0 }
+miracles = { dice = 4, pips = 2 }
+blades = { dice = 3, pips = 2 }
 
 [[entity]]
 name = "Darean Halst"
@@ -326,8 +326,8 @@ max_hp = 38
 default = [ 10, 30, -15 ]
 
 [entity.skills]
-blades = { dice = 3, pips = 0 }
-intimidation = { dice = 2, pips = 0 }
+blades = { dice = 5, pips = 0 }
+intimidation = { dice = 4, pips = 0 }
 
 [[entity]]
 name = "Todoban Boria"
@@ -341,8 +341,8 @@ max_hp = 34
 default = [ 10, 20, -10 ]
 
 [entity.skills]
-trickery = { dice = 3, pips = 0 }
-appraise = { dice = 2, pips = 0 }
+trickery = { dice = 4, pips = 0 }
+appraise = { dice = 3, pips = 0 }
 
 [[entity]]
 name = "Durstin Versade"
@@ -357,7 +357,7 @@ default = [ 25, 15, 5 ]
 
 [entity.skills]
 appraise = { dice = 2, pips = 0 }
-charisma = { dice = 2, pips = 0 }
+charisma = { dice = 1, pips = 0 }
 
 [[entity]]
 name = "Kassiel Iylmrain"
@@ -371,5 +371,5 @@ max_hp = 30
 default = [ 15, 15, -10 ]
 
 [entity.skills]
-artistry = { dice = 3, pips = 0 }
-charisma = { dice = 2, pips = 0 }
+artistry = { dice = 4, pips = 0 }
+charisma = { dice = 3, pips = 0 }

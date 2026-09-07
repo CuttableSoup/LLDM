@@ -170,7 +170,7 @@ max_hp = 24
 default = [ 30, 20, 10 ]
 
 [entity.skills]
-brawling = { dice = 2, pips = 0 }
+brawling = { dice = 3, pips = 0 }
 athletics = { dice = 2, pips = 0 }
 
 [[entity]]
@@ -185,8 +185,8 @@ max_hp = 26
 default = [ 15, 20, -10 ]
 
 [entity.skills]
-trickery = { dice = 3, pips = 0 }
-streetwise = { dice = 2, pips = 0 }
+trickery = { dice = 3, pips = 1 }
+streetwise = { dice = 2, pips = 1 }
 
 [[entity]]
 name = "Sabriyya Kalmeralm"
@@ -200,8 +200,8 @@ max_hp = 52
 default = [ 25, 25, 5 ]
 
 [entity.skills]
-charisma = { dice = 3, pips = 0 }
-intimidation = { dice = 2, pips = 0 }
+charisma = { dice = 6, pips = 1 }
+intimidation = { dice = 5, pips = 1 }
 
 [[entity]]
 name = "Leruu Kantiki"
@@ -215,8 +215,8 @@ max_hp = 28
 default = [ 20, 20, 0 ]
 
 [entity.skills]
-charisma = { dice = 2, pips = 0 }
-appraise = { dice = 2, pips = 0 }
+charisma = { dice = 3, pips = 1 }
+appraise = { dice = 2, pips = 1 }
 
 [[entity]]
 name = "Seeshah Raccas"
@@ -230,8 +230,8 @@ max_hp = 32
 default = [ 20, 15, -5 ]
 
 [entity.skills]
-arcane = { dice = 2, pips = 0 }
-charisma = { dice = 3, pips = 0 }
+arcane = { dice = 3, pips = 1 }
+charisma = { dice = 4, pips = 1 }
 
 [[entity]]
 name = "Maiveer Sloan"
@@ -245,8 +245,8 @@ max_hp = 46
 default = [ 10, 25, -15 ]
 
 [entity.skills]
-trickery = { dice = 3, pips = 0 }
-streetwise = { dice = 2, pips = 0 }
+trickery = { dice = 5, pips = 2 }
+streetwise = { dice = 4, pips = 2 }
 
 [[entity]]
 name = "Khet Igersen"
@@ -260,5 +260,5 @@ max_hp = 26
 default = [ 20, 15, 0 ]
 
 [entity.skills]
-appraise = { dice = 3, pips = 0 }
-charisma = { dice = 2, pips = 0 }
+appraise = { dice = 3, pips = 1 }
+charisma = { dice = 2, pips = 1 }

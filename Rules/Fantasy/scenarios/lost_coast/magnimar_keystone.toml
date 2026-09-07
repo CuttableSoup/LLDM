@@ -152,7 +152,7 @@ max_hp = 26
 default = [ 35, 20, 15 ]
 
 [entity.skills]
-miracles = { dice = 2, pips = 0 }
+miracles = { dice = 3, pips = 0 }
 charisma = { dice = 2, pips = 0 }
 
 [[entity]]
@@ -167,8 +167,8 @@ max_hp = 32
 default = [ 15, 25, -5 ]
 
 [entity.skills]
-miracles = { dice = 3, pips = 0 }
-trickery = { dice = 2, pips = 0 }
+miracles = { dice = 4, pips = 0 }
+trickery = { dice = 3, pips = 0 }
 
 [[entity]]
 name = "Leis Nivlandis"
@@ -182,8 +182,8 @@ max_hp = 42
 default = [ 20, 20, 0 ]
 
 [entity.skills]
-arcane = { dice = 4, pips = 0 }
-observation = { dice = 2, pips = 0 }
+arcane = { dice = 5, pips = 1 }
+observation = { dice = 4, pips = 1 }
 
 [[entity]]
 name = "Annamentus Jivorus"
@@ -197,8 +197,8 @@ max_hp = 32
 default = [ 25, 20, 5 ]
 
 [entity.skills]
-miracles = { dice = 3, pips = 0 }
-medicine = { dice = 2, pips = 0 }
+miracles = { dice = 4, pips = 0 }
+medicine = { dice = 3, pips = 0 }
 
 [[entity]]
 name = "Nireed Wadincoast"
@@ -212,8 +212,8 @@ max_hp = 30
 default = [ 30, 15, 5 ]
 
 [entity.skills]
-navigation = { dice = 2, pips = 0 }
-observation = { dice = 2, pips = 0 }
+navigation = { dice = 3, pips = 1 }
+observation = { dice = 2, pips = 1 }
 
 [[entity]]
 name = "Vammiera Symirkova"
@@ -227,8 +227,8 @@ max_hp = 44
 default = [ 15, 25, -10 ]
 
 [entity.skills]
-trickery = { dice = 3, pips = 0 }
-arcane = { dice = 2, pips = 0 }
+trickery = { dice = 5, pips = 2 }
+arcane = { dice = 4, pips = 2 }
 
 [[entity]]
 name = "Mizmina Symirkova"
@@ -242,8 +242,8 @@ max_hp = 42
 default = [ 5, 30, -20 ]
 
 [entity.skills]
-stealth = { dice = 4, pips = 0 }
-blades = { dice = 2, pips = 0 }
+stealth = { dice = 5, pips = 1 }
+blades = { dice = 4, pips = 1 }
 
 [[entity]]
 name = "Remeria Callinova"
@@ -257,8 +257,8 @@ max_hp = 26
 default = [ 30, 20, 10 ]
 
 [entity.skills]
-charisma = { dice = 2, pips = 0 }
-streetwise = { dice = 2, pips = 0 }
+charisma = { dice = 3, pips = 1 }
+streetwise = { dice = 2, pips = 1 }
 
 [[entity]]
 name = "Bevaluu Zimantiu"
@@ -272,5 +272,5 @@ max_hp = 38
 default = [ 30, 15, 10 ]
 
 [entity.skills]
-miracles = { dice = 3, pips = 0 }
-navigation = { dice = 2, pips = 0 }
+miracles = { dice = 4, pips = 1 }
+navigation = { dice = 3, pips = 1 }

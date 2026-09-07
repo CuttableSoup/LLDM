@@ -699,8 +699,8 @@ max_hp = 16
 default = [ 35, 25, 10 ]
 
 [entity.skills]
-miracles = { dice = 2, pips = 0 }
-charisma = { dice = 2, pips = 0 }
+miracles = { dice = 3, pips = 0 }
+charisma = { dice = 2, pips = 2 }
 
 [[entity]]
 name = "Naffer Vosk"
@@ -714,8 +714,8 @@ max_hp = 18
 default = [ 25, 20, 5 ]
 
 [entity.skills]
-miracles = { dice = 2, pips = 0 }
-stealth = { dice = 2, pips = 0 }
+miracles = { dice = 1, pips = 2 }
+stealth = { dice = 2, pips = 1 }
 
 [[entity]]
 name = "Garridan Viskalai"
@@ -744,8 +744,8 @@ max_hp = 15
 default = [ 30, 15, 10 ]
 
 [entity.skills]
-navigation = { dice = 2, pips = 0 }
-arcane = { dice = 2, pips = 0 }
+navigation = { dice = 2, pips = 2 }
+arcane = { dice = 1, pips = 1 }
 
 [[entity]]
 name = "Pennae Kesk"
@@ -759,7 +759,7 @@ max_hp = 12
 default = [ 25, 20, 0 ]
 
 [entity.skills]
-appraise = { dice = 2, pips = 0 }
+appraise = { dice = 3, pips = 0 }
 
 [[entity]]
 name = "Gorvi"
@@ -773,8 +773,8 @@ max_hp = 22
 default = [ 10, 25, -10 ]
 
 [entity.skills]
-intimidation = { dice = 2, pips = 0 }
-strength = { dice = 2, pips = 0 }
+intimidation = { dice = 2, pips = 1 }
+strength = { dice = 2, pips = 2 }
 
 [[entity]]
 name = "Brodert Quink"
@@ -788,8 +788,8 @@ max_hp = 14
 default = [ 25, 15, 10 ]
 
 [entity.skills]
-linguistics = { dice = 2, pips = 0 }
-arcane = { dice = 2, pips = 0 }
+linguistics = { dice = 2, pips = 2 }
+arcane = { dice = 3, pips = 0 }
 
 [[entity]]
 name = "Volioker Briskalberd"
@@ -803,7 +803,7 @@ max_hp = 18
 default = [ 25, 20, 5 ]
 
 [entity.skills]
-trickery = { dice = 2, pips = 0 }
+trickery = { dice = 2, pips = 2 }
 appraise = { dice = 2, pips = 0 }
 
 [[entity]]
@@ -818,8 +818,8 @@ max_hp = 30
 default = [ 30, 30, 10 ]
 
 [entity.skills]
-intimidation = { dice = 2, pips = 0 }
-athletics = { dice = 2, pips = 0 }
+intimidation = { dice = 4, pips = 0 }
+athletics = { dice = 3, pips = 2 }
 
 [[entity]]
 name = "Vachedi"
@@ -833,8 +833,8 @@ max_hp = 32
 default = [ 15, 25, -5 ]
 
 [entity.skills]
-intimidation = { dice = 2, pips = 0 }
-strength = { dice = 2, pips = 0 }
+intimidation = { dice = 3, pips = 0 }
+strength = { dice = 3, pips = 1 }
 
 [[entity]]
 name = "Savah Bevaniky"
@@ -848,7 +848,7 @@ max_hp = 21
 default = [ 25, 20, 5 ]
 
 [entity.skills]
-appraise = { dice = 2, pips = 0 }
+appraise = { dice = 2, pips = 2 }
 blades = { dice = 2, pips = 0 }
 
 [[entity]]
@@ -863,8 +863,8 @@ max_hp = 16
 default = [ 25, 20, 10 ]
 
 [entity.skills]
-arcane = { dice = 2, pips = 0 }
-charisma = { dice = 2, pips = 0 }
+arcane = { dice = 3, pips = 1 }
+charisma = { dice = 2, pips = 1 }
 
 [[entity]]
 name = "Larz Rovanky"
@@ -878,7 +878,7 @@ max_hp = 16
 default = [ 15, 20, -5 ]
 
 [entity.skills]
-artistry = { dice = 2, pips = 0 }
+artistry = { dice = 2, pips = 1 }
 strength = { dice = 2, pips = 0 }
 
 [[entity]]
@@ -893,8 +893,8 @@ max_hp = 25
 default = [ 10, 25, -15 ]
 
 [entity.skills]
-artistry = { dice = 2, pips = 0 }
-strength = { dice = 2, pips = 0 }
+artistry = { dice = 2, pips = 2 }
+strength = { dice = 3, pips = 0 }
 
 [[entity]]
 name = "Aliver Podiker"
@@ -908,8 +908,8 @@ max_hp = 20
 default = [ 20, 15, -15 ]
 
 [entity.skills]
-arcane = { dice = 2, pips = 0 }
-trickery = { dice = 2, pips = 0 }
+arcane = { dice = 3, pips = 0 }
+trickery = { dice = 3, pips = 0 }
 
 [[entity]]
 name = "Nisk Tander"
@@ -923,8 +923,8 @@ max_hp = 15
 default = [ 20, 20, 0 ]
 
 [entity.skills]
-trickery = { dice = 2, pips = 0 }
-arcane = { dice = 2, pips = 0 }
+trickery = { dice = 2, pips = 2 }
+arcane = { dice = 1, pips = 2 }
 
 [[entity]]
 name = "Jesk Berinni"
@@ -938,7 +938,7 @@ max_hp = 18
 default = [ 25, 20, 5 ]
 
 [entity.skills]
-charisma = { dice = 2, pips = 0 }
+charisma = { dice = 2, pips = 1 }
 artistry = { dice = 2, pips = 0 }
 
 [[entity]]
@@ -953,8 +953,8 @@ max_hp = 25
 default = [ 20, 15, 5 ]
 
 [entity.skills]
-linguistics = { dice = 2, pips = 0 }
-acrobatics = { dice = 2, pips = 0 }
+linguistics = { dice = 2, pips = 1 }
+acrobatics = { dice = 3, pips = 1 }
 
 [[entity]]
 name = "Alma Avertin"
@@ -968,7 +968,7 @@ max_hp = 20
 default = [ 30, 20, 10 ]
 
 [entity.skills]
-artistry = { dice = 2, pips = 0 }
+artistry = { dice = 2, pips = 1 }
 observation = { dice = 2, pips = 0 }
 
 [[entity]]
@@ -983,7 +983,7 @@ max_hp = 18
 default = [ 30, 20, 10 ]
 
 [entity.skills]
-linguistics = { dice = 2, pips = 0 }
+linguistics = { dice = 2, pips = 2 }
 charisma = { dice = 2, pips = 0 }
 
 [[entity]]
@@ -998,8 +998,8 @@ max_hp = 30
 default = [ 25, 20, 10 ]
 
 [entity.skills]
-charisma = { dice = 2, pips = 0 }
-artistry = { dice = 2, pips = 0 }
+charisma = { dice = 3, pips = 2 }
+artistry = { dice = 3, pips = 1 }
 
 [[entity]]
 name = "Aesrick Battlehorn"
@@ -1013,8 +1013,8 @@ max_hp = 24
 default = [ 25, 20, 5 ]
 
 [entity.skills]
-artistry = { dice = 2, pips = 0 }
-strength = { dice = 2, pips = 0 }
+artistry = { dice = 3, pips = 0 }
+strength = { dice = 2, pips = 2 }
 
 [[entity]]
 name = "Ibor Thorn"
@@ -1028,7 +1028,7 @@ max_hp = 14
 default = [ 20, 20, -5 ]
 
 [entity.skills]
-survival = { dice = 2, pips = 0 }
+survival = { dice = 1, pips = 2 }
 observation = { dice = 2, pips = 0 }
 
 [[entity]]
@@ -1043,8 +1043,8 @@ max_hp = 20
 default = [ 20, 20, -5 ]
 
 [entity.skills]
-appraise = { dice = 2, pips = 0 }
-streetwise = { dice = 2, pips = 0 }
+appraise = { dice = 2, pips = 1 }
+streetwise = { dice = 1, pips = 2 }
 
 [[entity]]
 name = "Ilsoari Gandethus"
@@ -1058,8 +1058,8 @@ max_hp = 20
 default = [ 25, 20, 10 ]
 
 [entity.skills]
-arcane = { dice = 2, pips = 0 }
-trickery = { dice = 2, pips = 0 }
+arcane = { dice = 3, pips = 1 }
+trickery = { dice = 2, pips = 1 }
 
 [[entity]]
 name = "Niska Mvashti"
@@ -1073,8 +1073,8 @@ max_hp = 16
 default = [ 20, 15, 5 ]
 
 [entity.skills]
-arcane = { dice = 2, pips = 0 }
-observation = { dice = 2, pips = 0 }
+arcane = { dice = 3, pips = 1 }
+observation = { dice = 3, pips = 0 }
 
 [[entity]]
 name = "Olmur Danvakus"
@@ -1088,7 +1088,7 @@ max_hp = 15
 default = [ 35, 20, 15 ]
 
 [entity.skills]
-appraise = { dice = 2, pips = 0 }
+appraise = { dice = 2, pips = 2 }
 husbandry = { dice = 2, pips = 0 }
 
 [[entity]]
@@ -1103,8 +1103,8 @@ max_hp = 18
 default = [ 30, 20, 10 ]
 
 [entity.skills]
-artistry = { dice = 2, pips = 0 }
-appraise = { dice = 2, pips = 0 }
+artistry = { dice = 3, pips = 0 }
+appraise = { dice = 2, pips = 1 }
 
 [[entity]]
 name = "Bilivar Wheen"
@@ -1118,7 +1118,7 @@ max_hp = 15
 default = [ 15, 20, -5 ]
 
 [entity.skills]
-artistry = { dice = 2, pips = 0 }
+artistry = { dice = 1, pips = 2 }
 strength = { dice = 2, pips = 0 }
 
 [[entity]]
@@ -1133,8 +1133,8 @@ max_hp = 14
 default = [ 20, 20, -5 ]
 
 [entity.skills]
-appraise = { dice = 2, pips = 0 }
-observation = { dice = 2, pips = 0 }
+appraise = { dice = 1, pips = 2 }
+observation = { dice = 1, pips = 2 }
 
 [[entity]]
 name = "Jargie Quinn"
@@ -1148,8 +1148,8 @@ max_hp = 30
 default = [ 30, 20, 10 ]
 
 [entity.skills]
-charisma = { dice = 2, pips = 0 }
-streetwise = { dice = 2, pips = 0 }
+charisma = { dice = 3, pips = 0 }
+streetwise = { dice = 2, pips = 2 }
 
 [[entity]]
 name = "Turch Sterglus"
@@ -1164,7 +1164,7 @@ default = [ 25, 20, 5 ]
 
 [entity.skills]
 appraise = { dice = 2, pips = 0 }
-survival = { dice = 2, pips = 0 }
+survival = { dice = 2, pips = 2 }
 
 [[entity]]
 name = "Chod Bevuk"
@@ -1178,7 +1178,7 @@ max_hp = 17
 default = [ 25, 20, 10 ]
 
 [entity.skills]
-streetwise = { dice = 2, pips = 0 }
+streetwise = { dice = 2, pips = 1 }
 appraise = { dice = 2, pips = 0 }
 
 [[entity]]
@@ -1193,8 +1193,8 @@ max_hp = 22
 default = [ 35, 25, 15 ]
 
 [entity.skills]
-charisma = { dice = 2, pips = 0 }
-streetwise = { dice = 2, pips = 0 }
+charisma = { dice = 3, pips = 1 }
+streetwise = { dice = 3, pips = 0 }
 
 [[entity]]
 name = "Bethana Corwin"
@@ -1222,8 +1222,8 @@ max_hp = 30
 default = [ 20, 20, 0 ]
 
 [entity.skills]
-survival = { dice = 2, pips = 0 }
-missiles = { dice = 2, pips = 0 }
+survival = { dice = 3, pips = 0 }
+missiles = { dice = 2, pips = 2 }
 
 [[entity]]
 name = "Gaven Deverin"
@@ -1237,8 +1237,8 @@ max_hp = 25
 default = [ 25, 25, 10 ]
 
 [entity.skills]
-artistry = { dice = 2, pips = 0 }
-miracles = { dice = 2, pips = 0 }
+artistry = { dice = 2, pips = 1 }
+miracles = { dice = 3, pips = 0 }
 
 [[entity]]
 name = "Jasper Korvaski"
@@ -1252,7 +1252,7 @@ max_hp = 20
 default = [ 30, 25, 10 ]
 
 [entity.skills]
-charisma = { dice = 2, pips = 0 }
+charisma = { dice = 2, pips = 2 }
 appraise = { dice = 2, pips = 0 }
 
 [[entity]]
@@ -1268,7 +1268,7 @@ default = [ 20, 20, -5 ]
 
 [entity.skills]
 appraise = { dice = 2, pips = 0 }
-miracles = { dice = 2, pips = 0 }
+miracles = { dice = 3, pips = 0 }
 
 [[entity]]
 name = "Jubrayl Vhiski"
@@ -1282,8 +1282,8 @@ max_hp = 25
 default = [ 15, 20, -10 ]
 
 [entity.skills]
-streetwise = { dice = 2, pips = 0 }
-trickery = { dice = 2, pips = 0 }
+streetwise = { dice = 3, pips = 1 }
+trickery = { dice = 3, pips = 1 }
 
 [[entity]]
 name = "Kaye Tesarani"
@@ -1297,8 +1297,8 @@ max_hp = 15
 default = [ 25, 20, 10 ]
 
 [entity.skills]
-charisma = { dice = 2, pips = 0 }
-trickery = { dice = 2, pips = 0 }
+charisma = { dice = 3, pips = 0 }
+trickery = { dice = 2, pips = 1 }
 
 [[entity]]
 name = "Vorvashali Voon"
@@ -1312,8 +1312,8 @@ max_hp = 18
 default = [ 25, 20, 10 ]
 
 [entity.skills]
-appraise = { dice = 2, pips = 0 }
-arcane = { dice = 2, pips = 0 }
+appraise = { dice = 2, pips = 2 }
+arcane = { dice = 2, pips = 2 }
 
 [[entity]]
 name = "Hannah Velerin"
@@ -1327,8 +1327,8 @@ max_hp = 20
 default = [ 30, 20, 10 ]
 
 [entity.skills]
-medicine = { dice = 2, pips = 0 }
-survival = { dice = 2, pips = 0 }
+medicine = { dice = 3, pips = 1 }
+survival = { dice = 2, pips = 2 }
 
 [[entity]]
 name = "Jhalevia Stensin"
@@ -1342,7 +1342,7 @@ max_hp = 18
 default = [ 25, 20, 10 ]
 
 [entity.skills]
-navigation = { dice = 2, pips = 0 }
+navigation = { dice = 3, pips = 0 }
 appraise = { dice = 2, pips = 0 }
 
 [[entity]]
@@ -1357,8 +1357,8 @@ max_hp = 28
 default = [ 10, 20, -15 ]
 
 [entity.skills]
-intimidation = { dice = 2, pips = 0 }
-appraise = { dice = 2, pips = 0 }
+intimidation = { dice = 3, pips = 1 }
+appraise = { dice = 3, pips = 0 }
 
 [[entity]]
 name = "Velarie Neserin"
@@ -1372,8 +1372,8 @@ max_hp = 14
 default = [ 25, 20, 5 ]
 
 [entity.skills]
-observation = { dice = 2, pips = 0 }
-husbandry = { dice = 2, pips = 0 }
+observation = { dice = 1, pips = 2 }
+husbandry = { dice = 1, pips = 2 }
 
 [[entity]]
 name = "Kendra Deverin"
@@ -1387,5 +1387,5 @@ max_hp = 25
 default = [ 30, 25, 15 ]
 
 [entity.skills]
-charisma = { dice = 2, pips = 0 }
-appraise = { dice = 2, pips = 0 }
+charisma = { dice = 3, pips = 1 }
+appraise = { dice = 2, pips = 2 }

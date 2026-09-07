@@ -110,8 +110,8 @@ max_hp = 22
 default = [ 20, 15, 0 ]
 
 [entity.skills]
-appraise = { dice = 3, pips = 0 }
-charisma = { dice = 2, pips = 0 }
+appraise = { dice = 2, pips = 2 }
+charisma = { dice = 1, pips = 2 }
 
 [[entity]]
 name = "Billiver Billivin"
@@ -125,8 +125,8 @@ max_hp = 20
 default = [ 30, 10, 10 ]
 
 [entity.skills]
-arcane = { dice = 2, pips = 0 }
-trickery = { dice = 2, pips = 0 }
+arcane = { dice = 2, pips = 1 }
+trickery = { dice = 1, pips = 1 }
 
 [[entity]]
 name = "Annsa Shivarlu"
@@ -140,8 +140,8 @@ max_hp = 28
 default = [ 30, 20, 10 ]
 
 [entity.skills]
-charisma = { dice = 3, pips = 0 }
-artistry = { dice = 2, pips = 0 }
+charisma = { dice = 3, pips = 2 }
+artistry = { dice = 2, pips = 2 }
 
 [[entity]]
 name = "Morgamer Pug"
@@ -155,5 +155,5 @@ max_hp = 22
 default = [ 25, 15, 5 ]
 
 [entity.skills]
-arcane = { dice = 2, pips = 0 }
-appraise = { dice = 2, pips = 0 }
+arcane = { dice = 2, pips = 1 }
+appraise = { dice = 1, pips = 1 }

@@ -202,8 +202,8 @@ max_hp = 38
 default = [ 30, 30, 10 ]
 
 [entity.skills]
-axes = { dice = 3, pips = 0 }
-observation = { dice = 2, pips = 0 }
+axes = { dice = 4, pips = 2 }
+observation = { dice = 3, pips = 2 }
 
 [[entity]]
 name = "Zimandi Kaddren"
@@ -217,8 +217,8 @@ max_hp = 40
 default = [ 15, 20, -5 ]
 
 [entity.skills]
-arcane = { dice = 4, pips = 0 }
-charisma = { dice = 2, pips = 0 }
+arcane = { dice = 5, pips = 0 }
+charisma = { dice = 4, pips = 0 }
 
 [[entity]]
 name = "Cheiskaia Nirodin"
@@ -232,8 +232,8 @@ max_hp = 24
 default = [ 20, 15, 0 ]
 
 [entity.skills]
-charisma = { dice = 2, pips = 0 }
-artistry = { dice = 2, pips = 0 }
+charisma = { dice = 2, pips = 2 }
+artistry = { dice = 1, pips = 2 }
 
 [[entity]]
 name = "Jorston Droaeb"
@@ -247,8 +247,8 @@ max_hp = 34
 default = [ 25, 25, 5 ]
 
 [entity.skills]
-athletics = { dice = 2, pips = 0 }
-observation = { dice = 2, pips = 0 }
+athletics = { dice = 4, pips = 0 }
+observation = { dice = 3, pips = 0 }
 
 [[entity]]
 name = "Mivonis Vanderale"
@@ -262,8 +262,8 @@ max_hp = 38
 default = [ 20, 20, 0 ]
 
 [entity.skills]
-appraise = { dice = 3, pips = 0 }
-trickery = { dice = 2, pips = 0 }
+appraise = { dice = 4, pips = 2 }
+trickery = { dice = 3, pips = 2 }
 
 [[entity]]
 name = "Gradon Scarnetti"
@@ -277,8 +277,8 @@ max_hp = 34
 default = [ 10, 25, -10 ]
 
 [entity.skills]
-intimidation = { dice = 3, pips = 0 }
-appraise = { dice = 2, pips = 0 }
+intimidation = { dice = 4, pips = 0 }
+appraise = { dice = 3, pips = 0 }
 
 [[entity]]
 name = "Urtilia Mendion Scarnetti"
@@ -292,8 +292,8 @@ max_hp = 26
 default = [ 15, 25, -5 ]
 
 [entity.skills]
-observation = { dice = 3, pips = 0 }
-charisma = { dice = 2, pips = 0 }
+observation = { dice = 3, pips = 2 }
+charisma = { dice = 2, pips = 2 }
 
 [[entity]]
 name = "Filuvia Mindurian"
@@ -307,8 +307,8 @@ max_hp = 22
 default = [ 30, 15, 10 ]
 
 [entity.skills]
-streetwise = { dice = 2, pips = 0 }
-charisma = { dice = 2, pips = 0 }
+streetwise = { dice = 2, pips = 2 }
+charisma = { dice = 1, pips = 2 }
 
 [[entity]]
 name = "Kaleb Valdemar"
@@ -322,8 +322,8 @@ max_hp = 34
 default = [ 10, 20, -15 ]
 
 [entity.skills]
-arcane = { dice = 3, pips = 0 }
-trickery = { dice = 2, pips = 0 }
+arcane = { dice = 4, pips = 1 }
+trickery = { dice = 3, pips = 1 }
 
 [[entity]]
 name = "Savasha Versade"
@@ -337,8 +337,8 @@ max_hp = 22
 default = [ 30, 15, 15 ]
 
 [entity.skills]
-charisma = { dice = 3, pips = 0 }
-artistry = { dice = 2, pips = 0 }
+charisma = { dice = 2, pips = 2 }
+artistry = { dice = 1, pips = 2 }
 
 [[entity]]
 name = "Randred Derexhi"
@@ -352,8 +352,8 @@ max_hp = 40
 default = [ 15, 25, -5 ]
 
 [entity.skills]
-blades = { dice = 3, pips = 0 }
-streetwise = { dice = 2, pips = 0 }
+blades = { dice = 5, pips = 0 }
+streetwise = { dice = 4, pips = 0 }
 
 [[entity]]
 name = "Luma Derexhi"
@@ -367,8 +367,8 @@ max_hp = 28
 default = [ 30, 20, 10 ]
 
 [entity.skills]
-survival = { dice = 2, pips = 0 }
-observation = { dice = 2, pips = 0 }
+survival = { dice = 3, pips = 1 }
+observation = { dice = 2, pips = 1 }
 
 [[entity]]
 name = "Sheila Heidmarch"
@@ -382,8 +382,8 @@ max_hp = 40
 default = [ 30, 25, 10 ]
 
 [entity.skills]
-brawling = { dice = 3, pips = 0 }
-athletics = { dice = 2, pips = 0 }
+brawling = { dice = 5, pips = 1 }
+athletics = { dice = 4, pips = 1 }
 
 [[entity]]
 name = "Canayven Heidmarch"
@@ -397,8 +397,8 @@ max_hp = 46
 default = [ 35, 25, 15 ]
 
 [entity.skills]
-missiles = { dice = 3, pips = 0 }
-survival = { dice = 2, pips = 0 }
+missiles = { dice = 5, pips = 2 }
+survival = { dice = 4, pips = 2 }
 
 [[entity]]
 name = "Almya Gorangal"
@@ -412,8 +412,8 @@ max_hp = 18
 default = [ 10, 20, -10 ]
 
 [entity.skills]
-arcane = { dice = 2, pips = 0 }
-navigation = { dice = 2, pips = 0 }
+arcane = { dice = 2, pips = 1 }
+navigation = { dice = 1, pips = 1 }
 
 [[entity]]
 name = "Joadric Heimurl"
@@ -427,5 +427,5 @@ max_hp = 36
 default = [ 30, 20, 10 ]
 
 [entity.skills]
-axes = { dice = 3, pips = 0 }
-intimidation = { dice = 2, pips = 0 }
+axes = { dice = 4, pips = 1 }
+intimidation = { dice = 3, pips = 1 }

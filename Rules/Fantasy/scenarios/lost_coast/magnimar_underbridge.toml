@@ -120,8 +120,8 @@ max_hp = 28
 default = [ 10, 25, -15 ]
 
 [entity.skills]
-intimidation = { dice = 3, pips = 0 }
-streetwise = { dice = 2, pips = 0 }
+intimidation = { dice = 3, pips = 1 }
+streetwise = { dice = 2, pips = 1 }
 
 [[entity]]
 name = "Siov Cassimeel"
@@ -135,8 +135,8 @@ max_hp = 30
 default = [ 15, 20, -10 ]
 
 [entity.skills]
-trickery = { dice = 3, pips = 0 }
-arcane = { dice = 2, pips = 0 }
+trickery = { dice = 3, pips = 1 }
+arcane = { dice = 2, pips = 1 }
 
 [[entity]]
 name = "Doolun Corveshku"
@@ -150,8 +150,8 @@ max_hp = 18
 default = [ 25, 10, -5 ]
 
 [entity.skills]
-stealth = { dice = 2, pips = 0 }
-streetwise = { dice = 2, pips = 0 }
+stealth = { dice = 1, pips = 2 }
+streetwise = { dice = 1, pips = 0 }
 
 [[entity]]
 name = "Ayavah"
@@ -165,5 +165,5 @@ max_hp = 32
 default = [ 20, 20, -10 ]
 
 [entity.skills]
-artistry = { dice = 3, pips = 0 }
-arcane = { dice = 2, pips = 0 }
+artistry = { dice = 4, pips = 1 }
+arcane = { dice = 3, pips = 1 }

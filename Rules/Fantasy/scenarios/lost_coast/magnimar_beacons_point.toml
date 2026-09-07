@@ -148,8 +148,8 @@ max_hp = 26
 default = [ 10, 20, -15 ]
 
 [entity.skills]
-streetwise = { dice = 3, pips = 0 }
-intimidation = { dice = 2, pips = 0 }
+streetwise = { dice = 3, pips = 1 }
+intimidation = { dice = 2, pips = 1 }
 
 [[entity]]
 name = "Therhyn Raccas"
@@ -163,8 +163,8 @@ max_hp = 40
 default = [ 10, 25, -10 ]
 
 [entity.skills]
-stealth = { dice = 3, pips = 0 }
-trickery = { dice = 3, pips = 0 }
+stealth = { dice = 5, pips = 0 }
+trickery = { dice = 4, pips = 0 }
 
 [[entity]]
 name = "Mother Flytongue"
@@ -178,5 +178,5 @@ max_hp = 22
 default = [ 15, 20, -10 ]
 
 [entity.skills]
-trickery = { dice = 2, pips = 0 }
-streetwise = { dice = 2, pips = 0 }
+trickery = { dice = 2, pips = 2 }
+streetwise = { dice = 1, pips = 2 }
