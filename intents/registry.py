@@ -13,6 +13,7 @@
 from intents.advance_retreat import narrate_advance_retreat, resolve_advance_retreat
 from intents.formation import narrate_formation, resolve_formation
 from intents.hitch import narrate_hitch, narrate_unhitch, resolve_hitch, resolve_unhitch
+from intents.lore_check import narrate_lore_check, resolve_lore_check
 from intents.mount import narrate_dismount, narrate_mount, resolve_dismount, resolve_mount
 from intents.move import narrate_move, resolve_move
 from intents.rest import narrate_rest, resolve_rest
@@ -33,4 +34,5 @@ HANDLERS = {
     "dismount": (resolve_dismount, narrate_dismount),
     "hitch": (resolve_hitch, narrate_hitch),
     "unhitch": (resolve_unhitch, narrate_unhitch),
+    "lore_check": (resolve_lore_check, narrate_lore_check),
 }

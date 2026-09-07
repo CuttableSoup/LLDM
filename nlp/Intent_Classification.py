@@ -34,6 +34,18 @@ from resolution.AdHoc_Generation import GROUND_AWARE_INTENTS, PLAYER_CENTRIC_INT
 # description is "Using swords and knives in close combat.", which a bare "close " would
 # misfire on before skill matching ever got a chance to run.
 EXAMINE_KEYWORDS = ("examine", "inspect", "look at", "check out")
+# Recalling in-fiction knowledge about a currently-present creature's own weaknesses/abilities
+# (the Pathfinder Knowledge-skill shape -- see skills.toml's own "lore_types" field,
+# DM_Combat.py's _resolve_lore_check_intent, docs/extended-goals.md's "Knowledge checks
+# revealing monster lore"). Deliberately never names the creature itself here -- like MOUNT_
+# KEYWORDS/FORMATION_*_KEYWORDS below, DMCore resolves *which* one by searching the raw input
+# for a currently-present entity's own name. Long, distinctive phrases, not bare words, so this
+# never collides with DIALOGUE_KEYWORDS' own "ask "/"tell " (a genuine "ask the sheriff what he
+# knows" must still reach dialogue, not this).
+LORE_KEYWORDS = (
+    "what do you know about", "what do i know about", "what does my character know about",
+    "recall what you know about", "recall what i know about",
+)
 # Moves an item already in the player's own inventory into a worn/wielded [entity.equipped]
 # slot -- see DMCore._resolve_equip_intent. No collision risk with any skill's own keyword
 # list (checked by test_keyword_tables_never_collide_with_a_skill_keyword, below).
@@ -248,10 +260,14 @@ ACTION_CLAUSE_PATTERN = re.compile(r"--|[,;:?]|\band\b|\bthen\b")
 # per-turn action count at all); NO_ITEM_LOOKUP_INTENTS is a purely *technical* one (these two
 # act on the current scene target directly, so map_to_item never runs for them) that's
 # independent of whether the intent is exempt -- "open"/"close" still cost a turn action (see
-# DM_Core.py) despite needing no item lookup, the same way "give"/"take"/etc. do.
+# DM_Core.py) despite needing no item lookup, the same way "give"/"take"/etc. do. "lore_check" is
+# the one exemption granted despite actually rolling dice (DM_Combat.py's
+# _resolve_lore_check_intent) -- every other member here is free *because* it's diceless; this
+# one is free by deliberate design instead, since a mid-fight Knowledge check shouldn't cost the
+# player a turn (and hand the enemy a free one) just to think out loud.
 EXEMPT_ITEM_INTENTS = frozenset({
     "advance", "retreat", "formation_behind", "formation_abreast", "speak_language", "rest",
-    "mount", "dismount", "hitch", "unhitch",
+    "mount", "dismount", "hitch", "unhitch", "lore_check",
 })
 NO_ITEM_LOOKUP_INTENTS = frozenset({"open", "close"})
 
@@ -384,8 +400,10 @@ def detect_item_intent(processed_text):
     @param processed_text The cleaned and processed player input.
     @return "examine", "equip", "unequip", "drop", "take", "give", "trade", "use", "craft",
         "open", "close", "advance", "retreat", "formation_behind", "formation_abreast",
-        "speak_language", "rest", "mount", "dismount", "hitch", "unhitch", or None.
+        "speak_language", "rest", "mount", "dismount", "hitch", "unhitch", "lore_check", or None.
     """
+    if _keyword_gate(processed_text, LORE_KEYWORDS):
+        return "lore_check"
     if _keyword_gate(processed_text, EXAMINE_KEYWORDS):
         return "examine"
     # Checked ahead of EQUIP_KEYWORDS purely as defense in depth -- _phrase_matches' own

@@ -146,6 +146,14 @@ name = "arcane"
 description = "Knowledge and practical use of magic."
 keywords = ["magic", "spellcasting", "supernatural", "wizard", "sorcery", "spell", "cast", "mana", "ritual", "curse", "cursed", "identify"]
 opposes = ["willpower", "arcane"]
+# lore_types -- which creature supertypes/subtypes a "lore_check" free-standing intent
+# (DM_Combat.py's _resolve_lore_check_intent, docs/extended-goals.md's "Knowledge checks
+# revealing monster lore") rolls THIS skill against, the Pathfinder Knowledge-X-per-monster-type
+# shape without a separate skill/table for it -- reuses the same {supertypes, subtypes} shape
+# damage_bonus_vs/dispel/cure already use (Combat_Resolution.matches_supertype_or_subtype). A
+# subtype matching no skill's own lore_types at all (ex: an ordinary humanoid) simply has no
+# lore check available.
+lore_types = { subtypes = ["elemental", "monstrous humanoid"] }
 
 [[skill]]
 name = "navigation"
@@ -166,6 +174,8 @@ name = "survival"
 description = "Staying alive in hostile wilderness environments."
 keywords = ["wilderness", "exploration", "foraging", "camp", "nature", "track", "outdoor"]
 opposes = ["survival"]
+# See arcane's own lore_types comment.
+lore_types = { subtypes = ["animal"] }
 
 [[skill]]
 name = "willpower"
@@ -178,6 +188,8 @@ name = "miracles"
 description = "Invoking divine magic from deities."
 keywords = ["magic", "divine", "spellcasting", "priest", "holy", "prayer", "blessing", "god", "faith"]
 opposes = ["willpower", "miracles"]
+# See arcane's own lore_types comment.
+lore_types = { subtypes = ["undead"] }
 
 [[skill]]
 name = "artistry"

@@ -1,3 +1,5 @@
+import re
+
 import resolution.Combat_Resolution as Combat_Resolution
 from resolution.Challenge_Rating import calculate_challenge_rating, calculate_party_challenge_rating, skill_rating
 from dm.DM_ActionOutcome import DamageEffect, MovementOutcome, TransferOutcome, rolled_outcome_from_roll
@@ -35,9 +37,11 @@ class CombatMixin(DMCoreProtocol):
         (StatusMixin) to skip its turn entirely when it can't act at all; and, for a
         deliberate `action = "steal"`/`"gift"` behavior entry, self.transfer_item
         (InventoryMixin) plus self.nudge_attitude_from_event (SocialMixin) to fire the same
-        "theft"/"favor" nudge the player's own "take"/"give" already fires. Inherits
-        DMCoreProtocol purely so type checkers can resolve these shared attributes/cross-mixin
-        methods -- see DM_Types.py.
+        "theft"/"favor" nudge the player's own "take"/"give" already fires; and
+        _resolve_lore_check_intent calls self.is_identified/self.apply_condition (StatusMixin)
+        to reuse the same reveal-a-hidden-property primitive the cursed dagger's own examine
+        check already uses. Inherits DMCoreProtocol purely so type checkers can resolve these
+        shared attributes/cross-mixin methods -- see DM_Types.py.
     """
 
     def resolve_bonus(self, attacker_name, bonus):
@@ -787,6 +791,100 @@ class CombatMixin(DMCoreProtocol):
         return calculate_challenge_rating(
             entity.get("skills", {}), entity.get("max_hp", 0), damage_dice, damage_pips,
         )
+
+    def _resolve_lore_skill(self, target_name):
+        """!
+        @brief Which skill's own lore_types (skills.toml's [[skill]] field) matches
+            target_name's supertype/subtype -- the domain skill a Pathfinder Knowledge check
+            against this kind of creature would use (ex: "undead" -> miracles, "animal" ->
+            survival), reusing Combat_Resolution.matches_supertype_or_subtype (the same
+            OR-of-two-lists check damage_bonus_vs/dispel/cure already share) rather than a
+            second lookup table.
+        @param target_name The name of the entity being studied.
+        @return The matching skill's own name, or None if no [[skill]] authors a matching
+            lore_types at all (ex: an ordinary humanoid) -- opt-in, not universal.
+        """
+        target = self.entities.get(target_name, {})
+        for skill_name, skill in self.skills.items():
+            lore_types = skill.get("lore_types")
+            if lore_types and Combat_Resolution.matches_supertype_or_subtype(target, lore_types):
+                return skill_name
+        return None
+
+    def _lore_tags(self, target_name):
+        """!
+        @brief The tag data a successful lore check actually reveals -- the same
+            resistance_tags/immunity_tags/vulnerability_tags/damage_tags fields already driving
+            this entity's own combat math (docs/combat.md's "Tags vs. conditions"), not a
+            separately hand-authored "lore text" field.
+        @param target_name The name of the entity being studied.
+        @return A flat, deduplicated list of tag strings (possibly empty), in a fixed field
+            order, skipping whichever fields the target never authored at all.
+        """
+        target = self.entities.get(target_name, {})
+        tags = []
+        for field in ("resistance_tags", "immunity_tags", "vulnerability_tags", "damage_tags"):
+            for tag in target.get(field, []):
+                if tag not in tags:
+                    tags.append(tag)
+        return tags
+
+    def _resolve_lore_check_intent(self, input_text, resolved):
+        """!
+        @brief Handles "lore_check" -- Pathfinder's Knowledge-skill shape: recalling a
+            currently-present creature's own weaknesses/abilities (see docs/extended-goals.md's
+            "Knowledge checks revealing monster lore"). Deliberately resolved entirely outside
+            _on_turn_detected's own clause list (Intent_Classification.py's own
+            EXEMPT_ITEM_INTENTS) -- no dice_penalty threaded at all, and this never triggers
+            _resolve_combat_round on its own, even mid-fight, unlike an ordinary action-kind
+            clause.
+
+            Which creature is meant is resolved the same "search the raw input for a
+            currently-present entity's own name" way _resolve_mount_intent/
+            _resolve_formation_intent already use (DM_Movement.py) -- no embedding match, since
+            a creature's name either is or isn't literally said. Denied "not_present" if none is
+            named; "no_lore_available" if no [[skill]] authors a lore_types matching the
+            target's own supertype/subtype (_resolve_lore_skill) -- opt-in, not universal, the
+            same precedent [bulk]/[[equip_slot]] already set for a setting/creature that never
+            opts in. Already is_identified skips the roll entirely and just reports what's
+            already known -- no need to re-earn already-learned knowledge, the same economy
+            examining an already-identified item already has (DM_Status.py's is_identified).
+            Otherwise a flat, non-opposed resolve_action against difficulty `10 +
+            get_challenge_rating(target_name)` (the Pathfinder "DC = 10 + CR" shape). A pass
+            applies the permanent "identified" condition and reveals the target's own tags
+            (_lore_tags); a fail reports "check_failed".
+        @param input_text The raw (lowercased, prefix-stripped) player input, searched for a
+            currently-present entity's own name.
+        @param resolved The item_interaction_resolved publisher closure from
+            DMCore._on_item_interaction_detected.
+        """
+        candidates = [
+            name for name in self.scenario_entities
+            if name != self.player_name
+            and re.search(rf"\b{re.escape(name.lower())}\b", input_text or "")
+        ]
+        if not candidates:
+            resolved(False, reason="not_present")
+            return
+        target_name = candidates[0]
+
+        lore_skill = self._resolve_lore_skill(target_name)
+        if not lore_skill:
+            resolved(False, reason="no_lore_available", target=target_name)
+            return
+
+        if self.is_identified(target_name):
+            resolved(True, target=target_name, skill=lore_skill, revealed=self._lore_tags(target_name))
+            return
+
+        difficulty = 10 + self.get_challenge_rating(target_name)
+        roll = self.resolve_action(self.player_name, lore_skill, difficulty)
+        if not roll["success"]:
+            resolved(False, reason="check_failed", target=target_name, skill=lore_skill)
+            return
+
+        self.apply_condition(target_name, "identified", duration="permanent")
+        resolved(True, target=target_name, skill=lore_skill, revealed=self._lore_tags(target_name))
 
     def get_party_challenge_rating(self):
         """!

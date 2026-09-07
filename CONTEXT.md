@@ -17,9 +17,12 @@ _Avoid_: item intent, diceless action.
 **Free-standing intent**:
 An item-interaction intent that acts on the scene, the party, or the block clock directly,
 rather than a named item — advance, retreat, formation_behind, formation_abreast,
-speak_language, rest, move, travel, mount, dismount, hitch, and unhitch. Resolved with no
-dependency on the scene target or the locked-container gate, unlike every item-named intent.
-_Avoid_: scene intent, movement intent (move/travel are only two of the twelve).
+speak_language, rest, move, travel, mount, dismount, hitch, unhitch, and lore_check. Resolved
+with no dependency on the scene target or the locked-container gate, unlike every item-named
+intent. lore_check is the one member that actually rolls dice — every other member is free
+because it's diceless; it's exempted from the ordinary turn pipeline by deliberate design
+instead, so recalling monster lore mid-fight never costs a turn.
+_Avoid_: scene intent, movement intent (move/travel are only two of the thirteen).
 
 **Scene target**:
 The entity a non-free-standing item-interaction intent implicitly acts against when no item

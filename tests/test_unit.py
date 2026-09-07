@@ -65,6 +65,7 @@ from nlp.Intent_Classification import (
     FORMATION_BEHIND_KEYWORDS,
     GIVE_KEYWORDS,
     HITCH_KEYWORDS,
+    LORE_KEYWORDS,
     MOUNT_KEYWORDS,
     OPEN_KEYWORDS,
     REST_KEYWORDS,
@@ -521,6 +522,23 @@ class TestIntentClassification(unittest.TestCase):
         self.assertEqual(detect_item_intent("close the chest"), "close")
         self.assertIsNone(detect_item_intent("i fight in close combat"))
 
+    def test_detect_item_intent_lore_check_vs_genuine_dialogue(self):
+        self.assertEqual(detect_item_intent("what do you know about the troll"), "lore_check")
+        # A genuine "ask ... about ..." must still fall through to dialogue, not lore_check.
+        self.assertIsNone(detect_item_intent("ask the guard about the road"))
+
+    def test_lore_check_never_joins_the_turn_pipeline(self):
+        # A standalone lore-check input publishes only its own free-standing
+        # item_interaction_detected -- never a turn_detected, so it can never cost a turn slot
+        # or trigger a combat round the way an ordinary action-kind clause would (see
+        # docs/extended-goals.md's "Knowledge checks revealing monster lore").
+        classifier = IntentClassifier(FakeMatcher())
+        _processed, events = classifier.classify("what do you know about the troll")
+        self.assertEqual(events, [{"event": "item_interaction_detected", "payload": {
+            "intent": "lore_check", "item_name": None,
+            "input": "what do you know about the troll", "score": None,
+        }}])
+
     def test_detect_dialogue_intent_vs_item_and_skill_phrasing(self):
         self.assertTrue(detect_dialogue_intent("talk to the innkeeper"))
         self.assertTrue(detect_dialogue_intent("ask the guard about the road"))
@@ -791,6 +809,7 @@ class TestIntentClassification(unittest.TestCase):
             "DISMOUNT_KEYWORDS": DISMOUNT_KEYWORDS,
             "HITCH_KEYWORDS": HITCH_KEYWORDS,
             "UNHITCH_KEYWORDS": UNHITCH_KEYWORDS,
+            "LORE_KEYWORDS": LORE_KEYWORDS,
         }
         # No known exceptions remain: appraise's own skills.toml keywords deliberately exclude
         # "examine" (EXAMINE_KEYWORDS' own item-detection word, checked first) precisely so this
@@ -2237,6 +2256,85 @@ class TestHitch(DMTestCase):
         self.assertEqual(result["reason"], "not_hitched")
 
 
+class TestLoreCheck(DMTestCase):
+    # arena: gladstone/wolf/wolf_2/thane all start band 1. wolf is subtype "animal" (survival's
+    # own lore_types, skills.toml) but authors no resistance/immunity/vulnerability/damage_tags
+    # of its own; thane is subtype "humanoid" -- no [[skill]] authors a lore_types matching it
+    # at all. "giant spider" (debug.toml's shared entity catalog, subtype "animal",
+    # vulnerability_tags = ["fire"]) is instanced fresh per test that needs real revealed tags.
+
+    def setUp(self):
+        super().setUp()
+        self.resolved = self._capture("item_interaction_resolved")
+
+    def _add_spider(self, band=1):
+        [name] = self.dm_core._instance_entities([{"name": "giant spider", "band": band}])
+        self.dm_core.scenario_entities.append(name)
+        return name
+
+    def test_lore_check_denied_when_no_present_entity_is_named(self):
+        self.dm_core._on_item_interaction_detected({
+            "intent": "lore_check", "item_name": None, "input": "what do you know about the dragon",
+        })
+        result = self.resolved[-1]
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "not_present")
+
+    def test_lore_check_denied_against_a_creature_with_no_matching_lore_skill(self):
+        self.dm_core._on_item_interaction_detected({
+            "intent": "lore_check", "item_name": None, "input": "what do you know about thane",
+        })
+        result = self.resolved[-1]
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "no_lore_available")
+        self.assertEqual(result["target"], "thane")
+
+    def test_lore_check_success_reveals_the_targets_own_tags(self):
+        name = self._add_spider()
+        self._stub_roll_dice(999)  # guarantees a pass regardless of the CR-scaled difficulty
+        self.dm_core._on_item_interaction_detected({
+            "intent": "lore_check", "item_name": None, "input": f"what do you know about the {name}",
+        })
+        result = self.resolved[-1]
+        self.assertTrue(result["found"])
+        self.assertEqual(result["target"], name)
+        self.assertEqual(result["skill"], "survival")
+        self.assertEqual(result["revealed"], ["fire"])
+        self.assertTrue(self.dm_core.is_identified(name))
+
+    def test_lore_check_success_against_a_target_with_no_tags_reveals_nothing(self):
+        self._stub_roll_dice(999)
+        self.dm_core._on_item_interaction_detected({
+            "intent": "lore_check", "item_name": None, "input": "what do you know about the wolf",
+        })
+        result = self.resolved[-1]
+        self.assertTrue(result["found"])
+        self.assertEqual(result["skill"], "survival")
+        self.assertEqual(result["revealed"], [])
+
+    def test_lore_check_fails_and_reveals_nothing_on_a_bad_roll(self):
+        name = self._add_spider()
+        self._stub_roll_dice(0)  # guarantees a fail against any positive CR-scaled difficulty
+        self.dm_core._on_item_interaction_detected({
+            "intent": "lore_check", "item_name": None, "input": f"what do you know about the {name}",
+        })
+        result = self.resolved[-1]
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "check_failed")
+        self.assertFalse(self.dm_core.is_identified(name))
+
+    def test_lore_check_already_identified_skips_the_roll_entirely(self):
+        name = self._add_spider()
+        self.dm_core.apply_condition(name, "identified", duration="permanent")
+        self._stub_roll_dice(0)  # would fail any real roll -- proves no roll is attempted
+        self.dm_core._on_item_interaction_detected({
+            "intent": "lore_check", "item_name": None, "input": f"what do you know about the {name}",
+        })
+        result = self.resolved[-1]
+        self.assertTrue(result["found"])
+        self.assertEqual(result["revealed"], ["fire"])
+
+
 class TestDowntime(DMTestCase):
     # debug.toml authors no [time] table, so DM_Time.py's own default (24 hours/day, 16
     # daylight, 3 blocks/day -- an 8-hour block) is what every test here exercises.
@@ -3470,6 +3568,36 @@ class TestFreeStandingIntentHandlers(unittest.TestCase):
             with self.subTest(reason=reason):
                 prompt = self._narrate("unhitch", {
                     "intent": "unhitch", "found": False, "reason": reason, "input": "unhitch the horse",
+                })
+                self.assertIn(expected_phrase, prompt)
+
+    def test_narrate_lore_check_reports_the_real_target_and_revealed_tags(self):
+        prompt = self._narrate("lore_check", {
+            "intent": "lore_check", "found": True, "target": "giant spider", "skill": "survival",
+            "revealed": ["fire"],
+        })
+        self.assertIn("giant spider", prompt)
+        self.assertIn("fire", prompt)
+
+    def test_narrate_lore_check_still_grounded_when_nothing_is_revealed(self):
+        # A pass with no resistance/immunity/vulnerability/damage_tags authored at all (ex:
+        # a plain wolf) must not fabricate traits that were never there.
+        prompt = self._narrate("lore_check", {
+            "intent": "lore_check", "found": True, "target": "wolf", "skill": "survival", "revealed": [],
+        })
+        self.assertIn("wolf", prompt)
+        self.assertIn("nothing noteworthy", prompt)
+
+    def test_narrate_lore_check_explains_each_failure_reason(self):
+        for reason, expected_phrase in (
+            ("not_present", "nothing here matches"),
+            ("no_lore_available", "nothing comes to mind"),
+            ("check_failed", "nothing useful surfaces"),
+        ):
+            with self.subTest(reason=reason):
+                prompt = self._narrate("lore_check", {
+                    "intent": "lore_check", "found": False, "reason": reason, "target": "giant spider",
+                    "input": "what do you know about the giant spider",
                 })
                 self.assertIn(expected_phrase, prompt)
 

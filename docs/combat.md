@@ -85,6 +85,43 @@ would. `get_party_challenge_rating` filters through `self.scenario_entities`, no
 `is_player`/`is_party` scan of `self.entities` (see the same note on `GUI_Core.py`'s Party-tab
 filtering, above).
 
+**Lore checks (Pathfinder Knowledge skills).** `"lore_check"` is a free-standing intent (see
+`docs/action-resolution.md`'s "Multiple actions", `CONTEXT.md`'s "Free-standing intent") that
+recalls a currently-present creature's own weaknesses/abilities — no new skill for it: a
+`[[skill]]` entry (`skills.toml`) can author `lore_types = {supertypes, subtypes}` (the same
+shape `damage_bonus_vs`/`dispel`/`cure` already use) naming which creature kinds it covers —
+`arcane` (elementals/monstrous humanoids), `miracles` (undead), and `survival` (animals) each do
+today — rather than adding a standalone "knowledge" skill or splitting into several PF-shaped
+Knowledge-X skills the way this engine's own domain-consolidated skill list otherwise avoids. An
+unmatched creature subtype (ex: an ordinary humanoid) simply has no lore check available.
+
+`DM_Combat.py`'s `_resolve_lore_check_intent` resolves *which* creature is meant the same
+"search the raw input for a currently-present entity's own name" way `_resolve_mount_intent`/
+`_resolve_formation_intent` already do (`DM_Movement.py`) — no embedding match. `_resolve_lore_
+skill` picks whichever `[[skill]]`'s own `lore_types` matches the target's `supertype`/`subtype`
+(`matches_supertype_or_subtype`); none matching denies `"no_lore_available"`. Already
+`is_identified` (see "Tags vs. conditions", below) skips the roll entirely and just reports
+what's already known — no need to re-earn already-learned knowledge, the same economy examining
+an already-identified item already has. Otherwise a flat, non-opposed `resolve_action` against
+difficulty `10 + get_challenge_rating(target_name)` (the Pathfinder `DC = 10 + CR` shape). A
+pass applies the permanent `"identified"` condition and hands back `_lore_tags` — the target's
+own `resistance_tags`/`immunity_tags`/`vulnerability_tags`/`damage_tags`, deduplicated — no
+separately hand-authored "lore text" field, just permission to surface tag data that already
+drives its combat math; a fail reports `"check_failed"`.
+
+**Deliberately never joins the ordinary turn pipeline**, unlike an ordinary action-kind clause —
+recalling what you know about a troll mid-fight must not cost a turn slot or hand it a free hit
+via `_resolve_combat_round`. Detection reuses `Intent_Classification.py`'s own
+`EXEMPT_ITEM_INTENTS` outright (`LORE_KEYWORDS`, ex: "what do you know about") rather than a
+third classifier pass — the exact mechanism `mount`/`hitch`/`formation_*`/`rest` already use to
+publish a free-standing `item_interaction_detected` that never joins `turn_clauses`/
+`dice_penalty`. `lore_check` is the one member of that set that actually rolls dice — every
+other member is free *because* it's diceless; this one is free by deliberate design instead. No
+new event or LLMCore handler either: `intents/lore_check.py`'s `resolve_lore_check`/`narrate_
+lore_check`, registered in `intents/registry.py`'s `HANDLERS` alongside every other free-standing
+intent, publish/narrate through the same `item_interaction_resolved` → `generate_item_
+interaction_response` path every other free-standing intent already uses.
+
 
 ## Status and conditions
 

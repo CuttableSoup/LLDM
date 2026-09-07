@@ -1273,11 +1273,11 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         """!
         @brief Event handler for a free-text item-interaction match (see NLPCore.map_to_item):
             "examine"/"take"/"give"/"trade"/"use"/"equip"/"unequip"/"drop" against a named
-            item, "open"/"close" against the scene target itself, or one of the twelve
+            item, "open"/"close" against the scene target itself, or one of the thirteen
             free-standing intents (see CONTEXT.md's "Free-standing intent" -- "advance",
             "retreat", "formation_behind", "formation_abreast", "speak_language", "rest",
-            "move", "travel", "mount", "dismount", "hitch", "unhitch"), each resolved and
-            narrated by its own module under intents/
+            "move", "travel", "mount", "dismount", "hitch", "unhitch", "lore_check"), each
+            resolved and narrated by its own module under intents/
             (see intents/registry.py's own HANDLERS manifest) rather than a branch here.
             Deliberately bypasses the whole skill/dice system either way -- none of these
             warrant a roll (see DM_Movement.py's module docstring for why movement specifically
