@@ -1,0 +1,2106 @@
+# Pathfinder 1e Core Rulebook (Chapter 6: Equipment) weapons/armor/shields, converted to this
+# engine's D6 format. A separate catalog from items.toml on purpose: items.toml is the small,
+# hand-curated set of narrative items the debug scenario actually references (and stays that
+# way); this file is the full mundane-gear catalog a shop/loot table can draw from. load_rules
+# scans every *.toml under Rules/Fantasy/ (Rules/Fantasy/reference/ is one directory too deep to
+# be included), so no code change was needed to pick this up.
+#
+# Eight PF weapons/armor already have a shipped items.toml equivalent under the exact same name
+# (longsword, spear, long bow, short bow, hand axe, club, dagger, chain mail) and are
+# deliberately NOT duplicated here -- reuse those instead of authoring a second, slightly
+# different "longsword". A few PF weapons (shortsword/shortbow's own generic martial-weapon
+# stats) are close enough to an existing items.toml reflavor (rusty shortsword / short bow) that
+# a second entry would just be redundant; PF's real "Shortsword"/"Shortbow" numbers are covered
+# by the new "short sword" entry below instead, since items.toml's own "rusty shortsword" is a
+# deliberately weakened debug-scenario reflavor, not the base weapon. Ammunition (arrows, bolts,
+# sling bullets) is out of scope -- this engine has no ammo-tracking mechanic; a ranged weapon
+# just works once equipped, the same way items.toml's own "long bow"/"short bow" already ship
+# with no separate ammunition item. "Net" (pure entangle, no direct damage) is also out of scope
+# -- it would need a bespoke restraining condition, not just a damage_value/armor_value
+# conversion, so it's left as a "needs a human call" gap rather than authored badly.
+#
+# ============================================================================================
+# Conversion formulas (weapons & armor/shields only -- see AskUserQuestion decisions this file
+# was authored against: weapons+armor scope, this file's own location, value = gp price
+# unscaled)
+# ============================================================================================
+#
+# Damage dice: PF's own Medium-creature "Dmg (M)" column (Table 6-4), converted to this engine's
+# {dice, pips} by nearest average damage -- D6's pips are a flat +0/+1/+2 per die (not another
+# fractional die), so the available averages are 1,2,3.5,4.5,5.5,7,8,9,10.5,11.5,... with real
+# gaps between them. Matched as closely as the available codes allow:
+#   PF die   avg    D6 code   avg
+#   1d2      1.5    0D+1      1     (weakest tier -- unarmed-adjacent gauntlet strikes)
+#   1d3      2.0    0D+2      2     (exact)
+#   1d4      2.5    0D+2      2     (nearest available; collides with 1d3 -- both "light" tier)
+#   1d6      3.5    1D+0      3.5   (exact)
+#   1d8      4.5    1D+1      4.5   (exact)
+#   1d10     5.5    1D+2      5.5   (exact)
+#   1d12     6.5    2D+0      7     (nearest available)
+#   2d4      5.0    1D+2      5.5   (nearest available; collides with 1d10)
+#   2d6      7.0    2D+0      7     (exact; collides with 1d12)
+#   2d8      9.0    2D+2      9     (exact)
+# A double weapon's second head (ex: quarterstaff's own 1d6/1d6, dwarven urgrosh's 1d8/1d6) is
+# dropped -- this engine has no "attack twice per turn" primitive (see
+# reference/pathfinder_mapping.toml's own creature_ability "Multiple natural attacks" row, same
+# precedent); only the primary head's own damage converts.
+#
+# Strength bonus: bonus = "strength_damage" for every melee weapon and every "throwing"-skill
+# weapon (PF applies Str to thrown-weapon damage same as melee) and for the missile weapons PF
+# itself grants Str to (sling, halfling sling staff, composite longbow, composite shortbow) --
+# bonus = 0 for every other "missiles"-skill weapon (ordinary bows, all crossbows, blowgun),
+# matching items.toml's own shipped "long bow"/"short bow" precedent exactly.
+#
+# Range: PF's range increment (feet) divided by ~16 ft/band and rounded, calibrated against
+# items.toml's own shipped long bow (100 ft -> 6 bands) and short bow (60 ft -> 4 bands) so this
+# file's bands line up with what's already in play. A weapon with PF's own "reach" property
+# (longspear, glaive, guisarme, lance, ranseur, whip) gets range = 1 outright -- one band beyond
+# plain melee -- the same fixed value items.toml's own shipped "spear" already uses for reach,
+# rather than trying to derive a band count from "reach doubles a 5 ft square".
+#
+# Armor/shield AC bonus -> armor_value: PF's own AC bonus is already a clean small integer, so
+# it's a direct lookup rather than an average-matching exercise:
+#   AC bonus   D6 code
+#   +1         0D+2
+#   +2         1D+0
+#   +3         1D+1
+#   +4         1D+2
+#   +5         2D+0
+#   +6         2D+1
+#   +7         2D+2
+#   +8         3D+0
+#   +9         3D+1
+# armor_tags is always [ "physical", "piercing", "bludgeoning", "slashing" ], matching
+# items.toml's own shipped "chain mail" -- this engine's armor doesn't discriminate by damage
+# type the way PF's DR does, it's a flat physical-hit reducer. Shields use equip_slot = "lhand"
+# (this engine has no separate shield slot -- rules.toml's own [[equip_slot]] gives a humanoid
+# "rhand"/"lhand" only, same as any off-hand item) and subtype = "shield" (new, purely
+# descriptive -- nothing in the engine gates on an item's own subtype for equipping, only the
+# wearer's supertype/subtype via get_equip_slots, so this needed no code change either).
+#
+# Skill assignment: blades = swords, kukri, picks, starknife; axes = axes/waraxes; polearms =
+# reach/pole weapons + spiked chain + trident; brawling = blunt one- and two-handed weapons
+# (matching items.toml's own shipped "club" -> brawling precedent) + monk-flavor blunt weapons;
+# finesse = the dagger family, whip, and the remaining light monk weapons (sai/siangham/kama/
+# nunchaku); throwing = weapons PF itself calls out as thrown (dart, javelin, throwing axe,
+# light hammer, bolas, shuriken); missiles = every bow/crossbow/sling/blowgun.
+#
+# max_hp/bulk/[entity.skills].fortitude (the item's own durability, checked by a "sunder"
+# attempt) scale by a simple three-tier ladder rather than PF's own per-item weight in lbs,
+# matching items.toml's own shipped items (bulk=1 flat regardless of real-world weight): light/
+# one-handed weapons and ranged weapons get bulk=1, two-handed weapons and heavy armor/tower
+# shield get bulk=2 -- the one place this file diverges from items.toml's fully-flat bulk=1,
+# since a full plate suit and a dagger sharing one bulk unit loses too much fidelity at this
+# catalog's scale, while still keeping only two tiers to match the existing convention's
+# simplicity.
+#
+# value is the PF gp price entirely unscaled (a fractional gp, ex: a 5 sp dart = 0.5, stays
+# fractional rather than rounding) -- items.toml's own existing values (longsword=15,
+# chain mail=15, etc.) don't track PF gp consistently, so no existing conversion ratio was being
+# preserved either way; starting-gold/loot-currency amounts elsewhere may need separate
+# re-tuning against this file's much larger prices, but that's a one-time constant change, not
+# a per-item judgment call.
+
+[[entity]]
+name = "spiked gauntlet"
+supertype = "object"
+subtype = "weapon"
+skill = "brawling"
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 6
+damage_value = { dice = 0, pips = 2, bonus = "strength_damage" }
+damage_tags = [ "piercing" ]
+bulk = 1
+value = 5
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "punching dagger"
+supertype = "object"
+subtype = "weapon"
+skill = "finesse"
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 6
+damage_value = { dice = 0, pips = 2, bonus = "strength_damage" }
+damage_tags = [ "piercing" ]
+bulk = 1
+value = 2
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "light mace"
+supertype = "object"
+subtype = "weapon"
+skill = "brawling"
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 6
+damage_value = { dice = 1, pips = 0, bonus = "strength_damage" }
+damage_tags = [ "bludgeoning" ]
+bulk = 1
+value = 5
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "sickle"
+supertype = "object"
+subtype = "weapon"
+skill = "blades"
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 6
+damage_value = { dice = 1, pips = 0, bonus = "strength_damage" }
+damage_tags = [ "slashing" ]
+bulk = 1
+value = 6
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "heavy mace"
+supertype = "object"
+subtype = "weapon"
+skill = "brawling"
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 6
+damage_value = { dice = 1, pips = 1, bonus = "strength_damage" }
+damage_tags = [ "bludgeoning" ]
+bulk = 1
+value = 12
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "morningstar"
+supertype = "object"
+subtype = "weapon"
+skill = "brawling"
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 6
+damage_value = { dice = 1, pips = 1, bonus = "strength_damage" }
+damage_tags = [ "bludgeoning", "piercing" ]
+bulk = 1
+value = 8
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "shortspear"
+supertype = "object"
+subtype = "weapon"
+skill = "polearms"
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 6
+damage_value = { dice = 1, pips = 0, bonus = "strength_damage" }
+damage_tags = [ "piercing" ]
+bulk = 1
+value = 1
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "longspear"
+supertype = "object"
+subtype = "weapon"
+skill = "polearms"
+equip_slot = "rhand"
+max_hp = 10
+range = 1
+damage_value = { dice = 1, pips = 1, bonus = "strength_damage" }
+damage_tags = [ "piercing" ]
+bulk = 2
+value = 5
+[entity.skills]
+fortitude = { dice = 3, pips = 0 }
+
+[[entity]]
+name = "quarterstaff"
+supertype = "object"
+subtype = "weapon"
+skill = "brawling"
+equip_slot = "rhand"
+max_hp = 10
+damage_value = { dice = 1, pips = 0, bonus = "strength_damage" }
+damage_tags = [ "bludgeoning" ]
+bulk = 2
+value = 0
+[entity.skills]
+fortitude = { dice = 3, pips = 0 }
+
+[[entity]]
+name = "blowgun"
+supertype = "object"
+subtype = "weapon"
+skill = "missiles"
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 5
+range = 1
+damage_value = { dice = 0, pips = 1, bonus = 0 }
+damage_tags = [ "piercing" ]
+bulk = 1
+value = 2
+[entity.skills]
+fortitude = { dice = 1, pips = 0 }
+
+[[entity]]
+name = "light crossbow"
+supertype = "object"
+subtype = "weapon"
+skill = "missiles"
+equip_slot = "rhand"
+max_hp = 5
+range = 5
+damage_value = { dice = 1, pips = 1, bonus = 0 }
+damage_tags = [ "piercing" ]
+bulk = 2
+value = 35
+[entity.skills]
+fortitude = { dice = 1, pips = 0 }
+
+[[entity]]
+name = "heavy crossbow"
+supertype = "object"
+subtype = "weapon"
+skill = "missiles"
+equip_slot = "rhand"
+max_hp = 5
+range = 8
+damage_value = { dice = 1, pips = 2, bonus = 0 }
+damage_tags = [ "piercing" ]
+bulk = 2
+value = 50
+[entity.skills]
+fortitude = { dice = 1, pips = 0 }
+
+[[entity]]
+name = "dart"
+supertype = "object"
+subtype = "weapon"
+skill = "throwing"
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 5
+range = 1
+damage_value = { dice = 0, pips = 2, bonus = "strength_damage" }
+damage_tags = [ "piercing" ]
+bulk = 1
+value = 0.5
+[entity.skills]
+fortitude = { dice = 1, pips = 0 }
+
+[[entity]]
+name = "javelin"
+supertype = "object"
+subtype = "weapon"
+skill = "throwing"
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 5
+range = 2
+damage_value = { dice = 1, pips = 0, bonus = "strength_damage" }
+damage_tags = [ "piercing" ]
+bulk = 1
+value = 1
+[entity.skills]
+fortitude = { dice = 1, pips = 0 }
+
+[[entity]]
+name = "sling"
+supertype = "object"
+subtype = "weapon"
+skill = "missiles"
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 5
+range = 3
+damage_value = { dice = 0, pips = 2, bonus = "strength_damage" }
+damage_tags = [ "bludgeoning" ]
+bulk = 1
+value = 0
+[entity.skills]
+fortitude = { dice = 1, pips = 0 }
+
+[[entity]]
+name = "throwing axe"
+supertype = "object"
+subtype = "weapon"
+skill = "throwing"
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 5
+range = 1
+damage_value = { dice = 1, pips = 0, bonus = "strength_damage" }
+damage_tags = [ "slashing" ]
+bulk = 1
+value = 8
+[entity.skills]
+fortitude = { dice = 1, pips = 0 }
+
+[[entity]]
+name = "light hammer"
+supertype = "object"
+subtype = "weapon"
+skill = "throwing"
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 5
+range = 1
+damage_value = { dice = 0, pips = 2, bonus = "strength_damage" }
+damage_tags = [ "bludgeoning" ]
+bulk = 1
+value = 1
+[entity.skills]
+fortitude = { dice = 1, pips = 0 }
+
+[[entity]]
+name = "kukri"
+supertype = "object"
+subtype = "weapon"
+skill = "blades"
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 6
+damage_value = { dice = 0, pips = 2, bonus = "strength_damage" }
+damage_tags = [ "slashing" ]
+bulk = 1
+value = 8
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "light pick"
+supertype = "object"
+subtype = "weapon"
+skill = "blades"
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 6
+damage_value = { dice = 0, pips = 2, bonus = "strength_damage" }
+damage_tags = [ "piercing" ]
+bulk = 1
+value = 4
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "sap"
+supertype = "object"
+subtype = "weapon"
+skill = "brawling"
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 6
+damage_value = { dice = 1, pips = 0, bonus = "strength_damage" }
+damage_tags = [ "bludgeoning" ]
+bulk = 1
+value = 1
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "short sword"
+supertype = "object"
+subtype = "weapon"
+skill = "blades"
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 6
+damage_value = { dice = 1, pips = 0, bonus = "strength_damage" }
+damage_tags = [ "piercing" ]
+bulk = 1
+value = 10
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "battleaxe"
+supertype = "object"
+subtype = "weapon"
+skill = "axes"
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 6
+damage_value = { dice = 1, pips = 1, bonus = "strength_damage" }
+damage_tags = [ "slashing" ]
+bulk = 1
+value = 10
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "flail"
+supertype = "object"
+subtype = "weapon"
+skill = "brawling"
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 6
+damage_value = { dice = 1, pips = 1, bonus = "strength_damage" }
+damage_tags = [ "bludgeoning" ]
+bulk = 1
+value = 8
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "heavy pick"
+supertype = "object"
+subtype = "weapon"
+skill = "blades"
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 6
+damage_value = { dice = 1, pips = 0, bonus = "strength_damage" }
+damage_tags = [ "piercing" ]
+bulk = 1
+value = 8
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "rapier"
+supertype = "object"
+subtype = "weapon"
+skill = "blades"
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 6
+damage_value = { dice = 1, pips = 0, bonus = "strength_damage" }
+damage_tags = [ "piercing" ]
+bulk = 1
+value = 20
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "scimitar"
+supertype = "object"
+subtype = "weapon"
+skill = "blades"
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 6
+damage_value = { dice = 1, pips = 0, bonus = "strength_damage" }
+damage_tags = [ "slashing" ]
+bulk = 1
+value = 15
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "trident"
+supertype = "object"
+subtype = "weapon"
+skill = "polearms"
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 6
+damage_value = { dice = 1, pips = 1, bonus = "strength_damage" }
+damage_tags = [ "piercing" ]
+bulk = 1
+value = 15
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "warhammer"
+supertype = "object"
+subtype = "weapon"
+skill = "brawling"
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 6
+damage_value = { dice = 1, pips = 1, bonus = "strength_damage" }
+damage_tags = [ "bludgeoning" ]
+bulk = 1
+value = 12
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "falchion"
+supertype = "object"
+subtype = "weapon"
+skill = "blades"
+equip_slot = "rhand"
+max_hp = 10
+damage_value = { dice = 1, pips = 2, bonus = "strength_damage" }
+damage_tags = [ "slashing" ]
+bulk = 2
+value = 75
+[entity.skills]
+fortitude = { dice = 3, pips = 0 }
+
+[[entity]]
+name = "glaive"
+supertype = "object"
+subtype = "weapon"
+skill = "polearms"
+equip_slot = "rhand"
+max_hp = 10
+range = 1
+damage_value = { dice = 1, pips = 2, bonus = "strength_damage" }
+damage_tags = [ "slashing" ]
+bulk = 2
+value = 8
+[entity.skills]
+fortitude = { dice = 3, pips = 0 }
+
+[[entity]]
+name = "greataxe"
+supertype = "object"
+subtype = "weapon"
+skill = "axes"
+equip_slot = "rhand"
+max_hp = 10
+damage_value = { dice = 2, pips = 0, bonus = "strength_damage" }
+damage_tags = [ "slashing" ]
+bulk = 2
+value = 20
+[entity.skills]
+fortitude = { dice = 3, pips = 0 }
+
+[[entity]]
+name = "greatclub"
+supertype = "object"
+subtype = "weapon"
+skill = "brawling"
+equip_slot = "rhand"
+max_hp = 10
+damage_value = { dice = 1, pips = 2, bonus = "strength_damage" }
+damage_tags = [ "bludgeoning" ]
+bulk = 2
+value = 5
+[entity.skills]
+fortitude = { dice = 3, pips = 0 }
+
+[[entity]]
+name = "heavy flail"
+supertype = "object"
+subtype = "weapon"
+skill = "brawling"
+equip_slot = "rhand"
+max_hp = 10
+damage_value = { dice = 1, pips = 2, bonus = "strength_damage" }
+damage_tags = [ "bludgeoning" ]
+bulk = 2
+value = 15
+[entity.skills]
+fortitude = { dice = 3, pips = 0 }
+
+[[entity]]
+name = "greatsword"
+supertype = "object"
+subtype = "weapon"
+skill = "blades"
+equip_slot = "rhand"
+max_hp = 10
+damage_value = { dice = 2, pips = 0, bonus = "strength_damage" }
+damage_tags = [ "slashing" ]
+bulk = 2
+value = 50
+[entity.skills]
+fortitude = { dice = 3, pips = 0 }
+
+[[entity]]
+name = "guisarme"
+supertype = "object"
+subtype = "weapon"
+skill = "polearms"
+equip_slot = "rhand"
+max_hp = 10
+range = 1
+damage_value = { dice = 1, pips = 2, bonus = "strength_damage" }
+damage_tags = [ "slashing" ]
+bulk = 2
+value = 9
+[entity.skills]
+fortitude = { dice = 3, pips = 0 }
+
+[[entity]]
+name = "halberd"
+supertype = "object"
+subtype = "weapon"
+skill = "polearms"
+equip_slot = "rhand"
+max_hp = 10
+damage_value = { dice = 1, pips = 2, bonus = "strength_damage" }
+damage_tags = [ "piercing", "slashing" ]
+bulk = 2
+value = 10
+[entity.skills]
+fortitude = { dice = 3, pips = 0 }
+
+[[entity]]
+name = "lance"
+supertype = "object"
+subtype = "weapon"
+skill = "polearms"
+equip_slot = "rhand"
+max_hp = 10
+range = 1
+damage_value = { dice = 1, pips = 1, bonus = "strength_damage" }
+damage_tags = [ "piercing" ]
+bulk = 2
+value = 10
+[entity.skills]
+fortitude = { dice = 3, pips = 0 }
+
+[[entity]]
+name = "ranseur"
+supertype = "object"
+subtype = "weapon"
+skill = "polearms"
+equip_slot = "rhand"
+max_hp = 10
+range = 1
+damage_value = { dice = 1, pips = 2, bonus = "strength_damage" }
+damage_tags = [ "piercing" ]
+bulk = 2
+value = 10
+[entity.skills]
+fortitude = { dice = 3, pips = 0 }
+
+[[entity]]
+name = "scythe"
+supertype = "object"
+subtype = "weapon"
+skill = "polearms"
+equip_slot = "rhand"
+max_hp = 10
+damage_value = { dice = 1, pips = 2, bonus = "strength_damage" }
+damage_tags = [ "piercing", "slashing" ]
+bulk = 2
+value = 18
+[entity.skills]
+fortitude = { dice = 3, pips = 0 }
+
+[[entity]]
+name = "composite longbow"
+supertype = "object"
+subtype = "weapon"
+skill = "missiles"
+equip_slot = "rhand"
+max_hp = 5
+range = 7
+damage_value = { dice = 1, pips = 1, bonus = "strength_damage" }
+damage_tags = [ "piercing" ]
+bulk = 2
+value = 100
+[entity.skills]
+fortitude = { dice = 1, pips = 0 }
+
+[[entity]]
+name = "composite shortbow"
+supertype = "object"
+subtype = "weapon"
+skill = "missiles"
+equip_slot = "rhand"
+max_hp = 5
+range = 4
+damage_value = { dice = 1, pips = 0, bonus = "strength_damage" }
+damage_tags = [ "piercing" ]
+bulk = 2
+value = 75
+[entity.skills]
+fortitude = { dice = 1, pips = 0 }
+
+[[entity]]
+name = "kama"
+supertype = "object"
+subtype = "weapon"
+skill = "finesse"
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 6
+damage_value = { dice = 1, pips = 0, bonus = "strength_damage" }
+damage_tags = [ "slashing" ]
+bulk = 1
+value = 2
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "nunchaku"
+supertype = "object"
+subtype = "weapon"
+skill = "finesse"
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 6
+damage_value = { dice = 1, pips = 0, bonus = "strength_damage" }
+damage_tags = [ "bludgeoning" ]
+bulk = 1
+value = 2
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "sai"
+supertype = "object"
+subtype = "weapon"
+skill = "finesse"
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 6
+damage_value = { dice = 0, pips = 2, bonus = "strength_damage" }
+damage_tags = [ "bludgeoning" ]
+bulk = 1
+value = 1
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "siangham"
+supertype = "object"
+subtype = "weapon"
+skill = "finesse"
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 6
+damage_value = { dice = 1, pips = 0, bonus = "strength_damage" }
+damage_tags = [ "piercing" ]
+bulk = 1
+value = 3
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "bastard sword"
+supertype = "object"
+subtype = "weapon"
+skill = "blades"
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 6
+damage_value = { dice = 1, pips = 2, bonus = "strength_damage" }
+damage_tags = [ "slashing" ]
+bulk = 1
+value = 35
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "dwarven waraxe"
+supertype = "object"
+subtype = "weapon"
+skill = "axes"
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 6
+damage_value = { dice = 1, pips = 2, bonus = "strength_damage" }
+damage_tags = [ "slashing" ]
+bulk = 1
+value = 30
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "whip"
+supertype = "object"
+subtype = "weapon"
+skill = "finesse"
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 6
+range = 1
+damage_value = { dice = 0, pips = 2, bonus = "strength_damage" }
+damage_tags = [ "slashing" ]
+bulk = 1
+value = 1
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "orc double axe"
+supertype = "object"
+subtype = "weapon"
+skill = "axes"
+equip_slot = "rhand"
+max_hp = 10
+damage_value = { dice = 1, pips = 1, bonus = "strength_damage" }
+damage_tags = [ "slashing" ]
+bulk = 2
+value = 60
+[entity.skills]
+fortitude = { dice = 3, pips = 0 }
+
+[[entity]]
+name = "spiked chain"
+supertype = "object"
+subtype = "weapon"
+skill = "polearms"
+equip_slot = "rhand"
+max_hp = 10
+damage_value = { dice = 1, pips = 2, bonus = "strength_damage" }
+damage_tags = [ "piercing" ]
+bulk = 2
+value = 25
+[entity.skills]
+fortitude = { dice = 3, pips = 0 }
+
+[[entity]]
+name = "elven curve blade"
+supertype = "object"
+subtype = "weapon"
+skill = "blades"
+equip_slot = "rhand"
+max_hp = 10
+damage_value = { dice = 1, pips = 2, bonus = "strength_damage" }
+damage_tags = [ "slashing" ]
+bulk = 2
+value = 80
+[entity.skills]
+fortitude = { dice = 3, pips = 0 }
+
+[[entity]]
+name = "dire flail"
+supertype = "object"
+subtype = "weapon"
+skill = "brawling"
+equip_slot = "rhand"
+max_hp = 10
+damage_value = { dice = 1, pips = 1, bonus = "strength_damage" }
+damage_tags = [ "bludgeoning" ]
+bulk = 2
+value = 90
+[entity.skills]
+fortitude = { dice = 3, pips = 0 }
+
+[[entity]]
+name = "gnome hooked hammer"
+supertype = "object"
+subtype = "weapon"
+skill = "brawling"
+equip_slot = "rhand"
+max_hp = 10
+damage_value = { dice = 1, pips = 1, bonus = "strength_damage" }
+damage_tags = [ "bludgeoning", "piercing" ]
+bulk = 2
+value = 20
+[entity.skills]
+fortitude = { dice = 3, pips = 0 }
+
+[[entity]]
+name = "two-bladed sword"
+supertype = "object"
+subtype = "weapon"
+skill = "blades"
+equip_slot = "rhand"
+max_hp = 10
+damage_value = { dice = 1, pips = 1, bonus = "strength_damage" }
+damage_tags = [ "slashing" ]
+bulk = 2
+value = 100
+[entity.skills]
+fortitude = { dice = 3, pips = 0 }
+
+[[entity]]
+name = "dwarven urgrosh"
+supertype = "object"
+subtype = "weapon"
+skill = "axes"
+equip_slot = "rhand"
+max_hp = 10
+damage_value = { dice = 1, pips = 1, bonus = "strength_damage" }
+damage_tags = [ "piercing", "slashing" ]
+bulk = 2
+value = 50
+[entity.skills]
+fortitude = { dice = 3, pips = 0 }
+
+[[entity]]
+name = "bolas"
+supertype = "object"
+subtype = "weapon"
+skill = "throwing"
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 5
+range = 1
+damage_value = { dice = 0, pips = 2, bonus = "strength_damage" }
+damage_tags = [ "bludgeoning" ]
+bulk = 1
+value = 5
+[entity.skills]
+fortitude = { dice = 1, pips = 0 }
+
+[[entity]]
+name = "hand crossbow"
+supertype = "object"
+subtype = "weapon"
+skill = "missiles"
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 5
+range = 2
+damage_value = { dice = 0, pips = 2, bonus = 0 }
+damage_tags = [ "piercing" ]
+bulk = 1
+value = 100
+[entity.skills]
+fortitude = { dice = 1, pips = 0 }
+
+[[entity]]
+name = "heavy repeating crossbow"
+supertype = "object"
+subtype = "weapon"
+skill = "missiles"
+equip_slot = "rhand"
+max_hp = 5
+range = 8
+damage_value = { dice = 1, pips = 2, bonus = 0 }
+damage_tags = [ "piercing" ]
+bulk = 2
+value = 400
+[entity.skills]
+fortitude = { dice = 1, pips = 0 }
+
+[[entity]]
+name = "light repeating crossbow"
+supertype = "object"
+subtype = "weapon"
+skill = "missiles"
+equip_slot = "rhand"
+max_hp = 5
+range = 5
+damage_value = { dice = 1, pips = 1, bonus = 0 }
+damage_tags = [ "piercing" ]
+bulk = 2
+value = 250
+[entity.skills]
+fortitude = { dice = 1, pips = 0 }
+
+[[entity]]
+name = "shuriken"
+supertype = "object"
+subtype = "weapon"
+skill = "throwing"
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 5
+range = 1
+damage_value = { dice = 0, pips = 1, bonus = "strength_damage" }
+damage_tags = [ "piercing" ]
+bulk = 1
+value = 0.2
+[entity.skills]
+fortitude = { dice = 1, pips = 0 }
+
+[[entity]]
+name = "halfling sling staff"
+supertype = "object"
+subtype = "weapon"
+skill = "missiles"
+equip_slot = "rhand"
+max_hp = 5
+range = 5
+damage_value = { dice = 1, pips = 1, bonus = "strength_damage" }
+damage_tags = [ "bludgeoning" ]
+bulk = 2
+value = 20
+[entity.skills]
+fortitude = { dice = 1, pips = 0 }
+
+[[entity]]
+name = "starknife"
+supertype = "object"
+subtype = "weapon"
+skill = "blades"
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 6
+damage_value = { dice = 0, pips = 2, bonus = "strength_damage" }
+damage_tags = [ "piercing" ]
+bulk = 1
+value = 24
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "padded armor"
+supertype = "object"
+subtype = "armor"
+equip_slot = "chest"
+max_hp = 15
+armor_value = { dice = 0, pips = 2 }
+armor_tags = [ "physical", "piercing", "bludgeoning", "slashing" ]
+bulk = 1
+value = 5
+[entity.skills]
+fortitude = { dice = 3, pips = 0 }
+
+[[entity]]
+name = "leather armor"
+supertype = "object"
+subtype = "armor"
+equip_slot = "chest"
+max_hp = 15
+armor_value = { dice = 1, pips = 0 }
+armor_tags = [ "physical", "piercing", "bludgeoning", "slashing" ]
+bulk = 1
+value = 10
+[entity.skills]
+fortitude = { dice = 3, pips = 0 }
+
+[[entity]]
+name = "studded leather armor"
+supertype = "object"
+subtype = "armor"
+equip_slot = "chest"
+max_hp = 15
+armor_value = { dice = 1, pips = 1 }
+armor_tags = [ "physical", "piercing", "bludgeoning", "slashing" ]
+bulk = 1
+value = 25
+[entity.skills]
+fortitude = { dice = 3, pips = 0 }
+
+[[entity]]
+name = "chain shirt"
+supertype = "object"
+subtype = "armor"
+equip_slot = "chest"
+max_hp = 15
+armor_value = { dice = 1, pips = 2 }
+armor_tags = [ "physical", "piercing", "bludgeoning", "slashing" ]
+bulk = 1
+value = 100
+[entity.skills]
+fortitude = { dice = 3, pips = 0 }
+
+[[entity]]
+name = "hide armor"
+supertype = "object"
+subtype = "armor"
+equip_slot = "chest"
+max_hp = 20
+armor_value = { dice = 1, pips = 2 }
+armor_tags = [ "physical", "piercing", "bludgeoning", "slashing" ]
+bulk = 1
+value = 15
+[entity.skills]
+fortitude = { dice = 4, pips = 0 }
+
+[[entity]]
+name = "scale mail"
+supertype = "object"
+subtype = "armor"
+equip_slot = "chest"
+max_hp = 20
+armor_value = { dice = 2, pips = 0 }
+armor_tags = [ "physical", "piercing", "bludgeoning", "slashing" ]
+bulk = 1
+value = 50
+[entity.skills]
+fortitude = { dice = 4, pips = 0 }
+
+[[entity]]
+name = "breastplate"
+supertype = "object"
+subtype = "armor"
+equip_slot = "chest"
+max_hp = 20
+armor_value = { dice = 2, pips = 1 }
+armor_tags = [ "physical", "piercing", "bludgeoning", "slashing" ]
+bulk = 1
+value = 200
+[entity.skills]
+fortitude = { dice = 4, pips = 0 }
+
+[[entity]]
+name = "splint mail"
+supertype = "object"
+subtype = "armor"
+equip_slot = "chest"
+max_hp = 30
+armor_value = { dice = 2, pips = 2 }
+armor_tags = [ "physical", "piercing", "bludgeoning", "slashing" ]
+bulk = 2
+value = 200
+[entity.skills]
+fortitude = { dice = 5, pips = 0 }
+
+[[entity]]
+name = "banded mail"
+supertype = "object"
+subtype = "armor"
+equip_slot = "chest"
+max_hp = 30
+armor_value = { dice = 2, pips = 2 }
+armor_tags = [ "physical", "piercing", "bludgeoning", "slashing" ]
+bulk = 2
+value = 250
+[entity.skills]
+fortitude = { dice = 5, pips = 0 }
+
+[[entity]]
+name = "half-plate"
+supertype = "object"
+subtype = "armor"
+equip_slot = "chest"
+max_hp = 30
+armor_value = { dice = 3, pips = 0 }
+armor_tags = [ "physical", "piercing", "bludgeoning", "slashing" ]
+bulk = 2
+value = 600
+[entity.skills]
+fortitude = { dice = 5, pips = 0 }
+
+[[entity]]
+name = "full plate"
+supertype = "object"
+subtype = "armor"
+equip_slot = "chest"
+max_hp = 30
+armor_value = { dice = 3, pips = 1 }
+armor_tags = [ "physical", "piercing", "bludgeoning", "slashing" ]
+bulk = 2
+value = 1500
+[entity.skills]
+fortitude = { dice = 5, pips = 0 }
+
+[[entity]]
+name = "buckler"
+supertype = "object"
+subtype = "shield"
+equip_slot = "lhand"
+max_hp = 10
+armor_value = { dice = 0, pips = 2 }
+armor_tags = [ "physical", "piercing", "bludgeoning", "slashing" ]
+bulk = 1
+value = 5
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "light wooden shield"
+supertype = "object"
+subtype = "shield"
+equip_slot = "lhand"
+max_hp = 10
+armor_value = { dice = 0, pips = 2 }
+armor_tags = [ "physical", "piercing", "bludgeoning", "slashing" ]
+bulk = 1
+value = 3
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "light steel shield"
+supertype = "object"
+subtype = "shield"
+equip_slot = "lhand"
+max_hp = 10
+armor_value = { dice = 0, pips = 2 }
+armor_tags = [ "physical", "piercing", "bludgeoning", "slashing" ]
+bulk = 1
+value = 9
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "heavy wooden shield"
+supertype = "object"
+subtype = "shield"
+equip_slot = "lhand"
+max_hp = 10
+armor_value = { dice = 1, pips = 0 }
+armor_tags = [ "physical", "piercing", "bludgeoning", "slashing" ]
+bulk = 1
+value = 7
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "heavy steel shield"
+supertype = "object"
+subtype = "shield"
+equip_slot = "lhand"
+max_hp = 10
+armor_value = { dice = 1, pips = 0 }
+armor_tags = [ "physical", "piercing", "bludgeoning", "slashing" ]
+bulk = 1
+value = 20
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "tower shield"
+supertype = "object"
+subtype = "shield"
+equip_slot = "lhand"
+max_hp = 15
+armor_value = { dice = 1, pips = 2 }
+armor_tags = [ "physical", "piercing", "bludgeoning", "slashing" ]
+bulk = 2
+value = 30
+[entity.skills]
+fortitude = { dice = 3, pips = 0 }
+
+# ============================================================================================
+# Adventuring gear, alchemical items, tools, clothing, food, and trade goods (Table 6-9 and
+# Table 6-3), added in a follow-up pass to the weapons/armor above. Most of this is genuinely
+# flavor-only in this engine -- no skill check, damage roll, or condition hooks onto a torch or
+# a peasant's outfit -- but it's still worth having as plain [[entity]] objects (bulk + value +
+# a subtype) so a shop or loot table can actually stock them, the same role items.toml's own
+# "iron ingot"/"leather strip" crafting materials already play.
+#
+# Renamed on collision with an existing name elsewhere in this setting's own catalog: PF's plain
+# "Chest" -> "storage chest" (items.toml's own "chest" is the locked debug-scenario treasure
+# chest); PF's plain "Vial" is skipped outright rather than renamed -- items.toml's own
+# "glass vial" already covers that exact object (the empty husk left behind by a drunk health
+# potion).
+#
+# subtype is a new, purely descriptive value per category (gear/alchemical/tool/clothing/food/
+# trade_good) -- nothing in the engine gates on it, same non-enforcement as "shield" above.
+# A few gain a real engine hook where it costs nothing extra to add: "backpack"/"sack"/
+# "belt pouch"/"map case"/"storage chest" get container_capacity (this engine's own bounded-
+# container primitive, items.toml's own shipped "bag of holding"); "wizard's spellbook" gets
+# container_allowed_supertypes = ["spell"] (matching items.toml's own shipped "spellbook", which
+# this reuses the exact same restriction from rather than inventing a second one); "signet ring"
+# gets equip_slot = "ring" (a real, already-defined slot with nothing else claiming it); clothing
+# gets equip_slot = "chest" -- narratively you wear an outfit OR armor, never both, the same
+# single-slot contention that's already true of any two chest-slot items.
+#
+# Out of scope entirely, left for a human call rather than half-modeled:
+#   - Mounts and vehicles (horses, carts, ships) -- these aren't inventory objects at all in
+#     this engine's own model (see docs/downtime.md's "Mounts and conveyance" -- a mount is a
+#     live creature entity with its own "mount" field, a cart/wagon likewise), so converting
+#     them belongs with that subsystem, not a flat items.toml-style catalog entry.
+#   - "Spellcasting and Services" (hireling wages, tolls, ship's passage, paying an NPC
+#     spellcaster) -- pure narrative pricing information, never an object anyone carries.
+#   - Multiple lock/manacle quality tiers, masterwork tool variants, and armor special
+#     materials (adamantine/mithral/cold iron/darkwood/dragonhide/alchemical silver) -- real
+#     PF depth with no engine mechanic to attach to (no crafting-quality axis, no damage-
+#     reduction-bypass-by-material distinct from what resistance_bypass_tags/
+#     armor_bypass_tags already cover generically) beyond what a GM could already reflavor an
+#     existing entry as.
+#
+# Four alchemical splash weapons (acid, alchemist's fire, holy water, thunderstone) keep a real
+# damage_value instead of going flavor-only, converted the same way as an ordinary weapon
+# (nearest-average PF-die-to-D6-code, skill = "throwing", range = 1 matching this file's own
+# 10 ft -> 1 band anchor) -- an honest simplification of PF's own ranged-touch-vs-flat-AC-5
+# mechanic, which this engine has no equivalent of, so it resolves as an ordinary opposed
+# throwing check instead. Secondary/recurring effects are dropped rather than half-modeled:
+# alchemist's fire's follow-up burn, holy water's undead/evil-outsider-only bonus damage, and
+# thunderstone's deafen-on-failed-save (it just deals a small sonic hit here instead). The
+# remaining alchemical items (antitoxin, everburning torch, smokestick, sunrod, tanglefoot bag,
+# tindertwig) stay flavor-only -- each needs its own bespoke mechanic (a temporary saving-throw
+# bonus, a light source, a concealment cloud, an entangle condition) that a flat damage
+# conversion can't honestly capture, the same "needs a human call" treatment "net" already got
+# in the weapons section above.
+
+# ---- Adventuring gear ----
+[[entity]]
+name = "backpack"
+supertype = "object"
+subtype = "gear"
+container_capacity = 10
+bulk = 1
+value = 2
+
+[[entity]]
+name = "barrel"
+supertype = "object"
+subtype = "gear"
+bulk = 2
+value = 2
+
+[[entity]]
+name = "basket"
+supertype = "object"
+subtype = "gear"
+bulk = 1
+value = 0.4
+
+[[entity]]
+name = "bedroll"
+supertype = "object"
+subtype = "gear"
+bulk = 1
+value = 0.1
+
+[[entity]]
+name = "bell"
+supertype = "object"
+subtype = "gear"
+bulk = 0
+value = 1
+
+[[entity]]
+name = "winter blanket"
+supertype = "object"
+subtype = "gear"
+bulk = 1
+value = 0.5
+
+[[entity]]
+name = "block and tackle"
+supertype = "object"
+subtype = "gear"
+bulk = 1
+value = 5
+
+[[entity]]
+name = "glass bottle"
+supertype = "object"
+subtype = "gear"
+bulk = 0
+value = 2
+
+[[entity]]
+name = "bucket"
+supertype = "object"
+subtype = "gear"
+bulk = 1
+value = 0.5
+
+[[entity]]
+name = "caltrops"
+supertype = "object"
+subtype = "gear"
+bulk = 1
+value = 1
+
+[[entity]]
+name = "candle"
+supertype = "object"
+subtype = "gear"
+bulk = 0
+value = 0.01
+
+[[entity]]
+name = "canvas"
+supertype = "object"
+subtype = "gear"
+bulk = 0
+value = 0.1
+
+[[entity]]
+name = "map case"
+supertype = "object"
+subtype = "gear"
+container_capacity = 2
+bulk = 0
+value = 1
+
+[[entity]]
+name = "chain"
+supertype = "object"
+subtype = "gear"
+bulk = 1
+value = 30
+
+[[entity]]
+name = "chalk"
+supertype = "object"
+subtype = "gear"
+bulk = 0
+value = 0.01
+
+[[entity]]
+name = "storage chest"
+supertype = "object"
+subtype = "gear"
+container_capacity = 15
+bulk = 2
+value = 2
+
+[[entity]]
+name = "crowbar"
+supertype = "object"
+subtype = "gear"
+bulk = 1
+value = 2
+
+[[entity]]
+name = "firewood"
+supertype = "object"
+subtype = "gear"
+bulk = 1
+value = 0.01
+
+[[entity]]
+name = "fishhook"
+supertype = "object"
+subtype = "gear"
+bulk = 0
+value = 0.1
+
+[[entity]]
+name = "fishing net"
+supertype = "object"
+subtype = "gear"
+bulk = 1
+value = 4
+
+[[entity]]
+name = "empty flask"
+supertype = "object"
+subtype = "gear"
+bulk = 0
+value = 0.03
+
+[[entity]]
+name = "flint and steel"
+supertype = "object"
+subtype = "gear"
+bulk = 0
+value = 1
+
+[[entity]]
+name = "grappling hook"
+supertype = "object"
+subtype = "gear"
+bulk = 1
+value = 1
+
+[[entity]]
+name = "hammer"
+supertype = "object"
+subtype = "gear"
+bulk = 1
+value = 0.5
+
+[[entity]]
+name = "hourglass"
+supertype = "object"
+subtype = "gear"
+bulk = 1
+value = 25
+
+[[entity]]
+name = "ink"
+supertype = "object"
+subtype = "gear"
+bulk = 0
+value = 8
+
+[[entity]]
+name = "inkpen"
+supertype = "object"
+subtype = "gear"
+bulk = 0
+value = 0.1
+
+[[entity]]
+name = "clay jug"
+supertype = "object"
+subtype = "gear"
+bulk = 1
+value = 0.03
+
+[[entity]]
+name = "ladder"
+supertype = "object"
+subtype = "gear"
+bulk = 2
+value = 0.2
+
+[[entity]]
+name = "common lamp"
+supertype = "object"
+subtype = "gear"
+bulk = 1
+value = 0.1
+
+[[entity]]
+name = "bullseye lantern"
+supertype = "object"
+subtype = "gear"
+bulk = 1
+value = 12
+
+[[entity]]
+name = "hooded lantern"
+supertype = "object"
+subtype = "gear"
+bulk = 1
+value = 7
+
+[[entity]]
+name = "simple lock"
+supertype = "object"
+subtype = "gear"
+bulk = 0
+value = 20
+
+[[entity]]
+name = "manacles"
+supertype = "object"
+subtype = "gear"
+bulk = 1
+value = 15
+
+[[entity]]
+name = "steel mirror"
+supertype = "object"
+subtype = "gear"
+bulk = 0
+value = 10
+
+[[entity]]
+name = "clay tankard"
+supertype = "object"
+subtype = "gear"
+bulk = 0
+value = 0.02
+
+[[entity]]
+name = "paper"
+supertype = "object"
+subtype = "gear"
+bulk = 0
+value = 0.4
+
+[[entity]]
+name = "parchment"
+supertype = "object"
+subtype = "gear"
+bulk = 0
+value = 0.2
+
+[[entity]]
+name = "miner's pick"
+supertype = "object"
+subtype = "gear"
+bulk = 1
+value = 3
+
+[[entity]]
+name = "clay pitcher"
+supertype = "object"
+subtype = "gear"
+bulk = 1
+value = 0.02
+
+[[entity]]
+name = "piton"
+supertype = "object"
+subtype = "gear"
+bulk = 0
+value = 0.1
+
+[[entity]]
+name = "pole"
+supertype = "object"
+subtype = "gear"
+bulk = 1
+value = 0.05
+
+[[entity]]
+name = "iron pot"
+supertype = "object"
+subtype = "gear"
+bulk = 1
+value = 0.8
+
+[[entity]]
+name = "belt pouch"
+supertype = "object"
+subtype = "gear"
+container_capacity = 3
+bulk = 0
+value = 1
+
+[[entity]]
+name = "portable ram"
+supertype = "object"
+subtype = "gear"
+bulk = 2
+value = 10
+
+[[entity]]
+name = "trail rations"
+supertype = "object"
+subtype = "gear"
+bulk = 1
+value = 0.5
+
+[[entity]]
+name = "hemp rope"
+supertype = "object"
+subtype = "gear"
+bulk = 1
+value = 1
+
+[[entity]]
+name = "silk rope"
+supertype = "object"
+subtype = "gear"
+bulk = 1
+value = 10
+
+[[entity]]
+name = "sack"
+supertype = "object"
+subtype = "gear"
+container_capacity = 5
+bulk = 0
+value = 0.1
+
+[[entity]]
+name = "sealing wax"
+supertype = "object"
+subtype = "gear"
+bulk = 0
+value = 1
+
+[[entity]]
+name = "sewing needle"
+supertype = "object"
+subtype = "gear"
+bulk = 0
+value = 0.5
+
+[[entity]]
+name = "shovel"
+supertype = "object"
+subtype = "gear"
+bulk = 1
+value = 2
+
+[[entity]]
+name = "signal whistle"
+supertype = "object"
+subtype = "gear"
+bulk = 0
+value = 0.8
+
+[[entity]]
+name = "signet ring"
+supertype = "object"
+subtype = "gear"
+equip_slot = "ring"
+bulk = 0
+value = 5
+
+[[entity]]
+name = "sledge"
+supertype = "object"
+subtype = "gear"
+bulk = 1
+value = 1
+
+[[entity]]
+name = "soap"
+supertype = "object"
+subtype = "gear"
+bulk = 0
+value = 0.5
+
+[[entity]]
+name = "spyglass"
+supertype = "object"
+subtype = "gear"
+bulk = 1
+value = 1000
+
+[[entity]]
+name = "tent"
+supertype = "object"
+subtype = "gear"
+bulk = 2
+value = 10
+
+[[entity]]
+name = "torch"
+supertype = "object"
+subtype = "gear"
+bulk = 1
+value = 0.01
+
+[[entity]]
+name = "waterskin"
+supertype = "object"
+subtype = "gear"
+bulk = 1
+value = 1
+
+[[entity]]
+name = "whetstone"
+supertype = "object"
+subtype = "gear"
+bulk = 0
+value = 0.02
+
+# ---- Special substances and items (alchemical) ----
+[[entity]]
+name = "flask of acid"
+supertype = "object"
+subtype = "weapon"
+skill = "throwing"
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 3
+range = 1
+damage_value = { dice = 1, pips = 0, bonus = 0 }
+damage_tags = [ "acid" ]
+bulk = 1
+value = 10
+
+[[entity]]
+name = "alchemist's fire"
+supertype = "object"
+subtype = "weapon"
+skill = "throwing"
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 3
+range = 1
+damage_value = { dice = 1, pips = 0, bonus = 0 }
+damage_tags = [ "fire" ]
+bulk = 1
+value = 20
+
+[[entity]]
+name = "holy water"
+supertype = "object"
+subtype = "weapon"
+skill = "throwing"
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 3
+range = 1
+damage_value = { dice = 1, pips = 2, bonus = 0 }
+damage_tags = [ "holy" ]
+bulk = 1
+value = 25
+
+[[entity]]
+name = "thunderstone"
+supertype = "object"
+subtype = "weapon"
+skill = "throwing"
+equip_slot = [ "rhand", "lhand" ]
+max_hp = 3
+range = 1
+damage_value = { dice = 0, pips = 2, bonus = 0 }
+damage_tags = [ "sonic" ]
+bulk = 1
+value = 30
+
+[[entity]]
+name = "antitoxin"
+supertype = "object"
+subtype = "alchemical"
+bulk = 0
+value = 50
+
+[[entity]]
+name = "everburning torch"
+supertype = "object"
+subtype = "alchemical"
+bulk = 1
+value = 110
+
+[[entity]]
+name = "smokestick"
+supertype = "object"
+subtype = "alchemical"
+bulk = 0
+value = 20
+
+[[entity]]
+name = "sunrod"
+supertype = "object"
+subtype = "alchemical"
+bulk = 1
+value = 2
+
+[[entity]]
+name = "tanglefoot bag"
+supertype = "object"
+subtype = "alchemical"
+bulk = 1
+value = 50
+
+[[entity]]
+name = "tindertwig"
+supertype = "object"
+subtype = "alchemical"
+bulk = 0
+value = 1
+
+# ---- Tools and skill kits ----
+[[entity]]
+name = "alchemist's lab"
+supertype = "object"
+subtype = "tool"
+bulk = 2
+value = 200
+
+[[entity]]
+name = "artisan's tools"
+supertype = "object"
+subtype = "tool"
+bulk = 1
+value = 5
+
+[[entity]]
+name = "climber's kit"
+supertype = "object"
+subtype = "tool"
+bulk = 1
+value = 80
+
+[[entity]]
+name = "disguise kit"
+supertype = "object"
+subtype = "tool"
+bulk = 1
+value = 50
+
+[[entity]]
+name = "healer's kit"
+supertype = "object"
+subtype = "tool"
+bulk = 1
+value = 50
+
+[[entity]]
+name = "wooden holy symbol"
+supertype = "object"
+subtype = "tool"
+bulk = 0
+value = 1
+
+[[entity]]
+name = "silver holy symbol"
+supertype = "object"
+subtype = "tool"
+bulk = 0
+value = 25
+
+[[entity]]
+name = "magnifying glass"
+supertype = "object"
+subtype = "tool"
+bulk = 0
+value = 100
+
+[[entity]]
+name = "common musical instrument"
+supertype = "object"
+subtype = "tool"
+bulk = 1
+value = 5
+
+[[entity]]
+name = "merchant's scale"
+supertype = "object"
+subtype = "tool"
+bulk = 0
+value = 2
+
+[[entity]]
+name = "spell component pouch"
+supertype = "object"
+subtype = "tool"
+bulk = 0
+value = 5
+
+[[entity]]
+name = "wizard's spellbook"
+supertype = "object"
+subtype = "tool"
+container_allowed_supertypes = [ "spell" ]
+bulk = 1
+value = 15
+
+[[entity]]
+name = "thieves' tools"
+supertype = "object"
+subtype = "tool"
+bulk = 0
+value = 30
+
+# ---- Clothing ----
+[[entity]]
+name = "artisan's outfit"
+supertype = "object"
+subtype = "clothing"
+equip_slot = "chest"
+bulk = 1
+value = 1
+
+[[entity]]
+name = "cleric's vestments"
+supertype = "object"
+subtype = "clothing"
+equip_slot = "chest"
+bulk = 1
+value = 5
+
+[[entity]]
+name = "cold-weather outfit"
+supertype = "object"
+subtype = "clothing"
+equip_slot = "chest"
+bulk = 1
+value = 8
+
+[[entity]]
+name = "courtier's outfit"
+supertype = "object"
+subtype = "clothing"
+equip_slot = "chest"
+bulk = 1
+value = 30
+
+[[entity]]
+name = "entertainer's outfit"
+supertype = "object"
+subtype = "clothing"
+equip_slot = "chest"
+bulk = 1
+value = 3
+
+[[entity]]
+name = "explorer's outfit"
+supertype = "object"
+subtype = "clothing"
+equip_slot = "chest"
+bulk = 1
+value = 10
+
+[[entity]]
+name = "monk's outfit"
+supertype = "object"
+subtype = "clothing"
+equip_slot = "chest"
+bulk = 1
+value = 5
+
+[[entity]]
+name = "noble's outfit"
+supertype = "object"
+subtype = "clothing"
+equip_slot = "chest"
+bulk = 1
+value = 75
+
+[[entity]]
+name = "peasant's outfit"
+supertype = "object"
+subtype = "clothing"
+equip_slot = "chest"
+bulk = 1
+value = 0.1
+
+[[entity]]
+name = "royal outfit"
+supertype = "object"
+subtype = "clothing"
+equip_slot = "chest"
+bulk = 1
+value = 200
+
+[[entity]]
+name = "scholar's outfit"
+supertype = "object"
+subtype = "clothing"
+equip_slot = "chest"
+bulk = 1
+value = 5
+
+[[entity]]
+name = "traveler's outfit"
+supertype = "object"
+subtype = "clothing"
+equip_slot = "chest"
+bulk = 1
+value = 1
+
+# ---- Food and drink ----
+[[entity]]
+name = "loaf of bread"
+supertype = "object"
+subtype = "food"
+bulk = 0
+value = 0.02
+
+[[entity]]
+name = "hunk of cheese"
+supertype = "object"
+subtype = "food"
+bulk = 0
+value = 0.1
+
+[[entity]]
+name = "chunk of meat"
+supertype = "object"
+subtype = "food"
+bulk = 0
+value = 0.3
+
+[[entity]]
+name = "pitcher of common wine"
+supertype = "object"
+subtype = "food"
+bulk = 1
+value = 0.2
+
+[[entity]]
+name = "bottle of fine wine"
+supertype = "object"
+subtype = "food"
+bulk = 1
+value = 10
+
+[[entity]]
+name = "mug of ale"
+supertype = "object"
+subtype = "food"
+bulk = 0
+value = 0.04
+
+# ---- Trade goods ----
+[[entity]]
+name = "pound of wheat"
+supertype = "object"
+subtype = "trade_good"
+bulk = 1
+value = 0.01
+
+[[entity]]
+name = "pound of flour"
+supertype = "object"
+subtype = "trade_good"
+bulk = 1
+value = 0.02
+
+[[entity]]
+name = "pound of iron"
+supertype = "object"
+subtype = "trade_good"
+bulk = 1
+value = 0.1
+
+[[entity]]
+name = "pound of copper"
+supertype = "object"
+subtype = "trade_good"
+bulk = 1
+value = 0.5
+
+[[entity]]
+name = "pound of cinnamon"
+supertype = "object"
+subtype = "trade_good"
+bulk = 1
+value = 1
+
+[[entity]]
+name = "pound of ginger"
+supertype = "object"
+subtype = "trade_good"
+bulk = 1
+value = 2
+
+[[entity]]
+name = "pound of salt"
+supertype = "object"
+subtype = "trade_good"
+bulk = 1
+value = 5
+
+[[entity]]
+name = "square yard of silk"
+supertype = "object"
+subtype = "trade_good"
+bulk = 1
+value = 10
+
+[[entity]]
+name = "pound of saffron"
+supertype = "object"
+subtype = "trade_good"
+bulk = 1
+value = 15
+
+[[entity]]
+name = "pound of gold"
+supertype = "object"
+subtype = "trade_good"
+bulk = 1
+value = 50
+
+[[entity]]
+name = "pound of platinum"
+supertype = "object"
+subtype = "trade_good"
+bulk = 1
+value = 500

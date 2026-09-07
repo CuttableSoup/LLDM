@@ -5,16 +5,28 @@ a simplified D6 (West End Games) engine rolls dice and resolves outcomes, and a 
 (currently Gemma via Ollama at `http://127.0.0.1:11434`) narrates what happened. Skills,
 entities, items, spells, rules, and scenarios are all data-driven via TOML, organized into
 "settings" — self-contained sibling directories under `Rules/` (`Rules/Fantasy/`,
-`Rules/Zombie/`), each independently scanned by `load_rules`. None of the engine itself is
-fantasy-specific — `DMCore(event_bus, scenario_name, setting="Fantasy")`'s own `setting` param
-picks which one to boot from (`Rules/<setting>/scenarios/<scenario_name>.toml` and every
-sibling `Rules/<setting>/*.toml`), and it round-trips through a save file (`dm_state.json`'s
-own `"setting"` key) so a resumed save reloads from the same setting it was saved under.
-`Rules/Fantasy/` is the deep, primary setting; `Rules/Zombie/` is a bare-bones second one (a
-Left 4 Dead-inspired survival shooter) that proves the engine is setting-agnostic — see
-`Rules/Zombie/scenarios/rooftop.toml` (`python LLDM.py rooftop --setting Zombie`). Every
-setting authors its own skills/rules/races from scratch — nothing is shared or inherited
-between settings, deliberately, so one setting's data can never leak into another's.
+`Rules/Zombie/`, `Rules/Pathfinder/`), each independently scanned by `load_rules`. None of the
+engine itself is fantasy-specific — `DMCore(event_bus, scenario_name, setting="Fantasy")`'s own
+`setting` param picks which one to boot from (`Rules/<setting>/scenarios/<scenario_name>.toml`
+and every sibling `Rules/<setting>/*.toml`), and it round-trips through a save file
+(`dm_state.json`'s own `"setting"` key) so a resumed save reloads from the same setting it was
+saved under. `Rules/Fantasy/` is the deep, primary setting; `Rules/Zombie/` is a bare-bones
+second one (a Left 4 Dead-inspired survival shooter) that proves the engine is setting-agnostic
+— see `Rules/Zombie/scenarios/rooftop.toml` (`python LLDM.py rooftop --setting Zombie`).
+`Rules/Pathfinder/` started as a full copy of `Rules/Fantasy/`'s own base ruleset and layers on
+every genuinely Pathfinder-1e/Golarion-sourced conversion pass on top of it: the full mundane
+weapon/armor catalog (`equipment.toml`), the bulk-converted Sorcerer/Wizard spell list
+(`spells_pathfinder.toml`), `reference/pathfinder_mapping.toml` (the machine-readable PF-to-D6
+mapping notes), and the `lost_coast` scenario (Sandpoint/Magnimar, Paizo's own Rise of the
+Runelords geography) plus the `world_map.toml`/`terrain.toml`/`polities.toml`/`environments.toml`
+entries that exist only to support it. That material used to live directly under `Rules/Fantasy/`
+but was deliberately split out into its own setting so a real Paizo-IP conversion project
+doesn't leak into what ships as the primary Fantasy setting — the test suite still boots against
+`Fantasy` by default (`tests/test_unit.py`'s `DMTestCase.setting`), with only the handful of
+tests that actually exercise `lost_coast` pointed at `Pathfinder` explicitly. Every setting
+authors its own skills/rules/races from scratch — nothing is shared or inherited between
+settings, deliberately, so one setting's data can never leak into another's (which is exactly why
+`Rules/Pathfinder/` needed its own full copy of the base ruleset rather than importing Fantasy's).
 GUI-driven character creation (Character → Create...) already reads whichever `Rules/<setting>`
 the Ruleset menu is set to (`list_available_settings`, `DM_Rules.py`) — `Rules/Zombie/`'s own
 `archetypes.toml` (survivor archetypes + starting-gear loadouts, playing the role

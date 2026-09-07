@@ -1,0 +1,1252 @@
+# The single developer/test scenario -- collapses what used to be 12 separate scenario files
+# (arena/character_test/crypt/dungeon/field/npc_generation_test/plains/scenario_entity_test/
+# shop/tavern/tavern_random/town) into one connected hub-and-spoke [[location]] graph, so both
+# the GUI's Scenario -> Load... picker and `python LLDM.py <scenario>` offer one real "start
+# here" option instead of a wall of test fixtures. `lost_coast.toml` is deliberately NOT part of
+# this merge -- it's kept as its own real shipped scenario, not a test fixture. Every area below
+# keeps its own original location/room/entity keys unchanged (so every existing test's own
+# start_location override still lands exactly where it used to), just reachable from a shared
+# `debug_hub` via an ordinary [[location.exit]] each way, using `return_to` for the trip back
+# (see docs/movement-scenarios.md's "Location-to-location travel"). `character_test.toml`'s own
+# former "testing_grounds" location is not carried over at all -- its only two consumers
+# (a character-creation-rename check and a live custom-character combat conversation) never
+# actually needed an isolated room of their own; both now just point at `arena_grounds`, which
+# already has everything either one needs (a scenario-local "wolf" to collide-rename against /
+# fight). `trailhead`/`border_stones` (from plains.toml) keep their own `grid` fields and are
+# NOT wired into the [[location.exit]] graph the same way -- a gridded location's own outgoing
+# travel skips that graph entirely (DM_Movement.py's _resolve_travel_intent), so they're reached
+# from the hub by one ordinary exit in, then named/grid travel between each other from there.
+[scenario]
+name = "The Debug Room"
+description = "A bare stone chamber lined with unmarked doors, each leading to a different testing ground."
+start_location = "debug_hub"
+known_locations = [ "trailhead", "border_stones" ]
+
+[[location]]
+key = "debug_hub"
+name = "The Debug Room"
+description = "A bare stone chamber lined with unmarked doors, each leading to a different testing ground."
+entities = []
+
+[[location.exit]]
+destination = "arena_grounds"
+aliases = [ "arena" ]
+
+[[location.exit]]
+destination = "crypt"
+aliases = [ "crypt" ]
+
+[[location.exit]]
+destination = "cellar"
+aliases = [ "cellar", "forgotten cellar" ]
+
+[[location.exit]]
+destination = "field_grounds"
+aliases = [ "field", "open field" ]
+
+[[location.exit]]
+destination = "trailhead"
+aliases = [ "plains", "trailhead", "open plains" ]
+
+[[location.exit]]
+destination = "generation_grounds"
+aliases = [ "generation grounds" ]
+
+[[location.exit]]
+destination = "vault"
+aliases = [ "vault", "sealed vault" ]
+
+[[location.exit]]
+destination = "general_store"
+aliases = [ "shop", "store", "general store" ]
+
+[[location.exit]]
+destination = "tavern_floor"
+aliases = [ "tavern", "rusty tankard" ]
+
+[[location.exit]]
+destination = "tavern_tonight"
+aliases = [ "tavern tonight", "busy tavern" ]
+
+[[location.exit]]
+destination = "town_square"
+aliases = [ "town", "millbrook", "market square" ]
+
+# ---------------------------------------------------------------------------------------------
+# arena_grounds -- formerly arena.toml. Also now the target of character_test.toml's own two
+# former consumers (TestCharacterCreationRename's "wolf" scenario-local-collision check, and
+# TestCreatedCharacterConversation's live custom-character combat) -- both only ever needed a
+# scenario-local "wolf" to exist somewhere, which this room already has.
+[[location]]
+key = "arena_grounds"
+name = "The Arena"
+description = "A large arena. Dried blood spatters paint the dirt. The crowd demands to be entertained."
+start_room = "grounds"
+entities = [
+    { name = "player", band = 1 },
+    { name = "thane", band = 1 }
+]
+return_to = "debug_hub"
+
+[[location.room]]
+key = "grounds"
+name = "The Arena"
+description = "A large arena. Dried blood spatters paint the dirt. The crowd demands to be entertained."
+bands = 4
+enclosed = true
+entities = [
+    { name = "wolf", band = 1 },
+    { name = "wolf", band = 1 },
+]
+
+# ---------------------------------------------------------------------------------------------
+# crypt -- formerly crypt.toml, its own multi-room dungeon crawl carried over unchanged.
+[[location]]
+key = "crypt"
+name = "The Sunken Crypt"
+description = "A crypt long since swallowed by the earth, its passages choked with rubble and the smell of old stone."
+start_room = "entrance"
+entities = [
+    { name = "player", band = 1 },
+    { name = "thane", band = 1 },
+    { name = "anne", band = 1 }
+]
+return_to = "debug_hub"
+
+[[location.room]]
+key = "entrance"
+name = "Entrance Hall"
+description = "A low, dusty antechamber. Something about the far wall doesn't look quite right."
+bands = 2
+enclosed = true
+entities = [
+    { name = "dart trap", band = 2 },
+]
+
+[[location.room.exit]]
+band = 2
+direction = "forward"
+destination = "hall_of_webs"
+arrival_band = 1
+
+[[location.room]]
+key = "hall_of_webs"
+name = "The Hall of Webs"
+description = "Thick sheets of webbing span the corridor from floor to ceiling, swaying faintly though there's no wind down here."
+bands = 2
+enclosed = true
+entities = [
+    { name = "giant spider", band = 1 },
+]
+
+[[location.room.exit]]
+band = 1
+direction = "forward"
+destination = "guard_chamber"
+arrival_band = 1
+
+[[location.room.exit]]
+band = 1
+direction = "back"
+destination = "entrance"
+arrival_band = 2
+
+[[location.room]]
+key = "guard_chamber"
+name = "The Guard Chamber"
+description = "A small stone room with a rotted table and a single iron chest against the wall, long abandoned by whoever once stood watch here. A narrow side passage breaks off to the right partway across."
+bands = 3
+enclosed = true
+entities = [
+    { name = "iron chest", band = 3 },
+]
+
+[[location.room.exit]]
+band = 1
+direction = "back"
+destination = "hall_of_webs"
+arrival_band = 1
+
+[[location.room.exit]]
+band = 2
+direction = "right"
+destination = "hidden_alcove"
+arrival_band = 1
+
+[[location.room.exit]]
+band = 3
+direction = "forward"
+destination = "collapsed_passage"
+arrival_band = 1
+
+[[location.room]]
+key = "hidden_alcove"
+name = "The Hidden Alcove"
+description = "A cramped, easy-to-miss nook off the main passage. A small coffer sits half-buried in the rubble."
+bands = 1
+enclosed = true
+entities = [
+    { name = "dusty coffer", band = 1 },
+]
+
+[[location.room.exit]]
+band = 1
+direction = "back"
+destination = "guard_chamber"
+arrival_band = 2
+
+[[location.room]]
+key = "collapsed_passage"
+name = "The Collapsed Passage"
+description = "Rubble narrows the way ahead to a single crawlspace. A faint metallic glint catches the light overhead."
+bands = 2
+enclosed = true
+entities = [
+    { name = "scythe trap", band = 2 },
+]
+
+[[location.room.exit]]
+band = 2
+direction = "forward"
+destination = "bone_gallery"
+arrival_band = 1
+
+[[location.room.exit]]
+band = 1
+direction = "back"
+destination = "guard_chamber"
+arrival_band = 3
+
+[[location.room]]
+key = "bone_gallery"
+name = "The Bone Gallery"
+description = "Alcoves line both walls, each holding the remains of the dead -- except one, which is standing."
+bands = 2
+enclosed = true
+entities = [
+    { name = "skeleton warrior", band = 1 },
+]
+
+[[location.room.exit]]
+band = 1
+direction = "forward"
+destination = "sanctum"
+arrival_band = 1
+
+[[location.room.exit]]
+band = 1
+direction = "back"
+destination = "collapsed_passage"
+arrival_band = 2
+
+[[location.room]]
+key = "sanctum"
+name = "The Sanctum"
+description = "A small, reverent chamber untouched by the collapse elsewhere in the crypt. An ornate reliquary sits at its center."
+bands = 2
+enclosed = true
+entities = [
+    { name = "ornate reliquary", band = 1 },
+]
+
+[[location.room.exit]]
+band = 1
+direction = "forward"
+destination = "boss_chamber"
+arrival_band = 1
+
+[[location.room.exit]]
+band = 1
+direction = "back"
+destination = "bone_gallery"
+arrival_band = 1
+
+[[location.room]]
+key = "boss_chamber"
+name = "The Warden's Vault"
+description = "A vast circular chamber, its walls carved with warnings in a script no living tongue still speaks. Something vast rises from the dark at its center."
+bands = 3
+enclosed = true
+entities = [
+    { name = "the bone warden", band = 1 },
+]
+
+[[location.room.exit]]
+band = 1
+direction = "back"
+destination = "sanctum"
+arrival_band = 1
+
+# ---------------------------------------------------------------------------------------------
+# cellar -- formerly dungeon.toml. Never authors any local [[entity]] of its own -- "chest"
+# resolves against the shared Rules/Fantasy/items.toml entry, same as it always has.
+[[location]]
+key = "cellar"
+name = "The Forgotten Cellar"
+description = "A small, dreary dungeon room. Water drips somewhere in the dark, and a single locked chest sits against the far wall."
+start_room = "cellar_room"
+entities = [
+    { name = "player", band = 1 },
+]
+return_to = "debug_hub"
+
+[[location.room]]
+key = "cellar_room"
+name = "The Forgotten Cellar"
+description = "A small, dreary dungeon room. Water drips somewhere in the dark, and a single locked chest sits against the far wall."
+bands = 2
+enclosed = true
+entities = [
+    { name = "chest", band = 1 }
+]
+
+# ---------------------------------------------------------------------------------------------
+# field_grounds -- formerly field.toml. The only unenclosed room in the file (retreat has no
+# ceiling here -- see DM_Movement.py's "Movement and range").
+[[location]]
+key = "field_grounds"
+name = "The Open Field"
+description = "Rolling grassland stretches to the horizon under a gray sky. A wolf stalks through the tall grass, and farther off a bandit lurks at the treeline, bow in hand."
+start_room = "grounds"
+entities = [
+    { name = "player", band = 1 },
+]
+return_to = "debug_hub"
+
+[[location.room]]
+key = "grounds"
+name = "The Open Field"
+description = "Rolling grassland stretches to the horizon under a gray sky. A wolf stalks through the tall grass, and farther off a bandit lurks at the treeline, bow in hand."
+bands = 8
+enclosed = false
+entities = [
+    { name = "wolf", band = 3 },
+    { name = "bandit", band = 5 },
+]
+
+# ---------------------------------------------------------------------------------------------
+# trailhead / border_stones -- formerly plains.toml, the grid-based overworld-travel demo. Not
+# part of the [[location.exit]] graph above (see this file's own top comment) -- reachable from
+# debug_hub by the one plain exit into "trailhead", then by grid/name between the two.
+[[location]]
+key = "trailhead"
+name = "the trailhead"
+description = "A weathered signpost marks where a cart track gives way to open grass."
+grid = { x = 0, y = 0 }
+entities = []
+
+[[location]]
+key = "border_stones"
+name = "the border stones"
+aliases = [ "the standing stones", "the stones" ]
+description = "A ring of half-sunken standing stones, worn smooth by wind and time."
+grid = { x = 24, y = 0 }
+entities = []
+
+# ---------------------------------------------------------------------------------------------
+# generation_grounds -- formerly npc_generation_test.toml.
+[[location]]
+key = "generation_grounds"
+name = "The Generation Grounds"
+description = "A bare, featureless room built only to exercise NPC generation."
+start_room = "grounds"
+entities = [
+    { name = "player", band = 1 },
+]
+return_to = "debug_hub"
+
+[[location.room]]
+key = "grounds"
+name = "The Generation Grounds"
+description = "A bare, featureless room built only to exercise NPC generation."
+bands = 4
+enclosed = true
+entities = [
+    { template = "generated_stranger", band = 2 },
+]
+
+# ---------------------------------------------------------------------------------------------
+# vault -- formerly scenario_entity_test.toml.
+[[location]]
+key = "vault"
+name = "The Sealed Vault"
+description = "A bare stone vault built only to exercise scenario-local entity definitions."
+start_room = "chamber"
+entities = [
+    { name = "player", band = 1 },
+]
+return_to = "debug_hub"
+
+[[location.room]]
+key = "chamber"
+name = "The Sealed Vault"
+description = "A bare stone vault built only to exercise scenario-local entity definitions."
+bands = 2
+enclosed = true
+entities = [
+    { name = "vault sentinel", band = 1 },
+]
+
+# ---------------------------------------------------------------------------------------------
+# general_store -- formerly shop.toml.
+[[location]]
+key = "general_store"
+name = "The General Store"
+description = "A cramped, well-stocked general store. Shelves line every wall, crowded with sacks, coils, jars, and tools whose exact purpose isn't always obvious at a glance."
+start_room = "floor"
+entities = [
+    { name = "player", band = 1 },
+]
+return_to = "debug_hub"
+
+[[location.room]]
+key = "floor"
+name = "The General Store"
+description = "A cramped, well-stocked general store. Shelves line every wall, crowded with sacks, coils, jars, and tools whose exact purpose isn't always obvious at a glance."
+bands = 2
+enclosed = true
+entities = [
+    { name = "shopkeeper", band = 1 }
+]
+
+# ---------------------------------------------------------------------------------------------
+# tavern_floor -- formerly tavern.toml, the fixed/hand-authored innkeeper.
+[[location]]
+key = "tavern_floor"
+name = "The Rusty Tankard"
+description = "A cozy tavern. A fire crackles in the hearth while a few locals nurse their drinks."
+start_room = "floor"
+entities = [
+    { name = "player", band = 1 },
+]
+return_to = "debug_hub"
+
+[[location.room]]
+key = "floor"
+name = "The Rusty Tankard"
+description = "A cozy tavern. A fire crackles in the hearth while a few locals nurse their drinks."
+bands = 2
+enclosed = true
+entities = [
+    { name = "innkeeper", band = 1 }
+]
+
+# ---------------------------------------------------------------------------------------------
+# tavern_tonight -- formerly tavern_random.toml, the generated/randomized cast version. Display
+# name changed from tavern_floor's own "The Rusty Tankard" to "The Rusty Tankard (Busy Night)"
+# purely so the two don't share an alias-matching phrase on debug_hub's own exits (no test
+# references either display name).
+[[location]]
+key = "tavern_tonight"
+name = "The Rusty Tankard (Busy Night)"
+description = "The same cozy tavern, but who's behind the bar and who's nursing a drink changes with every visit -- new faces, new stories."
+start_room = "floor"
+entities = [
+    { name = "player", band = 1 },
+]
+return_to = "debug_hub"
+
+[[location.room]]
+key = "floor"
+name = "The Rusty Tankard (Busy Night)"
+description = "The same cozy tavern, but who's behind the bar and who's nursing a drink changes with every visit -- new faces, new stories."
+bands = 3
+enclosed = true
+entities = [
+    { template = "generated_innkeeper", band = 1 },
+    { template = "generated_stranger", band = 2 },
+    { template = "generated_regular", band = 3 }
+]
+
+# ---------------------------------------------------------------------------------------------
+# town_square / blacksmith / old_well -- formerly town.toml, its own internal exit graph
+# carried over unchanged except town_square's own new return_to back to debug_hub.
+[[location]]
+key = "town_square"
+name = "The Market Square"
+description = "A wide cobbled square ringed with stalls, the smell of woodsmoke and bread drifting from every corner."
+kind = "district"
+entities = [
+    { name = "town crier" },
+    { name = "market stall" },
+]
+return_to = "debug_hub"
+
+[[location.encounter]]
+name = "town square encounter"
+trigger = "on_enter"
+encounter = [
+    { "A ragged child tugs at your sleeve, asking if you've seen their missing cat." = 30 },
+    { "A street performer juggles knives for scattered coin." = 30 },
+    { "generated_beggar" = 10 },
+    { "nothing" = 30 },
+]
+
+[[location.exit]]
+destination = "blacksmith"
+aliases = [ "smithy", "forge" ]
+
+[[location.exit]]
+destination = "old_well"
+aliases = [ "well" ]
+
+[[location]]
+key = "blacksmith"
+name = "The Sooted Anvil"
+description = "Heat rolls off the forge in the back; every surface is dark with soot and old iron."
+kind = "building"
+entities = [
+    { name = "blacksmith" },
+    { name = "forge" },
+]
+return_to = "town_square"
+
+[[location]]
+key = "old_well"
+name = "The Old Well"
+description = "A stone well, its rope ladder disappearing into darkness below."
+kind = "district"
+start_room = "shaft"
+return_to = "town_square"
+
+[[location.room]]
+key = "shaft"
+name = "The Well Shaft"
+description = "A narrow stone shaft, the ladder groaning underfoot."
+bands = 2
+enclosed = true
+
+[[location.room.encounter]]
+name = "well shaft encounter"
+trigger = "on_enter"
+encounter = [
+    { "goblin scout" = 30 },
+    { "giant rat" = 25 },
+    { "nothing" = 45 },
+]
+
+[[location.room.exit]]
+band = 2
+direction = "forward"
+destination = "den"
+arrival_band = 1
+
+[[location.room]]
+key = "den"
+name = "The Goblin Den"
+description = "A cramped, foul-smelling burrow lit by a single guttering torch."
+bands = 2
+enclosed = true
+entities = [
+    { name = "goblin", band = 1 },
+]
+
+[[location.room.exit]]
+band = 1
+direction = "back"
+destination = "shaft"
+arrival_band = 2
+
+# ===============================================================================================
+# Entities -- local copies of every npc/creature every area above references, so this one file
+# stays self-contained. Duplicates that used to be kept in sync by hand across separate files
+# (wolf, thane) now just live here once.
+
+[[entity]]
+name = "wolf"
+supertype = "creature"
+subtype = "animal"
+
+max_hp = 16
+
+[[entity.abilities]]
+name = "bite"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "piercing" ]
+damage_value = { dice = 1, pips = 0, bonus = "user.strength_damage" }
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+    { field = "hp_per_remain", operator = "<", value = 0.40 },
+]
+action = "retreat"
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "bite"
+
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+willpower = { dice = 2, pips = 0 }
+reflexes = { dice = 2, pips = 0 }
+dodge = { dice = 6, pips = 0 }
+strength = { dice = 2, pips = 0 }
+brawling = { dice = 5, pips = 0 }
+
+[[entity]]
+name = "thane"
+supertype = "creature"
+subtype = "humanoid"
+description = "A grizzled mercenary who fights at gladstone's side."
+is_party = true
+follow_offset = 0
+
+max_hp = 24
+
+[entity.attitudes]
+default = [ 40, 40, 40 ]
+
+[entity.qualities]
+race = "human"
+
+[entity.skills]
+acrobatics = { dice = 2, pips = 0 }
+appraise = { dice = 2, pips = 0 }
+arcane = { dice = 2, pips = 0 }
+artistry = { dice = 2, pips = 0 }
+athletics = { dice = 4, pips = 0 }
+axes = { dice = 2, pips = 0 }
+blades = { dice = 4, pips = 0 }
+brawling = { dice = 4, pips = 0 }
+charisma = { dice = 2, pips = 0 }
+disguise = { dice = 2, pips = 0 }
+dodge = { dice = 3, pips = 0 }
+escape = { dice = 2, pips = 0 }
+finesse = { dice = 2, pips = 0 }
+fly = { dice = 2, pips = 0 }
+forgery = { dice = 2, pips = 0 }
+fortitude = { dice = 3, pips = 0 }
+gambling = { dice = 2, pips = 0 }
+husbandry = { dice = 2, pips = 0 }
+intimidation = { dice = 4, pips = 0 }
+linguistics = { dice = 2, pips = 0 }
+medicine = { dice = 2, pips = 0 }
+miracles = { dice = 2, pips = 0 }
+missiles = { dice = 2, pips = 0 }
+navigation = { dice = 2, pips = 0 }
+observation = { dice = 2, pips = 0 }
+polearms = { dice = 2, pips = 0 }
+psionics = { dice = 2, pips = 0 }
+reflexes = { dice = 2, pips = 0 }
+stealth = { dice = 2, pips = 0 }
+streetwise = { dice = 3, pips = 0 }
+strength = { dice = 4, pips = 0 }
+survival = { dice = 4, pips = 0 }
+throwing = { dice = 2, pips = 0 }
+trickery = { dice = 2, pips = 0 }
+willpower = { dice = 2, pips = 0 }
+
+[[entity.abilities]]
+name = "shortsword strike"
+supertype = "innate"
+subtype = "weapon"
+skill = "blades"
+damage_tags = [ "slashing" ]
+damage_value = { dice = 2, pips = 0, bonus = "user.strength_damage" }
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "shortsword strike"
+
+[[entity]]
+name = "anne"
+supertype = "creature"
+subtype = "humanoid"
+description = "A sharp-eyed battle mage, quick with a ward and quicker with a curse."
+is_party = true
+follow_offset = -1
+
+max_hp = 18
+
+abilities = [ "splash flow" ]
+
+[entity.attitudes]
+default = [ 30, 30, 30 ]
+
+[[entity.attitudes.name]]
+gladstone = [ 100, 100, 100 ]
+
+[entity.qualities]
+race = "elf"
+
+[entity.skills]
+acrobatics = { dice = 5, pips = 0 }
+appraise = { dice = 2, pips = 0 }
+arcane = { dice = 4, pips = 0 }
+artistry = { dice = 2, pips = 0 }
+athletics = { dice = 2, pips = 0 }
+axes = { dice = 2, pips = 0 }
+blades = { dice = 2, pips = 0 }
+brawling = { dice = 1, pips = 0 }
+charisma = { dice = 4, pips = 0 }
+disguise = { dice = 2, pips = 0 }
+dodge = { dice = 2, pips = 1 }
+escape = { dice = 2, pips = 0 }
+finesse = { dice = 2, pips = 0 }
+fly = { dice = 2, pips = 0 }
+forgery = { dice = 2, pips = 0 }
+fortitude = { dice = 2, pips = 0 }
+gambling = { dice = 2, pips = 0 }
+husbandry = { dice = 2, pips = 0 }
+intimidation = { dice = 1, pips = 0 }
+linguistics = { dice = 4, pips = 0 }
+medicine = { dice = 4, pips = 0 }
+miracles = { dice = 2, pips = 0 }
+missiles = { dice = 2, pips = 0 }
+navigation = { dice = 2, pips = 0 }
+observation = { dice = 5, pips = 0 }
+polearms = { dice = 2, pips = 0 }
+psionics = { dice = 2, pips = 0 }
+reflexes = { dice = 2, pips = 0 }
+stealth = { dice = 5, pips = 0 }
+streetwise = { dice = 2, pips = 0 }
+strength = { dice = 1, pips = 0 }
+survival = { dice = 2, pips = 0 }
+throwing = { dice = 2, pips = 0 }
+trickery = { dice = 2, pips = 0 }
+willpower = { dice = 3, pips = 0 }
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "splash flow"
+
+[[entity]]
+name = "giant spider"
+supertype = "creature"
+subtype = "animal"
+description = "An abdomen swollen to the size of a barrel, bristling with coarse hair, skitters along webbing strung wall to wall."
+
+max_hp = 14
+
+vulnerability_value = { dice = 2, pips = 0 }
+vulnerability_tags = [ "fire" ]
+
+[[entity.abilities]]
+name = "venomous bite"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "piercing", "poison" ]
+damage_value = { dice = 2, pips = 0, bonus = "user.strength_damage" }
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+    { field = "hp_per_remain", operator = "<", value = 0.40 },
+]
+action = "retreat"
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "venomous bite"
+
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+willpower = { dice = 1, pips = 0 }
+reflexes = { dice = 3, pips = 0 }
+dodge = { dice = 4, pips = 0 }
+strength = { dice = 1, pips = 0 }
+brawling = { dice = 4, pips = 0 }
+
+[[entity]]
+name = "skeleton warrior"
+supertype = "creature"
+subtype = "undead"
+description = "A yellowed skeleton in tattered mail, empty sockets fixed forward, a notched blade held in a bony grip."
+
+max_hp = 20
+
+immunity_tags = [ "poison" ]
+vulnerability_value = { dice = 2, pips = 0 }
+vulnerability_tags = [ "bludgeoning" ]
+
+[[entity.abilities]]
+name = "notched blade"
+supertype = "innate"
+subtype = "weapon"
+skill = "blades"
+damage_tags = [ "slashing" ]
+damage_value = { dice = 2, pips = 1, bonus = "user.strength_damage" }
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "notched blade"
+
+[entity.skills]
+fortitude = { dice = 3, pips = 0 }
+willpower = { dice = 3, pips = 0 }
+reflexes = { dice = 2, pips = 0 }
+dodge = { dice = 2, pips = 0 }
+strength = { dice = 3, pips = 0 }
+blades = { dice = 4, pips = 0 }
+
+[[entity]]
+name = "the bone warden"
+supertype = "creature"
+subtype = "undead"
+description = "A towering, armor-fused skeleton bound in chains of dark iron, its ribcage packed with cold blue witchfire that never quite goes out."
+
+max_hp = 50
+
+immunity_tags = [ "poison" ]
+resistance_value = { dice = 1, pips = 0 }
+resistance_tags = [ "physical", "piercing", "slashing" ]
+vulnerability_value = { dice = 2, pips = 0 }
+vulnerability_tags = [ "fire" ]
+
+[[entity.abilities]]
+name = "bone claw"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "slashing" ]
+damage_value = { dice = 3, pips = 0, bonus = "user.strength_damage" }
+
+[[entity.abilities]]
+name = "grave chill"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "cold" ]
+damage_value = { dice = 4, pips = 1, bonus = 0 }
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.4 },
+]
+action = "bone claw"
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "grave chill"
+
+[entity.skills]
+fortitude = { dice = 6, pips = 0 }
+willpower = { dice = 3, pips = 0 }
+reflexes = { dice = 2, pips = 0 }
+dodge = { dice = 2, pips = 0 }
+strength = { dice = 5, pips = 0 }
+brawling = { dice = 5, pips = 0 }
+
+[[entity]]
+name = "bandit"
+supertype = "creature"
+subtype = "humanoid"
+description = "A road-worn brigand in mismatched leathers, a short bow slung across their back and a rusty shortsword at their hip."
+
+max_hp = 18
+currency = 12
+inventory = [ "short bow", "rusty shortsword" ]
+
+abilities = [ "short bow", "rusty shortsword" ]
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+    { field = "hp_per_remain", operator = "<", value = 0.40 },
+]
+action = "retreat"
+
+[[entity.behavior]]
+requirements = [
+    { field = "distance_to_target", operator = ">", value = 0 },
+]
+action = "short bow"
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "rusty shortsword"
+
+[entity.skills]
+missiles = { dice = 4, pips = 0 }
+blades = { dice = 3, pips = 0 }
+dodge = { dice = 3, pips = 0 }
+fortitude = { dice = 2, pips = 0 }
+strength = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "vault sentinel"
+supertype = "creature"
+subtype = "construct"
+description = "A construct that exists only inside this scenario file."
+max_hp = 10
+
+[entity.skills]
+brawling = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "shopkeeper"
+supertype = "creature"
+subtype = "humanoid"
+description = "A cheerful, round-faced merchant standing behind a cluttered counter of general goods."
+
+max_hp = 16
+
+currency = 60
+
+languages = [ "common" ]
+memories = [ "Took over the shop from their father", "Knows every regular customer by name" ]
+quotes = [ "Welcome, welcome! Take a look around.", "If I don't have it in stock, I can probably find some." ]
+
+inventory = [ "dagger" ]
+
+[entity.attitudes]
+default = [ 40, 10, 0 ]
+
+[entity.qualities]
+body = "round"
+eye = "hazel"
+gender = "female"
+hair = "brown"
+height = "average"
+skin = "tan"
+size = "medium"
+race = "human"
+age = 44
+
+[entity.conditions]
+
+[entity.skills]
+charisma = { dice = 3, pips = 0 }
+appraise = { dice = 4, pips = 0 }
+persuasion = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "innkeeper"
+supertype = "creature"
+subtype = "humanoid"
+description = "A stout woman with flour-dusted sleeves, wiping down the bar."
+
+max_hp = 20
+
+currency = 40
+
+languages = [ "common" ]
+memories = [ "Lost her husband to a bandit raid on the north road", "Waters down the ale for rowdy patrons" ]
+quotes = [ "Welcome to the Rusty Tankard, what'll it be?", "Careful with that road at night, bandits about." ]
+
+[entity.attitudes]
+default = [ 30, 10, 0 ]
+
+[entity.qualities]
+body = "stout"
+eye = "green"
+gender = "female"
+hair = "grey"
+height = "short"
+skin = "ruddy"
+size = "medium"
+race = "human"
+age = 52
+
+[entity.conditions]
+
+[entity.skills]
+charisma = { dice = 3, pips = 0 }
+appraise = { dice = 2, pips = 0 }
+observation = { dice = 3, pips = 0 }
+streetwise = { dice = 2, pips = 1 }
+brawling = { dice = 1, pips = 0 }
+
+[[entity]]
+name = "town crier"
+supertype = "creature"
+subtype = "humanoid"
+description = "A booming-voiced man in a faded municipal sash, bellowing the day's news to anyone who'll listen."
+
+max_hp = 12
+currency = 2
+
+languages = [ "common" ]
+memories = [ "Has read the same three proclamations for a week straight" ]
+quotes = [ "Hear ye! The miller's prices are up again!", "No news from the capital today, sadly." ]
+
+[entity.attitudes]
+default = [ 20, 10, 0 ]
+
+[entity.qualities]
+body = "wiry"
+gender = "male"
+race = "human"
+age = 41
+
+[entity.skills]
+charisma = { dice = 3, pips = 0 }
+artistry = { dice = 2, pips = 0 }
+observation = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "market stall"
+supertype = "object"
+subtype = "prop"
+description = "A wooden stall heaped with root vegetables, bundled herbs, and a crate of clucking hens."
+
+[[entity]]
+name = "blacksmith"
+supertype = "creature"
+subtype = "humanoid"
+description = "Broad-shouldered and soot-streaked, hammer never far from hand."
+
+max_hp = 22
+currency = 30
+inventory = [ "dagger" ]
+
+languages = [ "common" ]
+memories = [ "Apprenticed under the previous smith for a decade", "Refuses to work on feast days" ]
+quotes = [ "Need something forged, or just looking?", "Careful, that edge is still hot." ]
+
+[entity.attitudes]
+default = [ 15, 20, 0 ]
+
+[entity.qualities]
+body = "broad"
+gender = "female"
+race = "dwarf"
+age = 47
+
+[entity.skills]
+strength = { dice = 4, pips = 0 }
+appraise = { dice = 3, pips = 0 }
+streetwise = { dice = 2, pips = 0 }
+brawling = { dice = 3, pips = 0 }
+
+[[entity]]
+name = "forge"
+supertype = "object"
+subtype = "prop"
+description = "A soot-blackened stone forge, coals banked but still glowing."
+provides_station = "forge"
+
+[[entity]]
+name = "goblin"
+supertype = "creature"
+subtype = "humanoid"
+description = "A wiry, yellow-eyed creature in scavenged scraps of armor, baring filed teeth."
+
+max_hp = 12
+
+[[entity.abilities]]
+name = "rusty knife"
+supertype = "innate"
+subtype = "weapon"
+skill = "blades"
+damage_tags = [ "slashing" ]
+damage_value = { dice = 1, pips = 1, bonus = "user.strength_damage" }
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+    { field = "hp_per_remain", operator = "<", value = 0.40 },
+]
+action = "retreat"
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "rusty knife"
+
+[entity.skills]
+fortitude = { dice = 2, pips = 0 }
+reflexes = { dice = 3, pips = 0 }
+dodge = { dice = 3, pips = 0 }
+strength = { dice = 2, pips = 0 }
+blades = { dice = 3, pips = 0 }
+
+[[entity]]
+name = "goblin scout"
+supertype = "creature"
+subtype = "humanoid"
+description = "Leaner and quicker than its kin, more interested in fleeing with plunder than fighting for it."
+
+max_hp = 9
+
+[[entity.abilities]]
+name = "sharpened stick"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "piercing" ]
+damage_value = { dice = 1, pips = 0, bonus = "user.strength_damage" }
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+    { field = "hp_per_remain", operator = "<", value = 0.50 },
+]
+action = "retreat"
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "sharpened stick"
+
+[entity.skills]
+fortitude = { dice = 1, pips = 0 }
+reflexes = { dice = 3, pips = 0 }
+dodge = { dice = 3, pips = 0 }
+strength = { dice = 1, pips = 0 }
+brawling = { dice = 2, pips = 0 }
+stealth = { dice = 3, pips = 0 }
+
+[[entity]]
+name = "giant rat"
+supertype = "creature"
+subtype = "animal"
+description = "A rat the size of a dog, matted fur bristling, incisors yellowed and long."
+
+max_hp = 6
+
+[[entity.abilities]]
+name = "bite"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "piercing" ]
+damage_value = { dice = 1, pips = 0, bonus = "user.strength_damage" }
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "bite"
+
+[entity.skills]
+fortitude = { dice = 1, pips = 0 }
+reflexes = { dice = 2, pips = 0 }
+dodge = { dice = 2, pips = 0 }
+strength = { dice = 1, pips = 0 }
+brawling = { dice = 2, pips = 0 }
+
+# ===============================================================================================
+# Entity templates -- NPC-generation stubs. "generated_stranger" is shared, byte-for-byte
+# identical, between what used to be npc_generation_test.toml and tavern_random.toml's own
+# copies -- now just defined once.
+
+[[entity_template]]
+name = "generated_stranger"
+supertype = "creature"
+subtype = "humanoid"
+hint = [
+    {"a stranger passing through, keeping mostly to themselves" = 30},
+    {"a wandering merchant looking to trade" = 30},
+    {"an adventerer looking for a party to tackle a nearby dungeon" = 40},
+]
+target_cr = "player"
+cr_multiplier = {min = 0.8, max = 1.2} # can vary from weaker to stronger
+
+currency = {min = 10, max = 50}
+
+[entity_template.attitudes]
+default = [
+    {min = -40, max = 40}, # disposition varies from wary to warm
+    0, # threat remains zero
+    {min = -40, max = 40} # familiarity varies from wary to warm
+]
+[[entity_template.attitudes.name]]
+player = [ 40, 0, 0 ] # trusts the player for some reaseon
+
+[entity_template.qualities]
+race = [
+    {"halfling" = 20},
+    {"dwarf" = 20},
+    {"elf" = 20},
+    {"human" = 60},
+    {"half-orc" = 20}
+]
+gender = [
+    {"male" = 50},
+    {"female" = 50}
+]
+age = { min = 18, max = 50 }
+
+[[entity_template]]
+name = "vault_specter_stub"
+supertype = "creature"
+subtype = "undead"
+hint = "a restless guardian bound to this vault"
+target_cr = "player"
+
+[entity_template.qualities]
+race = "human"
+
+[entity_template.attitudes]
+default = [ -60, 0, 0 ]
+
+[[entity_template]]
+name = "generated_innkeeper"
+supertype = "creature"
+subtype = "humanoid"
+hint = "the innkeeper running the bar tonight"
+target_cr = "player"
+
+currency = 40
+
+[entity_template.attitudes]
+default = [ 30, 10, 0 ]
+
+[entity_template.qualities]
+race = "dwarf"
+
+[[entity_template]]
+name = "generated_regular"
+supertype = "creature"
+subtype = "humanoid"
+hint = "a regular who's had one too many and is in a talkative mood"
+target_cr = "player"
+cr_multiplier = 0.6                         # a background patron, not meant to rival the player
+
+currency = 5
+
+[entity_template.attitudes]
+default = [ 15, 0, 0 ]
+[[entity_template.attitudes.supertype]]
+undead = [ -60, 40, -60 ]
+
+[entity_template.qualities]
+race = "halfling"
+
+[[entity_template]]
+name = "generated_beggar"
+supertype = "creature"
+subtype = "humanoid"
+hint = "a down-on-their-luck beggar working the market square, asking for coin"
+target_cr = "player"
+cr_multiplier = 0.3
+
+currency = { min = 0, max = 3 }
+
+[entity_template.attitudes]
+default = [
+    { min = 0, max = 30 },   # disposition -- neutral to warm; never hostile
+    -20,                      # threat -- a little downtrodden
+    0,                        # familiarity -- neutral
+]
+
+[entity_template.qualities]
+race = [
+    { "human" = 60 },
+    { "halfling" = 20 },
+    { "dwarf" = 10 },
+    { "elf" = 10 },
+]
+gender = [ { "male" = 50 }, { "female" = 50 } ]
+age = { min = 25, max = 65 }

@@ -67,8 +67,10 @@ band distance can never fix it (a grounded wolf will never "catch up" to a flyin
 
 ## Scenarios, locations, and rooms
 
-`Rules/Fantasy/scenarios/` (`debug`, the single hub-and-spoke developer/test scenario -- see
-"Testing" -- plus `lost_coast`, the one real shipped scenario) holds one `[scenario]` table per
+`Rules/<setting>/scenarios/` (`Rules/Fantasy/scenarios/` holds just `debug`, the single
+hub-and-spoke developer/test scenario -- see "Testing"; `Rules/Pathfinder/scenarios/` additionally
+holds `lost_coast`, the one real shipped multi-file scenario, kept in its own setting so its
+Golarion-sourced content stays out of Fantasy) holds one `[scenario]` table per
 scenario, kept in its own subdirectory so multiple scenarios can coexist without the flat
 `load_rules` scan (which only keeps the last `[scenario]` table it reads) overwriting one with
 another. A scenario is either a single `<name>.toml` file (`debug.toml`) or, once its own content
@@ -78,7 +80,8 @@ merges together the same way `load_rules` already merges every shared `Rules/<se
 file -- `[[location]]`/`[[entity]]`/`[[entity_template]]` entries combine across files by key,
 exactly one of which may define the scenario's own singular `[scenario]` table (a hard error if
 more than one does, the same singular-ownership reasoning that pulled scenarios into their own
-subdirectory to begin with). `lost_coast` is the shipped example: `lost_coast/lost_coast.toml` carries `[scenario]` plus
+subdirectory to begin with). `lost_coast` (`Rules/Pathfinder/scenarios/lost_coast/`) is the shipped
+example: `lost_coast/lost_coast.toml` carries `[scenario]` plus
 Magnimar, `lost_coast/sandpoint.toml` carries Sandpoint's own full build-out -- it simply grew too
 large to sit next to Magnimar in one file, with Magnimar expected to get the same one-file-per-town
 treatment whenever it's built out too. Every scenario is `[scenario]` (just
@@ -86,7 +89,8 @@ treatment whenever it's built out too. Every scenario is `[scenario]` (just
 `[[location]]` tables → optionally, per location, one or more `[[location.room]]` tables — a
 location is a *superset* of a room, not a sister of it: `[[location.room]]`/
 `[[location.room.exit]]` behave exactly like an ordinary room/exit, just nested one level
-deeper. `Rules/Fantasy/reference/location_schema.toml`
+deeper. `Rules/Fantasy/reference/location_schema.toml` (and the identical
+`Rules/Pathfinder/reference/location_schema.toml`)
 is the field-by-field reference for the `[[location]]` shape. `debug.toml` itself is a worked
 example of a multi-location scenario at real scale: a freeform `debug_hub` location with a
 `[[location.exit]]` to each of its dozen-plus areas, each pointing back via its own

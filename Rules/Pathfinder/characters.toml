@@ -1,0 +1,130 @@
+# thane/anne used to live here too, but they were test/placeholder party members, not finished
+# characters meant to be shared -- each now lives solely as a local [[entity]] table in
+# debug.toml, the scenario file that actually uses them (its own thane/anne). "gladstone" stays
+# here -- it's the one entity template every setting boot needs
+# resolvable via is_player = true *before* any scenario loads (_resolve_player_name runs right
+# after load_rules, before load_scenario_definition), so it can never be scenario-local.
+
+[[entity]]
+name = "gladstone"
+supertype = "creature"
+subtype = "humanoid"
+description = "A man"
+is_player = true
+
+max_hp = 36
+
+currency = 100
+exp = 100
+# No explicit "speed" -- defaults to 1 band per "advance"/"retreat" action (see
+# DM_Movement.py), same as every other entity "unless otherwise specified". Only the player
+# actually moves today (creature/ally behavior doesn't choose to close distance -- see
+# DM_Movement.py's module notes for why that's a deliberate follow-up, not part of this pass).
+
+inventory = [
+    "longsword",
+    "chain mail",
+    "health potion",
+    "health potion",
+    "health potion",
+    "iron filings"
+]
+
+languages = [ "common" ]
+memories = [ "A wife at home" ]
+quotes = [ "Hello, world" ]
+
+# Flat list, same shape as "inventory": a string names a shared catalog entity
+# (spells.toml/techniques.toml) resolved by name at use time; a table is a one-off innate
+# ability with no shared entity to point at.
+abilities = [
+    "fireball",
+    "splash flow",
+    "arc lance",
+    "summon spectral wolf",
+    "wall of fire",
+    "dispel magic",
+    "cure disease",
+    "cleave",
+    "power attack",
+    "empowered",
+    { name = "punch", supertype = "innate", subtype = "weapon", skill = "brawling", damage_tags = [ "bludgeoning" ], damage_value = { dice = 0, pips = 0, bonus = "user.strength_damage" } },
+]
+
+[entity.equipped]
+rhand = "longsword"
+chest = "chain mail"
+
+[entity.attitudes]
+default = [ 0, 0, 0 ]
+# disposition   Hostile <-> Friendly
+# threat        Fearful <-> Confident
+# familiarity   Disgusted <-> Enamored
+
+[[entity.attitudes.supertype]]
+undead = [ -100, 100, -100 ]
+
+[[entity.attitudes.name]]
+anne = [ 100, 100, 100 ]
+
+[entity.qualities]
+body = "athletic"
+eye = "brown"
+gender = "male"
+hair = "black"
+height = "tall"
+skin = "fair"
+size = "medium"
+race = "human"
+age = 35
+
+[entity.conditions]
+
+# A full, explicit entry for every skill -- not just the ones gladstone is actually good at --
+# is what makes this table something the race/point-buy character-creation system
+# (Character_Creation.py, "human" in races.toml) could actually have produced: 2D human
+# baseline everywhere, plus a legal 15D allocation (blades +3, finesse +1, dodge +3, stealth
+# +2, appraise +2, navigation +2, medicine +2 -- exactly 15D, nothing over the 5D-per-skill
+# cap). A skill left off entirely would default to untrained 0D (DM_Combat.py's
+# resolve_action), not the race's own 2D baseline -- unable to clear anything but an
+# auto-success (difficulty 0) check, which is exactly why every skill needs its own line here
+# rather than only the "trained" ones. observation stays at the plain 2D human baseline
+# (deliberately not boosted further) so items.toml's dart trap/scythe trap [entity.notice]
+# checks -- rolled the moment either is instanced, DM_Rules.py's _auto_roll_notice -- stay a
+# real, uncertain roll rather than a foregone conclusion either way.
+[entity.skills]
+acrobatics = { dice = 2, pips = 0 }
+appraise = { dice = 4, pips = 0 }
+arcane = { dice = 2, pips = 0 }
+artistry = { dice = 2, pips = 0 }
+athletics = { dice = 2, pips = 2 }
+axes = { dice = 2, pips = 0 }
+blades = { dice = 5, pips = 0 }
+brawling = { dice = 2, pips = 0 }
+charisma = { dice = 2, pips = 0 }
+disguise = { dice = 2, pips = 0 }
+dodge = { dice = 5, pips = 0 }
+escape = { dice = 2, pips = 0 }
+finesse = { dice = 3, pips = 0 }
+fly = { dice = 2, pips = 0 }
+forgery = { dice = 2, pips = 0 }
+fortitude = { dice = 2, pips = 0 }
+gambling = { dice = 2, pips = 0 }
+husbandry = { dice = 2, pips = 0 }
+intimidation = { dice = 2, pips = 0 }
+linguistics = { dice = 2, pips = 0 }
+medicine = { dice = 4, pips = 0 }
+miracles = { dice = 2, pips = 0 }
+missiles = { dice = 2, pips = 0 }
+navigation = { dice = 4, pips = 0 }
+observation = { dice = 2, pips = 0 }
+polearms = { dice = 2, pips = 0 }
+psionics = { dice = 2, pips = 0 }
+reflexes = { dice = 2, pips = 0 }
+stealth = { dice = 4, pips = 0 }
+streetwise = { dice = 2, pips = 0 }
+strength = { dice = 2, pips = 0 }
+survival = { dice = 2, pips = 0 }
+throwing = { dice = 2, pips = 0 }
+trickery = { dice = 2, pips = 0 }
+willpower = { dice = 2, pips = 0 }

@@ -1,0 +1,25 @@
+# Trained combat-trick/metamagic modifiers -- a new supertype == "modifier" [[entity]], stacked
+# onto another named ability at the moment it's cast/swung rather than existing as an ability in
+# its own right (see entity_schema.toml's own "applies_to"/"skill_divisor"/"damage_bonus"/
+# "damage_multiplier" fields for the mechanism). Deliberately never added to any skills.toml
+# [[skill]]'s own "abilities" list -- unlike maneuvers.toml's untrained "trip"/"cleave", a
+# modifier only ever resolves for an entity that actually trained it, on its own "abilities"
+# list (see characters.toml's gladstone).
+
+[[entity]]
+name = "power attack"
+supertype = "modifier"
+subtype = "combat trick"
+description = "Trading precision for raw force -- a heavier, wilder swing that's harder to land but hits far harder when it does."
+applies_to = { subtypes = [ "weapon" ] }
+skill_divisor = 2
+damage_bonus = { dice = 2, pips = 0, bonus = 0 }
+
+[[entity]]
+name = "empowered"
+supertype = "modifier"
+subtype = "metamagic"
+description = "Pouring extra effort into a spell mid-cast -- a riskier working that lands harder when it succeeds."
+applies_to = { supertypes = [ "spell" ] }
+skill_divisor = 1.5
+damage_multiplier = 1.5

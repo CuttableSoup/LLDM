@@ -1,0 +1,1100 @@
+# Pathfinder 1e Sorcerer/Wizard spell list, converted to this engine's D6 format using the D6
+# Fantasy Rulebook's own point-buy spell-design system (Chapter XII: Magic) as the source of
+# each spell's `difficulty`, rather than a hand-picked number the way items.toml's own shipped
+# "fireball" was. A separate catalog from spells.toml on purpose, same reason equipment.toml
+# split off from items.toml: spells.toml stays the small, hand-authored set the debug scenario
+# actually references; this file is the bulk conversion pass.
+#
+# Scope: only the DIRECT-DAMAGE spells on the Sorcerer/Wizard list (0th-8th level) converted so
+# far -- illusions, buffs/debuffs, summons, polymorphs, and utility spells (the large majority of
+# the list) are NOT here yet. Each of those needs its own [[condition]]/[[status]] authoring the
+# way Rules/Fantasy/reference/pathfinder_mapping.toml's condition_pattern/spell_mechanic sections
+# already worked out category-by-category -- a flat damage-dice conversion can't honestly capture
+# "makes one person your friend" or "turns you into a Large dragon", so those are left for that
+# pass rather than faked here. Two spells from this list are skipped outright because
+# Rules/Fantasy/spells.toml already ships an equivalent under the same name: "fireball" and
+# "wall of fire" (the latter as the summon-based hazard shape, not a direct-damage spell at all).
+# A further handful of damage-*mentioning* spells were excluded even though a plain-text search
+# would flag them, because the damage is incidental to a different primary effect this pass
+# doesn't yet model: black tentacles/mage's faithful hound (grapple/summon), fire trap (a warding
+# trap, not a cast-and-forget spell), the form of the dragon line (polymorph -- see
+# pathfinder_mapping.toml's own "form" condition field), mage's sword/clenched fist/crushing hand
+# (a force effect that keeps attacking across multiple rounds -- no engine primitive for that, the
+# same gap pathfinder_mapping.toml's own "Multiple natural attacks" row already flagged), symbol
+# of weakness (a triggered rune/ability-damage trap), and transmute rock to mud (a terrain spell).
+#
+# ============================================================================================
+# Conversion method
+# ============================================================================================
+#
+# Caster level: each spell uses ITS OWN natural Pathfinder minimum caster level for a
+# sorcerer/wizard (2 x spell level - 1 -- level 1 for a 1st-level spell, 5 for 3rd-level, 15 for
+# 8th-level, etc.), not a flat level. This was a deliberate calibration choice (see conversation
+# history): the raw D6 Fantasy formula is accepted as-is rather than compressed, so a spell's
+# difficulty naturally follows Pathfinder's own power curve -- a cheap cantrip floors out at the
+# system's own minimum difficulty of 10, while a genuinely powerful high-level spell (Sunburst,
+# Incendiary Cloud) becomes something a starting character truly cannot cast yet, the same way
+# Pathfinder itself gates it behind character level.
+#
+# Effect: the spell's PF damage dice at that caster level (applying its own "per level, maximum
+# NdM" scaling) converted to the nearest D6 {dice, pips} by average damage -- same nearest-average
+# method equipment.toml's own header documents, extended past a single die to arbitrary dice
+# pools (dice*3.5 + pips vs. the PF average). That D6 code becomes the spell's own damage_value
+# AND feeds the D6 Magic formula's own "Effect" line (value = dice*3 + pips, x1.0 for a
+# stand-alone damage effect -- see the Vade Mecum's own "Value Characteristic Type Multiplier"
+# table).
+#
+# Range/Speed: PF's own range in feet (at that caster level, for a scaling range like "close
+# 25 ft. + 5 ft./2 levels") converted to meters and looked up on the D6 Fantasy "Spell Measures"
+# table (rounding UP to the next available code so a real spell's reach is never undersold).
+# Speed is always set equal to Range (an instant, accurate hit -- every converted spell here is
+# exactly that shape).
+#
+# Duration: instantaneous unless the spell has a real lingering duration; value 0 for
+# instantaneous, matching the rulebook's own stated minimum.
+#
+# Area Effect: a spell with a burst/spread/cone/line converts its own radius (or length, for a
+# cone/line -- both approximated as a sphere-shaped burst of that reach, since this engine's own
+# `targets.aoe` doesn't distinguish shapes) to meters, priced at +5 per meter of radius (the
+# rulebook's own default sphere cost) and added straight into the Spell Total.
+#
+# Casting Time / Components (negative modifiers): "1 standard action" -> -4 (the "1 round"
+# Spell Measures code); Verbal -> Incantation -1 (a few words); Somatic -> Gesture -1 (simple);
+# a Material component -> Components -6 (-3 for an ordinary/common reagent, doubled since it's
+# consumed in casting). No spell in this batch has Concentration, Community, Charges, or any of
+# the rarer optional aspects, so none of those modifiers appear here.
+#
+# Final: (Spell Total + Negative Modifiers), floored at 20, divided by 2 and rounded up = this
+# entry's own `difficulty`. Multi-instance effects (Magic Missile's extra missiles, Scorching
+# Ray's extra rays) are folded into ONE combined damage_value at the natural caster level rather
+# than modeled as separate rolls -- the same "approximate with a single ability" precedent
+# pathfinder_mapping.toml's own creature_ability section already set for multiple natural
+# attacks in one action. A line/cone/persistent-AoE spell (Lightning Bolt's line, Acid Fog's
+# per-round lingering damage) is likewise flattened to this engine's ordinary one-shot AoE burst
+# shape (`targets = {number=0, aoe, side="all"}`, matching items.toml/spells.toml's own shipped
+# "fireball") rather than inventing a new shape or a persistent hazard entity for each one.
+#
+# engine `range`/`targets.aoe` (in bands) are a SEPARATE conversion from the D6 Magic Range/Area
+# values above -- those only ever feed the difficulty formula. The entity's own gameplay range
+# uses the same ~16 ft/band scale equipment.toml's own header established (calibrated against
+# spells.toml's shipped fireball: range = 5 bands there for its own 20-ft blast radius).
+
+[[entity]]
+name = "acid splash"
+supertype = "spell"
+subtype = "conjuration"
+description = "Spit a small orb of conjured acid at a target."
+skill = "arcane"
+difficulty = 10
+range = 2
+targets = { number = 1, aoe = 0 }
+damage_value = { dice = 0, pips = 2, bonus = 0 }
+damage_tags = [ "acid" ]
+
+[[entity]]
+name = "disrupt undead"
+supertype = "spell"
+subtype = "necromancy"
+description = "Loose a thin ray of positive energy that sears the unliving."
+skill = "arcane"
+difficulty = 10
+range = 2
+targets = { number = 1, aoe = 0 }
+damage_value = { dice = 1, pips = 0, bonus = 0 }
+damage_tags = [ "positive" ]
+
+[[entity]]
+name = "ray of frost"
+supertype = "spell"
+subtype = "evocation"
+description = "Fire a pale ray of numbing cold from an outstretched finger."
+skill = "arcane"
+difficulty = 10
+range = 2
+targets = { number = 1, aoe = 0 }
+damage_value = { dice = 0, pips = 2, bonus = 0 }
+damage_tags = [ "cold" ]
+
+[[entity]]
+name = "burning hands"
+supertype = "spell"
+subtype = "evocation"
+description = "Spread the fingers wide and loose a fan of searing flame."
+skill = "arcane"
+difficulty = 10
+range = 1
+targets = { number = 0, aoe = 1, side = "all" }
+damage_value = { dice = 0, pips = 2, bonus = 0 }
+damage_tags = [ "fire" ]
+
+[[entity]]
+name = "chill touch"
+supertype = "spell"
+subtype = "necromancy"
+description = "Chill a living creature to the bone with a graveyard touch."
+skill = "arcane"
+difficulty = 10
+targets = { number = 1, aoe = 0 }
+damage_value = { dice = 1, pips = 0, bonus = 0 }
+damage_tags = [ "cold" ]
+
+[[entity]]
+name = "magic missile"
+supertype = "spell"
+subtype = "evocation"
+description = "Loose an unerring dart of pure magical force."
+skill = "arcane"
+difficulty = 10
+range = 7
+targets = { number = 1, aoe = 0 }
+damage_value = { dice = 1, pips = 0, bonus = 0 }
+damage_tags = [ "force" ]
+
+[[entity]]
+name = "shocking grasp"
+supertype = "spell"
+subtype = "evocation"
+description = "Charge a hand with crackling current and deliver it by touch."
+skill = "arcane"
+difficulty = 10
+targets = { number = 1, aoe = 0 }
+damage_value = { dice = 1, pips = 0, bonus = 0 }
+damage_tags = [ "electricity" ]
+
+[[entity]]
+name = "acid arrow"
+supertype = "spell"
+subtype = "conjuration"
+description = "Conjure a searing arrow of acid that eats through its target."
+skill = "arcane"
+difficulty = 10
+range = 33
+targets = { number = 1, aoe = 0 }
+damage_value = { dice = 1, pips = 1, bonus = 0 }
+damage_tags = [ "acid" ]
+
+[[entity]]
+name = "flaming sphere"
+supertype = "spell"
+subtype = "evocation"
+description = "Conjure a rolling globe of fire that crashes into whatever it's aimed at."
+skill = "arcane"
+difficulty = 10
+range = 8
+targets = { number = 1, aoe = 0 }
+damage_value = { dice = 3, pips = 0, bonus = 0 }
+damage_tags = [ "fire" ]
+
+[[entity]]
+name = "scorching ray"
+supertype = "spell"
+subtype = "evocation"
+description = "Hurl a searing ray of fire that scorches on contact."
+skill = "arcane"
+difficulty = 10
+range = 2
+targets = { number = 1, aoe = 0 }
+damage_value = { dice = 4, pips = 0, bonus = 0 }
+damage_tags = [ "fire" ]
+
+[[entity]]
+name = "shatter"
+supertype = "spell"
+subtype = "evocation"
+description = "Loose a burst of sonic vibration that shivers a solid object apart."
+skill = "arcane"
+difficulty = 10
+range = 2
+targets = { number = 1, aoe = 0 }
+damage_value = { dice = 3, pips = 0, bonus = 0 }
+damage_tags = [ "sonic" ]
+
+[[entity]]
+name = "lightning bolt"
+supertype = "spell"
+subtype = "evocation"
+description = "Discharge a crackling bolt of lightning in a straight line."
+skill = "arcane"
+difficulty = 10
+range = 8
+targets = { number = 0, aoe = 8, side = "all" }
+damage_value = { dice = 5, pips = 0, bonus = 0 }
+damage_tags = [ "electricity" ]
+
+[[entity]]
+name = "vampiric touch"
+supertype = "spell"
+subtype = "necromancy"
+description = "Drain the life from whatever's touched."
+skill = "arcane"
+difficulty = 10
+targets = { number = 1, aoe = 0 }
+damage_value = { dice = 1, pips = 0, bonus = 0 }
+damage_tags = [ "negative" ]
+
+[[entity]]
+name = "shout"
+supertype = "spell"
+subtype = "evocation"
+description = "Loose a thunderous shout that deafens and batters everyone ahead."
+skill = "arcane"
+difficulty = 13
+range = 2
+targets = { number = 0, aoe = 2, side = "all" }
+damage_value = { dice = 7, pips = 0, bonus = 0 }
+damage_tags = [ "sonic" ]
+
+[[entity]]
+name = "cone of cold"
+supertype = "spell"
+subtype = "evocation"
+description = "Loose a blast of numbing cold in a widening cone."
+skill = "arcane"
+difficulty = 13
+range = 4
+targets = { number = 0, aoe = 4, side = "all" }
+damage_value = { dice = 7, pips = 2, bonus = 0 }
+damage_tags = [ "cold" ]
+
+[[entity]]
+name = "acid fog"
+supertype = "spell"
+subtype = "conjuration"
+description = "Conjure a billowing, corrosive fog that eats at whatever it touches."
+skill = "arcane"
+difficulty = 24
+range = 13
+targets = { number = 0, aoe = 1, side = "all" }
+damage_value = { dice = 2, pips = 0, bonus = 0 }
+damage_tags = [ "acid" ]
+
+[[entity]]
+name = "chain lightning"
+supertype = "spell"
+subtype = "evocation"
+description = "Loose a bolt of lightning that arcs from foe to foe."
+skill = "arcane"
+difficulty = 19
+range = 53
+targets = { number = 12, aoe = 0, side = "enemies" }
+damage_value = { dice = 7, pips = 2, bonus = 0 }
+damage_tags = [ "electricity" ]
+
+[[entity]]
+name = "freezing sphere"
+supertype = "spell"
+subtype = "evocation"
+description = "Hurl a bead of magical cold that bursts in a freezing blast."
+skill = "arcane"
+difficulty = 19
+range = 53
+targets = { number = 0, aoe = 3, side = "all" }
+damage_value = { dice = 7, pips = 2, bonus = 0 }
+damage_tags = [ "cold" ]
+
+[[entity]]
+name = "delayed blast fireball"
+supertype = "spell"
+subtype = "evocation"
+description = "Hurl a mote of fire that can be set to detonate on command."
+skill = "arcane"
+difficulty = 13
+range = 58
+targets = { number = 0, aoe = 1, side = "all" }
+damage_value = { dice = 7, pips = 2, bonus = 0 }
+damage_tags = [ "fire" ]
+
+[[entity]]
+name = "horrid wilting"
+supertype = "spell"
+subtype = "necromancy"
+description = "Wrench the moisture from every living body nearby."
+skill = "arcane"
+difficulty = 19
+range = 63
+targets = { number = 0, aoe = 2, side = "all" }
+damage_value = { dice = 7, pips = 2, bonus = 0 }
+damage_tags = [ "negative" ]
+
+[[entity]]
+name = "incendiary cloud"
+supertype = "spell"
+subtype = "conjuration"
+description = "Conjure a billowing cloud of roiling flame."
+skill = "arcane"
+difficulty = 33
+range = 16
+targets = { number = 0, aoe = 1, side = "all" }
+damage_value = { dice = 6, pips = 0, bonus = 0 }
+damage_tags = [ "fire" ]
+
+[[entity]]
+name = "polar ray"
+supertype = "spell"
+subtype = "evocation"
+description = "Loose a ray of absolute cold that saps strength along with warmth."
+skill = "arcane"
+difficulty = 16
+range = 16
+targets = { number = 1, aoe = 0 }
+damage_value = { dice = 7, pips = 2, bonus = 0 }
+damage_tags = [ "cold" ]
+
+[[entity]]
+name = "greater shout"
+supertype = "spell"
+subtype = "evocation"
+description = "Loose a devastating shout that shatters eardrums and stuns anyone nearby."
+skill = "arcane"
+difficulty = 17
+range = 4
+targets = { number = 0, aoe = 4, side = "all" }
+damage_value = { dice = 7, pips = 2, bonus = 0 }
+damage_tags = [ "sonic" ]
+
+[[entity]]
+name = "sunburst"
+supertype = "spell"
+subtype = "evocation"
+description = "Summon a searing burst of radiance bright enough to blind and burn."
+skill = "arcane"
+difficulty = 79
+range = 63
+targets = { number = 0, aoe = 5, side = "all" }
+damage_value = { dice = 7, pips = 2, bonus = 0 }
+damage_tags = [ "radiant" ]
+
+# ============================================================================================
+# Attribute/skill buffs -- Phase 1 of the non-damage conversion pass (see the plan this session
+# produced: buffs, mind-affecting control, dispel/cure, and triggered wards are the categories
+# with an already-built, already-documented engine primitive and no new-creature-content
+# dependency; illusions/teleportation/polymorph/summon are separate follow-on batches).
+#
+# Each casts a rules.toml [[condition]] onto the target via on_hit_condition -- the same
+# self-buff shape this file's own sibling spells.toml already ships ("wild shape": a flat,
+# unopposed `difficulty` check, no damage_value at all, on_hit_condition firing on any successful
+# cast regardless of whether anything was actually "hit"). Difficulty uses the D6 Magic formula's
+# own x1.5 "skill modifier" multiplier on the Effect line (a condition.modifier is a modifier to
+# an existing skill, not a stand-alone new one -- see the Vade Mecum's own Value Characteristic
+# Type Multiplier table), everything else identical to the damage-spell pass: each spell's own
+# natural Pathfinder minimum caster level, Range/Duration off the Spell Measures table, Casting
+# Time/Gesture/Incantation/Components as negative modifiers, floored at a Final Spell Total of 20.
+# A "Mass" variant adds the Multiple Targets aspect (+3 per target, counted at that spell's own
+# natural caster level) rather than a second bespoke Effect -- same underlying condition, just
+# landing on more targets at once, which is exactly what "mass" means in Pathfinder too.
+# ============================================================================================
+
+[[entity]]
+name = "bull's strength"
+supertype = "spell"
+subtype = "transmutation"
+description = "Swell a creature's muscles with bull-like might."
+skill = "arcane"
+difficulty = 10
+targets = { number = 1, aoe = 0 }
+on_hit_condition = { condition = "bull's strength", chance = 100, duration = "rounds", length = 36 }
+
+[[entity]]
+name = "bull's strength, mass"
+supertype = "spell"
+subtype = "transmutation"
+description = "Swell a whole party's muscles with bull-like might at once."
+skill = "arcane"
+difficulty = 33
+range = 3
+targets = { number = 11, aoe = 2, side = "allies" }
+on_hit_condition = { condition = "bull's strength", chance = 100, duration = "rounds", length = 132 }
+
+[[entity]]
+name = "cat's grace"
+supertype = "spell"
+subtype = "transmutation"
+description = "Lend a creature a cat's own fluid grace."
+skill = "arcane"
+difficulty = 10
+targets = { number = 1, aoe = 0 }
+on_hit_condition = { condition = "cat's grace", chance = 100, duration = "rounds", length = 36 }
+
+[[entity]]
+name = "cat's grace, mass"
+supertype = "spell"
+subtype = "transmutation"
+description = "Lend a whole party a cat's own fluid grace at once."
+skill = "arcane"
+difficulty = 33
+range = 3
+targets = { number = 11, aoe = 2, side = "allies" }
+on_hit_condition = { condition = "cat's grace", chance = 100, duration = "rounds", length = 132 }
+
+[[entity]]
+name = "bear's endurance"
+supertype = "spell"
+subtype = "transmutation"
+description = "Grant a creature a bear's own tireless stamina."
+skill = "arcane"
+difficulty = 10
+targets = { number = 1, aoe = 0 }
+on_hit_condition = { condition = "bear's endurance", chance = 100, duration = "rounds", length = 36 }
+
+[[entity]]
+name = "bear's endurance, mass"
+supertype = "spell"
+subtype = "transmutation"
+description = "Grant a whole party a bear's own tireless stamina at once."
+skill = "arcane"
+difficulty = 33
+range = 3
+targets = { number = 11, aoe = 2, side = "allies" }
+on_hit_condition = { condition = "bear's endurance", chance = 100, duration = "rounds", length = 132 }
+
+[[entity]]
+name = "eagle's splendor"
+supertype = "spell"
+subtype = "transmutation"
+description = "Lend a creature an eagle's own commanding presence."
+skill = "arcane"
+difficulty = 10
+targets = { number = 1, aoe = 0 }
+on_hit_condition = { condition = "eagle's splendor", chance = 100, duration = "rounds", length = 36 }
+
+[[entity]]
+name = "eagle's splendor, mass"
+supertype = "spell"
+subtype = "transmutation"
+description = "Lend a whole party an eagle's own commanding presence at once."
+skill = "arcane"
+difficulty = 33
+range = 3
+targets = { number = 11, aoe = 2, side = "allies" }
+on_hit_condition = { condition = "eagle's splendor", chance = 100, duration = "rounds", length = 132 }
+
+[[entity]]
+name = "fox's cunning"
+supertype = "spell"
+subtype = "transmutation"
+description = "Sharpen a creature's wits to a fox's own cunning."
+skill = "arcane"
+difficulty = 10
+targets = { number = 1, aoe = 0 }
+on_hit_condition = { condition = "fox's cunning", chance = 100, duration = "rounds", length = 36 }
+
+[[entity]]
+name = "fox's cunning, mass"
+supertype = "spell"
+subtype = "transmutation"
+description = "Sharpen a whole party's wits to a fox's own cunning at once."
+skill = "arcane"
+difficulty = 33
+range = 3
+targets = { number = 11, aoe = 2, side = "allies" }
+on_hit_condition = { condition = "fox's cunning", chance = 100, duration = "rounds", length = 132 }
+
+[[entity]]
+name = "owl's wisdom"
+supertype = "spell"
+subtype = "transmutation"
+description = "Deepen a creature's insight to an owl's own watchful wisdom."
+skill = "arcane"
+difficulty = 10
+targets = { number = 1, aoe = 0 }
+on_hit_condition = { condition = "owl's wisdom", chance = 100, duration = "rounds", length = 36 }
+
+[[entity]]
+name = "owl's wisdom, mass"
+supertype = "spell"
+subtype = "transmutation"
+description = "Deepen a whole party's insight to an owl's own watchful wisdom at once."
+skill = "arcane"
+difficulty = 33
+range = 3
+targets = { number = 11, aoe = 2, side = "allies" }
+on_hit_condition = { condition = "owl's wisdom", chance = 100, duration = "rounds", length = 132 }
+
+# Drops the fear-immunity/temporary-hp half of Heroism, Greater below -- see rules.toml's own
+# "heroism"/"greater heroism" condition comments.
+[[entity]]
+name = "heroism"
+supertype = "spell"
+subtype = "enchantment"
+description = "Fill a creature with unshakeable, battle-ready confidence."
+skill = "arcane"
+difficulty = 10
+targets = { number = 1, aoe = 0 }
+on_hit_condition = { condition = "heroism", chance = 100, duration = "rounds", length = 600 }
+
+[[entity]]
+name = "greater heroism"
+supertype = "spell"
+subtype = "enchantment"
+description = "Fill a creature with an even deeper, battle-ready confidence."
+skill = "arcane"
+difficulty = 10
+targets = { number = 1, aoe = 0 }
+on_hit_condition = { condition = "greater heroism", chance = 100, duration = "rounds", length = 132 }
+
+# Drops Haste's own extra-attack/speed-increase half -- see rules.toml's own "hasted" comment.
+[[entity]]
+name = "haste"
+supertype = "spell"
+subtype = "transmutation"
+description = "Quicken a creature's reflexes and reactions."
+skill = "arcane"
+difficulty = 10
+range = 2
+targets = { number = 1, aoe = 0 }
+on_hit_condition = { condition = "hasted", chance = 100, duration = "rounds", length = 5 }
+
+# Drops Rage's own Constitution/Will-save/AC-penalty clauses -- see rules.toml's own "raging"
+# comment.
+[[entity]]
+name = "rage"
+supertype = "spell"
+subtype = "enchantment"
+description = "Whip a willing creature into a battle-frenzy of raw strength."
+skill = "arcane"
+difficulty = 12
+range = 9
+targets = { number = 1, aoe = 0 }
+on_hit_condition = { condition = "raging", chance = 100, duration = "rounds", length = 5 }
+
+[[entity]]
+name = "resistance"
+supertype = "spell"
+subtype = "abjuration"
+description = "Wrap a creature in a faint, protective ward against harm."
+skill = "arcane"
+difficulty = 10
+targets = { number = 1, aoe = 0 }
+on_hit_condition = { condition = "resistant", chance = 100, duration = "rounds", length = 12 }
+
+# A 1-round duration on purpose -- True Strike's real effect is "guaranteed hit on your very
+# next swing," not a lingering buff; see rules.toml's own "true strike" condition comment.
+[[entity]]
+name = "true strike"
+supertype = "spell"
+subtype = "divination"
+description = "Glimpse a heartbeat into the future, guiding the next strike true."
+skill = "arcane"
+difficulty = 11
+targets = { number = 1, aoe = 0 }
+on_hit_condition = { condition = "true strike", chance = 100, duration = "rounds", length = 1 }
+
+# ============================================================================================
+# Mind-affecting control -- Phase 1's second batch (see rules.toml's own comment block right
+# before its matching new conditions for the shared "why prevents_action, why these names" story).
+#
+# Effect-value methodology diverges from the damage and buff batches here on purpose: Pathfinder
+# gives "you can't act at all" or "your mind is no longer your own" no numeric magnitude the way
+# a damage die or a +N attribute bonus has one, so the D6 Fantasy Rulebook's own explicit fallback
+# applies instead ("when the spell offers a general effect... the gamemaster will have to make up
+# levels of success," p.86) -- Effect = 3 x the spell's own Pathfinder level (floor 1), then scaled
+# by a type multiplier: x2.0 for full incapacitation/mind-override (Pattern A prevents_action,
+# override_target) since losing your turn outright is as strong an effect as this engine has;
+# x1.0 for a Pattern C fear/ability-penalty condition (a modifier, not a full loss of agency);
+# x1.5 for a permanent drain or an attitude-shift compulsion (between the two). This is a
+# documented authorial judgment call, not derived from a D6 Fantasy table entry the way the
+# damage/buff batches' own multipliers were -- flagged here so it reads as a choice, not a fact.
+#
+# Two real Pathfinder effects were dropped from this batch rather than faked: Dominate Person/
+# Monster (the caster names an arbitrary target for the dominated creature to attack, a per-cast
+# dynamic value no static TOML condition can express -- pathfinder_mapping.toml's own "Mind-
+# affecting control" row already flagged this exact gap) and Suggestion/Charm's own "compels a
+# specific course of action" half (modeled here as an ordinary attitude-shift instead, the same
+# honest simplification pathfinder_mapping.toml's own row already accepts for Charm-tier effects
+# -- real free-form command compliance stays a narrative/ADaM question, not an engine primitive).
+# ============================================================================================
+
+[[entity]]
+name = "sleep"
+supertype = "spell"
+subtype = "enchantment"
+description = "Blanket a wide area in a sudden, magical drowsiness."
+skill = "arcane"
+difficulty = 10
+range = 7
+targets = { number = 1, aoe = 0 }
+on_hit_condition = { condition = "asleep", chance = 100, duration = "rounds", length = 12 }
+
+[[entity]]
+name = "deep slumber"
+supertype = "spell"
+subtype = "enchantment"
+description = "Drop a target into a much deeper, harder-to-wake magical sleep."
+skill = "arcane"
+difficulty = 16
+range = 2
+targets = { number = 1, aoe = 0 }
+on_hit_condition = { condition = "asleep", chance = 100, duration = "rounds", length = 60 }
+
+[[entity]]
+name = "hold person"
+supertype = "spell"
+subtype = "enchantment"
+description = "Freeze a humanoid in place, rigid and unable to act."
+skill = "arcane"
+difficulty = 16
+range = 9
+targets = { number = 1, aoe = 0 }
+on_hit_condition = { condition = "held", chance = 100, duration = "rounds", length = 5 }
+
+[[entity]]
+name = "hold monster"
+supertype = "spell"
+subtype = "enchantment"
+description = "Freeze any creature in place, rigid and unable to act."
+skill = "arcane"
+difficulty = 23
+range = 12
+targets = { number = 1, aoe = 0 }
+on_hit_condition = { condition = "held", chance = 100, duration = "rounds", length = 9 }
+
+[[entity]]
+name = "hold person, mass"
+supertype = "spell"
+subtype = "enchantment"
+description = "Freeze a whole group of humanoids in place at once."
+skill = "arcane"
+difficulty = 50
+range = 4
+targets = { number = 13, aoe = 2, side = "enemies" }
+on_hit_condition = { condition = "held", chance = 100, duration = "rounds", length = 13 }
+
+[[entity]]
+name = "hold monster, mass"
+supertype = "spell"
+subtype = "enchantment"
+description = "Freeze a whole group of creatures in place at once."
+skill = "arcane"
+difficulty = 62
+range = 4
+targets = { number = 17, aoe = 2, side = "enemies" }
+on_hit_condition = { condition = "held", chance = 100, duration = "rounds", length = 17 }
+
+[[entity]]
+name = "hideous laughter"
+supertype = "spell"
+subtype = "enchantment"
+description = "Collapse a creature into helpless, uncontrollable laughter."
+skill = "arcane"
+difficulty = 10
+range = 2
+targets = { number = 1, aoe = 0 }
+on_hit_condition = { condition = "laughing", chance = 100, duration = "rounds", length = 3 }
+
+[[entity]]
+name = "daze"
+supertype = "spell"
+subtype = "enchantment"
+description = "Stun a weak-minded creature into a brief, blank stupor."
+skill = "arcane"
+difficulty = 10
+range = 2
+targets = { number = 1, aoe = 0 }
+on_hit_condition = { condition = "dazed", chance = 100, duration = "rounds", length = 1 }
+
+[[entity]]
+name = "daze monster"
+supertype = "spell"
+subtype = "enchantment"
+description = "Stun a much sturdier creature into a brief, blank stupor."
+skill = "arcane"
+difficulty = 13
+range = 8
+targets = { number = 1, aoe = 0 }
+on_hit_condition = { condition = "dazed", chance = 100, duration = "rounds", length = 1 }
+
+[[entity]]
+name = "irresistible dance"
+supertype = "spell"
+subtype = "enchantment"
+description = "Force a creature into an uncontrollable, defenseless dance."
+skill = "arcane"
+difficulty = 24
+targets = { number = 1, aoe = 0 }
+on_hit_condition = { condition = "dancing", chance = 100, duration = "rounds", length = 3 }
+
+[[entity]]
+name = "hypnotism"
+supertype = "spell"
+subtype = "enchantment"
+description = "Fascinate a creature with dancing, colorful shapes."
+skill = "arcane"
+difficulty = 10
+range = 2
+targets = { number = 1, aoe = 0 }
+on_hit_condition = { condition = "fascinated", chance = 100, duration = "rounds", length = 5 }
+
+[[entity]]
+name = "confusion"
+supertype = "spell"
+subtype = "enchantment"
+description = "Scramble a creature's mind, leaving its actions up to chance."
+skill = "arcane"
+difficulty = 19
+range = 11
+targets = { number = 1, aoe = 0 }
+on_hit_condition = { condition = "confused", chance = 100, duration = "rounds", length = 7 }
+
+[[entity]]
+name = "insanity"
+supertype = "spell"
+subtype = "enchantment"
+description = "Plunge a creature into permanent, incurable confusion."
+skill = "arcane"
+difficulty = 30
+range = 14
+targets = { number = 1, aoe = 0 }
+on_hit_condition = { condition = "confused", chance = 100, duration = "permanent" }
+
+[[entity]]
+name = "cause fear"
+supertype = "spell"
+subtype = "necromancy"
+description = "Strike a weak creature with a sudden jolt of terror."
+skill = "arcane"
+difficulty = 10
+range = 2
+targets = { number = 1, aoe = 0 }
+on_hit_condition = { condition = "shaken", chance = 100, duration = "rounds", length = 3 }
+
+[[entity]]
+name = "fear"
+supertype = "spell"
+subtype = "necromancy"
+description = "Loose a cone of pure terror that scatters everyone caught in it."
+skill = "arcane"
+difficulty = 10
+range = 2
+targets = { number = 0, aoe = 2, side = "all" }
+on_hit_condition = { condition = "frightened", chance = 100, duration = "rounds", length = 7 }
+
+[[entity]]
+name = "scare"
+supertype = "spell"
+subtype = "necromancy"
+description = "Frighten a weaker creature with a sudden burst of dread."
+skill = "arcane"
+difficulty = 10
+range = 8
+targets = { number = 1, aoe = 0 }
+on_hit_condition = { condition = "shaken", chance = 100, duration = "rounds", length = 3 }
+
+[[entity]]
+name = "ray of enfeeblement"
+supertype = "spell"
+subtype = "necromancy"
+description = "Loose a ray of black energy that saps a creature's strength."
+skill = "arcane"
+difficulty = 10
+range = 2
+targets = { number = 1, aoe = 0 }
+on_hit_condition = { condition = "enfeebled", chance = 100, duration = "rounds", length = 1 }
+
+[[entity]]
+name = "touch of idiocy"
+supertype = "spell"
+subtype = "enchantment"
+description = "Dull a creature's wits with a numbing touch."
+skill = "arcane"
+difficulty = 10
+targets = { number = 1, aoe = 0 }
+on_hit_condition = { condition = "idiotic", chance = 100, duration = "scene" }
+
+[[entity]]
+name = "feeblemind"
+supertype = "spell"
+subtype = "enchantment"
+description = "Collapse a spellcaster's mind into permanent, drooling simplicity."
+skill = "arcane"
+difficulty = 17
+range = 12
+targets = { number = 1, aoe = 0 }
+on_hit_condition = { condition = "feebleminded", chance = 100, duration = "permanent" }
+
+[[entity]]
+name = "charm person"
+supertype = "spell"
+subtype = "enchantment"
+description = "Warm a person's feelings toward the caster with a subtle magical nudge."
+skill = "arcane"
+difficulty = 14
+range = 2
+targets = { number = 1, aoe = 0 }
+on_pass = { do = "attitude", entity = "target", toward = "actor", event = "charmed", magnitude = 0.8 }
+
+[[entity]]
+name = "charm monster"
+supertype = "spell"
+subtype = "enchantment"
+description = "Warm any creature's feelings toward the caster with a potent magical nudge."
+skill = "arcane"
+difficulty = 27
+range = 3
+targets = { number = 1, aoe = 0 }
+on_pass = { do = "attitude", entity = "target", toward = "actor", event = "charmed", magnitude = 0.9 }
+
+# "suggestion" itself is skipped here -- spells.toml already ships it (difficulty 10).
+
+# ============================================================================================
+# Dispel/cure and triggered wards -- Phase 1's third and last batch. Far fewer spells qualified
+# here than the original plan estimated: most of Pathfinder's "remove curse/disease/paralysis,
+# neutralize poison" cure line turned out to belong to the cleric/druid/paladin/ranger lists, not
+# sorcerer/wizard -- the wizard list itself only has Remove Curse. Antimagic Field was looked at
+# and dropped: it's a standing zone that suppresses every magical effect within it for its whole
+# duration, not a one-shot dispel, and this engine has no "suppress every condition in a radius"
+# primitive to approximate that with honestly (a one-shot AoE dispel would drop the "standing
+# zone" identity entirely, not just simplify it).
+#
+# Dispel Magic, Greater has no `difficulty` at all, matching spells.toml's own shipped "dispel
+# magic" exactly -- both resolve as an ordinary OPPOSED roll against the target's own defenses
+# (arcane's own skills.toml "opposes" list), not a flat D6-Magic-formula check. That's this
+# engine's existing, deliberate precedent for `dispel` specifically (a real contest against
+# whatever's being unraveled), so it's followed here rather than overridden with a computed
+# number the way a flat-check spell gets one.
+#
+# The seven Symbol of X spells are wards, not direct-cast effects -- each needs the same
+# three-part shape spells.toml's own "wall of fire"/"flame wall" pair already established: a
+# spell that `summon`s a placed hazard object, a matching [[status]] `on_arrival` trigger that
+# lands a condition on whoever sets it off, and `self_dismiss` so it's a one-shot discharge, not
+# a repeating trap (items.toml's dart trap's own "armed"/self_dismiss shape). Difficulty reuses
+# the mind-affecting batch's own type-multiplier convention against each symbol's own Pathfinder
+# level (3 x level x multiplier), but Casting Time here is the real 10-minutes-to-inscribe value
+# (-14, not the ordinary standard-action -4) plus a "very rare" destroyed-material cost (-10, not
+# the "common" -6 used elsewhere) -- real Symbol spells use powdered gems and rare inks. The two
+# together are large enough that every symbol floors at the system's own minimum difficulty of
+# 10-11 regardless of how severe its landed effect is. That's a real, worth-naming property of
+# the formula at this extreme (a slow, expensive ritual is priced as *easier to actually cast*
+# than a snap decision would be, which is the D6 point-buy system's own internal logic, not a
+# mistake) -- flagged here rather than quietly accepted, the same way Sunburst's difficulty of 79
+# was flagged rather than hidden. Symbol of Death's own "instant death below 150 hp, else 10d6"
+# is narrowed to just the 10d6 half -- the same "drop the hp-threshold clause" simplification the
+# mind-affecting batch already applied to the Power Word line (excluded from that batch entirely
+# for the same reason).
+# ============================================================================================
+
+[[entity]]
+name = "dispel magic, greater"
+supertype = "spell"
+subtype = "abjuration"
+description = "Unravel several nearby magical effects at once, banishing them outright."
+skill = "arcane"
+range = 9
+targets = { number = 4, aoe = 0 }
+dispel = { supertypes = [ "spell" ], subtypes = [ "spell" ] }
+
+[[entity]]
+name = "remove curse"
+supertype = "spell"
+subtype = "abjuration"
+description = "Lift a standing curse from a person or object."
+skill = "arcane"
+difficulty = 10
+targets = { number = 1, aoe = 0 }
+cure = { subtypes = [ "curse" ] }
+
+[[entity]]
+name = "rune of sleep"
+supertype = "object"
+subtype = "spell"
+max_hp = 10
+immunity_tags = [ "any" ]
+
+[entity.conditions.armed]
+duration = "permanent"
+
+[[status]]
+name = "rune of sleep trigger"
+trigger = "on_arrival"
+requirements = [
+    { field = "name", operator = "==", value = "rune of sleep" },
+    { field = "has_condition:armed", operator = "==", value = true },
+]
+apply = { condition = "asleep", duration = "rounds", length = 18, radius = 0, side = "all" }
+self_dismiss = "armed"
+
+[[entity]]
+name = "symbol of sleep"
+supertype = "spell"
+subtype = "enchantment"
+description = "Inscribe a rune that plunges whoever reads it into magical sleep."
+skill = "arcane"
+difficulty = 10
+summon = { name = "rune of sleep", duration = 999999 }  # no true "permanent" sentinel for summon.duration (an integer round-countdown, DM_Summoning.py) -- a very large number stands in
+
+[[entity]]
+name = "rune of pain"
+supertype = "object"
+subtype = "spell"
+max_hp = 10
+immunity_tags = [ "any" ]
+
+[entity.conditions.armed]
+duration = "permanent"
+
+[[status]]
+name = "rune of pain trigger"
+trigger = "on_arrival"
+requirements = [
+    { field = "name", operator = "==", value = "rune of pain" },
+    { field = "has_condition:armed", operator = "==", value = true },
+]
+apply = { condition = "in_pain", duration = "rounds", length = 18, radius = 0, side = "all" }
+self_dismiss = "armed"
+
+[[entity]]
+name = "symbol of pain"
+supertype = "spell"
+subtype = "enchantment"
+description = "Inscribe a rune that wracks whoever reads it with agony."
+skill = "arcane"
+difficulty = 10
+summon = { name = "rune of pain", duration = 999999 }  # no true "permanent" sentinel for summon.duration (an integer round-countdown, DM_Summoning.py) -- a very large number stands in
+
+[[entity]]
+name = "rune of fear"
+supertype = "object"
+subtype = "spell"
+max_hp = 10
+immunity_tags = [ "any" ]
+
+[entity.conditions.armed]
+duration = "permanent"
+
+[[status]]
+name = "rune of fear trigger"
+trigger = "on_arrival"
+requirements = [
+    { field = "name", operator = "==", value = "rune of fear" },
+    { field = "has_condition:armed", operator = "==", value = true },
+]
+apply = { condition = "frightened", duration = "rounds", length = 18, radius = 0, side = "all" }
+self_dismiss = "armed"
+
+[[entity]]
+name = "symbol of fear"
+supertype = "spell"
+subtype = "necromancy"
+description = "Inscribe a rune that floods whoever reads it with terror."
+skill = "arcane"
+difficulty = 10
+summon = { name = "rune of fear", duration = 999999 }  # no true "permanent" sentinel for summon.duration (an integer round-countdown, DM_Summoning.py) -- a very large number stands in
+
+[[entity]]
+name = "rune of stunning"
+supertype = "object"
+subtype = "spell"
+max_hp = 10
+immunity_tags = [ "any" ]
+
+[entity.conditions.armed]
+duration = "permanent"
+
+[[status]]
+name = "rune of stunning trigger"
+trigger = "on_arrival"
+requirements = [
+    { field = "name", operator = "==", value = "rune of stunning" },
+    { field = "has_condition:armed", operator = "==", value = true },
+]
+apply = { condition = "dazed", duration = "rounds", length = 3, radius = 0, side = "all" }
+self_dismiss = "armed"
+
+[[entity]]
+name = "symbol of stunning"
+supertype = "spell"
+subtype = "enchantment"
+description = "Inscribe a rune that locks whoever reads it rigid with shock."
+skill = "arcane"
+difficulty = 10
+summon = { name = "rune of stunning", duration = 999999 }  # no true "permanent" sentinel for summon.duration (an integer round-countdown, DM_Summoning.py) -- a very large number stands in
+
+[[entity]]
+name = "rune of weakness"
+supertype = "object"
+subtype = "spell"
+max_hp = 10
+immunity_tags = [ "any" ]
+
+[entity.conditions.armed]
+duration = "permanent"
+
+[[status]]
+name = "rune of weakness trigger"
+trigger = "on_arrival"
+requirements = [
+    { field = "name", operator = "==", value = "rune of weakness" },
+    { field = "has_condition:armed", operator = "==", value = true },
+]
+apply = { condition = "weakened", duration = "rounds", length = 18, radius = 0, side = "all" }
+self_dismiss = "armed"
+
+[[entity]]
+name = "symbol of weakness"
+supertype = "spell"
+subtype = "necromancy"
+description = "Inscribe a rune that drains the strength from whoever reads it."
+skill = "arcane"
+difficulty = 10
+summon = { name = "rune of weakness", duration = 999999 }  # no true "permanent" sentinel for summon.duration (an integer round-countdown, DM_Summoning.py) -- a very large number stands in
+
+[[entity]]
+name = "rune of insanity"
+supertype = "object"
+subtype = "spell"
+max_hp = 10
+immunity_tags = [ "any" ]
+
+[entity.conditions.armed]
+duration = "permanent"
+
+[[status]]
+name = "rune of insanity trigger"
+trigger = "on_arrival"
+requirements = [
+    { field = "name", operator = "==", value = "rune of insanity" },
+    { field = "has_condition:armed", operator = "==", value = true },
+]
+apply = { condition = "confused", duration = "permanent", radius = 0, side = "all" }
+self_dismiss = "armed"
+
+[[entity]]
+name = "symbol of insanity"
+supertype = "spell"
+subtype = "enchantment"
+description = "Inscribe a rune that shatters the mind of whoever reads it, permanently."
+skill = "arcane"
+difficulty = 11
+summon = { name = "rune of insanity", duration = 999999 }  # no true "permanent" sentinel for summon.duration (an integer round-countdown, DM_Summoning.py) -- a very large number stands in
+
+[[entity]]
+name = "rune of death"
+supertype = "object"
+subtype = "spell"
+max_hp = 10
+immunity_tags = [ "any" ]
+
+[entity.conditions.armed]
+duration = "permanent"
+
+[[status]]
+name = "rune of death trigger"
+trigger = "on_arrival"
+requirements = [
+    { field = "name", operator = "==", value = "rune of death" },
+    { field = "has_condition:armed", operator = "==", value = true },
+]
+apply = { condition = "death rune blast", duration = "rounds", length = 1, radius = 0, side = "all" }
+self_dismiss = "armed"
+
+# "death rune blast" (rules.toml) is a dedicated 10D upkeep_damage condition, not a reuse of the
+# much weaker "burning" -- duration = "rounds"/length = 1 on the [[status]] above still makes
+# this an instant one-time blast, same "warding glyph blast" trick, just sized to actually match
+# what an 8th-level spell's difficulty below was computed from.
+[[entity]]
+name = "symbol of death"
+supertype = "spell"
+subtype = "necromancy"
+description = "Inscribe a rune that unleashes a killing blast on whoever reads it."
+skill = "arcane"
+difficulty = 10
+summon = { name = "rune of death", duration = 999999 }  # no true "permanent" sentinel for summon.duration (an integer round-countdown, DM_Summoning.py) -- a very large number stands in

@@ -65,7 +65,7 @@ max_hp = 24
 
 # Rolled reduction against ordinary weapons -- but a hit tagged "silver" bypasses it outright,
 # regardless of also carrying a matching resistance tag (Pathfinder's "DR 10/silver"; see
-# Rules/Pathfinder/reference/pathfinder_mapping.toml's damage_resistance table and DM_Combat.py's
+# Rules/Fantasy/reference/pathfinder_mapping.toml's damage_resistance table and DM_Combat.py's
 # get_damage_reduction). A silvered blade's own damage_tags would be
 # ["slashing", "silver"] -- the "slashing" tag alone still matches resistance_tags below on an
 # ordinary weapon, but "silver" short-circuits the reduction entirely once present.
@@ -270,7 +270,7 @@ strength = { dice = 2, pips = 0 }
 brawling = { dice = 3, pips = 0 }
 
 # Pathfinder Bestiary's giant rat -- the shipped disease-vector worked example
-# (Rules/Pathfinder/reference/pathfinder_mapping.toml's Poison/Dying-Stable-Disabled rows):
+# (Rules/Fantasy/reference/pathfinder_mapping.toml's Poison/Dying-Stable-Disabled rows):
 # on_hit_condition applies rules.toml's own "filth fever" unconditionally on a landed bite (see
 # that condition's own comment for why exposure itself is unconditional, with onset/frequency
 # doing the real work of "did it actually take hold").

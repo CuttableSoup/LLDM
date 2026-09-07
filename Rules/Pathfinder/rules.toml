@@ -1,0 +1,845 @@
+[[status]]
+name = "bruised"
+trigger = "on_damage"
+requirements = [
+    { field = "hp_per_remain", operator = "between", value = [0.81, 0.99] },
+]
+description = "Absorbed most or all of the attack"
+
+[[status]]
+name = "stunned"
+trigger = "on_damage"
+requirements = [
+    { field = "hp_per_remain", operator = "between", value = [0.60, 0.80] },
+]
+apply = { condition = "stunned", duration = "rounds", length = 1, dismiss = "" }
+description = "Moderate bruise or minor sprain; laceration; muscle tear; minor dislocation of joint."
+
+[[status]]
+name = "wounded"
+trigger = "on_damage"
+requirements = [
+    { field = "hp_per_remain", operator = "between", value = [0.40, 0.59] },
+]
+apply = { condition = "wounded", duration = "permanent", dismiss = "" }
+description = "Severe abrasion or sprain; deep laceration; torn ligaments; major dislocation or minor break."
+
+[[status]]
+name = "severe"
+trigger = "on_damage"
+requirements = [
+    { field = "hp_per_remain", operator = "between", value = [0.20, 0.39] },
+]
+apply = { condition = "severe", duration = "permanent", dismiss = "" }
+description = "Broken bone; gaping wound; ripped cartilage and muscle; concussion."
+
+[[status]]
+name = "incapacitated"
+trigger = "on_damage"
+requirements = [
+    { field = "hp_per_remain", operator = "between", value = [0.10, 0.19] },
+]
+apply = { condition = "incapacitated", duration = "permanent", dismiss = "" }
+description = "Multiple fracture; laceration in vital area; heavy concussion."
+
+[[status]]
+name = "mortal"
+trigger = "on_damage"
+requirements = [
+    { field = "hp_per_remain", operator = "between", value = [0.01, 0.09] },
+]
+apply = { condition = "unconscious", duration = "permanent", dismiss = "" }
+description = "Multiple internal injuries."
+
+[[status]]
+name = "dead"
+trigger = "on_damage"
+requirements = [
+    { field = "hp_per_remain", operator = "==", value = 0 },
+]
+apply = { condition = "dead", duration = "permanent", dismiss = "resurrection" }
+description = "Broken neck; punctured lung; eviscerated."
+
+[[condition]]
+name = "stunned"
+modifier = { dice = -1, pips = 0, bonus = 0 }
+
+# Applied by DM_Travel.py's own _roll_night_watch (docs/downtime.md's "Night watch and
+# surprise") to every is_party member when a night block's own hostile encounter catches a
+# failed (or unattempted, for a solo traveler) watch -- a heavier penalty than "stunned" since
+# it represents being caught asleep/unprepared, not just dazed mid-fight. Applied with
+# duration = "rounds", length = 1, so run_round_upkeep's own generic condition tick
+# (Combat_Resolution.tick_condition_durations) clears it the first round it's carried into.
+[[condition]]
+name = "surprised"
+modifier = { dice = -2, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "wounded"
+modifier = { dice = -1, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "severe"
+modifier = { dice = -2, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "incapacitated"
+modifier = { dice = -3, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "mortal"
+modifier = { dice = -3, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "dead"
+modifier = { dice = 0, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "locked"
+modifier = { dice = 0, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "jammed"
+modifier = { dice = 0, pips = 0, bonus = 0 }
+
+# A per-round upkeep effect, not a roll modifier -- run_round_upkeep (DM_Status.py) rolls
+# upkeep_heal once per combat round for every entity carrying this condition and heals it,
+# unless upkeep_blocked_by_tags overlaps whatever damage tags it was hit with this same round
+# (recorded by calculate_damage, DM_Combat.py -- see creatures.toml's "troll", which seeds this
+# permanently via its own [entity.conditions.regenerating]). The Pathfinder "Regeneration
+# 10 (fire)" shape: heals every round, except a round it's touched by fire at all.
+[[condition]]
+name = "regenerating"
+upkeep_heal = { dice = 2, pips = 0, bonus = 0 }
+upkeep_blocked_by_tags = [ "fire" ]
+
+# The conditions maneuvers.toml's universal abilities apply via their own on_pass programs --
+# what gives "shaken"/"prone"/"sundered_weapon" real mechanical teeth rather than
+# narrated-only flavor, the same way "stunned"/"wounded" already work.
+[[condition]]
+name = "shaken"
+modifier = { dice = -1, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "prone"
+modifier = { dice = -1, pips = 0, bonus = 0 }
+
+# "disarmed" is deliberately NOT a [[condition]] -- being disarmed is dropping your weapon, an
+# instantaneous equipment change (unequip + place in the room), not a lasting debuff to model as
+# a condition. maneuvers.toml's own "disarm" maneuver is commented out until that unequip/drop
+# program op actually exists; no [[condition]] entry is needed until it applies one again.
+
+[[condition]]
+name = "sundered_weapon"
+modifier = { dice = -1, pips = 0, bonus = 0 }
+
+# maneuvers.toml's own "bull rush"/"grapple"/"dirty trick"/"feint" -- Pathfinder's own CMB
+# maneuvers, each applying its own real dice penalty via its on_pass program the same way
+# trip/disarm/sunder already do.
+[[condition]]
+name = "staggered"
+modifier = { dice = -1, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "grappled"
+modifier = { dice = -2, pips = 0, bonus = 0 }
+
+# "applies_to" (a list of skill names) scopes this condition's own modifier to only those
+# skills' rolls -- get_condition_modifier (Combat_Resolution.py) skips it entirely for any
+# other skill. Pathfinder's Dazzled is sight-only; without "applies_to" this would otherwise
+# be an ordinary global Pattern C penalty (see pathfinder_mapping.toml's condition_pattern "C").
+[[condition]]
+name = "dazzled"
+modifier = { dice = -1, pips = 0, bonus = 0 }
+applies_to = [ "observation" ]
+
+[[condition]]
+name = "flat_footed"
+modifier = { dice = -1, pips = 0, bonus = 0 }
+
+# maneuvers.toml's own "pin" -- only ever applied to an already-"grappled" target. Pathfinder's
+# real "pinned" condition doesn't just penalize a roll, it stops the target from acting at all
+# (beyond trying to escape) -- prevents_action = true is the generic mechanism for that
+# (is_action_prevented, DM_Status.py), checked by DM_Core.py's _resolve_roll (the player's own
+# turn -- ActionPreventedOutcome, no roll) and DM_Combat.py's resolve_behavior_action (a
+# creature/ally's own turn -- treated exactly like "no behavior currently matches"). "pinned"
+# is the first (and, today, only) [[condition]] to author this; the modifier stays too, in
+# case a future mechanism (ex: an opposed escape attempt) ever rolls against a pinned target
+# directly rather than just skipping their turn outright.
+[[condition]]
+name = "pinned"
+modifier = { dice = -4, pips = 0, bonus = 0 }
+prevents_action = true
+
+# A presence flag only, same "no modifier at all" shape "locked"/"jammed" already use -- being
+# cursed (items.toml's cursed dagger, via its own on_interact.equip) is a narrative/mechanical
+# fact read elsewhere (a future curse-specific check), not itself a dice penalty.
+[[condition]]
+name = "cursed"
+subtype = "curse"
+modifier = { dice = 0, pips = 0, bonus = 0 }
+
+# creatures.toml's troll applies this to itself via its own on_damage program once it drops
+# below half HP without having been burned first -- see creatures.toml's own "A troll's temper".
+[[condition]]
+name = "enraged"
+modifier = { dice = 1, pips = 0, bonus = 0 }
+
+# A per-round upkeep effect (Pattern E, same shape "regenerating" already uses), applied by
+# "flame wall zone" below to whoever currently shares spells.toml's "flame wall" own band --
+# duration = "rounds"/length = 1 there is what makes this a zone rather than a one-time hit: it
+# lapses the instant an entity is no longer co-band, reapplied fresh each round they stay put.
+[[condition]]
+name = "burning"
+upkeep_damage = { dice = 2, pips = 0, bonus = 0 }
+
+# Pathfinder's Filth Fever (Core Rulebook) -- the "periodic_test" shipped worked example
+# (Rules/Fantasy/reference/pathfinder_mapping.toml's Poison/Dying-Stable-Disabled rows), applied
+# by creatures.toml's "giant rat" bite. Real Filth Fever: Fortitude DC 12; onset 1d3 days;
+# frequency 1/day; 1d3 Dex/1d3 Con damage on a failed save; cured by 2 CONSECUTIVE successes.
+# "onset" is flattened from "1d3 days" to a fixed 2 -- the same "flatten a die roll into one
+# authored number" precedent get_concealment's own miss_chance already sets; the engine also
+# doesn't separately model Pathfinder's own "initial exposure save" (whether you catch it at
+# all on the bite that exposes you) -- on_hit_condition's exposure is unconditional, and the
+# onset-then-first-save flow below is the first real chance to shake it off, an honest
+# simplification of the same shape rather than a second, redundant roll. Dex/Con ability damage
+# is mapped onto "finesse"/"fortitude" -- literal skills, not a whole [[skill_group]] drained at
+# once, the same precedent the shipped "energy drained" condition already sets (a [[skill_group]]
+# is for a roll-time modifier scoped across a cluster of rolls, not a permanent stat loss).
+# supertype/subtype classify this as an "affliction"/"disease" -- matches_supertype_or_subtype
+# (reused unchanged against the condition catalog, not just the entity one) is what lets
+# spells.toml's "cure disease" remove whichever disease is active without naming it.
+[[condition]]
+name = "filth fever"
+supertype = "affliction"
+subtype = "disease"
+
+[condition.periodic_test]
+skill = "fortitude"
+difficulty = 12
+cure_after_successes = 2
+
+[condition.periodic_test.onset]
+unit = "days"
+length = 2
+
+[condition.periodic_test.interval]
+unit = "days"
+length = 1
+
+[condition.periodic_test.on_fail]
+drain = [
+    { skill = "finesse", dice = 1, pips = 0 },
+    { skill = "fortitude", dice = 1, pips = 0 },
+]
+
+# Pathfinder's Polymorph/Baleful Polymorph line -- the "form" field (Combat_Resolution.py's own
+# _apply_form_override) is the "form override" mechanism Rules/Fantasy/reference/
+# pathfinder_mapping.toml's own Polymorph row used to flag as having no engine equivalent: on
+# first gain it snapshots FORM_OVERRIDE_FIELDS (name/description/supertype/subtype/skills/
+# abilities/max_hp/medium/damage_value/damage_tags/tags/resistance_*/immunity_tags/
+# vulnerability_*) off the target, overwrites them with the named entity's own values, and
+# dismiss_condition restores the exact snapshot the moment this condition ends -- gear,
+# inventory, currency, attitudes, and current hp all stay with the person, not the form (see
+# FORM_OVERRIDE_FIELDS' own comment). subtype = "transmutation" classifies this by KIND, the
+# same way "filth fever" above classifies itself as a "disease" -- spells.toml's own "break
+# enchantment" targets {subtypes = ["transmutation"]} without ever naming either condition
+# below directly, the same trick "cure disease" already uses against filth fever.
+[[condition]]
+name = "polymorphed"
+subtype = "transmutation"
+form = "coyote"
+
+# A beneficial counterpart sharing the exact same mechanism, authored as its own condition (a
+# fixed "form" per condition rather than a caster's free choice of any creature -- the engine
+# has no per-cast form-picking UI, the same static-TOML-spell simplification already accepted
+# elsewhere) so the same primitive covers both directions of a Polymorph line, not just the
+# hostile one.
+[[condition]]
+name = "wild shape"
+subtype = "transmutation"
+form = "wild boar"
+
+# Pathfinder's six ability-score buffs (Bull's Strength etc., all a flat +4), converted for
+# spells_pathfinder.toml's own attribute-buff spells: applies_to a rules.toml [[skill_group]]
+# rather than one named skill, the same "buff every skill an ability score governs at once"
+# trick the module note above [[skill_group]] "strength"/"dexterity" already documents. +4 PF ->
+# 2D here follows the same "~1 D6 die per 2 PF points" scale spells_pathfinder.toml's own header
+# documents for its buff-spell conversions generally.
+[[condition]]
+name = "bull's strength"
+modifier = { dice = 2, pips = 0, bonus = 0 }
+applies_to = [ "strength" ]
+
+[[condition]]
+name = "cat's grace"
+modifier = { dice = 2, pips = 0, bonus = 0 }
+applies_to = [ "dexterity" ]
+
+[[condition]]
+name = "bear's endurance"
+modifier = { dice = 2, pips = 0, bonus = 0 }
+applies_to = [ "constitution" ]
+
+[[condition]]
+name = "eagle's splendor"
+modifier = { dice = 2, pips = 0, bonus = 0 }
+applies_to = [ "charisma" ]
+
+[[condition]]
+name = "fox's cunning"
+modifier = { dice = 2, pips = 0, bonus = 0 }
+applies_to = [ "intelligence" ]
+
+[[condition]]
+name = "owl's wisdom"
+modifier = { dice = 2, pips = 0, bonus = 0 }
+applies_to = [ "wisdom" ]
+
+# Global (no applies_to) since Pathfinder's own +2/+4 morale bonus applies to "attack rolls,
+# saves, and skill checks" -- essentially everything, not one skill_group's worth.
+[[condition]]
+name = "heroism"
+modifier = { dice = 1, pips = 0, bonus = 0 }
+
+# Drops Heroism, Greater's own fear-immunity/temporary-hp half -- the flat morale bonus is the
+# one piece a condition.modifier can honestly capture; the rest would need its own
+# immunity_tags/max_hp-bonus mechanism this simplification pass isn't building per-spell.
+[[condition]]
+name = "greater heroism"
+modifier = { dice = 2, pips = 0, bonus = 0 }
+
+# Drops Haste's own extra-attack/speed-increase half (Pattern B, no action-economy hook per
+# pathfinder_mapping.toml's own condition_pattern "B") -- the +1 attack/AC/Reflex portion is what
+# survives as a flat global modifier.
+[[condition]]
+name = "hasted"
+modifier = { dice = 0, pips = 2, bonus = 0 }
+
+# Drops Rage's own Constitution/Will-save/AC-penalty clauses -- the Strength half (scoped via
+# applies_to, not global) is the one piece this simplification pass keeps.
+[[condition]]
+name = "raging"
+modifier = { dice = 1, pips = 0, bonus = 0 }
+applies_to = [ "strength" ]
+
+[[condition]]
+name = "resistant"
+modifier = { dice = 0, pips = 2, bonus = 0 }
+
+# True Strike's own +20 attack-roll bonus, folded to this engine's scale -- deliberately huge and
+# deliberately short (a 1-round duration on the spells_pathfinder.toml entry itself), matching
+# the real spell's own "guaranteed hit on your very next swing" shape rather than a lingering buff.
+[[condition]]
+name = "true strike"
+modifier = { dice = 5, pips = 0, bonus = 0 }
+
+# Mind-affecting control (Phase 1 of the non-damage conversion pass, second batch). Five
+# distinct Pattern A (docs/combat.md's "Status and conditions" -- prevents_action = true stops
+# the entity acting on its own turn entirely) conditions, kept separately named per source effect
+# (matching "pinned"/"prone"/"flat_footed" above staying distinct despite similar shapes) even
+# though they're mechanically identical -- a held creature narrates differently from an asleep
+# or dazed one. modifier stays alongside prevents_action on each, same "in case a future
+# mechanism ever rolls against this entity directly" reasoning "pinned" already documents.
+[[condition]]
+name = "asleep"
+modifier = { dice = -4, pips = 0, bonus = 0 }
+prevents_action = true
+
+[[condition]]
+name = "held"
+modifier = { dice = -4, pips = 0, bonus = 0 }
+prevents_action = true
+
+[[condition]]
+name = "laughing"
+modifier = { dice = -4, pips = 0, bonus = 0 }
+prevents_action = true
+
+[[condition]]
+name = "dazed"
+modifier = { dice = -4, pips = 0, bonus = 0 }
+prevents_action = true
+
+[[condition]]
+name = "dancing"
+modifier = { dice = -4, pips = 0, bonus = 0 }
+prevents_action = true
+
+# Hypnotism's own "fascinated" -- Pathfinder's real Fascinate is a behavior-requirement shape
+# ("stops acting unless threatened," per pathfinder_mapping.toml's own condition_pattern "C" row
+# for it) rather than a flat penalty, but this engine has no per-condition behavior-gate hook to
+# attach that to for the player's own turn -- prevents_action is the honest stand-in already used
+# for every other "loses their turn" effect in this batch.
+[[condition]]
+name = "fascinated"
+modifier = { dice = -4, pips = 0, bonus = 0 }
+prevents_action = true
+
+# override_target = "random" hijacks WHO an NPC's turn is aimed at (resolve_override_target,
+# folded into resolve_behavior_action) -- NPC-only, per pathfinder_mapping.toml's own "Confused"
+# row; a Confused player would need the player's own free-text input scrambled, out of scope.
+[[condition]]
+name = "confused"
+override_target = "random"
+
+# A second Fear-ladder tier alongside the existing "shaken" (-1D) -- Pathfinder's own Frightened
+# is one step worse than Shaken, same escalation pathfinder_mapping.toml's own condition_pattern
+# "C" row describes ("three severities of the same Pattern C condition").
+[[condition]]
+name = "frightened"
+modifier = { dice = -2, pips = 0, bonus = 0 }
+
+# Ray of Enfeeblement/Touch of Idiocy -- a temporary ability-score penalty, scoped via applies_to
+# to the one rules.toml [[skill_group]] each Pathfinder ability score maps onto (the same
+# skill_group trick the positive attribute buffs above use, just negative). Touch of Idiocy's
+# real Int/Wis/Cha triple penalty is narrowed to intelligence alone -- an honest simplification
+# rather than enumerating three skill_groups for one spell.
+[[condition]]
+name = "enfeebled"
+modifier = { dice = -1, pips = 0, bonus = 0 }
+applies_to = [ "strength" ]
+
+[[condition]]
+name = "idiotic"
+modifier = { dice = -1, pips = 0, bonus = 0 }
+applies_to = [ "intelligence" ]
+
+# Feeblemind's own permanent Int/Cha collapse -- drain = {skill, dice, pips} (Combat_Resolution.py)
+# is the permanent-base-stat-mutation primitive pathfinder_mapping.toml's own "Energy Drained"
+# row already established, reused here instead of an ordinary duration-limited modifier. Targets
+# "arcane" as the one literal skill standing in for Intelligence (this engine has no separate
+# attribute layer to drain directly), the same single-skill-proxy simplification "idiotic" above
+# uses for Touch of Idiocy.
+[[condition]]
+name = "feebleminded"
+drain = { skill = "arcane", dice = 3, pips = 0 }
+
+# Two more triggered-symbol effects (Symbol of Pain/Weakness) alongside the reused "frightened"/
+# "asleep"/"dazed"/"confused" conditions above -- global for "in_pain" (Pathfinder's own -4 to
+# checks/attacks/saves has no single skill_group to scope to), scoped for "weakened" (a harsher
+# tier than "enfeebled" above, matching Symbol of Weakness's own stronger Str penalty).
+[[condition]]
+name = "in_pain"
+modifier = { dice = -2, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "weakened"
+modifier = { dice = -2, pips = 0, bonus = 0 }
+applies_to = [ "strength" ]
+
+# Symbol of Death's own killing blast -- a dedicated upkeep_damage condition rather than reusing
+# the much weaker "burning" (2D/round): duration = "rounds"/length = 1 on the matching [[status]]
+# still makes this an instant one-time blast, same "warding glyph blast" trick, just sized to
+# match a real 8th-level spell instead of trivializing it into a minor burn.
+[[condition]]
+name = "death rune blast"
+upkeep_damage = { dice = 10, pips = 0, bonus = 0 }
+
+# The [[status]] "on_round" trigger (evaluate_proximity_statuses, called once a round per living
+# scene entity from run_round_upkeep -- DM_Status.py) is what turns a stationary object into a
+# persistent terrain hazard (Rules/Fantasy/reference/pathfinder_mapping.toml's "Persistent
+# terrain/obstacle spells" row): requirements match the hazard entity itself (here, by "name"),
+# and "apply" (the same {condition, duration, length, radius, side} shape "on_action" already
+# uses for a Frightful-Presence-style aura) lands on every other living entity sharing its band.
+# side = "all" since fire doesn't care who it burns. spells.toml's "wall of fire" spell conjures
+# the actual "flame wall" entity this matches, via the ordinary "summon" mechanism (same
+# placement/expiry "summon spectral wolf" already uses) -- a permanent, scenario-placed hazard
+# would work identically with no "summon" involved at all.
+[[status]]
+name = "flame wall zone"
+trigger = "on_round"
+requirements = [ { field = "name", operator = "==", value = "flame wall" } ]
+apply = { condition = "burning", duration = "rounds", length = 1, radius = 0, side = "all" }
+
+# The [[status]] "on_arrival" trigger (evaluate_proximity_statuses, called once per scene entry
+# -- DM_Rules.py's _evaluate_arrival_statuses, from both _enter_location and enter_room) is what
+# turns a stationary hazard into a delayed/triggered ward instead of a persistent zone (contrast
+# "flame wall zone" above, which re-checks every combat round): fires once, the moment someone
+# arrives, matching Rules/Fantasy/reference/pathfinder_mapping.toml's "Delayed/triggered magic"
+# row (Glyph of Warding). Both entries below match items.toml's "warding glyph" by name AND
+# require its own seeded "armed" flag ([entity.conditions.armed]) still active; side = "all"
+# since a glyph doesn't discriminate between party and any other creature that stumbles onto
+# it. Real Glyph of Warding is a one-time discharge, not a lingering hazard like flame wall --
+# "self_dismiss = 'armed'" on both entries is what makes the glyph spend itself the first time
+# it actually catches someone (only one dismiss call is needed; the second is a harmless no-op,
+# dismiss_condition already tolerates dismissing an already-gone condition), re-entering this
+# same room afterward no longer triggering it -- the same "seed a flag, dismiss it once solved"
+# shape items.toml's dart trap already uses via [entity.test], just spent automatically here
+# instead of by a deliberate disarm attempt.
+#
+# "warding glyph shock" is the lingering-debuff half -- "shaken", duration = "rounds"/length =
+# 3, the DEBUFF's own lifespan on whoever it hits.
+[[status]]
+name = "warding glyph shock"
+trigger = "on_arrival"
+requirements = [
+    { field = "name", operator = "==", value = "warding glyph" },
+    { field = "has_condition:armed", operator = "==", value = true },
+]
+apply = { condition = "shaken", duration = "rounds", length = 3, radius = 0, side = "all" }
+self_dismiss = "armed"
+
+# "warding glyph blast" is the instant-damage half (the real Pathfinder "Blast" glyph shape) --
+# reuses "burning" (upkeep_damage = 2D per round, the exact same condition "flame wall zone"
+# already applies) directly, no new condition needed at all: duration = "rounds"/length = 1
+# means _evaluate_arrival_statuses's own immediate upkeep resolution (DM_Rules.py -- otherwise
+# nothing would ever roll "burning"'s own upkeep_damage outside an actual combat round) deals
+# its damage and dismisses it in that same call, a real one-time blast rather than a lingering
+# fire.
+[[status]]
+name = "warding glyph blast"
+trigger = "on_arrival"
+requirements = [
+    { field = "name", operator = "==", value = "warding glyph" },
+    { field = "has_condition:armed", operator = "==", value = true },
+]
+apply = { condition = "burning", duration = "rounds", length = 1, radius = 0, side = "all" }
+self_dismiss = "armed"
+
+[strength_damage]
+skill = "strength"
+divisor = 2
+
+# [[skill_group]] -- lets a [[condition]]'s own "applies_to" or an item's own
+# "equipped_skill_bonus.skill" (get_skill_group_members, Combat_Resolution.py) address a whole
+# cluster of skills by one shared name, standing in for the attribute layer this engine
+# deliberately doesn't have: Pathfinder's Bull's Strength (+4 Str) buffs every Strength-based
+# skill/check at once, not one named skill -- authoring "strength" here is how the same shape
+# is expressed without building a real attribute stat. A name that matches no group here is
+# still just a literal skill name, unchanged -- this table is purely additive.
+[[skill_group]]
+name = "strength"
+skills = [ "strength", "athletics", "blades", "axes", "brawling" ]
+
+[[skill_group]]
+name = "dexterity"
+skills = [ "finesse", "acrobatics", "dodge", "escape" ]
+
+# Added for spells_pathfinder.toml's own attribute-buff conversions (Bear's Endurance/Fox's
+# Cunning/Owl's Wisdom/Eagle's Splendor) -- the remaining four Pathfinder ability scores, same
+# "buffs every skill that ability governs at once" shape as strength/dexterity above.
+[[skill_group]]
+name = "constitution"
+skills = [ "fortitude" ]
+
+[[skill_group]]
+name = "intelligence"
+skills = [ "arcane", "appraise", "linguistics", "forgery" ]
+
+[[skill_group]]
+name = "wisdom"
+skills = [ "miracles", "observation", "survival", "medicine", "navigation" ]
+
+[[skill_group]]
+name = "charisma"
+skills = [ "charisma", "intimidation", "artistry", "disguise", "gambling" ]
+
+# Carry-capacity formula -- get_max_bulk (DM_Rules.py) reads this once per lookup: min_bulk plus
+# this entity's own "skill" dice times mod_multiplier (ex: a 2D strength character here carries
+# 3 + 2*2 = 7 bulk before "take"/"trade"/a ground "take" starts refusing with reason
+# "bulk_exceeded" -- DM_Inventory.py's own _bulk_would_be_exceeded, checked against
+# get_current_bulk's live sum of every entity_schema.toml "bulk" value currently in the player's
+# own inventory). Absent entirely (ex: Rules/Zombie/, which authors no [bulk] table of its own)
+# means get_max_bulk returns None and the cap is never enforced at all -- same "a setting that
+# never opts in just doesn't get the mechanic" precedent [[equip_slot]] already sets.
+[bulk]
+skill = "strength"
+min_bulk = 3
+mod_multiplier = 2
+# Whether a mounted rider's own carried inventory bulk (get_current_bulk(rider)) also counts
+# against their mount's own load, on top of the rider's own flat "bulk" (body weight) --
+# see entity_schema.toml's own "mount"/"bulk" comments and DM_Rules.py's get_current_bulk.
+# Absent defaults to true. A setting that wants a mount to only ever answer for rider bodies,
+# never gear, sets this false.
+count_rider_gear = true
+
+# XP award formula -- _award_xp_for_defeat (DM_Combat.py) reads this once per kill, the moment a
+# hostile-to-the-player entity's HP first reaches 0 (calculate_damage's own "previous_hp > 0,
+# now 0" check). The base amount is the defeated entity's own "exp" field if it authored one
+# (entity_schema.toml), else its live get_challenge_rating -- same "decided live, not fixed at
+# creation time" value get_party_challenge_rating already reflects. That base is multiplied by
+# xp_multiplier, then either split evenly across every current is_player/is_party member
+# (divide_between_party = true, floor division) or credited to each one in full
+# (divide_between_party = false, the shipped Fantasy default -- undivided XP mirrors how
+# loot_entity/transfer_currency already hand a defeated/looted entity's full currency to
+# whoever loots it, never splitting it first). Absent entirely defaults to xp_multiplier = 1,
+# divide_between_party = false -- XP tracking itself isn't gated behind authoring this table the
+# way [bulk]'s own cap is; a setting that never authors [xp] still accumulates XP on its party
+# members' own "exp" field, just at the plainest possible rate.
+[xp]
+xp_multiplier = 1
+divide_between_party = false
+
+# The block clock underlying downtime (see docs/downtime.md) -- DMCore.current_block is a single
+# monotonic counter of 8-hour "blocks" elapsed since the scenario started; DMCore.get_time_state
+# derives day/block-in-day/hour/is_day from it against these three tunables alone, nothing else
+# stored redundantly. hours_per_day and blocks_per_day are independent (a day doesn't have to
+# divide evenly among its blocks, though it does by default: 24 / 3 = an 8-hour block).
+# daylight_hours is read against elapsed hours *within* the current day, not block index parity --
+# a block counts as daytime if it starts before daylight_hours (16 here, so the first two 8-hour
+# blocks are day and the third, starting at hour 16, is night). Absent entirely defaults to
+# exactly these three values, the same "still works with nothing authored" fallback [xp] gets.
+# starting_year is the calendar year (see [[calendar_month]] below) day 0 falls in -- 4726 AR,
+# Golarion's current year as of the Age of Lost Omens (Pathfinder 2e core).
+[time]
+hours_per_day = 24
+daylight_hours = 16
+blocks_per_day = 3
+starting_year = 4726
+
+# Golarion's own real-world calendar (Pathfinder core) -- 12 months, 365 days, no leap year, in
+# calendar order. get_calendar_date/get_time_state (DM_Time.py) convert get_time_state()'s own
+# absolute "day" counter (days elapsed since the scenario started, day 0 = [time]'s own
+# starting_year's Abadius 1 -- 4726 AR above) into {year, month, day_of_month} against this
+# table, wrapping into a new year once every month's own "days" (summed, not hardcoded to 365)
+# has been used up. Entirely optional, the same "still works unauthored" fallback every other
+# optional rules.toml table already follows -- absent entirely (ex: Rules/Zombie/, which
+# authors no calendar at all), get_calendar_date returns None and get_time_state's own
+# "date_label" falls back to the bare "day N" text it always used before this existed.
+[[calendar_month]]
+name = "Abadius"
+days = 31
+
+[[calendar_month]]
+name = "Calistril"
+days = 28
+
+[[calendar_month]]
+name = "Pharast"
+days = 31
+
+[[calendar_month]]
+name = "Gozran"
+days = 30
+
+[[calendar_month]]
+name = "Desnus"
+days = 31
+
+[[calendar_month]]
+name = "Sarenith"
+days = 30
+
+[[calendar_month]]
+name = "Erastus"
+days = 31
+
+[[calendar_month]]
+name = "Arodus"
+days = 31
+
+[[calendar_month]]
+name = "Rova"
+days = 30
+
+[[calendar_month]]
+name = "Lamashan"
+days = 31
+
+[[calendar_month]]
+name = "Neth"
+days = 30
+
+[[calendar_month]]
+name = "Kuthona"
+days = 31
+
+# Overworld travel speed (see docs/downtime.md's "Travel") -- distinct from combat's own
+# per-band-action "speed" (DM_Movement.py's advance_or_retreat), which never applies outside a
+# room's own band line. Grid units (world_map.toml's own region bounds, a [[location]]'s own
+# "grid") covered per block of travel time; an entity may override this with its own
+# "travel_speed" field (ex: a race with a slower or faster gait), else falls back to
+# default_speed here. A party paces to its slowest is_player/is_party member currently present
+# (see DM_Travel.py's _party_travel_speed), not just the player's own value.
+#
+# 24 -- not an arbitrary round number, but the one that lets a grid unit read as a literal mile:
+# Pathfinder's own core rule is 3 miles/hour of normal (x1) overland movement, and an 8-hour
+# block (see [time] above, blocks_per_day = 3) is 24 miles at that pace. Every gridded
+# [[location]]/[[region]]/[[road]] in Rules/Fantasy/ is placed under this same "1 unit = 1 mile"
+# convention (see docs/downtime.md's "Terrain, roads, and polities").
+[travel]
+default_speed = 24
+
+# Point-buy constants for character creation (Character_Creation.py/DM_CharacterCreation.py).
+# A new character's starting dice come entirely from whichever race is picked -- every race
+# in races.toml spells out an absolute dice count for every skill (human's own is a flat 2D
+# everywhere; there's no separate "base_dice" constant here for any race to fall back to).
+# What every race *does* share is how much is left to spend on top: pool_dice free dice to
+# allocate across skills however the player likes, capped at max_allocation_per_skill in any
+# single skill (so a 15D pool can't all pile into one skill).
+[character_creation]
+pool_dice = 15
+max_allocation_per_skill = 5
+
+# Each entry contributes one skill's dice/pips to the combined initiative pool DMCore.roll_initiative
+# rolls once per round for turn ordering -- "dodge + observation" today, but a third contributing
+# skill later is just another entry, no code change needed (same list-of-terms pattern [[status]]
+# already uses).
+[[initiative]]
+skill = "dodge"
+
+[[initiative]]
+skill = "observation"
+
+# Translates a get_attitude() axis value (-150..150, clamped) into prose for narration --
+# see DMCore.get_attitude_tier/describe_attitude. Checked in declaration order; a value sitting
+# exactly on a shared boundary (ex: -100, between "hostile" and "unfriendly") resolves to
+# whichever tier is declared first.
+[[attitude_tier]]
+name = "hostile"
+minimum = -150
+maximum = -100
+disposition = "wants them gone, one way or another"
+threat = "is terrified of them, ready to flee or freeze"
+familiarity = "is repulsed by them"
+
+[[attitude_tier]]
+name = "unfriendly"
+minimum = -100
+maximum = -60
+disposition = "is openly unfriendly toward them"
+threat = "is visibly afraid around them"
+familiarity = "finds them distasteful"
+
+[[attitude_tier]]
+name = "wary"
+minimum = -60
+maximum = -20
+disposition = "is cold and standoffish around them"
+threat = "feels intimidated and uneasy around them"
+familiarity = "feels a mild aversion to them"
+
+[[attitude_tier]]
+name = "neutral"
+minimum = -20
+maximum = 20
+disposition = "feels nothing in particular toward them"
+threat = "feels neither confident nor afraid around them"
+familiarity = "feels no particular closeness or distance"
+
+[[attitude_tier]]
+name = "warm"
+minimum = 20
+maximum = 60
+disposition = "is warm and well-disposed toward them"
+threat = "feels self-assured dealing with them"
+familiarity = "feels a real fondness for them"
+
+[[attitude_tier]]
+name = "friendly"
+minimum = 60
+maximum = 100
+disposition = "is genuinely friendly toward them"
+threat = "feels bold and confident around them"
+familiarity = "feels genuinely enamored with them"
+
+[[attitude_tier]]
+name = "devoted"
+minimum = 100
+maximum = 150
+disposition = "adores them and would do almost anything for them"
+threat = "feels utterly fearless around them"
+familiarity = "is utterly infatuated with them"
+
+# Per-axis attitude deltas for a resolved player action (see DM_Social.py's own
+# nudge_attitude_from_event) -- distinct from [[attitude_tier]] above, which only ever renders
+# an already-resolved value into prose. Each entry's own axis values are the *full-strength*
+# delta, applied at magnitude = 1.0 (ex: combat_hit at a killing blow, or theft/favor against
+# items.toml's own single most valuable item) -- an ordinary occurrence scales down from there
+# (see nudge_attitude_from_event's own magnitude param, 0..1). A missing axis defaults to 0.
+[[attitude_event]]
+name = "combat_hit"
+disposition = -20
+threat = -15
+familiarity = -10
+
+[[attitude_event]]
+name = "theft"
+disposition = -15
+threat = 0
+familiarity = -12
+
+# Mirrors "theft"'s own magnitude exactly (disposition/familiarity), just positive -- restores
+# roughly what this event lost when the six-axis model collapsed to three and "favor" lost its
+# own single largest lever (obligation = 20, folded into neither surviving axis at the time).
+# Give vs. take are the direct positive/negative mirror of the same mechanic
+# (DM_Inventory.py's own "give"/"take" transfer), so there's no principled reason for one to
+# carry noticeably less emotional weight than the other.
+[[attitude_event]]
+name = "favor"
+disposition = 15
+threat = 0
+familiarity = 12
+
+# "Bonds made on the battlefield" -- a small, deliberately modest counterpart to combat_hit
+# above, applied not to the entity being struck but to any *other* living entity that already
+# considers that same target an enemy (see DM_Core.py's own "shared_enemy" loop). Smaller than
+# favor's own deltas on purpose: watching someone fight your enemy is a lighter touch than being
+# on the receiving end of a real gift.
+[[attitude_event]]
+name = "shared_enemy"
+disposition = 5
+threat = 0
+familiarity = 0
+
+# Fired by maneuvers.toml's own "intimidate" universal ability (via its own "attitude" op) --
+# a successful intimidation scares the
+# target (threat drops hard) without necessarily earning outright hatred; a failed attempt barely
+# dents disposition and, if anything, leaves the target slightly more confident (threat up) for
+# having stood their ground.
+[[attitude_event]]
+name = "intimidated"
+disposition = -10
+threat = -25
+familiarity = -5
+
+[[attitude_event]]
+name = "failed_intimidation"
+disposition = -5
+threat = 10
+familiarity = -5
+
+# Fired by maneuvers.toml's own "charm" universal ability -- the positive mirror of intimidate's
+# own pair above. A successful charm attempt genuinely warms someone up (disposition/familiarity
+# both rise, and threat rises too -- charm reads as safe, not threatening); a failed attempt
+# reads as a bit awkward, a mild, mostly-harmless dent rather than real offense.
+[[attitude_event]]
+name = "charmed"
+disposition = 15
+threat = 5
+familiarity = 10
+
+[[attitude_event]]
+name = "failed_charm"
+disposition = -3
+threat = 0
+familiarity = -2
+
+# Which [entity.equipped] slot names are valid for a given kind of entity -- entity_schema.
+# toml's own [entity.equipped] comment notes slot names are freeform strings today (nothing in
+# DM_*.py validates them against anything); this table is reference data for that validation to
+# read from later, not itself enforced by any code yet. Matched the same way get_attitude's
+# "name"/"supertype" overrides are: a "subtype" entry beats a "supertype"-only entry for the
+# same supertype, checked in declaration order. An animal/elemental has no hands or worn
+# clothing, so it lists no slots at all; an undead humanoid keeps just enough to wield the
+# weapon/armor it died in.
+[[equip_slot]]
+supertype = "creature"
+subtype = "humanoid"
+slots = [ "head", "neck", "chest", "back", "rhand", "lhand", "ring", "feet" ]
+
+[[equip_slot]]
+supertype = "creature"
+subtype = "undead"
+slots = [ "rhand", "chest" ]
+
+[[equip_slot]]
+supertype = "creature"
+subtype = "animal"
+slots = []
+
+[[equip_slot]]
+supertype = "creature"
+subtype = "elemental"
+slots = []

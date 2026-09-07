@@ -318,15 +318,17 @@ entity and no named-currency subsystem to hang a per-polity one off of) is narra
 by naming itself once in arrival narration (`_finish_pending_travel`'s own `"polity"` field,
 `intents/travel.py`'s `narrate_travel`).
 
-Every gridded coordinate in `Rules/Fantasy/` (region bounds, `[[location]]`'s own `grid`,
+Every gridded coordinate in `Rules/<setting>/` (region bounds, `[[location]]`'s own `grid`,
 `[[road]]` endpoints/`width`) shares one real-world scale: `rules.toml`'s own `default_speed = 24`
 is chosen specifically so 1 grid unit reads as 1 literal mile — Pathfinder's own core rule is 3
 miles/hour of normal (x1) overland movement, and an 8-hour block is 24 miles at that pace.
 
-Shipped worked example: `Rules/Fantasy/scenarios/lost_coast.toml`'s `sandpoint`/`magnimar` (real
-Golarion place names, `docs/movement-scenarios.md`-adjacent geography rather than any imported GIS
-data — see that scenario's own docstring), placed at their real ~60-mile separation along the Lost
-Coast Road, inside `world_map.toml`'s `"the Lost Coast"` region (`terrain = "coastal_forest"`, a
+Shipped worked example: `Rules/Pathfinder/scenarios/lost_coast/lost_coast.toml`'s `sandpoint`/
+`magnimar` (real Golarion place names, `docs/movement-scenarios.md`-adjacent geography rather than
+any imported GIS data — see that scenario's own docstring, and kept in the Pathfinder setting
+rather than Fantasy specifically because it's Golarion-sourced), placed at their real ~60-mile
+separation along the Lost Coast Road, inside `Rules/Pathfinder/world_map.toml`'s `"the Lost Coast"`
+region (`terrain = "coastal_forest"`, a
 `0.6` multiplier; `polity = "Varisia"`). A `[[road]]` running the exact Sandpoint-to-Magnimar line
 at `speed_multiplier = 1.0` overrides that slowdown back to the plain default, so the trip still
 costs exactly 3 blocks — a single day — the same real mileage always implied, proof the mechanism

@@ -7,3 +7,7 @@
 # -- never overriding an explicit choice) and names itself in arrival narration. No currency field
 # here on purpose -- the engine has one flat scalar "currency" per entity and no named-currency
 # subsystem at all, so a per-polity currency would be flavor text with no mechanic behind it.
+[[polity]]
+name = "Varisia"
+language = "varisian"
+description = "A rugged, sparsely settled frontier region on Golarion's northwest coast, its scattered towns overshadowed by the ruins of a much older empire."

@@ -559,7 +559,7 @@ value = 30
 container_allowed_supertypes = [ "spell" ]
 inventory = [ "fireball" ]
 
-# The "on_arrival" shipped worked example (Rules/Fantasy/reference/pathfinder_mapping.toml's
+# The "on_arrival" shipped worked example (Rules/Pathfinder/reference/pathfinder_mapping.toml's
 # "Delayed/triggered magic" row -- Glyph of Warding/Magic Mouth): an ordinary hazard, placed
 # permanently like any other room prop (or conjured via "summon", same as spells.toml's "flame
 # wall"), with no mechanism of its own beyond the [[status]] entry (rules.toml's own "warding

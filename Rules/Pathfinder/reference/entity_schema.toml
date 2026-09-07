@@ -1,0 +1,977 @@
+# Reference only -- every field the engine currently understands on an [[entity]] table, in
+# one place. Not real game data and never loaded: load_rules (DM_Rules.py) only os.listdir()s
+# the top level of Rules/Fantasy/, the same reason Rules/Fantasy/scenarios/ is safe to hold its
+# own *.toml files -- this file lives one directory deeper for the same reason. Copy the
+# fields you need into characters.toml/npcs.toml/creatures.toml/items.toml/spells.toml/
+# techniques.toml; nothing here is required, and no single real entity uses all of it at once
+# (a wolf has no [entity.test], a chest has no [entity.skills]) -- see those files for
+# realistic combinations. NPC-generation stubs are a different top-level table entirely --
+# [[entity_template]], not [[entity]] -- see the sibling template_schema.toml for that shape's
+# own field reference, and Rules/Fantasy/templates.toml for real examples.
+#
+# Every field is read with .get(), so an absent field just means "code that reads it falls
+# back to a default" (0, {}, [], or a hardcoded fallback like "untrained" 0D) rather than an
+# error. A field marked UNUSED below is parsed and kept on the entity dict but nothing in
+# DM_*.py currently reads it -- reserved for a future mechanic, not enforced by any rule today.
+
+[[entity]]
+
+# ---------------------------------------------------------------------------------------------
+# Identity -- every entity needs at least "name"; supertype/subtype are freeform strings the
+# rest of the data (attitudes' supertype override, is_hostile's "object" check, an ability's
+# skill matching, DM_Core's subtype == "container" gate) interprets by convention, not an enum
+# enforced anywhere. Common supertypes in use: "creature" (characters.toml/npcs.toml/
+# creatures.toml), "object" (items.toml), "spell"/"technique" (spells.toml/techniques.toml),
+# "innate" (a one-off inline ability with no shared catalog entity, ex: gladstone's "punch"),
+# "modifier" (a trained combat-trick/metamagic entity stacked onto another named ability at
+# cast time, ex: "power attack"/"empowered" -- see "applies_to"/"skill_divisor"/"damage_bonus"/
+# "damage_multiplier", below).
+# Common subtypes: "humanoid"/"animal"/"elemental"/"undead" (creature), "weapon"/"armor"/
+# "potion"/"container"/"trap"/"trinket" (object), "evocation" (spell school), "martial"
+# (technique), "weapon" (an innate attack's own subtype, ex: wolf's "bite").
+name = "reference_entity"                  # Required. The instancing/lookup key everywhere
+                                            # (inventory entries, equipped slots, abilities'
+                                            # string references, scenario "entities" lists all
+                                            # name an entity this way).
+supertype = "creature"                     # See above. Also gates is_hostile: supertype ==
+                                            # "object" is never treated as hostile regardless
+                                            # of attitude data.
+subtype = "humanoid"                       # See above. Also gates DM_Core's open/close
+                                            # handling (subtype == "container" only).
+description = "Flavor text shown to the LLM narrator and to a passed skill check's outcome."
+                                            # Read by describe_character (roster/defender_details)
+                                            # and by examine (item_interaction_resolved's own
+                                            # "description"). An item with an empty description
+                                            # is silently dropped from a container's "contents"
+                                            # listing -- keep it non-empty even when deliberately
+                                            # vague (ex: health potion's description hides what
+                                            # it does until identified).
+is_player = false                          # Exactly one loaded template must set this true
+                                            # (characters.toml's gladstone) -- DMCore.__init__
+                                            # raises ValueError at boot if none does. A
+                                            # scenario/room's own "entities" list never names
+                                            # this template literally -- it uses the reserved
+                                            # "player" placeholder instead (DM_Rules.py's
+                                            # PLAYER_PLACEHOLDER), resolved to whichever
+                                            # template this flag currently marks (and to
+                                            # whatever name apply_character_creation may have
+                                            # renamed it to -- see DM_CharacterCreation.py).
+is_party = false                           # Marks a non-player ally as part of the player's
+                                            # own party (ex: characters.toml's thane) -- purely
+                                            # a display flag read by GUICore's Party tab
+                                            # (is_player OR is_party); no combat/behavior logic
+                                            # depends on it. is_player already implies party
+                                            # membership, so gladstone doesn't need this too.
+
+# ---------------------------------------------------------------------------------------------
+# Vitals and physical stats
+max_hp = 20                                # Ceiling for get_current_hp/apply_healing's clamp;
+                                            # also the "hp_per_remain" denominator every
+                                            # [[status]] wound tier checks against. An entity
+                                            # with max_hp == 0 (or absent) never matches any
+                                            # hp_per_remain requirement (get_comparable_value
+                                            # returns None for a non-positive max_hp).
+currency = 0                                # Starting money -- transfer_currency/loot_entity/
+                                            # "trade"'s price check all read and mutate this.
+bulk = 0                                    # An object's own carry weight -- get_current_bulk
+                                            # (DM_Rules.py) sums every "bulk" value across the
+                                            # player's own "inventory" list; "take"/"trade"/a
+                                            # ground "take" (DM_Inventory.py's own
+                                            # _bulk_would_be_exceeded) refuse with reason
+                                            # "bulk_exceeded" the moment that sum would rise
+                                            # past get_max_bulk. No cap enforced on any entity
+                                            # other than the player this way. Also meaningful on
+                                            # a *creature* now, not just an object -- its own
+                                            # body weight as cargo, counted against whatever it's
+                                            # currently mounted on (see "mount", above, and
+                                            # get_current_bulk's own reverse-lookup over every
+                                            # entity currently deferring to a given mount) --
+                                            # the same field, same "how much of someone else's
+                                            # capacity do I eat" meaning, just now also asked of
+                                            # a rider instead of only an item.
+                                            # Carrying capacity is computed by get_max_bulk from
+                                            # rules.toml's own [bulk] table: min_bulk plus this
+                                            # entity's own "skill" dice (ex: "strength") times
+                                            # mod_multiplier -- unless this entity authors its
+                                            # own "max_bulk" field directly (see below), which
+                                            # always wins over the formula. A setting that
+                                            # authors no [bulk] table and whose entity authors no
+                                            # "max_bulk" of its own either simply never gets the
+                                            # cap enforced (get_max_bulk returns None).
+max_bulk = 20                               # Optional flat override for get_max_bulk, read
+                                            # directly with no formula involved -- lets a
+                                            # setting with no [bulk] table at all (ex:
+                                            # Rules/Zombie/) still cap specific entities (ex:
+                                            # "riley"/"car") without having to opt every entity
+                                            # into a shared strength-derived formula. Also wins
+                                            # over the formula in a setting that *does* author
+                                            # [bulk] -- an explicit number is a deliberate
+                                            # override, not something the generic rule should
+                                            # second-guess.
+container_capacity = 40                     # Object only. Caps the total "bulk" of whatever
+                                            # sits in this entity's own "inventory" list --
+                                            # enforced by transfer_item/place_new_item
+                                            # (Inventory_Resolution.py's get_container_
+                                            # rejection_reason), refusing to add an item that
+                                            # would push the sum past this number. Absent (every
+                                            # entity shipped before this field existed) means
+                                            # uncapped. Distinct from get_max_bulk/max_bulk,
+                                            # which cap what the *carrier* can carry overall --
+                                            # get_current_bulk never recurses into an item's own
+                                            # nested "inventory" in the first place, so whatever
+                                            # this field lets a container hold never counts
+                                            # against whoever's carrying it (the Pathfinder "Bag
+                                            # of Holding" shape -- see items.toml's own "bag of
+                                            # holding").
+container_allowed_supertypes = [ "spell" ]  # Object only. If set, transfer_item/place_new_item
+                                            # refuse "wrong_item_type" for anything whose own
+                                            # "supertype" isn't in this list -- ex: items.toml's
+                                            # "spellbook" only ever holds spell entities. Checked
+                                            # independently of container_allowed_subtypes, below
+                                            # -- both, if both are authored, must pass.
+container_allowed_subtypes = [ "potion" ]   # Object only. Same shape as container_allowed_
+                                            # supertypes, just matched against an item's own
+                                            # "subtype" instead (ex: a quiver that only holds
+                                            # ammunition). Absent (both fields) means
+                                            # unrestricted -- every container shipped before
+                                            # this mechanic existed.
+value = 0                                   # An object's price -- read by "trade"
+                                            # (item_interaction_resolved's "price"; denied
+                                            # "cant_afford" if the buyer's own currency is
+                                            # short).
+exp = 0                                     # Dual role, same "one field, two sides of the same
+                                            # economy" shape "currency" already has. On a
+                                            # player/party member: their own running XP total --
+                                            # _award_xp_for_defeat (DM_Combat.py) accumulates
+                                            # into this field, never resets it. On anything else
+                                            # (ex: a creature/npc): a custom flat XP grant for
+                                            # defeating it, checked via plain key presence (an
+                                            # authored `exp = 0` really does grant zero) --
+                                            # absent entirely (every shipped creature/npc today)
+                                            # falls back to that entity's own live
+                                            # get_challenge_rating instead. Neither role is ever
+                                            # read off a template directly by anything other
+                                            # than _award_xp_for_defeat/its own accumulation.
+
+# ---------------------------------------------------------------------------------------------
+# Movement (see DM_Movement.py's "Movement and range" in CLAUDE.md)
+speed = 1                                   # Only ever read off the player's own entity
+                                            # (advance_or_retreat) -- bands moved per
+                                            # advance/retreat action. Defaults to 1 if absent.
+                                            # An enemy/ally's own "speed" (if set) is inert:
+                                            # nothing but the player currently moves.
+# "band" is never set in a template -- it's assigned per-instance at scenario-load time from
+# the scenario/room's own "entities" list ({name, band}), not authored here.
+medium = "air"                              # "air"/"water"/"earth"; absent/"ground" is the
+                                            # default every entity implicitly has, unaffected
+                                            # regardless of what it fights -- deliberately NOT a
+                                            # new elevation/spatial axis, bands stay one-
+                                            # dimensional. Gates has_medium_access (DM_Movement.
+                                            # py, checked in _resolve_roll/resolve_behavior_
+                                            # action alongside is_in_range): a melee-only
+                                            # (range 0/absent) attacker whose own "medium"
+                                            # doesn't match a non-"ground" defender's can't reach
+                                            # it at all, no roll attempted (same OutOfRangeOutcome
+                                            # is_in_range's own failure already reports) -- the
+                                            # Pathfinder Fly/Swim(submerge)/Burrow shape (a
+                                            # grounded creature's sword can't connect with a
+                                            # flying dragon). Any ability with an already-
+                                            # authored "range" > 0 reaches every medium freely --
+                                            # no new field needed on ranged weapons/spells.
+#
+# ---------------------------------------------------------------------------------------------
+# Overland conveyance -- travel_speed/mount/pulled entities (see docs/downtime.md's "Travel"
+# and creatures.toml's own "horse"). A rider's own single entry is runtime-only, written by
+# "mount"/"dismount" (DM_Movement.py's _resolve_mount_intent/_resolve_dismount_intent) --
+# never authored in a template ahead of time. A vehicle's own entry (ex: a cart) is different:
+# "hitch"/"unhitch" (_resolve_hitch_intent/_resolve_unhitch_intent) promote/append onto it at
+# runtime same as a rider's, but _resolve_hitch_intent also requires the *key* to already exist
+# on the vehicle before the first hitch ever succeeds -- an ordinary NPC nothing ever declared
+# hitchable doesn't retroactively become a valid one just because something got hitched to it
+# (see _is_valid_conveyance, DM_Movement.py). A template meant to serve as a vehicle therefore
+# authors this as an empty placeholder (mount = "") ahead of time -- present as a key, but
+# resolving to no live entity yet, exactly like a fresh cart with nothing hitched to it should.
+mount = "horse"                             # The name of a currently-present, living entity
+                                            # this one currently defers to for its own
+                                            # effective travel_speed and, if the deferred-to
+                                            # entity itself has no capacity-generating skill of
+                                            # its own (ex: a cart), carrying capacity too -- a
+                                            # string, or a list of names for something with more
+                                            # than one provider (ex: a cart's own "mount" naming
+                                            # every horse hitched to it). Resolved recursively
+                                            # (_resolve_travel_speed, DM_Travel.py; get_carrying_
+                                            # capacity, DM_Rules.py) -- a rider names their cart,
+                                            # the cart names its own team, so a rider's effective
+                                            # speed/capacity walks that whole chain rather than
+                                            # requiring them to name the team directly. Speed
+                                            # aggregates a multi-entry "mount" by the *minimum*
+                                            # across every named entity (paced to the slowest
+                                            # puller); capacity aggregates by the *sum* (every
+                                            # additional puller helps). A "mount" naming a dead
+                                            # or no-longer-present entity is simply ignored --
+                                            # this entity falls back to its own travel_speed/
+                                            # max_bulk instead, no error, the same "getting
+                                            # thrown just silently unwinds the relationship, no
+                                            # extra penalty" precedent this design deliberately
+                                            # settled on (see docs/downtime.md's "Travel" or the
+                                            # module docstring on _resolve_mount_intent for the
+                                            # full reasoning).
+terrain_tags = [ "aquatic" ]                 # See docs/downtime.md's "Terrain, roads, and
+                                            # polities" -- what impassable terrain.toml terrain
+                                            # (ex: "water") this entity itself can cross,
+                                            # unioned with the recursively-resolved tags of
+                                            # everything in its own live "mount" chain
+                                            # (_resolve_conveyance_tags, DM_Travel.py) -- a
+                                            # rider inherits a boat's/griffon's own tags the
+                                            # same way they already inherit its travel_speed.
+                                            # Absent means no special passability of its own
+                                            # (the default for everything shipped today).
+#
+# NPC-generation stubs are a different top-level table entirely -- [[entity_template]], loaded
+# into self.entity_templates, never self.entities -- with their own field reference,
+# template_schema.toml (sibling file). Every field on *this* page still applies to an
+# entity_template unchanged (it's authored the same way, means the same thing); the one
+# exception is [entity.skills]/max_hp/name, which an entity_template never authors at all --
+# NPC_Generation.py fills those in at instancing time instead.
+
+# ---------------------------------------------------------------------------------------------
+# Skills -- {dice, pips} per skill name, read by resolve_action/resolve_opposed_action/
+# get_opposing_skill/select_ability_skill/roll_initiative/resolve_bonus. A skill this entity
+# doesn't list defaults to untrained (0 dice, 0 pips) wherever it's rolled -- unattemptable
+# against anything but an auto-success (difficulty 0) check. "healing" here (not
+# a top-level field) is what _resolve_use_intent rolls for a usable item's healing effect (ex:
+# items.toml's health potion) -- same {dice, pips} shape as any other skill entry, just never
+# actually rolled as a skill check.
+[entity.skills]
+blades = { dice = 4, pips = 0 }
+dodge = { dice = 3, pips = 1 }
+fortitude = { dice = 3, pips = 0 }
+healing = { dice = 5, pips = 0 }            # Only meaningful on a usable item, not a creature.
+
+# ---------------------------------------------------------------------------------------------
+# Inventory, currency carrier, and equipped slots
+inventory = [ "longsword", "health potion", "health potion" ]
+                                            # A flat list of item entity names; duplicates
+                                            # represent quantity (transfer_item moves one
+                                            # matching entry per call). Also doubles as a
+                                            # container's own contents (ex: items.toml's chest).
+
+[entity.equipped]
+                                            # slot name -> item entity name. Slot names are
+                                            # freeform strings (get_equipped_weapon/
+                                            # get_damage_reduction iterate .values(), never
+                                            # keys) -- "rhand"/"chest" are convention, not
+                                            # enforced. An equipped item with its own
+                                            # damage_value is what find_attack_ability/
+                                            # get_equipped_weapon treat as the wielded weapon;
+                                            # one with armor_value/armor_tags is what
+                                            # get_damage_reduction treats as worn armor. The
+                                            # same item name must also exist in "inventory".
+rhand = "longsword"
+chest = "chain mail"
+
+equipped_skill_bonus = { skill = "observation", dice = 1, pips = 0 }
+                                            # Item-only -- a passive skill-dice bonus while
+                                            # this item is equipped, regardless of slot (a ring,
+                                            # belt, or cloak, not just a weapon/armor piece) --
+                                            # the Pathfinder "Ring/belt/wondrous stat bonus"
+                                            # shape. get_equipped_skill_bonus (Combat_
+                                            # Resolution.py) sums every equipped item's own
+                                            # matching bonus into resolve_action/resolve_
+                                            # opposed_action, alongside get_condition_modifier.
+                                            # "skill" may instead name a rules.toml
+                                            # [[skill_group]] (ex: "strength"), buffing every
+                                            # skill in that group at once -- the Pathfinder
+                                            # ability-score-bonus shape (ex: a belt of giant
+                                            # strength), authored without this engine needing a
+                                            # real attribute layer. See get_skill_group_members.
+
+# ---------------------------------------------------------------------------------------------
+# Ability/weapon/spell/technique fields -- present directly on a weapon/armor object
+# (items.toml), a spell/technique (spells.toml/techniques.toml), or an inline table inside
+# another entity's own "abilities" list (below). Not every field applies to every kind of
+# ability -- a plain weapon has no "targets", a non-damaging ability has no damage_value.
+skill = "blades"                            # A single skill name, or a list (ex: techniques.
+                                            # toml's cleave: ["blades", "axes"]) -- any one
+                                            # match counts (ability_matches_skill). A list lets
+                                            # select_ability_skill pick the entity's own
+                                            # highest-rated of the options.
+equip_slot = "rhand"                        # Weapon/armor only -- a single slot name, or a
+                                            # list of candidates (ex: a one-handed weapon
+                                            # offering both "rhand" and "lhand"). "equip"
+                                            # (DMCore._resolve_equip_intent) picks the first
+                                            # candidate valid for the equipping entity's own
+                                            # supertype/subtype (resolve_equip_slot,
+                                            # DM_Inventory.py, against rules.toml's own
+                                            # [[equip_slot]] table -- see get_equip_slots,
+                                            # DM_Rules.py). Absent means "equip"/"unequip"
+                                            # refuse this item outright (reason
+                                            # "not_equippable") -- ex: a potion or a chest key
+                                            # is never equippable no matter what slots exist.
+range = 0                                   # In bands, absent/0 meaning melee (usable only in
+                                            # the target's own band). 1 extends melee by one
+                                            # band (a reach weapon, ex: spear). A ranged
+                                            # weapon/spell (ex: long bow, fireball) sets its own
+                                            # reach directly, no accuracy falloff across it.
+                                            # is_in_range(attacker, defender, ability) is True
+                                            # unconditionally when ability is None (a
+                                            # non-physical check, ex: charisma).
+damage_value = { dice = 1, pips = 2, bonus = "strength_damage" }
+                                            # {dice, pips, bonus} -- resolve_damage_value rolls
+                                            # dice/pips and adds the resolved bonus. "bonus" is
+                                            # either a flat number or a "user.<rule_name>"
+                                            # reference into a same-named table in rules.toml
+                                            # (ex: "user.strength_damage" divides the attacker's
+                                            # own strength dice by that rule's "divisor").
+                                            # "dice"/"pips" can themselves be the literal string
+                                            # "user.weapon.dice"/"user.weapon.pips" (ex:
+                                            # cleave) -- resolved off the attacker's own
+                                            # equipped weapon instead of a fixed number.
+damage_tags = [ "slashing" ]                # Matched against a defender's resistance_tags/
+                                            # immunity_tags/vulnerability_tags and an equipped
+                                            # armor's own armor_tags. "any" is a reserved wildcard
+                                            # meaning unpreventable damage -- since no real
+                                            # resistance_tags/armor_tags/vulnerability_tags list
+                                            # would ever legitimately contain the literal string
+                                            # "any", this already skips every defender's
+                                            # reduction/vulnerability with no extra code, and is
+                                            # stopped only by a defender's own
+                                            # immunity_tags = ["any"] (is_immune_to,
+                                            # Combat_Resolution.py).
+language_dependent = true                   # Opt-in precondition, not a damage classification --
+                                            # deliberately separate from damage_tags (which only
+                                            # ever feeds the damage-reduction pipeline above, and
+                                            # many language-dependent checks, ex: a persuade
+                                            # maneuver, deal no damage at all). If true, this
+                                            # ability/maneuver/spell requires the acting player to
+                                            # share a language with its target (_shares_language_
+                                            # with, DM_Dialogue.py) -- no roll attempted at all if
+                                            # not (LanguageBarrierOutcome), mirroring is_in_range's
+                                            # own "can't reach, don't roll" precedent. Absent (the
+                                            # default) means no gate -- ex: maneuvers.toml's
+                                            # "intimidate" (a raised weapon needs no shared words)
+                                            # versus its own "charm" (language_dependent = true).
+                                            # For a bare skill use with no named ability (ex:
+                                            # "persuade the guard"), _ability_requires_language
+                                            # (DM_Combat.py) falls back to checking the skill's own
+                                            # declared "abilities" list (skills.toml) instead.
+ignores_concealment = true                  # Lets this ability bypass a defender's own
+                                            # concealment/miss_chance (ex: a ghost touch/seeking
+                                            # weapon cutting through an invisible target's
+                                            # concealment) -- see get_concealment,
+                                            # resolve_opposed_action. Absent (the default) means
+                                            # an otherwise-successful roll can still come back a
+                                            # "concealed_miss" against a concealed defender.
+difficulty = 10                             # The flat number the actor must roll (with this
+                                            # ability's own "skill") to pull the working off at
+                                            # all, independent of who it's aimed at -- checked in
+                                            # _resolve_roll (DM_Core.py) once range/language have
+                                            # passed. Absent (ex: an ordinary weapon ability like
+                                            # "bite"/"shortsword strike" below) keeps the older
+                                            # resolve_opposed_action behavior: the caster's skill
+                                            # vs. whatever the defender's own best matching
+                                            # "opposes" skill happens to be. If a target actually
+                                            # wants to resist, it authors its own [entity.test]
+                                            # instead (skill = [...], difficulty = ...) -- that's
+                                            # checked first and always wins over this fallback
+                                            # when it matches.
+targets = { number = 1, aoe = 0 }           # Widens a hit past the one entity the roll was
+                                            # actually resolved against (target_name), which is
+                                            # always included and always first -- absent
+                                            # entirely (every ordinary weapon/most spells) means
+                                            # exactly that one entity, unchanged. "aoe" (int,
+                                            # bands, default 0) adds every other living scene
+                                            # entity within that many bands of target_name
+                                            # (get_distance_between, nearest first); "side"
+                                            # (default "enemies") filters that widened pool --
+                                            # "enemies"/"allies" via is_hostile(candidate, the
+                                            # caster), "all" for an indiscriminate blast that
+                                            # never checks hostility (ex: fire doesn't care who
+                                            # it burns), or "self" -- a short-circuit that always
+                                            # resolves to just the caster, ignoring target_name/
+                                            # aoe/number entirely (no target needs to be named at
+                                            # all, ex: a personal ward cast outside combat with
+                                            # no current_target). "number" (default 1, 0 =
+                                            # unlimited) caps the combined, target_name-inclusive
+                                            # list -- meaningless (never consulted) with
+                                            # side = "self". techniques.toml's cleave
+                                            # ({number = 3, aoe = 0}) is discriminating
+                                            # multi-target -- up to 3 enemies sharing
+                                            # target_name's own band; an indiscriminate AoE (ex:
+                                            # spells.toml's fireball) authors {aoe = 5, side =
+                                            # "all", number = 0}; a discriminating area effect
+                                            # (ex: a Pathfinder-style channeling that only touches
+                                            # allies) authors {aoe = <radius>, side = "allies"};
+                                            # a self-only ward authors {side = "self"}. Resolved
+                                            # by DM_Combat.py's resolve_targets, called from
+                                            # DM_Core.py's _apply_damage_if_hit (one damage roll/
+                                            # DamageEffect/attitude nudge per resolved target) and
+                                            # _run_ability_outcome_program (this ability's own
+                                            # on_pass/on_fail run once per resolved target).
+on_hit_condition = { condition = "bleeding", chance = 100 }
+                                            # Applies a [[condition]] directly to whoever this
+                                            # ability just hit, no [entity.test] detour needed
+                                            # -- the Pathfinder "Wounding"/poison-on-hit shape
+                                            # (apply_on_hit_condition, Combat_Resolution.py).
+                                            # "chance" (1-100, default 100) is the percent
+                                            # chance it actually lands; "duration"/"length"/
+                                            # "dismiss" are the same apply_condition params
+                                            # [[status]]'s own "apply" block already takes.
+                                            # Skipped outright if the defender is immune to
+                                            # this ability's own damage_tags.
+damage_bonus_vs = { supertypes = ["undead"], value = { dice = 2, pips = 0, bonus = 0 } }
+                                            # Extra rolled damage that only applies against a
+                                            # defender of a particular kind, matched by the
+                                            # defender's own supertype/subtype (either list,
+                                            # both optional) rather than by damage_tags overlap
+                                            # -- the Pathfinder "Holy"/"Bane" shape (get_damage_
+                                            # bonus_vs, Combat_Resolution.py), which damage_tags
+                                            # alone can't express (that only ever checks the
+                                            # defender's resistance/immunity/vulnerability, not
+                                            # what it *is*).
+dispel = { supertypes = ["spell"], subtypes = ["spell"] }
+                                            # A spell/technique only -- on a successful cast,
+                                            # banishes current_target outright (remove_entity_
+                                            # from_scene) if its own supertype/subtype matches
+                                            # either list (same {supertypes, subtypes} shape and
+                                            # matching rule damage_bonus_vs uses above --
+                                            # matches_supertype_or_subtype, Combat_Resolution.py)
+                                            # -- the Pathfinder "Dispel Magic" shape. The shipped
+                                            # example matches "spell" on BOTH axes deliberately --
+                                            # a live spell-catalog entity's own supertype is
+                                            # always "spell", while a conjured effect object (ex:
+                                            # spells.toml's "flame wall", supertype = "object")
+                                            # instead opts in via subtype = "spell" -- one filter
+                                            # covering "anything magical" rather than narrowly
+                                            # scoped to one particular effect's own subtype value.
+                                            # Aimed at anything that doesn't match (an ordinary
+                                            # creature, a chest) simply does nothing -- "used on
+                                            # the wrong thing wastes the action", not a hard
+                                            # pre-roll gate. No difficulty authored on the shipped
+                                            # example, so it resolves as an ordinary opposed roll
+                                            # against current_target's own defenses -- a mindless
+                                            # effect (ex: "flame wall", no skills of its own at
+                                            # all) offers essentially no resistance, while a
+                                            # warded creature's own skill makes it a real contest.
+                                            # _apply_dispel_if_hit, DM_Core.py.
+cure = { supertypes = ["affliction"], subtypes = ["disease"] }
+                                            # A spell/technique only -- on a successful cast,
+                                            # dismisses every one of current_target's own active
+                                            # conditions whose OWN [[condition]] entry matches
+                                            # either list (matches_supertype_or_subtype, reused
+                                            # unchanged against the condition catalog rather than
+                                            # the entity one -- it only ever reads dict.get(
+                                            # "supertype")/dict.get("subtype"), so a [[condition]]
+                                            # entry authoring those same two optional fields works
+                                            # identically) -- the Pathfinder "Remove Disease"/
+                                            # "Neutralize Poison"/panacea shape: the caster names a
+                                            # KIND, not a specific instance. {subtypes =
+                                            # ["disease"]} cures whichever disease is active
+                                            # without naming it; {supertypes = ["affliction"]} a
+                                            # broader panacea also catching poison/curse. Aimed at
+                                            # a target with nothing matching simply cures nothing
+                                            # -- "used on the wrong thing wastes the action", the
+                                            # same shape "dispel" above already has, still reported
+                                            # (an empty CureEffect) rather than silently skipped.
+                                            # _apply_cure_if_hit, DM_Core.py.
+applies_to = { supertypes = ["spell"] }     # A supertype == "modifier" entity only -- the same
+                                            # {supertypes, subtypes} shape/matching rule dispel/
+                                            # cure/damage_bonus_vs already use
+                                            # (matches_supertype_or_subtype). NLPCore matches a
+                                            # modifier's own name literally within the same
+                                            # clause as a base ability (ex: "power attack the
+                                            # goblin", "cast an empowered fireball"), stripped
+                                            # out before the base ability's own match runs
+                                            # (match_modifier, NLP_Core.py); DMCore then only
+                                            # actually applies it if the resolved base ability's
+                                            # own supertype/subtype matches this filter -- aimed
+                                            # at the wrong shape (ex: "power attack" against a
+                                            # spell) just wastes it, same "wrong thing wastes the
+                                            # action" precedent dispel/cure already set. Also
+                                            # gated on ownership: a modifier is deliberately never
+                                            # added to skills.toml's own universal abilities list,
+                                            # so resolve_named_ability only ever resolves one for
+                                            # an entity that actually trained it (its own
+                                            # "abilities" list) -- see maneuvers.toml's own
+                                            # untrained "trip"/"cleave" for the contrasting
+                                            # universal case.
+skill_divisor = 2                           # A supertype == "modifier" entity only -- divides
+                                            # the acting entity's own base skill rating
+                                            # (skill_rating, the same dice*3+pips scale
+                                            # get_opposing_skill/select_ability_skill already
+                                            # use) before dice_penalty/condition_modifier/
+                                            # equip_bonus stack on top, in resolve_action --
+                                            # applied identically whether the roll this turn ends
+                                            # up a flat difficulty check or (via resolve_opposed_
+                                            # action) an opposed one, since both share that one
+                                            # attacker-side pool-building step. This is the
+                                            # modifier's own cost -- "power attack"'s skill_
+                                            # divisor = 2 halves gladstone's own blades rating for
+                                            # this one swing, in exchange for its own damage_bonus
+                                            # below.
+damage_bonus = { dice = 2, pips = 0, bonus = 0 }
+                                            # A supertype == "modifier" entity only -- added onto
+                                            # the matched base ability's own damage_value (a
+                                            # per-cast deep copy, _apply_ability_modifier in
+                                            # DM_Core.py -- the shared spells.toml/creatures.toml/
+                                            # weapon entity itself is never mutated). Absent if
+                                            # the base ability has no damage_value at all (ex: a
+                                            # pure debuff/utility ability) -- nothing for either
+                                            # this or damage_multiplier below to act on, so the
+                                            # modifier's benefit half is simply wasted, same
+                                            # "wrong shape wastes it" precedent as a mismatched
+                                            # "applies_to". Additive, not multiplicative --
+                                            # deliberately the same operation type dice_penalty/
+                                            # condition_modifier already use, since skill_divisor
+                                            # above already covers proportional scaling on the
+                                            # cost side; mixing add/multiply across the cost and
+                                            # benefit halves of the same trade was the original
+                                            # design mistake this field's shape corrects.
+damage_multiplier = 1.5                     # A supertype == "modifier" entity only -- the other
+                                            # valid shape a modifier's own damage benefit can
+                                            # take, applied (after damage_bonus, if both are
+                                            # somehow both authored) to the same per-cast copy of
+                                            # damage_value -- ex: "empowered"'s +50% total damage,
+                                            # a genuinely proportional Pathfinder effect that a
+                                            # flat damage_bonus wouldn't represent faithfully.
+                                            # Author whichever of damage_bonus/damage_multiplier
+                                            # actually fits a given modifier's own fiction, never
+                                            # both at once in practice.
+cooldown_rounds = 3                         # A behavior-driven ability only (DM_Combat.py's
+                                            # resolve_behavior_action) -- once used, sets the
+                                            # acting entity's own ability_cooldowns[name] to
+                                            # this many rounds, ticked back down to 0 by
+                                            # tick_ability_cooldowns (run_round_upkeep,
+                                            # DM_Status.py). A behavior list gates back off this
+                                            # same ability meanwhile via the derived requirement
+                                            # field "ability_ready:<name>" (get_comparable_value)
+                                            # -- ex: a breath weapon usable once every 3 rounds,
+                                            # falling back to a weaker attack entry until then.
+summon = { name = "spectral wolf", duration = 4 }
+                                            # A spell/technique/innate ability only -- opts a
+                                            # successful cast into conjuring a temporary ally
+                                            # (DM_Core.py's _apply_summon_if_hit, DM_Summoning.
+                                            # py's _summon_creature) instead of/alongside
+                                            # dealing damage. "name" (a real [[entity]], looked
+                                            # up in self.entities) or "template" (a real
+                                            # [[entity_template]], looked up in
+                                            # self.entity_templates -- goes through ordinary
+                                            # NPC-generation stat-fitting the same as any
+                                            # scenario's own {template = ...} entry) -- exactly
+                                            # one of the two, same mutually-exclusive shape a
+                                            # scenario/room's own "entities" list entries use.
+                                            # "duration" is whole combat rounds remaining,
+                                            # decremented once per round (run_round_upkeep,
+                                            # DM_Status.py) -- the summoned creature is removed
+                                            # from the scene entirely (not just a condition
+                                            # dismissed) the round this hits 0. No engine
+                                            # concept of "duration" outside a combat round, so a
+                                            # summon cast outside combat never starts counting
+                                            # down until a round actually happens. The summoned
+                                            # instance itself carries no fields of its own here
+                                            # -- it's a real, hand-authored creature template,
+                                            # unrelated to (and not gated by) the "abilities"
+                                            # this ability lives on.
+teleport_to_band = 4                        # A spell/technique only -- on a successful cast,
+                                            # jumps the PLAYER directly to this band within the
+                                            # current room (move_entity's own existing floor/
+                                            # ceiling clamp still applies), no roll against a
+                                            # target needed (same "not really against anyone"
+                                            # scope "summon" has, below) -- the Pathfinder
+                                            # Dimension Door shape. Player-only; not wired into
+                                            # a creature's own behavior. Author a real "difficulty"
+                                            # (any small nonzero number) alongside this if a
+                                            # hostile current_target might be present when this
+                                            # is cast -- without one, _resolve_roll falls to the
+                                            # ordinary opposed-roll path (resisted by whatever
+                                            # current_target happens to be) instead of a flat,
+                                            # always-succeeds self-cast; "targets" is not
+                                            # consulted here at all (this always relocates the
+                                            # caster, never resolve_targets' own widened pool).
+teleport_to_location = { location = "crypt", room = "entry_hall", band = 1 }
+                                            # A spell/technique only -- on a successful cast,
+                                            # jumps the PLAYER to a different, already-known
+                                            # [[location]] outright via _enter_location, the
+                                            # same mechanism ordinary location-to-location
+                                            # travel uses -- but called directly, so it skips
+                                            # that path's own hostile-gate/grid-cost checks
+                                            # entirely (instant, works mid-combat) -- the
+                                            # Pathfinder Teleport shape. "room"/"band" default to
+                                            # that location's own start_room/band 1. Player-only;
+                                            # same "author a real difficulty" note as
+                                            # teleport_to_band, above, applies here too.
+materials = [
+    { item = "iron filings", quantity = 1 }, # A spell/technique/innate ability only -- same
+]                                           # {item, quantity} shape and same _has_materials/
+                                            # _consume_materials primitives (DM_Crafting.py) a
+                                            # craft recipe's own "materials" already uses,
+                                            # reused directly rather than a parallel mechanism.
+                                            # Gated *before* any of the three roll paths
+                                            # _resolve_roll picks between (entity test/opposed/
+                                            # untargeted) -- missing even one named item at its
+                                            # required quantity fails the cast outright as
+                                            # "missing_spell_materials", no roll attempted, same
+                                            # "gate failures cost nothing" precedent
+                                            # "out_of_range" already follows. Once a roll
+                                            # actually happens, every material is consumed
+                                            # unconditionally -- success or failure alike, same
+                                            # as a craft attempt's own materials (a fizzled cast
+                                            # still burns the reagent).
+
+# ---------------------------------------------------------------------------------------------
+# Abilities -- a flat list on the ability-*having* entity (creature/character), not the ability
+# entity itself. Each entry is either a bare string naming a shared catalog entity (resolved by
+# name via resolve_ability, ex: "fireball" -> spells.toml's own [[entity]]) or an inline table
+# for a one-off innate ability with no shared entity to point at (ex: gladstone's "punch",
+# wolf's "bite") -- same weapon/spell/technique fields as above, just embedded directly. TOML's
+# `[[entity.abilities]]` array-of-tables syntax (used by creatures.toml/npcs.toml) and the flat
+# `abilities = [...]` syntax (used by characters.toml) both land in the same "abilities" key --
+# pick whichever reads better for how many entries you have.
+[[entity.abilities]]
+name = "punch"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "bludgeoning" ]
+damage_value = { dice = 0, pips = 0, bonus = "user.strength_damage" }
+
+# ---------------------------------------------------------------------------------------------
+# Defensive traits -- static, tag-matched, permanent to what the entity is (see CLAUDE.md's
+# "Tags vs. conditions"). armor_value/armor_tags belong on a worn *item* (read off whatever's
+# in [entity.equipped]); resistance/immunity/vulnerability are innate to the entity carrying
+# them directly (a creature, or an item if you want an inherently resistant weapon/armor piece).
+armor_value = { dice = 2, pips = 0 }        # Item-only: rolled reduction, added to the
+                                            # wearer's own resistance_value roll.
+armor_tags = [ "physical", "piercing", "bludgeoning", "slashing" ]
+armor_bypass_tags = [ "magic" ]             # Item-only, optional. If any of an incoming hit's
+                                            # own damage_tags matches one of these, this item's
+                                            # armor_value/armor_tags reduction is skipped for
+                                            # that hit entirely, even though armor_tags would
+                                            # otherwise match (ex: ordinary chain mail resists
+                                            # "physical" normally, but a "magic"-tagged weapon
+                                            # cuts straight through it) -- the Pathfinder
+                                            # "hardness bypassed by a magic weapon" shape.
+                                            # Absent/empty means never bypassed (unchanged
+                                            # behavior for every item that doesn't author this).
+resistance_value = { dice = 2, pips = 0 }   # Rolled, partial reduction on a matching tag.
+resistance_tags = [ "physical" ]
+resistance_bypass_tags = [ "magic" ]        # Same shape as armor_bypass_tags, just for this
+                                            # entity's own innate resistance_value/
+                                            # resistance_tags instead of a worn item -- the
+                                            # Pathfinder "DR 10/magic" shape (a creature that
+                                            # shrugs off mundane weapons but not enchanted
+                                            # ones). See DM_Combat.py's get_damage_reduction.
+immunity_tags = [ "poison" ]                # Absolute -- zeroes net damage on a matching tag
+                                            # regardless of any roll. Wins outright over
+                                            # vulnerability if a single attack matches both.
+                                            # "any" is a reserved wildcard meaning immune to
+                                            # every damage_tags value, present or future
+                                            # (including a tagless attack, which an ordinary
+                                            # enumerated list could never match) -- spells.toml's
+                                            # "flame wall" is the shipped example, standing in
+                                            # for "can't be harmed by mundane means at all"
+                                            # without hand-listing every physical/energy type.
+vulnerability_value = { dice = 2, pips = 0 }# Rolled, extra damage added before reduction on a
+                                            # matching tag.
+vulnerability_tags = [ "fire" ]
+tags = [ "cursed" ]                         # Freeform classification, unrelated to the
+                                            # damage/armor/resistance tag-matching above --
+                                            # read back by narration once is_identified is true
+                                            # (a passed [entity.test] with "reveal" in its
+                                            # outcome), never shown by a plain examine before
+                                            # that. Also doubles as a usable item's opt-in
+                                            # marker for what kind of effect it has (ex: health
+                                            # potion's tags = ["healing"], purely descriptive --
+                                            # the actual heal is driven by "usable" +
+                                            # [entity.skills].healing, below, not by this list).
+
+# ---------------------------------------------------------------------------------------------
+# Usable (consumable) item fields -- gates DM_Core._resolve_use_intent
+usable = true                               # Required truthy to opt into "use"/"drink"/"quaff"
+                                            # at all (reason "not_usable" otherwise). Not tied
+                                            # to subtype == "potion" -- a future wand opts in
+                                            # the same way regardless of its own subtype.
+                                            # The actual healing amount (if any) is rolled from
+                                            # [entity.skills].healing, above -- there is no
+                                            # separate top-level "healing" field.
+charges = 3                                 # Absent means single-use (spent entirely on one
+                                            # "use"). Present, depletes by one per use; at zero
+                                            # the item is removed from inventory and swapped for
+                                            # "replace_with" (or simply removed if absent).
+replace_with = "glass vial"                 # Must name another loaded entity; an unknown name
+                                            # logs an error and the item is just removed instead.
+
+# ---------------------------------------------------------------------------------------------
+# Descriptive/flavor fields -- purely narrative, read by describe_character for the
+# scenario_loaded roster and every action's own "defender_details" (deliberately excludes
+# mechanical data like skills/dice, see CLAUDE.md's "Social and attitudes").
+languages = [ "common" ]                    # Every language this entity understands. Absent
+                                            # entirely defaults to ["common"], same as every
+                                            # entity shipped today -- an author only needs to
+                                            # narrow this (ex: ["elvish"] alone, no "common")
+                                            # to actually gate dialogue with this entity. See
+                                            # DM_Dialogue.py's language-barrier check and
+                                            # races.toml's own "language"/"nonsense_phrase"
+                                            # fields (apply_character_creation adds the
+                                            # player's chosen race's language onto their own
+                                            # list at chargen time).
+current_language = "common"                 # Player-entity only, runtime state (not authored --
+                                            # never set on a template): whichever one of the
+                                            # player's own "languages" is currently being spoken.
+                                            # Absent defaults to languages[0] (_current_language,
+                                            # DM_Dialogue.py) -- switched via the "speak in
+                                            # <language>" intent (_resolve_language_intent).
+                                            # Compared against a target's own full "languages"
+                                            # list by _detect_language_barrier -- only the
+                                            # player's side is ever narrowed to one active tongue.
+memories = [ "A wife at home" ]
+quotes = [ "Hello, world" ]
+
+[entity.qualities]
+                                            # key -> value, joined as "Qualities: k v, k v, ..."
+                                            # in describe_character. Freeform keys -- body/eye/
+                                            # gender/hair/height/skin/size/race/age are simply
+                                            # what the shipped data happens to use.
+body = "athletic"
+eye = "brown"
+gender = "male"
+hair = "black"
+height = "tall"
+skin = "fair"
+size = "medium"
+race = "human"
+age = 35
+
+# ---------------------------------------------------------------------------------------------
+# Attitudes -- get_attitude's three-tier lookup: a specific "name" override beats a "supertype"
+# override beats "default". No [entity.attitudes] table at all defaults every axis to neutral
+# (0), which is enough on its own to make is_hostile true (disposition <= 0) -- an NPC with a
+# real default array is what opts *out* of default combat routing. Values are nominally
+# -100..100 (headroom to -150/150 for get_attitude_tier's clamp). Axes, in order: disposition
+# (Hostile<->Friendly), threat (Fearful<->Confident), familiarity (Disgusted<->Enamored) -- a
+# three-axis collapse of an original six; see CLAUDE.md's "Social and attitudes" for why
+# trust/respect/obligation were dropped.
+[entity.attitudes]
+default = [ 0, 0, 0 ]
+
+[[entity.attitudes.supertype]]
+                                            # TOML parses this as a list of single-key tables --
+                                            # get_attitude loops it checking `if toward_name in
+                                            # override`. Matches by the *target's own* supertype.
+undead = [ -100, 100, -100 ]
+
+[[entity.attitudes.name]]
+                                            # Same shape, matched by the target's own literal
+                                            # name -- checked before the supertype override.
+anne = [ 100, 100, 100 ]
+
+# ---------------------------------------------------------------------------------------------
+# Starting conditions -- seeds active_conditions at instancing time (copied fresh per instance,
+# never shared with the template). Same {duration, dismiss} shape apply_condition itself
+# writes; "dismiss" left absent/empty means the general-purpose dismiss_condition (or
+# evaluate_statuses' own stale-condition sweep, for a status-driven one) can clear it, a named
+# value (ex: "resurrection") means only that specific mechanism can.
+[entity.conditions.locked]
+duration = "permanent"
+
+[entity.conditions.closed]
+duration = "permanent"
+
+[entity.conditions.hidden]                  # Opts this entity out of the LLM's narration
+                                            # prompt entirely (_describe_scenario_characters'
+                                            # roster, and any action's own "defender_details")
+                                            # while active -- is_hidden (DM_Status.py). Paired
+                                            # with [entity.notice] below, this is how a hazard
+                                            # like items.toml's dart trap stays unspoiled until
+                                            # the player would actually have a reason to know
+                                            # about it.
+duration = "permanent"
+
+# ---------------------------------------------------------------------------------------------
+# Notice -- an auto-rolled, no-player-input counterpart to [entity.test]: the moment this
+# entity is instanced (RulesMixin._auto_roll_notice, DM_Rules.py), if it starts "hidden"
+# (above), the engine silently rolls resolve_action(player, skill, difficulty) on the player's
+# behalf. A pass dismisses "hidden" immediately; a fail leaves it hidden for the rest of that
+# playthrough -- this only ever rolls once, at instancing, same as every other per-room
+# condition (see _populate_room/visited_rooms). Unrelated to [entity.test]: that one still
+# requires matching player input and works the same whether or not this has resolved yet (ex:
+# a blind disarm attempt against a trap the player never actually noticed).
+[entity.notice]
+skill = "observation"                       # A single skill name (not a list -- there's no
+                                            # player choice to disambiguate between).
+difficulty = 4                              # Same resolve_action semantics as [entity.test]'s
+                                            # own "difficulty".
+
+# ---------------------------------------------------------------------------------------------
+# Behavior (creature/ally AI) -- a declaration-order list, matched top-down: the first entry
+# whose "requirements" all hold is what this entity does on its own turn in a round_resolved
+# round (resolve_behavior_action). "requirements" uses the exact same {field, operator, value}
+# engine [[status]] does (entity_matches_requirements) -- "field" can be derived
+# ("hp_per_remain", "distance_to_target" -- see below) or any direct attribute. "action" is
+# either one of this entity's *own* abilities by name (resolved via resolve_named_ability +
+# select_ability_skill, not a bare skill), or one of a handful of reserved words:
+# "advance"/"retreat" (MOVEMENT_ACTIONS, DM_Combat.py), routed to move_toward_or_away
+# (DM_Movement.py) instead -- ex: creatures.toml's wolf/giant spider both check a low-hp
+# "retreat" entry ahead of their own attack entry, the explicit, opt-in way a creature values
+# its own life and flees rather than fights to the death; an undead/construct with no such
+# entry just keeps attacking regardless of its own HP -- or "steal"/"gift" (TRANSFER_ACTIONS,
+# DM_Combat.py), routed to _resolve_transfer_behavior instead -- an autonomous item transfer
+# rather than an attack or a move, firing the same "theft"/"favor" attitude nudge
+# DM_Inventory.py's player-driven "take"/"give" already fires. Two behavior-entry-only fields
+# apply just to these: "item" (a real item entity's own name, or the reserved sentinel
+# "currency" -- the same one map_to_item's own currency-synonym check resolves to) names what
+# moves; "amount" (currency only) caps how much -- absent means transfer_currency's own
+# default, everything the source has, likely too punishing for an ambush the player didn't
+# choose to walk into (ex: creatures.toml's own "pickpocket", the shipped worked example,
+# authors amount = 10). An entity with no matching behavior (or
+# no behavior list at all) simply doesn't act that round -- but an attack entry that *did*
+# match, whose target is currently out of its own range, doesn't just do nothing:
+# resolve_behavior_action falls back to "advance" on its own in that case, no explicit
+# "advance" entry needed, closing the distance instead of standing idle.
+#
+# "distance_to_target" is a derived field like "hp_per_remain", but opponent-relative -- the
+# band gap to whichever entity resolve_behavior_action is resolving this turn against
+# (get_distance_between(entity_name, opponent_name)), None (never matching) if no opponent is
+# known at all (ex: a status's own requirements, which never carry one). Not needed for the
+# common "my one attack can't reach" case (the implicit "advance" fallback above already
+# handles that with no TOML at all) -- it's for a creature choosing *between* more than one
+# attack option by range. creatures.toml's "bandit" (in the "field" scenario) is the shipped
+# example -- both "short bow" and "rusty shortsword" below are real items.toml entities, named
+# directly (no [[entity.abilities]] duplication needed -- see resolve_ability):
+#   [[entity.behavior]]
+#   requirements = [ { field = "distance_to_target", operator = ">", value = 0 } ]
+#   action = "short bow"
+#   [[entity.behavior]]
+#   requirements = [ { field = "hp_per_remain", operator = ">=", value = 0.01 } ]
+#   action = "rusty shortsword"
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+    { field = "hp_per_remain", operator = "<", value = 0.40 },
+]
+action = "retreat"
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "punch"
+
+# ---------------------------------------------------------------------------------------------
+# Entity test -- a skill check against this entity itself (a lock, a trap, a hidden property),
+# not an opposed roll against a defender (see CLAUDE.md's "Entity tests"). Resolved as a flat
+# resolve_action(player, skill, difficulty) check.
+[entity.test]
+difficulty = 12                             # Same resolve_action semantics as the ability-level
+                                            # "difficulty" above -- but this one lives on the
+                                            # *target* entity, not the acting ability, and (when
+                                            # its own "skill" matches) always takes priority over
+                                            # the ability's own fallback "difficulty" -- this is
+                                            # how a specific entity authors real resistance to a
+                                            # spell/ability rather than just eating its flat DC.
+skill = [ "finesse" ]                       # Which skill(s) can attempt this test at all --
+                                            # gates whether it's a test in the first place
+                                            # (is_test_available); a skill not listed here just
+                                            # isn't a test and falls through to ordinary
+                                            # opposed-skill resolution instead.
+requires_condition = "locked"               # If set, this active_conditions entry must
+                                            # currently be present for the test to be available.
+blocks_if_condition = "jammed"              # If set, this active_conditions entry must
+                                            # currently be *absent* -- stops a spent/failed test
+                                            # from re-rolling forever.
+requirements = [                            # Optional, additive to requires_condition/
+    { field = "hp_per_remain", operator = "between", value = [0.2, 0.8] },
+]                                           # blocks_if_condition above -- the same requirements
+                                            # engine [[status]]/[[entity.behavior]] already use
+                                            # (entity_matches_requirements), for a test that needs
+                                            # to gate on more than one named condition's presence/
+                                            # absence (ex: an HP tier, an attribute, or a
+                                            # nested {"all"|"any"|"none": [...]} boolean
+                                            # combination of several checks). All present fields
+                                            # (requires_condition, blocks_if_condition,
+                                            # requirements) must hold together; most tests still
+                                            # only need the two simple fields above.
+
+[entity.test.pass]
+                                            # apply_test_outcome dispatches purely on which of
+                                            # these keys are present -- any combination, or none.
+dismiss_condition = "locked"                # Removes a condition (ex: unlocks the chest).
+condition = "identified"                    # Applies a new condition (same fields as below).
+duration = "permanent"
+dismiss = ""
+reveal = true                               # Truthy -> also applies "identified" permanently;
+                                            # what it reveals is read back off this entity's own
+                                            # "tags" field by whoever narrates it, not stored
+                                            # on the outcome itself.
+loot = true                                 # Truthy -> hands everything (currency + inventory)
+                                            # to the player via loot_entity.
+damage = { dice = 3, pips = 0, bonus = 0 }  # A {dice, pips, bonus} table -- deals real damage
+                                            # to the player via calculate_damage (ex: a trap's
+                                            # failed disarm), same immunity/resistance/
+                                            # vulnerability/evaluate_statuses path a weapon hit
+                                            # takes. Pair with damage_tags, below.
+damage_tags = [ "piercing" ]
+xp = true                                   # Truthy -> awards XP via _award_xp_for_defeat
+                                            # (DM_Combat.py) -- the same primitive a combat kill
+                                            # triggers, just called from here instead (ex:
+                                            # items.toml's dart trap/scythe trap, whose own
+                                            # [entity.test.pass] pairs this with
+                                            # dismiss_condition = "armed"). Only ever fires once
+                                            # per entity: dismissing this test's own
+                                            # requires_condition makes is_test_available false
+                                            # for every later attempt, same guarantee a combat
+                                            # kill gets from HP never going back above 0 on its
+                                            # own. Deliberately opt-in, unlike a combat kill --
+                                            # most entity.tests (ex: a chest's own lock above)
+                                            # aren't "surviving a threat" at all, so this can't
+                                            # be inferred from subtype == "trap" or any other
+                                            # property; it has to be authored. This entity's own
+                                            # top-level "exp" field is what decides the amount
+                                            # (custom if authored, else get_challenge_rating --
+                                            # see that field's own comment, above).
+
+[entity.test.fail]
+condition = "jammed"
+duration = "permanent"
+dismiss = ""
+
+# ---------------------------------------------------------------------------------------------
+# Craft -- gates DMCore._try_craft_action (DM_Crafting.py). Lives on the item *being* crafted,
+# named by whatever the player's "craft"/"brew"/"forge" phrase resolves to via map_to_item (the
+# same catalog-wide lookup examine/take/use already use -- this entity need not be instanced
+# anywhere yet; a pure recipe is fine). Unlike [entity.test], this is never opposed (there's
+# nothing to oppose it with) and never gated by the entity's own active_conditions -- it's
+# always available the moment its own requires_station/materials gates are met.
+[entity.craft]
+skill = [ "strength", "finesse" ]           # Which skill(s) can attempt this craft -- any one
+                                            # qualifies, same precedent as [entity.test]'s own
+                                            # skill list, except the player's *best-trained*
+                                            # skill among these is auto-picked (select_ability_
+                                            # skill, DM_Combat.py) rather than requiring the
+                                            # player to have named one in their own phrasing --
+                                            # "craft"/"brew"/"forge" carry no skill of their own
+                                            # the way "pick the lock with finesse" does.
+difficulty = 12                             # Same resolve_action semantics as [entity.test]'s
+                                            # own "difficulty".
+requires_station = "forge"                  # Optional. If set, some live scene entity's own
+                                            # top-level "provides_station" (see below) must
+                                            # match this value or the attempt fails as
+                                            # "missing_station" with no roll. Omitted entirely
+                                            # means craftable anywhere.
+materials = [
+    { item = "iron ingot", quantity = 2 }, # Every named item must be present in the player's
+    { item = "leather strip", quantity = 1 }, # own inventory in at least this quantity
+]                                           # (duplicates represent quantity, same convention
+                                            # transfer_item's own docstring already documents) or
+                                            # the attempt fails as "missing_materials" with no
+                                            # roll. Once a roll actually happens, every material
+                                            # is consumed unconditionally -- success or failure
+                                            # alike, a botched attempt still spends them.
+
+# ---------------------------------------------------------------------------------------------
+# Craft station -- a plain top-level field (not part of [entity.craft], which lives on the item
+# being crafted, not the station) marking a *different*, usually stationary entity (ex: a forge
+# prop) as satisfying some recipe's own "requires_station". Deliberately its own field rather
+# than reusing the freeform "tags" field above -- tags is documented as narration-only, never
+# matched against anything else, and overloading it here would break that invariant.
+provides_station = "forge"

@@ -223,7 +223,7 @@ at their own call sites, so this costs no new plumbing beyond the one added para
 `skill_name`, for the defender's side. A condition authoring no `applies_to` at all (every
 condition shipped before this field existed) still applies globally, unchanged. This is what
 lets Pathfinder's sight-only Dazzled or sound-only Deafened be authored honestly instead of as
-an oversized blanket penalty (see `Rules/Fantasy/reference/pathfinder_mapping.toml`'s Pattern
+an oversized blanket penalty (see `Rules/Pathfinder/reference/pathfinder_mapping.toml`'s Pattern
 C) — `rules.toml`'s own `"dazzled"` is the shipped example, `applies_to = ["observation"]`.
 
 **`applies_to` (and `equipped_skill_bonus`'s own `skill`) can name a `[[skill_group]]` instead
@@ -291,7 +291,7 @@ right before making camp still doesn't regenerate through that rest.
 ## Pathfinder-mapping engine extensions
 
 Five additive fields/triggers, added specifically to close `fit = "partial"`/`"none"` gaps in
-`Rules/Fantasy/reference/pathfinder_mapping.toml` (a machine-readable Pathfinder 1e -> D6
+`Rules/Pathfinder/reference/pathfinder_mapping.toml` (a machine-readable Pathfinder 1e -> D6
 mechanic-lookup table) without touching any existing behavior -- every one of these is
 absent/inert unless a piece of content actually authors it.
 

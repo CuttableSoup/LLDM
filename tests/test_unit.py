@@ -175,11 +175,13 @@ class DMTestCase(unittest.TestCase):
     which is what every subclass that never overrides either attribute relies on."""
     scenario_name = "debug"
     start_location = "arena_grounds"
+    setting = "Fantasy"
 
     def setUp(self):
         self.event_bus = EventBus()
         self.dm_core = DMCore(
             self.event_bus, scenario_name=self.scenario_name, start_location=self.start_location,
+            setting=self.setting,
         )
 
     def _stub_roll_dice(self, roll_result):
@@ -2527,6 +2529,7 @@ class TestLostCoastStartingDate(DMTestCase):
         rather than re-seeding the scenario's start date on top of it.
     """
     scenario_name = "lost_coast"
+    setting = "Pathfinder"  # lost_coast is Golarion-sourced content, kept isolated under Rules/Pathfinder/
     start_location = None  # leaves lost_coast.toml's own [scenario].start_location alone.
 
     def test_booting_the_scenario_seeds_the_shipped_start_date(self):
@@ -3101,6 +3104,7 @@ class TestWorldMapExpansion(DMTestCase):
     # overrides that slowdown back to the plain default_speed of 24, so the shipped trip still
     # costs exactly 3 blocks (distance 60 / speed 24), a single day.
     scenario_name = "lost_coast"
+    setting = "Pathfinder"  # lost_coast is Golarion-sourced content, kept isolated under Rules/Pathfinder/
     start_location = None  # lost_coast.toml is its own file, untouched by the debug.toml merge --
     # None leaves its own [scenario].start_location ("sandpoint") alone, overriding
     # DMTestCase's own "arena_grounds" default, which doesn't exist in this scenario at all.
@@ -3742,7 +3746,7 @@ class TestEntityBehavior(DMTestCase):
     def test_has_condition_gates_a_behavior_entry_off_the_entitys_own_condition(self):
         # A paralyzed creature shouldn't "act" at 0 dice -- it should match nothing and stand
         # down entirely, the same "no matching entry" fallback an entity with no behavior list
-        # at all already gets. See Rules/Fantasy/reference/pathfinder_mapping.toml's
+        # at all already gets. See Rules/Pathfinder/reference/pathfinder_mapping.toml's
         # condition_pattern "A" recipe.
         self.dm_core.entities["paralyzed_dummy"] = {
             "name": "paralyzed_dummy", "max_hp": 20, "skills": {},
@@ -3996,7 +4000,7 @@ class TestRoundUpkeep(DMTestCase):
     @brief The generic per-round upkeep hook (run_round_upkeep/apply_round_upkeep/
         get_condition_upkeep, DM_Status.py) and creatures.toml's "troll" -- the shipped
         regeneration-suppressed-by-fire example (see rules.toml's own "regenerating"
-        [[condition]] entry and Rules/Fantasy/reference/pathfinder_mapping.toml's
+        [[condition]] entry and Rules/Pathfinder/reference/pathfinder_mapping.toml's
         creature_ability "Regeneration / Fast Healing" row).
     """
 
@@ -4351,7 +4355,7 @@ class TestCombatTrickAndMetamagicModifiers(DMTestCase):
         counterpart to TestUniversalAbilities above: a supertype == "modifier" [[entity]]
         stacked onto another named ability at cast time via "applies_to"/"skill_divisor"/
         "damage_bonus"/"damage_multiplier" (see entity_schema.toml's own field reference and
-        Rules/Fantasy/reference/pathfinder_mapping.toml's Metamagic row).
+        Rules/Pathfinder/reference/pathfinder_mapping.toml's Metamagic row).
     """
 
     def setUp(self):
@@ -9830,11 +9834,11 @@ class TestValidation(DMTestCase):
     error captured after that must come from the injected data."""
 
     def test_real_shipped_data_boots_with_zero_validation_errors(self):
-        # Every real scenario this repo ships, in both settings -- a regression guard that a
+        # Every real scenario this repo ships, across every setting -- a regression guard that a
         # future data edit doesn't quietly introduce a dangling reference, and proof the
         # validator is genuinely setting-agnostic (no Fantasy-specific assumption anywhere in
         # DM_Validation.py).
-        for setting in ("Fantasy", "Zombie"):
+        for setting in ("Fantasy", "Zombie", "Pathfinder"):
             for scenario_key, _name, _description in list_available_scenarios(setting):
                 errors = []
                 bus = EventBus()
