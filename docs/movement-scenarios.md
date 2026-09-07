@@ -67,20 +67,33 @@ band distance can never fix it (a grounded wolf will never "catch up" to a flyin
 
 ## Scenarios, locations, and rooms
 
-`Rules/Fantasy/scenarios/*.toml` (`debug`, the single hub-and-spoke developer/test scenario --
-see "Testing" -- plus `lost_coast`, kept separate as the one real shipped scenario) each hold
-one `[scenario]` table, kept in their own subdirectory so multiple scenarios can coexist without
-the flat `load_rules` scan (which only keeps the last `[scenario]` table it reads) overwriting
-one with another. Every scenario is `[scenario]` (just `name`/`description`/`start_location`) →
-one or more `[[location]]` tables → optionally, per location, one or more `[[location.room]]`
-tables — a location is a *superset* of a room, not a sister of it: `[[location.room]]`/
+`Rules/Fantasy/scenarios/` (`debug`, the single hub-and-spoke developer/test scenario -- see
+"Testing" -- plus `lost_coast`, the one real shipped scenario) holds one `[scenario]` table per
+scenario, kept in its own subdirectory so multiple scenarios can coexist without the flat
+`load_rules` scan (which only keeps the last `[scenario]` table it reads) overwriting one with
+another. A scenario is either a single `<name>.toml` file (`debug.toml`) or, once its own content
+outgrows comfortably fitting in one document, a `<name>/` directory instead, holding several
+sibling `.toml` files that `load_scenario_definition` (`DM_Rules.py`'s `scenario_component_files`)
+merges together the same way `load_rules` already merges every shared `Rules/<setting>/*.toml`
+file -- `[[location]]`/`[[entity]]`/`[[entity_template]]` entries combine across files by key,
+exactly one of which may define the scenario's own singular `[scenario]` table (a hard error if
+more than one does, the same singular-ownership reasoning that pulled scenarios into their own
+subdirectory to begin with). `lost_coast` is the shipped example: `lost_coast/lost_coast.toml` carries `[scenario]` plus
+Magnimar, `lost_coast/sandpoint.toml` carries Sandpoint's own full build-out -- it simply grew too
+large to sit next to Magnimar in one file, with Magnimar expected to get the same one-file-per-town
+treatment whenever it's built out too. Every scenario is `[scenario]` (just
+`name`/`description`/`start_location`) → one or more
+`[[location]]` tables → optionally, per location, one or more `[[location.room]]` tables — a
+location is a *superset* of a room, not a sister of it: `[[location.room]]`/
 `[[location.room.exit]]` behave exactly like an ordinary room/exit, just nested one level
 deeper. `Rules/Fantasy/reference/location_schema.toml`
 is the field-by-field reference for the `[[location]]` shape. `debug.toml` itself is a worked
 example of a multi-location scenario at real scale: a freeform `debug_hub` location with a
 `[[location.exit]]` to each of its dozen-plus areas, each pointing back via its own
 `return_to = "debug_hub"` — the same hub-and-spoke pattern `debug.toml`'s own
-`town_square`/`blacksmith`/`old_well` sub-graph already uses at a smaller scale, just one level up.
+`town_square`/`blacksmith`/`old_well` sub-graph already uses at a smaller scale, just one level up
+(and the same pattern `lost_coast/sandpoint.toml`'s own 52-landmark hub-and-spoke off `sandpoint`
+itself scales up once more, per "Gridded locations fall back to grid connectivity" below).
 
 **A location may declare `entities` directly, `[[location.room]]`, or both.** On a location with
 no rooms at all (ex: `debug.toml`'s `town_square`/`blacksmith`), `entities` is genuinely
@@ -178,13 +191,19 @@ blocks a move taken from a location's own freeform space; always blocks one take
 already runs for an ordinary room-to-room move, scoped to that one room's own occupants, whether
 the destination is another room in the same location or a jump to a different location entirely.
 
-**Gridded locations skip this graph entirely.** An optional `grid = {x, y}` field on a
-`[[location]]` — see `docs/downtime.md`'s "Travel" — replaces its own `[[location.exit]]`/
-`return_to` graph with pure grid connectivity: any *known* location (`DMCore.known_locations`) is
-reachable directly by name/alias, distance/time cost computed from grid coordinates and party
-travel speed. `_resolve_travel_intent` branches on the *current* location's own `grid` field before
-ever touching `_resolve_location_exit` below; a non-gridded location's exits are completely
-unaffected either way.
+**Gridded locations fall back to grid connectivity, not exclusively to it.** An optional
+`grid = {x, y}` field on a `[[location]]` — see `docs/downtime.md`'s "Travel" — adds pure grid
+connectivity on top of (not instead of) its own `[[location.exit]]`/`return_to` graph: any
+*known* location (`DMCore.known_locations`) is reachable directly by name/alias, distance/time
+cost computed from grid coordinates and party travel speed. `_resolve_travel_intent` tries this
+location's own named-exit lookup first regardless of `grid`; only when that finds nothing does a
+`grid` field get checked against every other known, gridded location's own name/aliases
+(`_resolve_grid_destination`, a pure lookup) before finally falling back to `return_to` — so a
+gridded location can double as a real hub with its own walkable interior (ex: a town whose
+overworld grid point is also its town-square exit graph) while still being reachable from, and
+reaching, other gridded points by name. A non-gridded location's exits are completely unaffected
+either way, and a gridded location authoring no exit graph of its own (every one shipped before
+this existed) behaves exactly as before — the named-exit lookup simply never matches anything.
 
 **`self.entities` holds templates and live instances under the same keys** — instancing a
 single-occurrence entity overwrites its template slot. `load_game` re-runs `load_rules()` before

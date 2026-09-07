@@ -8,7 +8,7 @@ import threading
 from Event_Bus import EventBus
 from Logger import Logger
 from llm.LLM_Core import LLMCore
-from dm.DM_Core import DMCore, scenario_file_path
+from dm.DM_Core import DMCore, scenario_exists
 from gui.GUI_Core import GUICore
 from nlp.NLP_Core import NLPCore
 from llm.Ollama_Launcher import ensure_ollama_running
@@ -77,7 +77,7 @@ def main():
     # Fail fast on a bad scenario name before spending ~15-20s loading NLPCore's
     # sentence-transformers model, rather than silently continuing with no scenario
     # data (which used to let the LLM hallucinate a scene from nothing).
-    if args.scenario is not None and not os.path.exists(scenario_file_path(args.scenario, args.setting)):
+    if args.scenario is not None and not scenario_exists(args.scenario, args.setting):
         print(
             f"Error: scenario '{args.scenario}' not found in Rules/{args.setting}/scenarios/.",
             file=sys.stderr,

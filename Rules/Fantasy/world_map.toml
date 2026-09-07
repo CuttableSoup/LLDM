@@ -45,6 +45,14 @@ max_y = 20
 # cross-country penalty back to the plain default_speed, so this trip still costs exactly 3
 # blocks (a single day), now demonstrably because of the road rather than by having no terrain at
 # all. width is a perpendicular tolerance in grid units (miles), not a lane count.
+#
+# A road isn't limited to one straight leg between its two endpoints -- "path" (a list of 2+
+# {x, y} points, below) traces out as many legs as it names, each checked as its own segment
+# (DM_Travel.py's _resolve_road_multiplier/_road_points), so a road can bend to actually follow
+# a coastline/river/mountain pass instead of cutting straight through whatever's between its
+# endpoints. "from"/"to" (this entry's own shape) is still the plain single-segment case --
+# equivalent to a two-point "path" -- kept working unchanged for a road that's genuinely
+# straight, like this one.
 [[road]]
 from = { x = 150, y = 0 }
 to = { x = 210, y = 0 }

@@ -18,7 +18,13 @@ PLAYER_PLACEHOLDER = "player"
 
 def scenario_file_path(scenario_name, setting="Fantasy"):
     """!
-    @brief Resolves a scenario name to its file path under Rules/<setting>/scenarios/.
+    @brief Resolves a scenario name to its single-file path under Rules/<setting>/scenarios/
+        -- the plain, one-`[[location]]`-file-holds-everything shape every scenario used
+        before scenario_component_files (below) existed, and still the only shape most
+        scenarios need (ex: debug.toml). Kept as its own function (rather than folded away)
+        since it's still exactly what a caller wants when checking/reporting on the
+        conventional single-file case specifically (ex: LLDM.py's own error message, naming
+        the file a scenario would need if it doesn't already exist as a directory).
     @param scenario_name The scenario's filename without extension (ex: "debug", "lost_coast").
     @param setting Which Rules/ subdirectory to resolve against (ex: "Fantasy", "Zombie") --
         each setting is a self-contained TOML data pack (its own skills/rules/entities/
@@ -30,34 +36,101 @@ def scenario_file_path(scenario_name, setting="Fantasy"):
     return os.path.join(PROJECT_ROOT, "Rules", setting, "scenarios", f"{scenario_name}.toml")
 
 
+def _scenario_dir_path(scenario_name, setting="Fantasy"):
+    return os.path.join(PROJECT_ROOT, "Rules", setting, "scenarios", scenario_name)
+
+
+def scenario_component_files(scenario_name, setting="Fantasy"):
+    """!
+    @brief Resolves a scenario name to every TOML file that makes it up -- a scenario is
+        either one plain `<name>.toml` file (scenario_file_path's own shape, everything a
+        scenario needs in one document -- ex: debug.toml) or, once a scenario grows past
+        comfortably fitting in one file, a `<name>/` directory instead, holding several
+        sibling `*.toml` files merged together the exact same way load_rules already merges
+        every shared Rules/<setting>/*.toml file: [[location]]/[[entity]]/[[entity_template]]
+        entries combine across files by key, last-file-wins on a genuine collision (sorted
+        order, so that's deterministic) -- see load_scenario_definition for where the actual
+        merge happens. The one thing that can't be split this way is the `[scenario]` table
+        itself (name/description/start_location, ...): exactly one component file may define
+        it, the same singular-ownership reason a scenario got pulled into its own
+        subdirectory, away from load_rules' own flat scan, in the first place (see this
+        module's own module-level scenario/rules-directory split). A scenario directory
+        naming a real town/district per file (ex: lost_coast/sandpoint.toml,
+        lost_coast/magnimar.toml) is the intended shape -- nothing here requires that
+        convention, though; any split across files works the same way.
+    @param scenario_name The scenario's own name (ex: "debug", "lost_coast").
+    @param setting Which Rules/ subdirectory to resolve against -- see scenario_file_path.
+    @return A sorted list of absolute filepaths -- every `*.toml` directly inside
+        `<name>/` (non-recursive, the same flat os.listdir scan load_rules itself uses) if
+        that directory exists, else the single conventional `[scenario_file_path(...)]`,
+        whether or not that one file actually exists (callers already handle a missing
+        single file the same way they always have).
+    """
+    dir_path = _scenario_dir_path(scenario_name, setting)
+    if os.path.isdir(dir_path):
+        return sorted(
+            os.path.join(dir_path, filename)
+            for filename in os.listdir(dir_path)
+            if filename.endswith(".toml")
+        )
+    return [scenario_file_path(scenario_name, setting)]
+
+
+def scenario_exists(scenario_name, setting="Fantasy"):
+    """!
+    @brief Whether scenario_name resolves to any real data at all, single-file or split
+        across a directory -- what LLDM.py's own pre-boot existence check needs instead of a
+        bare os.path.exists(scenario_file_path(...)), which only ever knew about the
+        single-file shape and would wrongly report a real, directory-based scenario (ex:
+        lost_coast) as missing.
+    @param scenario_name The scenario's own name.
+    @param setting Which Rules/ subdirectory to resolve against -- see scenario_file_path.
+    @return True if at least one of scenario_component_files' own paths actually exists.
+    """
+    return any(os.path.exists(path) for path in scenario_component_files(scenario_name, setting))
+
+
 def list_available_scenarios(setting="Fantasy"):
     """!
     @brief Every real gameplay scenario under Rules/<setting>/scenarios/, for a UI to offer as
         a choice before any DMCore exists -- same "pure, DMCore-independent, re-scan the TOML
         directly" precedent Character_Creation.py's load_character_creation_data sets, since
-        GUICore needs this list before it can know whether a DMCore will ever exist.
+        GUICore needs this list before it can know whether a DMCore will ever exist. A
+        directory-based scenario (scenario_component_files) is listed exactly once, keyed by
+        its own directory name, its display name/description read off whichever of its own
+        component files actually carries the `[scenario]` table.
     @param setting Which Rules/ subdirectory to scan -- see scenario_file_path.
     @return A list of (scenario_key, display_name, description) tuples, sorted by key. A
-        scenario file that's missing or fails to parse is silently skipped, the same
-        per-file leniency load_rules applies to every other TOML file.
+        scenario whose data is missing or fails to parse entirely is silently skipped, the
+        same per-file leniency load_rules applies to every other TOML file.
     """
     scenarios_dir = os.path.join(PROJECT_ROOT, "Rules", setting, "scenarios")
 
-    results = []
     if not os.path.isdir(scenarios_dir):
-        return results
-    for filename in sorted(os.listdir(scenarios_dir)):
-        if not filename.endswith(".toml"):
-            continue
-        key = filename[: -len(".toml")]
-        try:
-            with open(os.path.join(scenarios_dir, filename), "rb") as f:
-                data = tomllib.load(f)
-        except (OSError, tomllib.TOMLDecodeError):
-            continue
-        scenario_table = data.get("scenario", {})
+        return []
+
+    keys = set()
+    for entry in os.listdir(scenarios_dir):
+        full_path = os.path.join(scenarios_dir, entry)
+        if entry.endswith(".toml") and os.path.isfile(full_path):
+            keys.add(entry[: -len(".toml")])
+        elif os.path.isdir(full_path):
+            keys.add(entry)
+
+    results = []
+    for key in keys:
+        scenario_table = {}
+        for component_path in scenario_component_files(key, setting):
+            try:
+                with open(component_path, "rb") as f:
+                    data = tomllib.load(f)
+            except (OSError, tomllib.TOMLDecodeError):
+                continue
+            if "scenario" in data:
+                scenario_table = data["scenario"]
+                break
         results.append((key, scenario_table.get("name", key), scenario_table.get("description", "")))
-    return results
+    return sorted(results)
 
 
 def list_available_settings():
@@ -455,11 +528,14 @@ class RulesMixin(DMCoreProtocol):
 
     def load_scenario_definition(self, scenario_name):
         """!
-        @brief Reads a named scenario file from Rules/Fantasy/scenarios/ into self.scenario/
-            self.locations. Scenarios live in their own subdirectory rather than the flat
-            Rules/Fantasy/ scan in load_rules (which only keeps whichever [scenario] table it
-            reads last), so multiple named scenarios can coexist and one is selected explicitly
-            by name.
+        @brief Reads a named scenario's own component file(s) (scenario_component_files --
+            either one plain `<name>.toml`, or every `*.toml` in a `<name>/` directory) into
+            self.scenario/self.locations. Scenarios live in their own subdirectory rather than
+            the flat Rules/Fantasy/ scan in load_rules (which only keeps whichever [scenario]
+            table it reads last), so multiple named scenarios can coexist and one is selected
+            explicitly by name; a scenario split across several component files gets the exact
+            same treatment one level deeper -- see scenario_component_files' own docstring for
+            why exactly one of them may define [scenario] itself.
 
             A scenario is one or more [[location]] tables (a place: a town square, a building,
             a dungeon), self.scenario's own "start_location" naming which one to begin in --
@@ -489,30 +565,47 @@ class RulesMixin(DMCoreProtocol):
             this), so a scenario-local entity/template can reuse a shared name on purpose to
             override it for this one scenario, and so both are re-populated fresh on every
             load, same as everything load_rules itself loads.
-        @param scenario_name The scenario's filename without extension (ex: "debug", "lost_coast").
-        @raises FileNotFoundError if no matching scenario file exists. Unlike load_rules'
-                blanket per-file try/except, a missing/malformed scenario is fatal on purpose:
-                silently continuing with an empty self.scenario used to let LLMCore narrate an
-                opening scene with no name/description, which the LLM would happily hallucinate
-                (ex: a "featureless gray void") with no indication anything had gone wrong.
+        @param scenario_name The scenario's own name (ex: "debug", "lost_coast").
+        @raises FileNotFoundError if none of this scenario's own component files exist.
+                Unlike load_rules' blanket per-file try/except, a missing/malformed scenario is
+                fatal on purpose: silently continuing with an empty self.scenario used to let
+                LLMCore narrate an opening scene with no name/description, which the LLM would
+                happily hallucinate (ex: a "featureless gray void") with no indication anything
+                had gone wrong.
+        @raises ValueError if more than one component file defines its own [scenario] table --
+                the split-scenario counterpart of that same fatal-on-purpose principle: silently
+                keeping whichever loads last (load_rules' own flat-scan behavior, the reason
+                scenarios don't live there to begin with) would silently drop the other file's
+                intended name/description/start_location instead of surfacing the authoring
+                mistake.
         """
-        filepath = scenario_file_path(scenario_name, self.setting)
+        component_paths = [p for p in scenario_component_files(scenario_name, self.setting) if os.path.exists(p)]
+        if not component_paths:
+            raise FileNotFoundError(
+                f"Scenario '{scenario_name}' not found (expected {scenario_file_path(scenario_name, self.setting)})."
+            )
 
-        if not os.path.exists(filepath):
-            raise FileNotFoundError(f"Scenario '{scenario_name}' not found (expected {filepath}).")
-
-        with open(filepath, "rb") as f:
-            data = tomllib.load(f)
-        self.scenario = data.get("scenario", {})
+        self.scenario = None
         self.locations = {}
-        for location in data.get("location", []):
-            location = dict(location)
-            location["rooms"] = {room.get("key"): room for room in location.get("room", [])}
-            self.locations[location.get("key")] = location
-        for entity in data.get("entity", []):
-            self.entities[entity.get("name")] = entity
-        for entity_template in data.get("entity_template", []):
-            self.entity_templates[entity_template.get("name")] = entity_template
+        for filepath in component_paths:
+            with open(filepath, "rb") as f:
+                data = tomllib.load(f)
+            if "scenario" in data:
+                if self.scenario is not None:
+                    raise ValueError(
+                        f"Scenario '{scenario_name}' has more than one [scenario] table across "
+                        f"its own component files ({', '.join(component_paths)})."
+                    )
+                self.scenario = data["scenario"]
+            for location in data.get("location", []):
+                location = dict(location)
+                location["rooms"] = {room.get("key"): room for room in location.get("room", [])}
+                self.locations[location.get("key")] = location
+            for entity in data.get("entity", []):
+                self.entities[entity.get("name")] = entity
+            for entity_template in data.get("entity_template", []):
+                self.entity_templates[entity_template.get("name")] = entity_template
+        self.scenario = self.scenario or {}
         # Reset per-playthrough location/room state -- populated for real by _enter_location
         # (called from load_scenario(), below) once entities/templates are all loaded.
         self.current_location_key = None

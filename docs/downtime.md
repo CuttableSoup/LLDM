@@ -108,12 +108,17 @@ resulting day/night state, never inventing either.
 ## Travel
 
 An optional `grid = {x, y}` field on a `[[location]]` opts it into overworld travel (`DM_Travel.py`)
-— and, for that coordinate-bearing subset only, *replaces* its authored `[[location.exit]]`/
-`return_to` graph entirely: `DM_Movement.py`'s `_resolve_travel_intent` checks the *current*
-location for a `grid` field first, branching to `_resolve_grid_travel_intent` before ever
-consulting the exit graph if one is present. A location with no `grid` field keeps resolving
-through the ordinary exit graph completely unchanged — the two connectivity models never mix on
-the same location.
+*alongside* whatever `[[location.exit]]`/`return_to` graph it authors, not instead of it:
+`DM_Movement.py`'s `_resolve_travel_intent` tries this location's own named-exit lookup first;
+only once that finds nothing does a `grid` field get checked against every other known, gridded
+location's own name/aliases (`_resolve_grid_destination`), falling to `_resolve_grid_travel_intent`
+if one matches, before `return_to` gets the last word. A gridded location authoring no exit graph
+of its own (every one shipped before a gridded location ever needed a walkable interior, ex:
+`trailhead`/`border_stones`/`magnimar`) still resolves through grid travel exactly as before — the
+named-exit lookup simply never matches anything for it to fall through from. See
+`docs/movement-scenarios.md`'s "Gridded locations fall back to grid connectivity" for the full
+mechanism and worked example (`lost_coast.toml`'s `sandpoint`, doubling as both the overworld
+grid point *and* the town's own exit-graph hub).
 
 **Known locations.** From a gridded location, any *known* location is reachable directly by
 naming it (its own `name`, or a location-level `aliases` list — distinct from an exit's own
@@ -282,6 +287,14 @@ nothing about this design can pathfind around a stretch of slow ground once a tr
 underway — a route is checked passable *before* committing to it, never abandoned partway through).
 A road's own multiplier always overrides terrain rather than compounding with it — the whole point
 of building one is to counteract whatever ground it crosses.
+
+A `[[road]]` isn't limited to one straight leg between two endpoints — `path` (a list of 2+
+`{x, y}` points) traces out as many legs as it names, each checked as its own point-to-segment
+distance (`_road_points`/`_point_to_segment_distance`, factored out of `_resolve_road_multiplier`
+for exactly this reuse), so a road can actually bend to follow a coastline/river/mountain pass
+instead of cutting straight through whatever lies between its endpoints. The plain `from`/`to`
+shape (below, and every road shipped before `path` existed) is just the two-point case of the
+same mechanism, kept working unchanged.
 
 `terrain.toml`'s own `impassable`/`requires_tag` pair is what actually blocks a trip outright,
 closing the gap the rest of this section used to leave open ("Terrain never blocks travel today").

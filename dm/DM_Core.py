@@ -18,7 +18,7 @@ from dm.DM_Inventory import InventoryMixin
 from dm.DM_Movement import MovementMixin
 from dm.DM_NpcGeneration import NpcGenerationMixin
 from dm.DM_Persistence import PersistenceMixin
-from dm.DM_Rules import RulesMixin, scenario_file_path
+from dm.DM_Rules import RulesMixin, scenario_exists
 from dm.DM_Social import SocialMixin
 from dm.DM_Status import StatusMixin
 from dm.DM_Summoning import SummoningMixin

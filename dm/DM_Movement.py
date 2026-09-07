@@ -691,12 +691,18 @@ class MovementMixin(DMCoreProtocol):
             "no_exit") if that's also absent (ex: town_square, the top of the graph, has
             nowhere to "leave" to).
 
-            **Gridded locations branch out entirely** -- see DM_Travel.py's TravelMixin/
-            docs/downtime.md's "Travel". If the *current* location carries a "grid" field, the
-            authored [[location.exit]]/"return_to" graph below never runs at all: connectivity
-            for this coordinate-bearing subset comes purely from grid distance and
-            self.known_locations, handled start to finish by _resolve_grid_travel_intent
-            (including its own hostile gate, mirroring the one below).
+            **Gridded locations fall back to grid travel, not to it exclusively** -- see
+            DM_Travel.py's TravelMixin/docs/downtime.md's "Travel". A gridded location may
+            still author its own [[location.exit]]/"return_to" graph (ex: a walkable town
+            whose own overworld grid point doubles as its hub): this location's own named-exit
+            lookup runs first regardless of "grid"; failing that, a "grid" field checked against
+            _resolve_grid_destination (a pure lookup, no side effects) sends the input to
+            _resolve_grid_travel_intent instead (including its own hostile gate, mirroring the
+            one below) whenever input_text actually names another known, gridded location;
+            "return_to" is still the last resort, for a generic "leave" naming neither. Every
+            gridded location shipped without any exit graph of its own (ex:
+            "trailhead"/"border_stones"/"magnimar") authors nothing for the first lookup to ever
+            match, so it falls through to grid travel exactly as it always did.
 
             Hostile gate: never blocks a move taken from a location's own freeform "entities"
             space (self.rooms empty) -- an open square is non-linear on purpose, so ducking
@@ -724,15 +730,15 @@ class MovementMixin(DMCoreProtocol):
             resolved(False, reason="downtime_interrupted")
             return
 
-        if "grid" in self.locations.get(self.current_location_key, {}):
-            self._resolve_grid_travel_intent(input_text, resolved)
-            return
-
         exit_def = self._resolve_location_exit(input_text)
         if exit_def is not None:
             destination_key = exit_def["destination"]
             arrival_room = exit_def.get("arrival_room")
             arrival_band = exit_def.get("arrival_band", 1)
+        elif "grid" in self.locations.get(self.current_location_key, {}) and \
+                self._resolve_grid_destination(input_text) is not None:
+            self._resolve_grid_travel_intent(input_text, resolved)
+            return
         else:
             return_to = self.locations.get(self.current_location_key, {}).get("return_to")
             if not return_to or return_to not in self.locations:

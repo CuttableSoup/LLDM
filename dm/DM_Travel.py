@@ -293,13 +293,50 @@ class TravelMixin(DMCoreProtocol):
             if self._is_party_member(name)
         }
 
+    @staticmethod
+    def _point_to_segment_distance(x, y, sx, sy, ex, ey):
+        """!
+        @brief Standard clamped point-to-segment distance from (x, y) to the segment running
+            (sx, sy) -> (ex, ey) -- factored out of _resolve_road_multiplier so a multi-segment
+            road (see "_road_points", below) can reuse it once per leg instead of only ever
+            being handed a single segment.
+        @return The perpendicular (or endpoint) distance, in grid units.
+        """
+        dx, dy = ex - sx, ey - sy
+        length_sq = dx * dx + dy * dy
+        if length_sq == 0:
+            t = 0.0
+        else:
+            t = max(0.0, min(1.0, ((x - sx) * dx + (y - sy) * dy) / length_sq))
+        nearest_x, nearest_y = sx + t * dx, sy + t * dy
+        return math.hypot(x - nearest_x, y - nearest_y)
+
+    @staticmethod
+    def _road_points(road):
+        """!
+        @brief A road's own waypoints as a flat [(x, y), ...] list, at least 2 entries -- its
+            own "path" (a list of >= 2 {x, y} tables) if authored, tracing out a road that bends
+            across as many legs as it names, else the single-segment "from"/"to" pair every road
+            authored before "path" existed still uses, kept working unchanged. "path" and
+            "from"/"to" are mutually exclusive by convention (a road only needs one), but "path"
+            wins if both are somehow present.
+        @param road One world_map.toml [[road]] table.
+        @return A list of (x, y) tuples, consecutive pairs of which are this road's own legs.
+        """
+        path = road.get("path")
+        if path:
+            return [(point.get("x", 0), point.get("y", 0)) for point in path]
+        start, end = road.get("from", {}), road.get("to", {})
+        return [(start.get("x", 0), start.get("y", 0)), (end.get("x", 0), end.get("y", 0))]
+
     def _resolve_road_multiplier(self, x, y):
         """!
-        @brief The best (highest) speed_multiplier among every world_map.toml [[road]] whose
-            own line segment ("from" to "to") passes within "width" grid units of (x, y) --
-            standard clamped point-to-segment distance. A road overrides terrain entirely where
-            it applies (see _effective_speed_multiplier) rather than compounding with it: the
-            whole point of a road is to counteract whatever ground it's built over.
+        @brief The best (highest) speed_multiplier among every world_map.toml [[road]] any of
+            whose own legs (consecutive pairs of _road_points -- a single "from"/"to" segment,
+            or as many as "path" names) passes within "width" grid units of (x, y). A road
+            overrides terrain entirely where it applies (see _effective_speed_multiplier) rather
+            than compounding with it: the whole point of a road is to counteract whatever ground
+            it's built over.
         @param x Grid x coordinate.
         @param y Grid y coordinate.
         @return The matching road's own "speed_multiplier", or None if no road's own "width"
@@ -307,17 +344,11 @@ class TravelMixin(DMCoreProtocol):
         """
         best = None
         for road in self.rules.get("road", []):
-            start, end = road.get("from", {}), road.get("to", {})
-            sx, sy = start.get("x", 0), start.get("y", 0)
-            ex, ey = end.get("x", 0), end.get("y", 0)
-            dx, dy = ex - sx, ey - sy
-            length_sq = dx * dx + dy * dy
-            if length_sq == 0:
-                t = 0.0
-            else:
-                t = max(0.0, min(1.0, ((x - sx) * dx + (y - sy) * dy) / length_sq))
-            nearest_x, nearest_y = sx + t * dx, sy + t * dy
-            distance = math.hypot(x - nearest_x, y - nearest_y)
+            points = self._road_points(road)
+            distance = min(
+                self._point_to_segment_distance(x, y, sx, sy, ex, ey)
+                for (sx, sy), (ex, ey) in zip(points, points[1:])
+            )
             if distance <= road.get("width", 0):
                 multiplier = road.get("speed_multiplier", 1.0)
                 if best is None or multiplier > best:
