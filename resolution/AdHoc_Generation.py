@@ -603,7 +603,7 @@ def _build_creature_tool_schema(npc_keywords):
 
 
 def generate_ad_hoc_creature(
-    phrase, scene_description, target_cr, npc_keywords,
+    phrase, scene_description, target_cr, npc_keywords, skills_catalog,
     call_chat_completion=None, api_url=DEFAULT_API_URL, timeout=DEFAULT_TIMEOUT,
 ):
     """!
@@ -626,6 +626,8 @@ def generate_ad_hoc_creature(
     @param npc_keywords {keyword_name: [skill_name, ...]}, from NPC_Generation.load_npc_keywords
         -- an empty catalog (ex: a setting with no npc_keyword entries at all) declines
         immediately, no LLM call.
+    @param skills_catalog Forwarded to fit_skills_to_cr -- the setting's own {skill_name:
+        {"combat_role", ...}} table (ex: DM_Combat.py's self.skills).
     @param call_chat_completion/api_url/timeout See generate_ad_hoc_item's own docstring.
     @return {"created": False, "reason": str} on decline, an empty npc_keywords, or any failure
             -- never raises. On success: {"created": True, "entity": {full entity dict,
@@ -670,7 +672,7 @@ def generate_ad_hoc_creature(
 
     key_skills = [skill for keyword in chosen_keywords for skill in npc_keywords.get(keyword, [])]
     rolled_cr = target_cr * POWER_MULTIPLIERS[power] * random.uniform(0.85, 1.15)
-    skills, max_hp = fit_skills_to_cr(key_skills, rolled_cr)
+    skills, max_hp = fit_skills_to_cr(key_skills, rolled_cr, skills_catalog)
 
     entity = {
         "name": name,
@@ -687,8 +689,10 @@ def generate_ad_hoc_creature(
     }
 
     if disposition == "hostile":
-        # skills is built in unique_skills order (fit_skills_to_cr) -- the first entry is
-        # always one of the (up to 3) primary-rated skills, so no separate ranking is needed.
+        # fit_skills_to_cr builds skills offense-first, then defense, then resistive, then
+        # flavor -- the first entry is the single best-rated combat skill whenever key_skills
+        # names any at all (falling through to a flavor skill only if it named none), so no
+        # separate ranking is needed here.
         attack_skill = next(iter(skills), None)
         if attack_skill:
             ability_name = f"{name} attack"

@@ -63,27 +63,55 @@ currently reach its target (`is_in_range`) — closing distance instead of stand
 
 `Challenge_Rating.py` is a pure, DMCore-independent module computing a single number for "how
 powerful is this entity," built entirely from its own dice/pips. `skill_rating(dice, pips)` is
-`dice * 3 + pips`, the shared "3 pips = 1 die" scale. `calculate_challenge_rating(skills,
-max_hp, damage_dice=0, damage_pips=0, top_n=3)` sums three components on that same scale:
-- **skill** — the average `skill_rating` of the entity's `top_n` (default 3) best-*trained*
-  skills, not every skill it has, so a character trained broadly but shallowly can't outrank a
-  boss authored with only 2-3 trained skills.
+`dice * 3 + pips`, the shared "3 pips = 1 die" scale. `calculate_challenge_rating(offense_skill_
+rating, damage_dice, damage_pips, defense_skill_rating, save_ratings, max_hp, resistance_dice=0,
+resistance_pips=0, immunity_tags=None, vulnerability_dice=0, vulnerability_pips=0)` sums
+components on that same scale, each already resolved by the caller rather than derived from a
+generic "top skills" scan — an entity's own noncombat skills (`appraise`, `navigation`, ...)
+never contribute at all, only the ones that actually matter in a fight:
+- **offense** — `skill_rating` of the entity's single best attack's own skill, plus
+  `skill_rating` of that *same* attack's own damage `dice`/`pips` (not its `bonus` field, which
+  can be a `rules.toml` formula reference) — skill and damage always come from one matched
+  candidate, never mixed independently from two different weapons/abilities.
+- **defense** — the entity's own rating in whichever skill(s) `skills.toml` tags `combat_role =
+  "defense"` (Pathfinder/Fantasy/Zombie all use exactly one: `dodge`, the skill nearly every
+  physical attack skill's own `opposes` list leads with) — counted at full value, not diluted
+  into an average with unrelated skills the way a generic top-N scan would.
+- **save** — the average rating across whichever skill(s) are tagged `combat_role =
+  "resistive"` (`fortitude`/`reflexes`/`willpower` — Pathfinder's own three saves) — a distinct
+  axis from offense/defense: how hard this entity is to lock down with a save-or-suck
+  spell/condition, regardless of how it fares in a straight exchange. Averaged across *every*
+  resistive-role skill the setting defines, not just the ones an entity happens to train — an
+  untrained one still pulls the average down, the same way a real weak save would.
 - **hp** — `max_hp // 3`, the same `/3` scale as pips-to-dice.
-- **damage** — `skill_rating` of the entity's single best damage-dealing weapon/ability's own
-  `dice`/`pips` — not its `bonus` field, which can be a `rules.toml` formula reference rather
-  than a flat number.
+- **resistance / immunity / vulnerability** — `resistance_value`'s own rolled dice/pips add
+  directly (same scale as everything else); `immunity_tags` adds a flat credit
+  (`IMMUNITY_PER_TAG_BONUS` per specific tag, a bigger flat `IMMUNITY_ANY_BONUS` for the
+  reserved `"any"` wildcard — immunity has no dice/pips of its own to convert with, so these are
+  a deliberately simple stand-in); `vulnerability_value` *subtracts* — a real exploitable
+  weakness makes an entity easier to bring down, not harder.
+
+A setting's own `[[skill]]` entries opt into `combat_role` (`skills.toml`) rather than the code
+ever hardcoding a skill name — Pathfinder/Fantasy/Zombie each tag their own equivalents, so nothing
+here assumes any particular setting's own skill list.
 
 `calculate_party_challenge_rating(member_ratings)` is a plain sum, not an average — a larger
 party of individually modest ratings can still outrate one strong boss.
 
 `DM_Combat.py`'s `get_challenge_rating(entity_name)`/`get_party_challenge_rating()` are the
-DMCore-touching glue: `_best_damage_dice_pips` finds the best `dice`/`pips` from every equipped
-item plus every resolved ability with a `damage_value` (the same candidate pool
-`find_attack_ability` draws from, just not filtered to one particular skill), resolving
-`"user.weapon.<field>"` indirection (`resolve_weapon_reference`) the same way a real attack
-would. `get_party_challenge_rating` filters through `self.scenario_entities`, not a blind
-`is_player`/`is_party` scan of `self.entities` (see the same note on `GUI_Core.py`'s Party-tab
-filtering, above).
+DMCore-touching glue. `_best_offense_package` finds the single best-*paired* skill+damage from
+every equipped item plus every resolved ability with a `damage_value` (the same candidate pool
+`find_attack_ability` draws from, just not filtered to one particular skill), ranked by
+skill+damage together rather than damage alone, resolving `"user.weapon.<field>"` indirection
+(`resolve_weapon_reference`) the same way a real attack would, and `select_ability_skill` for a
+multi-skill `"skill"` field. An entity with no damage-dealing weapon/ability at all (ex: a
+procedurally-generated NPC — generation deliberately never touches `abilities`/`equipped`, see
+"NPC generation" below) falls back to its own best-rated `combat_role = "offense"` skill with 0
+damage, rather than reading as unarmed for CR purposes entirely. `_skills_with_role(combat_role)`
+is the generic lookup behind defense/save (and this fallback) — every skill name the live
+setting's own `self.skills` tags that role, never a hardcoded string. `get_party_challenge_rating`
+filters through `self.scenario_entities`, not a blind `is_player`/`is_party` scan of
+`self.entities` (see the same note on `GUI_Core.py`'s Party-tab filtering, above).
 
 **Lore checks (Pathfinder Knowledge skills).** `"lore_check"` is a free-standing intent (see
 `docs/action-resolution.md`'s "Multiple actions", `CONTEXT.md`'s "Free-standing intent") that

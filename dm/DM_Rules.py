@@ -657,7 +657,7 @@ class RulesMixin(DMCoreProtocol):
               max_hp/name of its own. NpcGenerationMixin._apply_npc_generation fills those in
               immediately after the instance is stored, mutating it in place (it has to
               already be in self.entities by then, since the CR-fitting math calls back into
-              get_challenge_rating/_best_damage_dice_pips, both keyed off self.entities[name]).
+              get_challenge_rating/_best_offense_package, both keyed off self.entities[name]).
               Keeping these in a separate dict, resolved only via "template" (never "name"),
               is what makes a generation stub impossible to reference by accident -- a typo'd
               `name = "generated_innkeeper"` fails the same "unknown entity" way a typo'd real

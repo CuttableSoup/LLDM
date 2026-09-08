@@ -39,11 +39,21 @@ a generated NPC can fight or what it carries is still decided by whoever authors
 `trickster`, `scholar`, ...), each naming 3-4 real skills. `NPC_Generation.py` (pure) builds an
 OpenAI-style `tools` payload constraining the LLM to 1-2 keyword *names* (an enum, not free
 text — more reliable with small local models); `generate_npc_stats` resolves them to their
-union of real skills before fitting. `fit_skills_to_cr(key_skills, target_cr, hp_share=0.3,
-damage_dice=0, damage_pips=0)` is the deterministic inverse of `calculate_challenge_rating`:
-`hp_units = round(target_cr * hp_share)`, `max_hp = hp_units * 3`; the remaining budget becomes
-a single rating `R` (floored at 3) given identically to each of the first 3 key skills (any 4th+
-gets a lower flavor-only rating). `generate_npc_stats` rolls `target_cr * cr_multiplier *
+union of real skills before fitting. `fit_skills_to_cr(key_skills, target_cr, skills_catalog,
+hp_share=0.3, damage_dice=0, damage_pips=0)` is the deterministic inverse of
+`calculate_challenge_rating`, reading each key_skill's own `combat_role` off `skills_catalog`
+(the setting's own `self.skills`, threaded through with no other DMCore dependency — see
+`docs/combat.md`'s "Challenge rating") the same way the forward formula does: `hp_units =
+round(target_cr * hp_share)`; the remaining budget splits evenly across however many of
+offense/defense/resistive actually have a named key_skill (a bucket nobody named gets none),
+with `"offense"`/`"defense"` key_skills all set to their own bucket's full rating (only the
+single best-rated one is ever actually read forward, so tying them keeps the round-trip exact
+regardless of which ends up "best") and `"resistive"` ones split so their sum, averaged across
+*every* resistive-role skill the catalog defines (not just the ones named), lands exactly on
+that bucket's own rating. A key_skill with no `combat_role` at all is flavor-only, rated off
+whatever combat skills were actually used (or a flat floor if none were). If key_skills names no
+combat-relevant skill whatsoever, the entire budget becomes HP instead — the one component every
+entity always has a use for. `generate_npc_stats` rolls `target_cr * cr_multiplier *
 random.uniform(1-variance, 1+variance)` before fitting — that plus keyword choice is where
 randomness comes from; `fit_skills_to_cr` itself stays deterministic and directly testable. On
 any failure (no `tool_calls`, malformed JSON, network error, timeout, or

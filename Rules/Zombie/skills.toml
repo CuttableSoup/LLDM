@@ -11,6 +11,16 @@ name = "firearms"
 description = "Using pistols, shotguns, and rifles."
 keywords = ["combat", "ranged", "gun", "pistol", "shoot", "shotgun", "rifle", "fire", "aim", "trigger", "ammo"]
 opposes = ["dodge", "reflexes"]
+# combat_role -- an opt-in tag Challenge_Rating.py's own get_challenge_rating reads generically
+# (never a hardcoded skill name in Python) to score how dangerous an entity is in a fight,
+# without assuming any particular setting's own skill names: "offense" (a skill that's ever
+# named as an attack ability's own "skill" field -- the entity's single best-rated offense
+# skill, paired with its best attack's own damage, becomes the CR's offense component),
+# "defense" (the skill physical attacks are actually opposed by -- dodge here), or "resistive"
+# (fortitude/reflexes/willpower, how hard this entity is to lock down with a save-or-suck
+# effect regardless of its raw combat stats). A skill with none of these (ex: mechanics,
+# survival) simply doesn't factor into CR at all.
+combat_role = "offense"
 specializations = ["pistols", "shotguns", "rifles"]
 
 [[skill]]
@@ -18,6 +28,8 @@ name = "melee"
 description = "Fighting with a handheld melee weapon."
 keywords = ["combat", "melee", "armed", "bat", "crowbar", "machete", "axe", "swing", "bludgeon", "slash", "strike", "weapon"]
 opposes = ["dodge", "reflexes", "melee", "brawling"]
+# See firearms' own combat_role comment.
+combat_role = "offense"
 specializations = ["blunt weapons", "edged weapons", "improvised weapons"]
 
 [[skill]]
@@ -25,6 +37,8 @@ name = "brawling"
 description = "Unarmed striking, shoving, and grappling."
 keywords = ["combat", "melee", "unarmed", "punch", "kick", "fist", "shove", "push", "grapple", "wrestle"]
 opposes = ["dodge", "reflexes", "brawling", "melee"]
+# See firearms' own combat_role comment.
+combat_role = "offense"
 specializations = ["shoving", "grappling", "striking"]
 
 [[skill]]
@@ -32,6 +46,8 @@ name = "throwing"
 description = "Hurling molotovs, pipe bombs, and other throwables."
 keywords = ["combat", "ranged", "throw", "toss", "hurl", "molotov", "pipe bomb", "grenade", "lob"]
 opposes = ["dodge", "reflexes"]
+# See firearms' own combat_role comment.
+combat_role = "offense"
 specializations = ["incendiaries", "explosives", "distraction devices"]
 
 [[skill]]
@@ -53,6 +69,8 @@ name = "reflexes"
 description = "Quick physical reactions to sudden danger."
 keywords = ["defense", "reaction", "speed", "quick", "fast", "react", "duck", "flinch"]
 opposes = ["stealth"]
+# See firearms' own combat_role comment.
+combat_role = "resistive"
 specializations = ["reacting to ambush", "catching objects", "initiative"]
 
 [[skill]]
@@ -60,6 +78,8 @@ name = "dodge"
 description = "Avoiding melee, unarmed, and thrown attacks."
 keywords = ["defense", "evasion", "reaction", "avoid", "duck", "sidestep", "weave"]
 opposes = ["firearms", "melee", "brawling", "throwing"]
+# See firearms' own combat_role comment.
+combat_role = "defense"
 specializations = ["dodging swings", "dodging lunges", "dodging thrown objects"]
 
 [[skill]]
@@ -81,6 +101,8 @@ name = "fortitude"
 description = "Enduring exhaustion, pain, and physical strain."
 keywords = ["defense", "resistance", "passive", "endure", "survive", "toughness", "exhaustion", "pain", "stamina"]
 opposes = []
+# See firearms' own combat_role comment.
+combat_role = "resistive"
 specializations = ["pain tolerance", "exhaustion resistance", "blood loss"]
 
 [[skill]]
@@ -88,6 +110,8 @@ name = "willpower"
 description = "Keeping your nerve under horror and panic."
 keywords = ["defense", "resistance", "mental", "fear", "panic", "nerve", "resolve", "calm", "steady", "courage"]
 opposes = []
+# See firearms' own combat_role comment.
+combat_role = "resistive"
 specializations = ["resisting panic", "resisting despair", "keeping calm"]
 
 [[skill]]

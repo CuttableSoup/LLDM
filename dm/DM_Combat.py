@@ -735,20 +735,32 @@ class CombatMixin(DMCoreProtocol):
         self.nudge_attitude_from_event(target_name, entity_name, event_name, min(1.0, value / SIGNIFICANT_VALUE))
         return TransferOutcome(entity=entity_name, direction=direction, item_name=item_name, target=target_name)
 
-    def _best_damage_dice_pips(self, entity_name):
+    def _best_offense_package(self, entity_name):
         """!
-        @brief The dice/pips of entity_name's single best damage-dealing weapon/ability, by
-            skill_rating -- every equipped item with a damage_value, plus every resolved
-            ability (resolve_ability) with one: the same candidate pool find_attack_ability
-            draws from, just not filtered down to one particular skill_name, since nothing
-            here is about to be rolled -- there's no "which skill" to disambiguate by, only
-            "which single number best represents this entity's damage output" (powers
-            get_challenge_rating's own damage component).
+        @brief entity_name's single best attack, as a matched (skill, dice, pips) package --
+            every equipped item with a damage_value, plus every resolved ability
+            (resolve_ability) with one (the same candidate pool find_attack_ability draws
+            from, just not filtered to one particular skill_name), ranked by
+            skill_rating(its own skill) + skill_rating(its own damage) together, not by
+            damage alone -- a devastating hit from a skill this entity barely rolls isn't
+            actually its best "package" the way get_challenge_rating's offense component
+            needs (see Challenge_Rating.py's own module note): skill and damage have to come
+            from the SAME candidate, never mixed independently from two different ones.
+            select_ability_skill resolves a multi-skill "skill" field (ex: cleave's own
+            ["blades", "axes"]) to whichever this entity actually rolls best. An entity with
+            no damage-dealing weapon/ability at all (ex: a procedurally-generated NPC --
+            DM_NpcGeneration.py deliberately never touches abilities/equipped, only skills)
+            falls back to its own best-rated combat_role = "offense" skill with 0 damage,
+            rather than reading as entirely unarmed for CR purposes -- a sharp "blades" rating
+            still means something even before this entity is ever handed a specific sword
+            object, the same way a real Pathfinder creature's attack bonus reflects its
+            training, not just whatever it happens to be holding.
         @param entity_name The name of the entity to check.
-        @return (dice, pips) of the best candidate, or (0, 0) if it has no damage-dealing
-            weapon/ability at all, or none of its dice/pips fields actually resolve to a
-            number (ex: an ability referencing "user.weapon.dice" on an entity with nothing
-            equipped).
+        @return ({"dice", "pips"} for the winning candidate's own skill, dice, pips) -- dice/
+            pips are 0 if entity_name has no damage-dealing weapon/ability at all (the skill
+            itself still falls back per above), or none of its dice/pips fields actually
+            resolve to a number (ex: an ability referencing "user.weapon.dice" on an entity
+            with nothing equipped).
         """
         entity = self.entities.get(entity_name, {})
         candidates = [
@@ -762,34 +774,70 @@ class CombatMixin(DMCoreProtocol):
             if ability and "damage_value" in ability
         ]
 
-        best_dice, best_pips, best_rating = 0, 0, 0
+        entity_skills = entity.get("skills", {})
+        best_skill_stats, best_dice, best_pips, best_total = {}, 0, 0, -1
         for candidate in candidates:
             damage_value = candidate["damage_value"]
             dice = self.resolve_weapon_reference(entity_name, damage_value.get("dice", 0), "dice")
             pips = self.resolve_weapon_reference(entity_name, damage_value.get("pips", 0), "pips")
             if not isinstance(dice, (int, float)) or not isinstance(pips, (int, float)):
                 continue
-            rating = skill_rating(dice, pips)
-            if rating > best_rating:
-                best_dice, best_pips, best_rating = dice, pips, rating
-        return best_dice, best_pips
+            skill_name = self.select_ability_skill(entity_name, candidate)
+            skill_stats = entity_skills.get(skill_name, {}) if skill_name else {}
+            total = skill_rating(skill_stats.get("dice", 0), skill_stats.get("pips", 0)) + skill_rating(dice, pips)
+            if total > best_total:
+                best_total = total
+                best_skill_stats, best_dice, best_pips = skill_stats, dice, pips
+
+        if best_total < 0:
+            offense_candidates = [entity_skills.get(name, {}) for name in self._skills_with_role("offense")]
+            best_skill_stats = max(
+                offense_candidates, key=lambda stats: skill_rating(stats.get("dice", 0), stats.get("pips", 0)),
+                default={},
+            )
+        return best_skill_stats, best_dice, best_pips
+
+    def _skills_with_role(self, combat_role):
+        """!
+        @brief Every skill name this setting's own skills.toml tags combat_role ==
+            combat_role (ex: "defense", "resistive") -- get_challenge_rating's own way of
+            finding "which skill is dodge"/"which skills are the saves" without ever
+            hardcoding a setting-specific skill name in Python (see skills.toml's own
+            combat_role comment on "athletics").
+        @param combat_role "offense", "defense", or "resistive".
+        @return A list of skill names (possibly empty, if this setting authors none).
+        """
+        return [name for name, skill in self.skills.items() if skill.get("combat_role") == combat_role]
 
     def get_challenge_rating(self, entity_name):
         """!
         @brief A single number describing how powerful entity_name currently is -- see
             Challenge_Rating.py's calculate_challenge_rating for what it's built from.
-            Reflects live state (current max_hp/skills/equipped gear/abilities), not a fixed
-            character-creation-time value, so it changes across play as an entity is healed/
-            hurt long-term, re-equipped, or gains an ability.
+            Reflects live state (current max_hp/skills/equipped gear/abilities/resistance-
+            immunity-vulnerability), not a fixed character-creation-time value, so it changes
+            across play as an entity is healed/hurt long-term, re-equipped, or gains an
+            ability.
         @param entity_name The name of the entity to rate.
         @return The entity's challenge rating (an int), or 0 if entity_name doesn't exist.
         """
         entity = self.entities.get(entity_name)
         if entity is None:
             return 0
-        damage_dice, damage_pips = self._best_damage_dice_pips(entity_name)
+        offense_skill_stats, damage_dice, damage_pips = self._best_offense_package(entity_name)
+        entity_skills = entity.get("skills", {})
+        defense_candidates = [entity_skills.get(name, {}) for name in self._skills_with_role("defense")]
+        defense_stats = max(
+            defense_candidates, key=lambda stats: skill_rating(stats.get("dice", 0), stats.get("pips", 0)),
+            default={},
+        )
+        save_ratings = [entity_skills.get(name, {}) for name in self._skills_with_role("resistive")]
+        resistance_value = entity.get("resistance_value") or {}
+        vulnerability_value = entity.get("vulnerability_value") or {}
         return calculate_challenge_rating(
-            entity.get("skills", {}), entity.get("max_hp", 0), damage_dice, damage_pips,
+            offense_skill_stats, damage_dice, damage_pips, defense_stats, save_ratings, entity.get("max_hp", 0),
+            resistance_dice=resistance_value.get("dice", 0), resistance_pips=resistance_value.get("pips", 0),
+            immunity_tags=entity.get("immunity_tags"),
+            vulnerability_dice=vulnerability_value.get("dice", 0), vulnerability_pips=vulnerability_value.get("pips", 0),
         )
 
     def _resolve_lore_skill(self, target_name):

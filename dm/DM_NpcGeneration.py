@@ -111,7 +111,7 @@ class NpcGenerationMixin(DMCoreProtocol):
             self.event_bus.publish("log_info", f"Generating NPC for '{instance_name}'...")
 
         result = generate_npc_stats(
-            npc_keywords, target_cr,
+            npc_keywords, target_cr, self.skills,
             hint=hint,
             qualities=entity.get("qualities"),
             variance=entity.get("variance", 0.15),

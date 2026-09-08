@@ -361,7 +361,7 @@ class ImprovisationMixin(DMCoreProtocol):
         npc_keywords = load_npc_keywords(os.path.join("Rules", self.setting))
         target_cr = self.get_challenge_rating(self.player_name)
         result = generate_ad_hoc_creature(
-            input_text, self._current_scene_description(), target_cr, npc_keywords,
+            input_text, self._current_scene_description(), target_cr, npc_keywords, self.skills,
         )
         if not result.get("created"):
             return {"created_creature": False}

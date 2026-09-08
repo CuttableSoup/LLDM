@@ -28,40 +28,89 @@ def skill_rating(dice, pips):
     return dice * SKILL_RATING_DIVISOR + pips
 
 
-def calculate_challenge_rating(skills, max_hp, damage_dice=0, damage_pips=0, top_n=3):
+# Flat credits for immunity_tags -- a true immunity is a hard, unconditional block, not a
+# rolled reduction like resistance_value, so it has no dice/pips of its own to convert with
+# skill_rating -- these two constants are this module's own deliberately simple stand-in
+# (the same "don't try to force an exact number" latitude reference/pathfinder_mapping.toml's
+# own "Energy Resistance N"/"Vulnerability" rows already claim for their rolled equivalents,
+# extended to immunity's all-or-nothing shape). IMMUNITY_PER_TAG_BONUS approximates one
+# ordinary resistance_value die pool (2D+0p = 6) fully realized, per specific tag (ex: fire
+# elemental's own immunity_tags = ["fire"]); IMMUNITY_ANY_BONUS is a much bigger flat jump for
+# the reserved "any" wildcard (is_immune_to) -- immune to every damage_tags value that exists,
+# a categorically different (and, among creatures rather than conjured hazard objects, rare)
+# trait from resisting one specific damage type.
+IMMUNITY_PER_TAG_BONUS = 6
+IMMUNITY_ANY_BONUS = 30
+
+
+def calculate_challenge_rating(
+    offense_skill_rating, damage_dice, damage_pips, defense_skill_rating, save_ratings, max_hp,
+    resistance_dice=0, resistance_pips=0, immunity_tags=None, vulnerability_dice=0, vulnerability_pips=0,
+):
     """!
     @brief A single number describing how powerful an entity is, from its own dice/pips --
-        summed from three independently meaningful components, each on the same pip-unit
-        scale skill_rating establishes:
-          - skill: the average skill_rating of the entity's top_n best-trained skills, not
-            every skill it has -- an entity trained broadly but shallowly across dozens of
-            noncombat skills (ex: a player character with a full skill table) shouldn't
-            outrank one with only a couple of genuinely sharp skills (ex: a boss creature
-            authored with just 2-3 trained skills); a flat sum would do exactly that.
+        summed from independently meaningful components, each on the same pip-unit scale
+        skill_rating establishes. Every input here is already resolved by the caller (ex:
+        DM_Combat.py's get_challenge_rating, which knows how to pull these off a live entity
+        and its setting's own skills.toml) -- this function itself stays pure arithmetic:
+          - offense: skill_rating(offense_skill_rating's own dice/pips) + skill_rating(damage_dice,
+            damage_pips) -- the entity's single best attack (weapon or ability), its own
+            to-hit skill and its own damage paired together rather than mixed independently
+            from two different candidates (see DM_Combat.py's _best_offense_package).
+          - defense: the entity's own rating in whichever skill(s) a setting's skills.toml
+            tags combat_role = "defense" (Pathfinder/Fantasy/Zombie all use exactly one --
+            dodge, the skill nearly every physical attack skill's own "opposes" list leads
+            with). Counted at full value, not diluted into an average with unrelated skills.
+          - save: the average rating across whichever skill(s) are tagged combat_role =
+            "resistive" (fortitude/reflexes/willpower -- Pathfinder's own three saves) -- a
+            distinct axis from offense/defense: how hard this entity is to lock down with a
+            save-or-suck spell/condition, regardless of how it fares in a straight exchange.
           - hp: max_hp // SKILL_RATING_DIVISOR -- the same "/3" scale as pips-to-dice, so a
             flat stat (HP has no dice of its own) still lands in comparable units without
             needing a separately-justified weighting constant.
-          - damage: skill_rating(damage_dice, damage_pips) of the entity's single best
-            damage-dealing weapon/ability -- its own dice/pips only, not the "bonus" field
-            (which can be a rules.toml formula reference rather than a flat number, and
-            isn't "dice and pips" in the first place).
-    @param skills The entity's own {skill_name: {"dice", "pips"}} table (entity["skills"]).
+          - resistance/immunity/vulnerability: resistance_value's own rolled reduction adds
+            directly (already dice/pips, the same scale as everything else); immunity_tags
+            adds a flat credit per IMMUNITY_PER_TAG_BONUS/IMMUNITY_ANY_BONUS (see their own
+            module comment); vulnerability_value SUBTRACTS -- a real exploitable weakness
+            makes an entity easier to bring down, not harder, so it lowers CR rather than
+            padding it the way a resistance would raise it.
+    @param offense_skill_rating The dice/pips of the skill used by the entity's single best
+        attack (weapon or ability) -- a {"dice", "pips"} table, or None/{} if it has no
+        attack at all (a pure support entity is still ratable, at 0).
+    @param damage_dice/damage_pips The dice/pips of that same best attack's own damage_value.
+    @param defense_skill_rating The entity's own {"dice", "pips"} in its setting's combat_role
+        = "defense" skill (None/{} if untrained or the setting authors no such skill at all).
+    @param save_ratings A list of the entity's own {"dice", "pips"} tables, one per
+        combat_role = "resistive" skill the setting authors (empty if none).
     @param max_hp The entity's max_hp.
-    @param damage_dice/damage_pips The dice/pips of the entity's best damage-dealing
-        weapon/ability, already resolved by the caller (ex: DM_Combat.py's
-        get_challenge_rating, which knows how to find one on a live entity) -- default 0/0,
-        so a pure support character with no attack of its own is still ratable.
-    @param top_n How many of the entity's best-trained skills to average. Defaults to 3.
+    @param resistance_dice/resistance_pips The entity's own resistance_value dice/pips
+        (0/0 if it has none at all -- not scoped to any particular resistance_tags match,
+        the same "don't try to force an exact number" simplification the rolled reduction
+        itself already accepts).
+    @param immunity_tags The entity's own immunity_tags list (None/[] if it has none).
+    @param vulnerability_dice/vulnerability_pips The entity's own vulnerability_value
+        dice/pips (0/0 if it has none at all).
     @return The entity's challenge rating (an int).
     """
-    ratings = sorted(
-        (skill_rating(stats.get("dice", 0), stats.get("pips", 0)) for stats in skills.values()),
-        reverse=True,
-    )[:top_n]
-    skill_component = round(sum(ratings) / len(ratings)) if ratings else 0
+    def _rating(stats):
+        return skill_rating((stats or {}).get("dice", 0), (stats or {}).get("pips", 0))
+
+    offense_component = _rating(offense_skill_rating) + skill_rating(damage_dice, damage_pips)
+    defense_component = _rating(defense_skill_rating)
+    save_component = round(sum(_rating(stats) for stats in save_ratings) / len(save_ratings)) if save_ratings else 0
     hp_component = max_hp // SKILL_RATING_DIVISOR
-    damage_component = skill_rating(damage_dice, damage_pips)
-    return skill_component + hp_component + damage_component
+    resistance_component = skill_rating(resistance_dice, resistance_pips)
+    vulnerability_component = skill_rating(vulnerability_dice, vulnerability_pips)
+    immunity_tags = immunity_tags or []
+    if "any" in immunity_tags:
+        immunity_component = IMMUNITY_ANY_BONUS
+    else:
+        immunity_component = IMMUNITY_PER_TAG_BONUS * len(immunity_tags)
+
+    return (
+        offense_component + defense_component + save_component + hp_component
+        + resistance_component + immunity_component - vulnerability_component
+    )
 
 
 def calculate_party_challenge_rating(member_ratings):

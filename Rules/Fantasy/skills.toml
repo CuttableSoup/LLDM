@@ -3,6 +3,17 @@ name = "athletics"
 description = "Physical movement and sports activities."
 keywords = ["movement", "exertion", "physical", "climb", "jump", "swim", "run", "sprint"]
 opposes = ["athletics", "observation"]
+# combat_role -- an opt-in tag Challenge_Rating.py's own get_challenge_rating reads generically
+# (never a hardcoded skill name in Python) to score how dangerous an entity is in a fight,
+# without assuming any particular setting's own skill names: "offense" (a skill that's ever
+# named as an attack/combat-maneuver's own "skill" field -- the entity's single best-rated
+# offense skill, paired with its best attack's own damage, becomes the CR's offense component),
+# "defense" (the skill physical attacks are actually opposed by -- dodge here), or "resistive"
+# (fortitude/reflexes/willpower -- Pathfinder's own three saves, how hard this entity is to lock
+# down with a save-or-suck effect regardless of its raw combat stats). A skill with none of these
+# (ex: appraise, navigation) simply doesn't factor into CR at all -- opt-in, same "absent field
+# means not applicable" precedent every other declarative skill field already follows.
+combat_role = "offense"
 # Combat maneuvers any entity may attempt via athletics, no training implied -- see
 # maneuvers.toml's own "Universal (untrained) abilities". "disarm" is temporarily missing --
 # maneuvers.toml's own [[entity]] is commented out until it applies a real unequip/drop effect
@@ -25,6 +36,8 @@ keywords = [
     "attack the creature", "attack the creature with my weapon",
 ]
 opposes = ["dodge", "blades", "brawling", "axes", "polearms"]
+# See athletics' own combat_role comment.
+combat_role = "offense"
 # See maneuvers.toml's own "sunder" -- accessible via any melee weapon skill, not just
 # athletics (Pathfinder's own Sunder is a CMB maneuver performed as part of a weapon attack).
 abilities = [ "sunder" ]
@@ -34,12 +47,16 @@ name = "throwing"
 description = "Hurling weapons or objects at a target."
 keywords = ["combat", "ranged", "projectile", "throw", "hurl", "toss"]
 opposes = ["dodge", "reflexes"]
+# See athletics' own combat_role comment.
+combat_role = "offense"
 
 [[skill]]
 name = "fortitude"
 description = "Resisting fatigue, disease, or poison."
 keywords = ["defense", "resistance", "passive", "endure", "survive", "toughness"]
 opposes = []
+# See athletics' own combat_role comment.
+combat_role = "resistive"
 
 [[skill]]
 name = "strength"
@@ -52,6 +69,8 @@ name = "axes"
 description = "Wielding axes in melee combat."
 keywords = ["combat", "melee", "armed", "axe", "hatchet", "cleave", "chop"]
 opposes = ["dodge", "blades", "axes", "polearms"]
+# See athletics' own combat_role comment.
+combat_role = "offense"
 abilities = [ "sunder" ]
 
 [[skill]]
@@ -59,6 +78,8 @@ name = "polearms"
 description = "Wielding long hafted weapons in combat."
 keywords = ["combat", "melee", "reach", "spear", "halberd", "pike", "lance", "thrust"]
 opposes = ["dodge", "blades", "axes", "polearms"]
+# See athletics' own combat_role comment.
+combat_role = "offense"
 abilities = [ "sunder" ]
 
 [[skill]]
@@ -66,6 +87,8 @@ name = "brawling"
 description = "Unarmed melee combat."
 keywords = ["combat", "melee", "unarmed", "punch", "kick", "unarmed strike", "fight"]
 opposes = ["dodge", "brawling", "blades", "axes", "polearms"]
+# See athletics' own combat_role comment.
+combat_role = "offense"
 abilities = [ "sunder" ]
 
 [[skill]]
@@ -79,6 +102,9 @@ name = "finesse"
 description = "Delicate physical manipulation of objects."
 keywords = ["manipulation", "precision", "covert", "pick", "lock", "steal", "dexterity", "disarm", "trap"]
 opposes = ["observation", "reflexes"]
+# See athletics' own combat_role comment -- a real weapon skill too (equipment.toml's own
+# dagger family/whip), not just the pickpocket maneuver below.
+combat_role = "offense"
 # See maneuvers.toml's own "sleight of hand" -- any entity may attempt to pick a pocket.
 abilities = [ "sleight of hand" ]
 
@@ -101,6 +127,8 @@ name = "trickery"
 description = "Deceptive physical actions or misdirection."
 keywords = ["misdirection", "sleight of hand", "distract", "feint", "fake", "bluff"]
 opposes = ["observation", "willpower"]
+# See athletics' own combat_role comment.
+combat_role = "offense"
 # Combat maneuvers any entity may attempt via trickery, no training implied -- see
 # maneuvers.toml's own "Universal (untrained) abilities".
 abilities = [ "dirty trick", "feint" ]
@@ -116,18 +144,25 @@ name = "dodge"
 description = "Avoiding physical and ranged attacks."
 keywords = ["defense", "evasion", "reaction", "avoid", "duck", "sidestep", "jump away"]
 opposes = ["blades", "axes", "polearms", "brawling", "missiles", "throwing"]
+# See athletics' own combat_role comment -- the one skill nearly every physical attack skill's
+# own opposes list leads with, so this is what Challenge_Rating.py reads as "defense" generically.
+combat_role = "defense"
 
 [[skill]]
 name = "reflexes"
 description = "Quick physical reactions to sudden events."
 keywords = ["defense", "reaction", "speed", "quick", "fast", "react", "catch"]
 opposes = ["stealth", "acrobatics", "finesse", "trickery"]
+# See athletics' own combat_role comment.
+combat_role = "resistive"
 
 [[skill]]
 name = "missiles"
 description = "Using bows, crossbows, and slings."
 keywords = ["combat", "ranged", "projectile", "bow", "arrow", "shoot", "aim", "fire"]
 opposes = ["dodge", "reflexes"]
+# See athletics' own combat_role comment.
+combat_role = "offense"
 
 [[skill]]
 name = "appraise"
@@ -146,6 +181,8 @@ name = "arcane"
 description = "Knowledge and practical use of magic."
 keywords = ["magic", "spellcasting", "supernatural", "wizard", "sorcery", "spell", "cast", "mana", "ritual", "curse", "cursed", "identify"]
 opposes = ["willpower", "arcane"]
+# See athletics' own combat_role comment.
+combat_role = "offense"
 # lore_types -- which creature supertypes/subtypes a "lore_check" free-standing intent
 # (DM_Combat.py's _resolve_lore_check_intent, docs/extended-goals.md's "Knowledge checks
 # revealing monster lore") rolls THIS skill against, the Pathfinder Knowledge-X-per-monster-type
@@ -182,12 +219,16 @@ name = "willpower"
 description = "Resisting mental influence, fear, or coercion."
 keywords = ["defense", "resistance", "mental", "focus", "concentration", "resolve", "determination"]
 opposes = ["arcane", "miracles", "psionics", "charisma", "intimidation"]
+# See athletics' own combat_role comment.
+combat_role = "resistive"
 
 [[skill]]
 name = "miracles"
 description = "Invoking divine magic from deities."
 keywords = ["magic", "divine", "spellcasting", "priest", "holy", "prayer", "blessing", "god", "faith"]
 opposes = ["willpower", "miracles"]
+# See athletics' own combat_role comment.
+combat_role = "offense"
 # See arcane's own lore_types comment.
 lore_types = { subtypes = ["undead"] }
 
@@ -226,6 +267,8 @@ name = "charisma"
 description = "Influencing others through sheer presence and personality."
 keywords = ["social", "persuasion", "influence", "persuade", "talk", "negotiate", "charm", "convince"]
 opposes = ["willpower", "charisma"]
+# See athletics' own combat_role comment.
+combat_role = "offense"
 # See maneuvers.toml's own "charm" -- any entity may attempt to win someone over.
 abilities = [ "charm" ]
 
@@ -247,6 +290,8 @@ name = "intimidation"
 description = "Frightening others to gain compliance."
 keywords = ["social", "coercion", "threat", "scare", "frighten", "bully", "menace", "force", "threaten", "intimidation", "scaring"]
 opposes = ["willpower", "intimidation"]
+# See athletics' own combat_role comment.
+combat_role = "offense"
 # See maneuvers.toml's own "intimidate" -- any entity may attempt this, no training implied.
 abilities = [ "intimidate" ]
 
@@ -255,3 +300,5 @@ name = "psionics"
 description = "Utilizing mental powers to affect the world."
 keywords = ["magic", "mental", "supernatural", "psychic", "mind", "thought", "telepathy", "telekinesis"]
 opposes = ["willpower", "psionics"]
+# See athletics' own combat_role comment.
+combat_role = "offense"

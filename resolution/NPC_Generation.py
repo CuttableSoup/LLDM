@@ -96,7 +96,7 @@ def load_npc_keywords(rules_dir=os.path.join("Rules", "Fantasy")):
     return keywords
 
 
-def fit_skills_to_cr(key_skills, target_cr, hp_share=0.3, damage_dice=0, damage_pips=0):
+def fit_skills_to_cr(key_skills, target_cr, skills_catalog, hp_share=0.3, damage_dice=0, damage_pips=0):
     """!
     @brief Deterministically distributes a challenge-rating "budget" across key_skills (plus
         HP) so the result's own calculate_challenge_rating lands on target_cr exactly (modulo
@@ -104,11 +104,27 @@ def fit_skills_to_cr(key_skills, target_cr, hp_share=0.3, damage_dice=0, damage_
         randomness is the caller's job (rolled into target_cr before this runs, and by which
         keywords/key_skills were even chosen) -- this function itself is deterministic so it
         stays directly testable.
+
+        Reads each key_skill's own combat_role off skills_catalog (skills.toml's own field --
+        see Challenge_Rating.py's module note) to know which of calculate_challenge_rating's
+        components it actually feeds: "offense" and "defense" skills are each set to their own
+        bucket's full budget (not divided -- only the single best-rated one in a bucket is
+        ever actually read, via DM_Combat.py's _best_offense_package/get_challenge_rating's own
+        max-over-candidates, so tying every named offense/defense skill at the same rating
+        keeps the result exact regardless of which one ends up "best"); "resistive" skills
+        average against EVERY resistive-role skill the catalog defines, not just the ones
+        named here (an un-named one reads as untrained/0, pulling the real average down), so
+        the sum handed to the named ones has to already account for that. A key_skill with no
+        combat_role at all (ex: "strength", "stealth") is flavor only -- it still gets a
+        rating (so a generated NPC's sheet doesn't show a suspicious 0D the archetype named),
+        but calculate_challenge_rating never reads it.
     @param key_skills An ordered list of skill names (ex: the union of 1-2 keywords' own
-        skill lists) -- duplicates are fine (deduped, order-preserving); only the first 3
-        (by calculate_challenge_rating's own top_n=3) actually affect the resulting CR, same
-        as any other entity's own trained skills.
+        skill lists) -- duplicates are fine (deduped, order-preserving).
     @param target_cr The challenge rating to fit toward (already variance-rolled).
+    @param skills_catalog The setting's own {skill_name: {"combat_role", ...}} table (ex:
+        DM_Combat.py's self.skills) -- pure data, no live DMCore needed, the same "just a
+        dict" precedent load_character_creation_data's own rules_dir scan already sets for a
+        DMCore-independent module.
     @param hp_share The fraction of target_cr's budget spent on HP (default 0.3, matching the
         rough proportion hand-authored creatures.toml/characters.toml entries already show).
     @param damage_dice/damage_pips The entity's own best damage-dealing weapon/ability, if
@@ -127,17 +143,58 @@ def fit_skills_to_cr(key_skills, target_cr, hp_share=0.3, damage_dice=0, damage_
     # integer arithmetic throughout, not floats leaking into a {"dice", "pips"} skill entry.
     target_cr = round(target_cr)
     hp_units = round(target_cr * hp_share)
-    max_hp = hp_units * 3
     remaining = target_cr - hp_units - skill_rating(damage_dice, damage_pips)
 
     unique_skills = list(dict.fromkeys(key_skills))  # dedupe, preserve first-seen order
+    offense = [n for n in unique_skills if skills_catalog.get(n, {}).get("combat_role") == "offense"]
+    defense = [n for n in unique_skills if skills_catalog.get(n, {}).get("combat_role") == "defense"]
+    resistive = [n for n in unique_skills if skills_catalog.get(n, {}).get("combat_role") == "resistive"]
+    flavor = [n for n in unique_skills if n not in offense and n not in defense and n not in resistive]
+    resistive_total = sum(1 for skill in skills_catalog.values() if skill.get("combat_role") == "resistive")
+
+    # No named skill feeds any of calculate_challenge_rating's own offense/defense/save
+    # components at all -- an ordinary skill split has nowhere combat-relevant to put the
+    # budget, so it all becomes HP instead (the one component every entity always has).
+    if not (offense or defense or resistive):
+        hp_units += remaining
+        remaining = 0
+    max_hp = hp_units * 3
+
+    buckets = {"offense": offense, "defense": defense, "resistive": resistive}
+    named_bucket_order = [name for name in ("offense", "defense", "resistive") if buckets[name]]
+    bucket_budget = {"offense": 0, "defense": 0, "resistive": 0}
+    if named_bucket_order:
+        share, leftover = divmod(remaining, len(named_bucket_order))
+        for index, name in enumerate(named_bucket_order):
+            bucket_budget[name] = share + (1 if index < leftover else 0)
+
     skills_dict = {}
-    if unique_skills:
-        primary_rating = max(remaining, MIN_KEY_SKILL_RATING)
-        flavor_rating = max(primary_rating // 2, MIN_KEY_SKILL_RATING)
-        for index, name in enumerate(unique_skills):
-            rating = primary_rating if index < 3 else flavor_rating
+    used_ratings = []
+    for role in ("offense", "defense"):
+        if not buckets[role]:
+            continue
+        rating = max(bucket_budget[role], MIN_KEY_SKILL_RATING)
+        used_ratings.append(rating)
+        for name in buckets[role]:
             skills_dict[name] = {"dice": rating // 3, "pips": rating % 3}
+
+    if resistive:
+        # sum(named ratings) + 0 * (unnamed saves) has to average to bucket_budget["resistive"]
+        # across every resistive-role skill the catalog defines, not just len(resistive).
+        target_sum = bucket_budget["resistive"] * max(resistive_total, len(resistive))
+        share, leftover = divmod(target_sum, len(resistive))
+        for index, name in enumerate(resistive):
+            rating = max(share + (1 if index < leftover else 0), MIN_KEY_SKILL_RATING)
+            used_ratings.append(rating)
+            skills_dict[name] = {"dice": rating // 3, "pips": rating % 3}
+
+    if flavor:
+        # Cosmetic only -- calculate_challenge_rating never reads an untagged skill. Scaled off
+        # the smallest combat rating actually used (so it reads as genuinely secondary), or a
+        # flat floor if this archetype named no combat-relevant skill at all.
+        flavor_rating = max(min(used_ratings) // 2, MIN_KEY_SKILL_RATING) if used_ratings else MIN_KEY_SKILL_RATING
+        for name in flavor:
+            skills_dict[name] = {"dice": flavor_rating // 3, "pips": flavor_rating % 3}
 
     return skills_dict, max_hp
 
@@ -202,7 +259,7 @@ def _describe_qualities(qualities):
     return f"{sentence}, about {age} years old." if descriptor else f"They are about {age} years old."
 
 
-def _fallback_npc_stats(npc_keywords, target_cr, hp_share):
+def _fallback_npc_stats(npc_keywords, target_cr, hp_share, skills_catalog):
     """!
     @brief The offline/failure path generate_npc_stats falls back to -- no network call at
         all, so it's instant and safe to use both when Ollama is genuinely unreachable and
@@ -213,12 +270,13 @@ def _fallback_npc_stats(npc_keywords, target_cr, hp_share):
     @param npc_keywords {keyword_name: [skill_name, ...]}, from load_npc_keywords.
     @param target_cr The already variance-rolled challenge rating to fit toward.
     @param hp_share Forwarded to fit_skills_to_cr.
+    @param skills_catalog Forwarded to fit_skills_to_cr.
     @return {"name", "description", "skills", "max_hp"}.
     """
     names = list(npc_keywords)
     chosen = random.sample(names, k=min(2, len(names))) if names else []
     key_skills = [skill for keyword in chosen for skill in npc_keywords.get(keyword, [])]
-    skills, max_hp = fit_skills_to_cr(key_skills, target_cr, hp_share=hp_share)
+    skills, max_hp = fit_skills_to_cr(key_skills, target_cr, skills_catalog, hp_share=hp_share)
     return {
         "name": "Unnamed Stranger",
         "description": "A figure whose story remains untold for now.",
@@ -228,7 +286,7 @@ def _fallback_npc_stats(npc_keywords, target_cr, hp_share):
 
 
 def generate_npc_stats(
-    npc_keywords, target_cr, hint=None, qualities=None, variance=0.15, cr_multiplier=1.0,
+    npc_keywords, target_cr, skills_catalog, hint=None, qualities=None, variance=0.15, cr_multiplier=1.0,
     hp_share=0.3, call_chat_completion=None, api_url=DEFAULT_API_URL, skip_llm_generation=False,
 ):
     """!
@@ -239,6 +297,8 @@ def generate_npc_stats(
         rather than reloaded here so a caller that's already loaded it once (or a test with a
         small fake catalog) doesn't pay/duplicate the file scan.
     @param target_cr The challenge rating to aim for, before variance/cr_multiplier.
+    @param skills_catalog Forwarded to fit_skills_to_cr -- the setting's own {skill_name:
+        {"combat_role", ...}} table (ex: DM_Combat.py's self.skills).
     @param hint Optional flavor text (ex: "a suspicious traveling merchant") folded into the
         LLM prompt; a generic prompt is used if omitted.
     @param qualities The entity's own already-resolved qualities dict (gender/race/age --
@@ -273,7 +333,7 @@ def generate_npc_stats(
     rolled_cr = target_cr * cr_multiplier * random.uniform(1 - variance, 1 + variance)
 
     if skip_llm_generation or not npc_keywords:
-        return _fallback_npc_stats(npc_keywords, rolled_cr, hp_share)
+        return _fallback_npc_stats(npc_keywords, rolled_cr, hp_share, skills_catalog)
 
     qualities_sentence = _describe_qualities(qualities)
     prompt = (
@@ -299,8 +359,8 @@ def generate_npc_stats(
         if not chosen_keywords:
             raise ValueError("No recognized keywords in LLM response")
     except Exception:
-        return _fallback_npc_stats(npc_keywords, rolled_cr, hp_share)
+        return _fallback_npc_stats(npc_keywords, rolled_cr, hp_share, skills_catalog)
 
     key_skills = [skill for keyword in chosen_keywords for skill in npc_keywords.get(keyword, [])]
-    skills, max_hp = fit_skills_to_cr(key_skills, rolled_cr, hp_share=hp_share)
+    skills, max_hp = fit_skills_to_cr(key_skills, rolled_cr, skills_catalog, hp_share=hp_share)
     return {"name": name, "description": backstory, "skills": skills, "max_hp": max_hp}

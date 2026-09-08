@@ -6457,27 +6457,47 @@ class TestChallengeRating(unittest.TestCase):
         self.assertEqual(skill_rating(dice=2, pips=2), 8)
         self.assertEqual(skill_rating(dice=0, pips=0), 0)
 
-    def test_calculate_challenge_rating_averages_only_the_top_n_skills(self):
-        # Six skills at 2D (rating 6) plus one standout at 5D (rating 15) -- top_n=3 should
-        # average the standout with two of the 2D skills (15+6+6)/3=9, not get diluted by
-        # every other 2D skill the entity also happens to have trained.
-        skills = {f"skill_{i}": {"dice": 2, "pips": 0} for i in range(6)}
-        skills["standout"] = {"dice": 5, "pips": 0}
-        rating = calculate_challenge_rating(skills, max_hp=0, top_n=3)
-        self.assertEqual(rating, 9)
+    def test_calculate_challenge_rating_save_component_averages_across_every_save_given(self):
+        # One real save (fortitude 5D=15) plus two absent ones ({} -- untrained, rating 0) --
+        # the average has to be taken across all three slots (5, not 15), the same way an
+        # entity missing two of Pathfinder's own three saves reads as genuinely easier to
+        # lock down with a save-or-suck effect, not merely "unrated" on those two.
+        save_ratings = [{"dice": 5, "pips": 0}, {}, {}]
+        rating = calculate_challenge_rating({}, 0, 0, {}, save_ratings, max_hp=0)
+        self.assertEqual(rating, 5)
 
-    def test_calculate_challenge_rating_sums_skill_hp_and_damage_components(self):
-        # gladstone's own numbers (characters.toml/items.toml/spells.toml): top-3 skill
-        # ratings blades 5D=15, dodge 5D=15, then one of the 4D=12 skills; max_hp=36; best
-        # damage is fireball's 5D=15 (beats the longsword's 1D+2=5 and cleave's weapon-scaled
-        # 1D+2=5) -- skill (15+15+12)/3=14, hp 36//3=12, damage 15 -> 41.
-        skills = {"blades": {"dice": 5, "pips": 0}, "dodge": {"dice": 5, "pips": 0},
-                  "appraise": {"dice": 4, "pips": 0}}
-        rating = calculate_challenge_rating(skills, max_hp=36, damage_dice=5, damage_pips=0)
-        self.assertEqual(rating, 41)
+    def test_calculate_challenge_rating_sums_offense_defense_save_and_hp_components(self):
+        # offense: blades 5D=15 + damage 5D=15 -> 30. defense: dodge 5D=15. save: fortitude
+        # 4D=12, willpower 2D=6, reflexes absent (0) -> round((12+6+0)/3)=6. hp: 36//3=12.
+        # 30+15+6+12=63.
+        offense_skill = {"dice": 5, "pips": 0}
+        defense_skill = {"dice": 5, "pips": 0}
+        save_ratings = [{"dice": 4, "pips": 0}, {"dice": 2, "pips": 0}, {}]
+        rating = calculate_challenge_rating(offense_skill, 5, 0, defense_skill, save_ratings, max_hp=36)
+        self.assertEqual(rating, 63)
 
     def test_calculate_challenge_rating_handles_an_entity_with_no_trained_skills(self):
-        self.assertEqual(calculate_challenge_rating({}, max_hp=9, damage_dice=1, damage_pips=1), 7)
+        self.assertEqual(calculate_challenge_rating({}, 1, 1, {}, [], max_hp=9), 7)
+
+    def test_calculate_challenge_rating_resistance_adds_and_vulnerability_subtracts(self):
+        base = calculate_challenge_rating({}, 0, 0, {}, [], max_hp=0)
+        with_resistance = calculate_challenge_rating(
+            {}, 0, 0, {}, [], max_hp=0, resistance_dice=2, resistance_pips=0,
+        )
+        with_vulnerability = calculate_challenge_rating(
+            {}, 0, 0, {}, [], max_hp=0, vulnerability_dice=2, vulnerability_pips=0,
+        )
+        self.assertEqual(with_resistance - base, 6)
+        self.assertEqual(with_vulnerability - base, -6)
+
+    def test_calculate_challenge_rating_immunity_tags_any_beats_a_specific_list(self):
+        base = calculate_challenge_rating({}, 0, 0, {}, [], max_hp=0)
+        one_tag = calculate_challenge_rating({}, 0, 0, {}, [], max_hp=0, immunity_tags=["fire"])
+        two_tags = calculate_challenge_rating({}, 0, 0, {}, [], max_hp=0, immunity_tags=["fire", "cold"])
+        any_tag = calculate_challenge_rating({}, 0, 0, {}, [], max_hp=0, immunity_tags=["any"])
+        self.assertGreater(one_tag, base)
+        self.assertGreater(two_tags, one_tag)
+        self.assertGreater(any_tag, two_tags)
 
     def test_calculate_party_challenge_rating_is_the_sum_not_the_average(self):
         self.assertEqual(calculate_party_challenge_rating([41, 26, 21]), 88)
@@ -6488,29 +6508,36 @@ class TestChallengeRatingDMCoreIntegration(DMTestCase):
     """!
     @brief get_challenge_rating/get_party_challenge_rating (DM_Combat.py) against debug.toml's
         real gladstone/thane/wolf data -- confirms the DMCore-side glue (finding each entity's
-        best damage-dealing weapon/ability, filtering the party by is_player/is_party) feeds
-        Challenge_Rating.py's pure math the right numbers, not just that the math itself is
-        right (TestChallengeRating already covers that in isolation).
+        best offense package, its own combat_role-tagged defense/save skills, filtering the
+        party by is_player/is_party) feeds Challenge_Rating.py's pure math the right numbers,
+        not just that the math itself is right (TestChallengeRating already covers that in
+        isolation).
     """
 
-    def test_gladstone_rating_picks_fireball_over_his_own_longsword_as_the_best_damage(self):
-        # skill (blades 5D=15, dodge 5D=15, one 4D skill=12) -> 14; hp 36//3=12; fireball's
-        # 5D=15 beats the longsword's 1D+2=5 and cleave's weapon-scaled 1D+2=5 -- 14+12+15=41.
-        self.assertEqual(self.dm_core.get_challenge_rating("gladstone"), 41)
+    def test_gladstone_rating_picks_arcane_and_fireball_as_the_best_offense_package(self):
+        # _best_offense_package maximizes skill+damage together, not damage alone -- arcane
+        # 2D=6 + fireball's own 5D=15 (=21) edges out blades 5D=15 + longsword's 1D+2=5 (=20),
+        # even though the longsword's own *skill* is rated higher on its own. defense: dodge
+        # 5D=15. save: fortitude/reflexes/willpower all 2D=6 each -> avg 6. hp: 36//3=12.
+        # 21+15+6+12=54.
+        self.assertEqual(self.dm_core.get_challenge_rating("gladstone"), 54)
 
-    def test_thane_rating_uses_his_own_innate_shortsword_strike(self):
-        # skill (three tied 4D skills=12 each) -> 12; hp 24//3=8; shortsword strike 2D=6.
-        self.assertEqual(self.dm_core.get_challenge_rating("thane"), 26)
+    def test_thane_rating_uses_his_own_best_offense_package(self):
+        # offense: one of his 4D=12 combat skills + shortsword strike's own 2D=6 -> 18.
+        # defense: dodge 3D=9. save: fortitude 3D=9, reflexes/willpower 2D=6 each -> avg 7.
+        # hp: 24//3=8. 18+9+7+8=42.
+        self.assertEqual(self.dm_core.get_challenge_rating("thane"), 42)
 
     def test_wolf_rating_uses_its_own_bite(self):
-        # skill (dodge 6D=18, brawling 5D=15, one 2D skill=6) -> 13; hp 16//3=5; bite 1D=3.
-        self.assertEqual(self.dm_core.get_challenge_rating("wolf"), 21)
+        # offense: brawling 5D=15 + bite's own 1D=3 -> 18. defense: dodge 6D=18. save:
+        # fortitude/reflexes/willpower all 2D=6 each -> avg 6. hp: 16//3=5. 18+18+6+5=47.
+        self.assertEqual(self.dm_core.get_challenge_rating("wolf"), 47)
 
     def test_unknown_entity_rates_zero(self):
         self.assertEqual(self.dm_core.get_challenge_rating("nobody"), 0)
 
     def test_party_rating_sums_gladstone_and_thane_but_not_the_wolves(self):
-        self.assertEqual(self.dm_core.get_party_challenge_rating(), 41 + 26)
+        self.assertEqual(self.dm_core.get_party_challenge_rating(), 54 + 42)
 
 
 class TestXpAward(DMTestCase):
@@ -6518,7 +6545,7 @@ class TestXpAward(DMTestCase):
     @brief _award_xp_for_defeat (DM_Combat.py), triggered from calculate_damage the moment a
         hostile entity's HP first reaches 0 -- debug.toml's own gladstone (is_player, starts
         with exp = 100)/thane (is_party, no authored "exp" -- starts at the implicit 0) and its
-        first wolf (hostile by default, challenge rating 21 -- TestChallengeRatingDMCoreIntegration).
+        first wolf (hostile by default, challenge rating 47 -- TestChallengeRatingDMCoreIntegration).
     """
 
     def _drop_the_wolf_to_one_hp(self):
@@ -6534,8 +6561,8 @@ class TestXpAward(DMTestCase):
         self._deal_five_damage()
 
         self.assertEqual(self.dm_core.get_current_hp("wolf"), 0)
-        self.assertEqual(self.dm_core.entities["gladstone"]["exp"], 100 + 21)
-        self.assertEqual(self.dm_core.entities["thane"]["exp"], 21)
+        self.assertEqual(self.dm_core.entities["gladstone"]["exp"], 100 + 47)
+        self.assertEqual(self.dm_core.entities["thane"]["exp"], 47)
 
     def test_custom_exp_field_overrides_the_challenge_rating_default(self):
         self.dm_core.entities["wolf"]["exp"] = 5
@@ -6559,16 +6586,16 @@ class TestXpAward(DMTestCase):
         self._drop_the_wolf_to_one_hp()
         self._deal_five_damage()
 
-        self.assertEqual(self.dm_core.entities["gladstone"]["exp"], 100 + 21 * 3)
+        self.assertEqual(self.dm_core.entities["gladstone"]["exp"], 100 + 47 * 3)
 
     def test_divide_between_party_splits_the_award_evenly_by_floor_division(self):
         self.dm_core.rules["xp"]["divide_between_party"] = True
         self._drop_the_wolf_to_one_hp()
         self._deal_five_damage()
 
-        # 21 // 2 party members (gladstone, thane) = 10 each, not 21 each.
-        self.assertEqual(self.dm_core.entities["gladstone"]["exp"], 100 + 10)
-        self.assertEqual(self.dm_core.entities["thane"]["exp"], 10)
+        # 47 // 2 party members (gladstone, thane) = 23 each, not 47 each.
+        self.assertEqual(self.dm_core.entities["gladstone"]["exp"], 100 + 23)
+        self.assertEqual(self.dm_core.entities["thane"]["exp"], 23)
 
     def test_a_second_hit_against_an_already_dead_entity_awards_no_further_xp(self):
         self._drop_the_wolf_to_one_hp()
@@ -6599,6 +6626,25 @@ class TestXpAward(DMTestCase):
         self.assertEqual(self.dm_core.entities["thane"].get("exp", 0), 0)
 
 
+# A minimal skills_catalog fixture mirroring Rules/Fantasy/skills.toml's own real combat_role
+# tags for the specific skill names these tests actually use -- fit_skills_to_cr/
+# generate_npc_stats/generate_ad_hoc_creature are pure, DMCore-independent functions (no
+# self.skills to read), so a plain dict fixture stands in the same way load_npc_keywords' own
+# small fake catalogs already do elsewhere in this class. "strength"/"linguistics"/"stealth"
+# are deliberately absent (no combat_role at all) -- flavor-only skills, same as the real file.
+FAKE_SKILLS_CATALOG = {
+    "blades": {"combat_role": "offense"},
+    "axes": {"combat_role": "offense"},
+    "athletics": {"combat_role": "offense"},
+    "brawling": {"combat_role": "offense"},
+    "arcane": {"combat_role": "offense"},
+    "dodge": {"combat_role": "defense"},
+    "fortitude": {"combat_role": "resistive"},
+    "reflexes": {"combat_role": "resistive"},
+    "willpower": {"combat_role": "resistive"},
+}
+
+
 class TestNpcGeneration(unittest.TestCase):
     """!
     @brief NPC_Generation.py's pure math/parsing -- no DMCore, no live LLM (see
@@ -6607,42 +6653,63 @@ class TestNpcGeneration(unittest.TestCase):
         rather than through DMCore.
     """
 
+    @staticmethod
+    def _cr_from_skills(skills, max_hp, catalog=FAKE_SKILLS_CATALOG):
+        """Mirrors DM_Combat.py's get_challenge_rating, minus the resistance/immunity/
+        vulnerability/equipped-weapon glue these pure skill-only fixtures never model -- the
+        same "just a dict" resolution get_challenge_rating does against a live entity's own
+        skills, applied here against a bare {skill_name: {"dice","pips"}} table instead."""
+        def _best(role):
+            candidates = [skills[n] for n in skills if catalog.get(n, {}).get("combat_role") == role]
+            return max(candidates, key=lambda s: skill_rating(s["dice"], s["pips"]), default={})
+
+        resistive_names = [n for n, s in catalog.items() if s.get("combat_role") == "resistive"]
+        save_ratings = [skills.get(n, {}) for n in resistive_names]
+        return calculate_challenge_rating(_best("offense"), 0, 0, _best("defense"), save_ratings, max_hp)
+
     def test_fit_skills_to_cr_round_trips_through_calculate_challenge_rating(self):
         # Every case should land *exactly* on target_cr -- fit_skills_to_cr is meant to be an
         # exact inverse of calculate_challenge_rating's own math, not just "close".
         cases = [
-            (20, ["blades", "dodge", "athletics"]),       # exactly 3 key skills
-            (41, ["arcane", "linguistics"]),               # fewer than 3
-            (10, ["stealth"]),                              # just 1
-            (60, ["blades", "dodge", "athletics", "strength", "brawling"]),  # more than 3
+            (20, ["blades", "dodge", "athletics"]),       # offense + defense, no saves named
+            (41, ["arcane", "linguistics"]),               # one offense skill + one flavor skill
+            (10, ["stealth"]),                              # no combat-relevant skill at all
+            (60, ["blades", "dodge", "athletics", "strength", "brawling"]),  # multiple offense
         ]
         for target_cr, key_skills in cases:
-            skills, max_hp = fit_skills_to_cr(key_skills, target_cr)
+            skills, max_hp = fit_skills_to_cr(key_skills, target_cr, FAKE_SKILLS_CATALOG)
             self.assertEqual(
-                calculate_challenge_rating(skills, max_hp), target_cr,
+                self._cr_from_skills(skills, max_hp), target_cr,
                 f"key_skills={key_skills} target_cr={target_cr}",
             )
 
     def test_fit_skills_to_cr_never_produces_negative_or_zero_dice(self):
-        skills, max_hp = fit_skills_to_cr(["blades", "dodge"], target_cr=1)
+        skills, max_hp = fit_skills_to_cr(["blades", "dodge"], target_cr=1, skills_catalog=FAKE_SKILLS_CATALOG)
         self.assertGreaterEqual(max_hp, 0)
         for stats in skills.values():
             self.assertGreaterEqual(stats["dice"], 1)
 
-    def test_fit_skills_to_cr_dedupes_and_only_the_first_three_affect_cr(self):
+    def test_fit_skills_to_cr_dedupes_and_only_combat_role_tagged_skills_affect_cr(self):
         skills, max_hp = fit_skills_to_cr(
             ["blades", "blades", "dodge", "athletics", "strength"], target_cr=30,
+            skills_catalog=FAKE_SKILLS_CATALOG,
         )
         self.assertEqual(len(skills), 4)  # deduped from 5 to 4
-        self.assertEqual(calculate_challenge_rating(skills, max_hp), 30)
+        self.assertEqual(self._cr_from_skills(skills, max_hp), 30)
 
-        primary_ratings = [skill_rating(skills[n]["dice"], skills[n]["pips"]) for n in ("blades", "dodge", "athletics")]
+        # blades/athletics are both "offense" -- tied with each other (only the single
+        # best-rated one is ever actually read, so they're set equal); dodge is "defense", a
+        # separate additive component that needn't match them. strength has no combat_role at
+        # all -- flavor only, and rated lower than every combat-relevant skill here.
+        offense_ratings = [skill_rating(skills[n]["dice"], skills[n]["pips"]) for n in ("blades", "athletics")]
+        defense_rating = skill_rating(skills["dodge"]["dice"], skills["dodge"]["pips"])
         flavor_rating = skill_rating(skills["strength"]["dice"], skills["strength"]["pips"])
-        self.assertEqual(len(set(primary_ratings)), 1)  # all three tied
-        self.assertLess(flavor_rating, primary_ratings[0])  # the 4th is CR-free flavor only
+        self.assertEqual(len(set(offense_ratings)), 1)  # blades and athletics tied
+        self.assertLess(flavor_rating, offense_ratings[0])
+        self.assertLess(flavor_rating, defense_rating)
 
     def test_fit_skills_to_cr_empty_key_skills_still_produces_hp(self):
-        skills, max_hp = fit_skills_to_cr([], target_cr=30)
+        skills, max_hp = fit_skills_to_cr([], target_cr=30, skills_catalog=FAKE_SKILLS_CATALOG)
         self.assertEqual(skills, {})
         self.assertGreater(max_hp, 0)
 
@@ -6698,7 +6765,9 @@ class TestNpcGeneration(unittest.TestCase):
             })}}]}}]}
 
         npc_keywords = {"warrior": ["blades", "axes", "athletics", "strength"]}
-        result = generate_npc_stats(npc_keywords, target_cr=20, variance=0, call_chat_completion=fake_call)
+        result = generate_npc_stats(
+            npc_keywords, target_cr=20, skills_catalog=FAKE_SKILLS_CATALOG, variance=0, call_chat_completion=fake_call,
+        )
 
         self.assertEqual(result["name"], "Test Name")
         self.assertEqual(result["description"], "A test backstory.")
@@ -6709,7 +6778,9 @@ class TestNpcGeneration(unittest.TestCase):
             raise ConnectionError("no Ollama")
 
         npc_keywords = {"warrior": ["blades", "axes", "athletics", "strength"]}
-        result = generate_npc_stats(npc_keywords, target_cr=20, call_chat_completion=failing_call)
+        result = generate_npc_stats(
+            npc_keywords, target_cr=20, skills_catalog=FAKE_SKILLS_CATALOG, call_chat_completion=failing_call,
+        )
 
         self.assertEqual(result["name"], "Unnamed Stranger")
         self.assertTrue(result["skills"])
@@ -6721,7 +6792,9 @@ class TestNpcGeneration(unittest.TestCase):
             })}}]}}]}
 
         npc_keywords = {"warrior": ["blades"]}
-        result = generate_npc_stats(npc_keywords, target_cr=20, call_chat_completion=fake_call)
+        result = generate_npc_stats(
+            npc_keywords, target_cr=20, skills_catalog=FAKE_SKILLS_CATALOG, call_chat_completion=fake_call,
+        )
 
         self.assertEqual(result["name"], "Unnamed Stranger")
 
@@ -6731,7 +6804,8 @@ class TestNpcGeneration(unittest.TestCase):
 
         npc_keywords = {"warrior": ["blades", "axes", "athletics", "strength"]}
         result = generate_npc_stats(
-            npc_keywords, target_cr=20, call_chat_completion=exploding_call, skip_llm_generation=True,
+            npc_keywords, target_cr=20, skills_catalog=FAKE_SKILLS_CATALOG,
+            call_chat_completion=exploding_call, skip_llm_generation=True,
         )
         self.assertTrue(result["skills"])
 
@@ -7026,7 +7100,8 @@ class TestAdHocGeneration(unittest.TestCase):
         npc_keywords = {"brute": ["strength", "brawling", "fortitude"]}
 
         result = generate_ad_hoc_creature(
-            "a rat", "A dank cellar.", target_cr=20, npc_keywords=npc_keywords, call_chat_completion=fake_call,
+            "a rat", "A dank cellar.", target_cr=20, npc_keywords=npc_keywords,
+            skills_catalog=FAKE_SKILLS_CATALOG, call_chat_completion=fake_call,
         )
 
         self.assertTrue(result["created"])
@@ -7053,7 +7128,8 @@ class TestAdHocGeneration(unittest.TestCase):
         npc_keywords = {"scholar": ["knowledge", "willpower"]}
 
         result = generate_ad_hoc_creature(
-            "a pilgrim", "A dusty road.", target_cr=20, npc_keywords=npc_keywords, call_chat_completion=fake_call,
+            "a pilgrim", "A dusty road.", target_cr=20, npc_keywords=npc_keywords,
+            skills_catalog=FAKE_SKILLS_CATALOG, call_chat_completion=fake_call,
         )
 
         entity = result["entity"]
@@ -7065,7 +7141,9 @@ class TestAdHocGeneration(unittest.TestCase):
         def exploding_call(*args, **kwargs):
             raise AssertionError("should never be called with no npc_keywords catalog")
 
-        result = generate_ad_hoc_creature("a rat", "desc", target_cr=20, npc_keywords={}, call_chat_completion=exploding_call)
+        result = generate_ad_hoc_creature(
+            "a rat", "desc", target_cr=20, npc_keywords={}, skills_catalog={}, call_chat_completion=exploding_call,
+        )
         self.assertFalse(result["created"])
         self.assertEqual(result["reason"], "no_keywords")
 
