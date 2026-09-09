@@ -273,6 +273,22 @@ def _op_inject_directive(step, ctx, entities, rules, event_bus):
     )
 
 
+def _op_destroy_equipped(step, ctx, entities, rules, event_bus):
+    """!
+    @brief `destroy_equipped` -- destroys whatever entity's resolved role currently has equipped
+        in `slot` outright (Inventory_Resolution.destroy_equipped_item), no roll/chance of its
+        own (a deliberate maneuver's own on_pass is unconditional, same as every other maneuver
+        here -- see maneuvers.toml's "disarm"). For the chance-gated version of the same effect
+        as an ability's own hit-side-effect (ex: creatures.toml's "rust monster"), see
+        Combat_Resolution.py's apply_destroy_equipped instead -- this op is for a program step,
+        not an ability field.
+    """
+    entity_name = resolve_role(_require(step, "entity"), ctx)
+    if entity_name is None:
+        return
+    Inventory_Resolution.destroy_equipped_item(entities, event_bus, entity_name, _require(step, "slot"))
+
+
 def _op_transfer_item(step, ctx, entities, rules, event_bus):
     """!@brief `transfer_item` -- moves one named item from `from`'s resolved role to `to`'s."""
     from_name = resolve_role(_require(step, "from"), ctx)
@@ -304,6 +320,7 @@ OP_HANDLERS = {
     "attitude": _op_attitude,
     "damage": _op_damage,
     "heal": _op_heal,
+    "destroy_equipped": _op_destroy_equipped,
     "inject_directive": _op_inject_directive,
     "transfer_item": _op_transfer_item,
     "transfer_currency": _op_transfer_currency,

@@ -408,6 +408,20 @@ targets = { number = 1, aoe = 0 }           # Widens a hit past the one entity t
                                             # DamageEffect/attitude nudge per resolved target) and
                                             # _run_ability_outcome_program (this ability's own
                                             # on_pass/on_fail run once per resolved target).
+save_for_half = { skill = "reflexes" }      # Pairs with "targets" above -- the Pathfinder
+                                            # Reflex-half AoE shape. Only ever checked for a
+                                            # target "targets" widened onto (never target_name
+                                            # itself, which already resolved through the ordinary
+                                            # opposed roll) -- DM_Core.py's _resolve_save_for_half,
+                                            # called from _apply_damage_if_hit. That target rolls
+                                            # a flat check against "skill" at this ability's own
+                                            # "difficulty" (default 10); a failed save takes full
+                                            # damage as normal, a passed one halves it (rolled
+                                            # once, then fixed into a per-target damage_value
+                                            # copy -- resistance/vulnerability/damage_bonus_vs
+                                            # still apply on top of that number as usual) -- or,
+                                            # if that target's own "negates_save_for_half" (see
+                                            # below) names this same "skill", negates it outright.
 on_hit_condition = { condition = "bleeding", chance = 100 }
                                             # Applies a [[condition]] directly to whoever this
                                             # ability just hit, no [entity.test] detour needed
@@ -419,6 +433,24 @@ on_hit_condition = { condition = "bleeding", chance = 100 }
                                             # [[status]]'s own "apply" block already takes.
                                             # Skipped outright if the defender is immune to
                                             # this ability's own damage_tags.
+destroy_equipped = { slot = "rhand", chance = 100 }
+                                            # Destroys whatever the defender currently has
+                                            # equipped in "slot" outright -- removed from both
+                                            # [entity.equipped] and "inventory" entirely, no
+                                            # partial-damage tracking (apply_destroy_equipped,
+                                            # Combat_Resolution.py -> Inventory_Resolution.py's
+                                            # destroy_equipped_item). The Pathfinder Rust Monster
+                                            # corrosion shape, deliberately simplified from
+                                            # Pathfinder's own two-hit item-HP model to a single
+                                            # destroy-or-nothing roll. "chance" (1-100, default
+                                            # 100) is the percent chance it actually lands, same
+                                            # shape as on_hit_condition's own. A maneuver's own
+                                            # on_pass program can achieve the same effect
+                                            # unconditionally via the "destroy_equipped" op (see
+                                            # maneuvers.toml's "disarm") -- this ability field is
+                                            # for a hit-side-effect instead, the same "ability
+                                            # field vs. program op" split on_hit_condition/the
+                                            # "condition" op already have.
 damage_bonus_vs = { supertypes = ["undead"], value = { dice = 2, pips = 0, bonus = 0 } }
                                             # Extra rolled damage that only applies against a
                                             # defender of a particular kind, matched by the
@@ -429,6 +461,15 @@ damage_bonus_vs = { supertypes = ["undead"], value = { dice = 2, pips = 0, bonus
                                             # alone can't express (that only ever checks the
                                             # defender's resistance/immunity/vulnerability, not
                                             # what it *is*).
+damage_bonus_if_condition = { condition = "flat_footed", value = { dice = 1, pips = 0, bonus = 0 } }
+                                            # Extra rolled damage that only applies while the
+                                            # defender currently carries a named condition
+                                            # (has_condition, not matches_supertype_or_subtype)
+                                            # -- the Pathfinder Sneak Attack shape (get_damage_
+                                            # bonus_if_condition, Combat_Resolution.py):
+                                            # structurally a twin of damage_bonus_vs just above,
+                                            # keyed off the defender's own current state rather
+                                            # than its static type.
 dispel = { supertypes = ["spell"], subtypes = ["spell"] }
                                             # A spell/technique only -- on a successful cast,
                                             # banishes current_target outright (remove_entity_
@@ -572,6 +613,28 @@ summon = { name = "spectral wolf", duration = 4 }
                                             # -- it's a real, hand-authored creature template,
                                             # unrelated to (and not gated by) the "abilities"
                                             # this ability lives on.
+create_spawn = { name = "wight", delay_rounds = 2, requirements = [ { field = "subtype", operator = "==", value = "humanoid" } ] }
+                                            # summon's delayed, kill-triggered mirror image -- the
+                                            # Pathfinder Wight/Shadow "kills become one of us"
+                                            # shape. Checked only on a real kill (DM_Combat.py's
+                                            # calculate_damage, the same hook that awards XP):
+                                            # if the just-killed defender matches "requirements"
+                                            # (entity_matches_requirements, the same {field,
+                                            # operator, value} shape a behavior/[entity.test]
+                                            # already uses -- omit entirely to match anything), a
+                                            # pending-spawn record lands on the corpse itself
+                                            # ({name, band, rounds_remaining = delay_rounds}),
+                                            # counted down once per round by DM_Summoning.py's
+                                            # _advance_pending_spawn (called from run_round_
+                                            # upkeep, DM_Status.py, even for a dead entity -- see
+                                            # that method's own comment). At 0, "name" is
+                                            # instanced at the corpse's own band as a permanent
+                                            # new entity -- unlike "summon" above, it's never
+                                            # tagged "summon_expires_in" and nothing ever removes
+                                            # it automatically; it's a new enemy, not a temporary
+                                            # ally. Not gated on is_hostile the way XP is -- a
+                                            # property of the killing ability, unrelated to
+                                            # whether the kill itself was XP-worthy.
 teleport_to_band = 4                        # A spell/technique only -- on a successful cast,
                                             # jumps the PLAYER directly to this band within the
                                             # current room (move_entity's own existing floor/
@@ -671,6 +734,34 @@ immunity_tags = [ "poison" ]                # Absolute -- zeroes net damage on a
                                             # "flame wall" is the shipped example, standing in
                                             # for "can't be harmed by mundane means at all"
                                             # without hand-listing every physical/energy type.
+immune_conditions = { subtypes = [ "mind-affecting" ] }
+                                            # Immune to a named condition or condition *kind*,
+                                            # matched by that [[condition]] entry's own
+                                            # supertype/subtype (the same {supertypes, subtypes}
+                                            # shape/matching rule damage_bonus_vs/dispel/cure
+                                            # already use) -- checked in apply_condition
+                                            # (Combat_Resolution.py) before the condition is ever
+                                            # set, a no-op if it matches. Distinct from
+                                            # immunity_tags above, which only ever matches an
+                                            # incoming hit's own damage_tags, never a condition's
+                                            # identity -- this is the Pathfinder "Immune to charm,
+                                            # sleep, mind-affecting" shape, immunity to what a
+                                            # condition *is*, not what damage carried it.
+negates_save_for_half = [ "reflexes" ]       # Which save(s) this entity fully negates on a pass
+                                            # instead of merely halving -- checked by DM_Core.py's
+                                            # _resolve_save_for_half: paired with an AoE ability's
+                                            # own "save_for_half" (see that field's own comment
+                                            # above), a passed save whose own "skill" appears in
+                                            # this list negates the hit entirely. The Pathfinder
+                                            # Evasion trait is exactly this list containing
+                                            # "reflexes" alone -- Evasion is textually a Reflex-
+                                            # save-only trait, not "any save-for-half effect," so
+                                            # the skill it applies to is data on the entity, not a
+                                            # name the engine hardcodes; nothing stops a different
+                                            # trait from naming "fortitude"/"willpower" instead
+                                            # for some other save-for-half effect. Meaningless
+                                            # without a "save_for_half"-authoring attacker; does
+                                            # nothing against an ordinary single-target attack.
 vulnerability_value = { dice = 2, pips = 0 }# Rolled, extra damage added before reduction on a
                                             # matching tag.
 vulnerability_tags = [ "fire" ]

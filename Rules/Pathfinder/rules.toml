@@ -235,6 +235,192 @@ drain = [
     { skill = "fortitude", dice = 1, pips = 0 },
 ]
 
+# reference/pathfinder_mapping.toml's condition_pattern "A" recipe, verbatim -- prevents_action
+# stops the entity acting on its own turn at all (ActionPreventedOutcome for the player,
+# "no behavior matched" for a creature/ally); the modifier stays alongside it in case a future
+# mechanism ever rolls AGAINST a paralyzed target directly (ex: a coup de grace check) rather
+# than just skipping its turn. Applied by creatures.toml's "ghoul" via on_hit_condition -- the
+# engine has no mechanism for a target's own save to negate an on-hit condition the way
+# Pathfinder's real DC 13 Fortitude negates does, so that save is approximated as a flat chance
+# on the ability itself instead (see that entity's own comment).
+[[condition]]
+name = "paralyzed"
+prevents_action = true
+modifier = { dice = -99, pips = 0, bonus = 0 }
+
+# A combat poison (Pathfinder's own "frequency 1/round for 4 rounds"), distinct from filth
+# fever's disease shape only in cadence -- periodic_test's onset/interval both take "rounds" as
+# a unit just as well as "days" (ticked from run_round_upkeep instead of the block clock; see
+# reference/pathfinder_mapping.toml's own Poison/Disease row). onset length 0 means the first
+# save happens the same round it's applied, matching a real injury poison's lack of any delay.
+# No explicit modeling of the real "for 4 rounds" hard cap -- cure_after_successes = 1 (a single
+# passed save cures it outright) is already more lenient than that cap, an honest
+# simplification rather than tracking a separate tick counter. Applied by creatures.toml's
+# "giant spider" bite.
+[[condition]]
+name = "giant spider venom"
+supertype = "affliction"
+subtype = "poison"
+
+[condition.periodic_test]
+skill = "fortitude"
+difficulty = 14
+cure_after_successes = 1
+
+[condition.periodic_test.onset]
+unit = "rounds"
+length = 0
+
+[condition.periodic_test.interval]
+unit = "rounds"
+length = 1
+
+[condition.periodic_test.on_fail]
+drain = [ { skill = "strength", dice = 1, pips = 0 } ]
+
+# Same periodic_test shape as "giant spider venom" above, just draining "finesse" (Dexterity
+# damage) instead of "strength" -- creatures.toml's "monitor lizard" bite.
+[[condition]]
+name = "monitor lizard venom"
+supertype = "affliction"
+subtype = "poison"
+
+[condition.periodic_test]
+skill = "fortitude"
+difficulty = 14
+cure_after_successes = 1
+
+[condition.periodic_test.onset]
+unit = "rounds"
+length = 0
+
+[condition.periodic_test.interval]
+unit = "rounds"
+length = 1
+
+[condition.periodic_test.on_fail]
+drain = [ { skill = "finesse", dice = 1, pips = 0 } ]
+
+# Imp/quasit poison -- same periodic_test shape again, Fortitude DC 13, draining "finesse".
+# Kept as two separate entries even though they're numerically close (an imp's own cure is 1
+# save, a quasit's is 2) rather than collapsing them into one shared condition -- the same "a
+# held creature narrates differently from an asleep one" precedent rules.toml's own miss_chance
+# conditions above already established for otherwise-similar effects. Applied by creatures.toml's
+# "imp"/"quasit".
+[[condition]]
+name = "imp poison"
+supertype = "affliction"
+subtype = "poison"
+
+[condition.periodic_test]
+skill = "fortitude"
+difficulty = 13
+cure_after_successes = 1
+
+[condition.periodic_test.onset]
+unit = "rounds"
+length = 0
+
+[condition.periodic_test.interval]
+unit = "rounds"
+length = 1
+
+[condition.periodic_test.on_fail]
+drain = [ { skill = "finesse", dice = 1, pips = 0 } ]
+
+[[condition]]
+name = "quasit poison"
+supertype = "affliction"
+subtype = "poison"
+
+[condition.periodic_test]
+skill = "fortitude"
+difficulty = 13
+cure_after_successes = 2
+
+[condition.periodic_test.onset]
+unit = "rounds"
+length = 0
+
+[condition.periodic_test.interval]
+unit = "rounds"
+length = 1
+
+[condition.periodic_test.on_fail]
+drain = [ { skill = "finesse", dice = 1, pips = 0 } ]
+
+# Same periodic_test shape again, Fortitude DC 15, draining "finesse" -- creatures.toml's
+# "ettercap" bite.
+[[condition]]
+name = "ettercap venom"
+supertype = "affliction"
+subtype = "poison"
+
+[condition.periodic_test]
+skill = "fortitude"
+difficulty = 15
+cure_after_successes = 2
+
+[condition.periodic_test.onset]
+unit = "rounds"
+length = 0
+
+[condition.periodic_test.interval]
+unit = "rounds"
+length = 1
+
+[condition.periodic_test.on_fail]
+drain = [ { skill = "finesse", dice = 1, pips = 0 } ]
+
+# Pathfinder's Energy Drain (a shadow's own Strength-damage touch) -- the Pattern F "drain"
+# recipe reference/pathfinder_mapping.toml's own row documents verbatim, permanently subtracting
+# from the target's base skill dice/pips the first time it's gained (Combat_Resolution.py's own
+# _apply_drain_if_gained, restored in full by dismiss_condition). A shadow's real Strength damage
+# has no listed saving throw at all -- unlike "level drained" below, its own on_hit_condition
+# chance is 100, not an approximated save.
+[[condition]]
+name = "energy drained"
+drain = { skill = "strength", dice = 1, pips = 0 }
+
+# Pathfinder's own generic negative-level energy drain (a wight's slam) -- distinct from
+# "energy drained" above (a shadow's own Strength-specific drain) since a negative level saps a
+# creature's overall vitality rather than one specific ability score; "fortitude" stands in for
+# that broader vitality hit. Real negative-level drain allows a DC 14 Fortitude save to resist,
+# approximated the same way "ghoul"'s own paralysis chance is -- on_hit_condition has no
+# mechanism to roll a target's own save before applying.
+[[condition]]
+name = "level drained"
+drain = { skill = "fortitude", dice = 1, pips = 0 }
+
+# Pathfinder's mind-affecting Charm/Sleep line -- a shared subtype = "mind-affecting" is what
+# lets a single immune_conditions = { subtypes = ["mind-affecting"] } (see creatures.toml's
+# "doppelganger") resist the whole family at once, rather than naming "charm"/"asleep"
+# individually. "charmed" carries no modifier of its own -- a real Charm Person's actual effect
+# is an attitude shift, not a dice penalty, so this is a presence flag only, same shape "cursed"
+# above already uses. "asleep" is the Pattern A full-incapacitation recipe (reference/pathfinder_
+# mapping.toml's own condition_pattern "A"), identical in shape to "paralyzed" above.
+[[condition]]
+name = "charmed"
+supertype = "affliction"
+subtype = "mind-affecting"
+modifier = { dice = 0, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "asleep"
+supertype = "affliction"
+subtype = "mind-affecting"
+prevents_action = true
+modifier = { dice = -99, pips = 0, bonus = 0 }
+
+# Fast Healing N -- distinct from "regenerating" above in exactly the one way that matters:
+# real Pathfinder fast healing (unlike regeneration) isn't suppressed by any particular damage
+# type, so this carries no upkeep_blocked_by_tags at all. Seeded permanently the same way
+# "regenerating" is, via [entity.conditions."fast healing"] -- creatures.toml's "imp"/"quasit"
+# (both "fast healing 2").
+[[condition]]
+name = "fast healing"
+upkeep_heal = { dice = 1, pips = 1, bonus = 0 }
+
 # Pathfinder's Polymorph/Baleful Polymorph line -- the "form" field (Combat_Resolution.py's own
 # _apply_form_override) is the "form override" mechanism reference/
 # pathfinder_mapping.toml's own Polymorph row used to flag as having no engine equivalent: on
@@ -897,6 +1083,14 @@ slots = [ "head", "neck", "chest", "back", "rhand", "lhand", "ring", "feet" ]
 supertype = "creature"
 subtype = "undead"
 slots = [ "rhand", "chest" ]
+
+# "troll" (creatures.toml) never equips anything and so never needed this -- "ogre" is the
+# first "giant"-subtype entity to actually wear armor and wield a weapon, exactly like any
+# other big humanoid-shaped creature.
+[[equip_slot]]
+supertype = "creature"
+subtype = "giant"
+slots = [ "head", "neck", "chest", "back", "rhand", "lhand", "ring", "feet" ]
 
 [[equip_slot]]
 supertype = "creature"

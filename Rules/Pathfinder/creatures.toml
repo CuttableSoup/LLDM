@@ -495,3 +495,1232 @@ dodge = { dice = 1, pips = 1 }
 fortitude = { dice = 1, pips = 1 }
 reflexes = { dice = 1, pips = 0 }
 stealth = { dice = 3, pips = 2 }
+
+# Bestiary 1 (3rd printing) p.183, "Kobold" (Kobold warrior 1), CR 1/4, XP 100. Same
+# stat-block conversion method as "goblin" above -- attack/save bonuses through rating = bonus +
+# 1, touch AC (12) to dodge, real AC (+2 armor) to an equipped item, natural armor (+1) skipped
+# as too small to matter (the same call already made for the animals below rather than
+# inflating every low-CR entry with a token resistance_value). Weakness "light sensitivity"
+# (page 301 of the same book) isn't modeled -- the engine has no ambient light-level state for a
+# conditional penalty to key off. subtype = "humanoid", not the real "humanoid (reptilian)" --
+# no equip_slot entry exists for "reptilian" (rules.toml's own table only recognizes humanoid/
+# goblinoid/undead/animal/elemental), and a kobold wears armor and wields weapons exactly like
+# any other small humanoid, so the generic slot list already fits.
+[[entity]]
+name = "kobold"
+supertype = "creature"
+subtype = "humanoid"
+description = "A short, reptilian humanoid with scaled skin, a snout full of tiny teeth, and a long tail."
+
+max_hp = 5
+
+inventory = [ "spear", "sling", "leather armor" ]
+abilities = [ "spear", "sling" ]
+
+[entity.equipped]
+chest = "leather armor"
+
+# Cowardly and scheming (Bestiary flavor: "never fight fair if they can help it") -- retreats
+# the instant it's actually hurt, same shape as goblin's own early retreat.
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+    { field = "hp_per_remain", operator = "<", value = 0.85 },
+]
+action = "retreat"
+
+[[entity.behavior]]
+requirements = [
+    { field = "distance_to_target", operator = ">", value = 0 },
+]
+action = "sling"
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "spear"
+
+[entity.skills]
+polearms = { dice = 0, pips = 2 }
+missiles = { dice = 1, pips = 1 }
+dodge = { dice = 1, pips = 0 }
+fortitude = { dice = 1, pips = 0 }
+reflexes = { dice = 0, pips = 2 }
+stealth = { dice = 2, pips = 0 }
+
+# Bestiary 1 (3rd printing) p.222, "Orc" (Orc warrior 1), CR 1/3, XP 135. Defensive Ability
+# "ferocity" (fights on below 0 HP) needs no modeling at all -- reference/pathfinder_
+# mapping.toml's own "Ferocity" row calls this the engine's default behavior for any entity
+# with no explicit "retreat" entry, which is exactly how this entity is authored (no retreat
+# threshold anywhere below). Weakness "light sensitivity" skipped for the same reason as
+# kobold's own. subtype = "humanoid" -- orc's real Pathfinder type is bare "humanoid (orc)",
+# and there's no "orc" equip_slot entry, so the generic humanoid slot list is what actually
+# lets it wear/wield anything.
+[[entity]]
+name = "orc"
+supertype = "creature"
+subtype = "humanoid"
+description = "A savage, bestial parody of a human, green-gray skin stretched over a heavy brow and greasy black hair."
+
+max_hp = 6
+
+inventory = [ "falchion", "javelin", "studded leather armor" ]
+abilities = [ "falchion", "javelin" ]
+
+[entity.equipped]
+chest = "studded leather armor"
+rhand = "falchion"
+
+[[entity.behavior]]
+requirements = [
+    { field = "distance_to_target", operator = ">", value = 0 },
+]
+action = "javelin"
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "falchion"
+
+[entity.skills]
+blades = { dice = 2, pips = 0 }
+throwing = { dice = 0, pips = 2 }
+dodge = { dice = 0, pips = 1 }
+fortitude = { dice = 1, pips = 1 }
+reflexes = { dice = 0, pips = 1 }
+intimidation = { dice = 1, pips = 0 }
+
+# Bestiary 1 (3rd printing) p.175, "Hobgoblin" (Hobgoblin fighter 1), CR 1/2, XP 200.
+# subtype = "goblinoid" -- matches rules.toml's own equip_slot entry for that subtype (shared
+# with "goblin" above), the real Pathfinder classification alongside goblins/bugbears. "long
+# bow" (with a space) is the shipped Fantasy-inherited item -- distinct from "composite longbow"
+# further up the same catalog -- chosen since its own damage_value already sits closer to a
+# real Pathfinder longbow's 1d8. Disciplined and organized (Bestiary flavor: "by far the most
+# civilized" of the goblinoids) rather than cowardly like its smaller kin -- no early-retreat
+# entry at all, matching orc's own soldierly posture above.
+[[entity]]
+name = "hobgoblin"
+supertype = "creature"
+subtype = "goblinoid"
+description = "Standing as tall as a human, this muscular, gray-skinned warrior watches everything with small, alert eyes."
+
+max_hp = 17
+
+inventory = [ "longsword", "long bow", "studded leather armor", "light steel shield" ]
+abilities = [ "longsword", "long bow" ]
+
+[entity.equipped]
+chest = "studded leather armor"
+lhand = "light steel shield"
+rhand = "longsword"
+
+[[entity.behavior]]
+requirements = [
+    { field = "distance_to_target", operator = ">", value = 0 },
+]
+action = "long bow"
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "longsword"
+
+[entity.skills]
+blades = { dice = 1, pips = 2 }
+missiles = { dice = 1, pips = 1 }
+dodge = { dice = 1, pips = 0 }
+fortitude = { dice = 2, pips = 0 }
+reflexes = { dice = 1, pips = 0 }
+willpower = { dice = 0, pips = 2 }
+stealth = { dice = 2, pips = 0 }
+
+# Bestiary 1 (3rd printing) p.250, "Skeleton" (Human Skeleton), CR 1/3, XP 135. Uses the
+# "2 claws +2 (1d4+2)" option from the real stat block's own melee line rather than its weaker
+# "broken scimitar +0" alternative, folded into one innate ability the same way "Multiple
+# natural attacks" (reference/pathfinder_mapping.toml) already recommends averaging toward.
+# "DR 5/bludgeoning" is the damage_resistance table's own "DR-with-bypass" shape, simplified
+# down to its simplest case -- bludgeoning is the ONE type that bypasses it entirely, so it's
+# just left out of resistance_tags rather than needing a separate resistance_bypass_tags entry
+# (no incoming hit needs an explicit "skip" tag when the type that skips it was never listed as
+# reduced in the first place). "+2 armor" (the real stat block's own "broken chain shirt",
+# reduced from a real chain shirt's usual bonus) converts to leather armor -- the shipped item
+# whose own armor_value happens to match that same +2 numerically. "Immune ... undead traits"
+# (no need for food/sleep, immune to death effects/ability drain/etc.) isn't modeled -- broader
+# than any tag category this engine tracks, the same scope "wraith" above already left alone.
+[[entity]]
+name = "human skeleton"
+supertype = "creature"
+subtype = "undead"
+description = "A pile of bones animated by foul magic, its long bony fingers curled into claws."
+
+max_hp = 4
+
+resistance_value = { dice = 2, pips = 0 }
+resistance_tags = [ "slashing", "piercing" ]
+immunity_tags = [ "cold" ]
+
+inventory = [ "leather armor" ]
+
+[entity.equipped]
+chest = "leather armor"
+
+[[entity.abilities]]
+name = "claws"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "slashing" ]
+damage_value = { dice = 1, pips = 1, bonus = 0 }
+
+[[entity.behavior]]
+requirements = [ { field = "hp_per_remain", operator = ">=", value = 0.01 } ]
+action = "claws"
+
+[entity.skills]
+brawling = { dice = 1, pips = 0 }
+dodge = { dice = 1, pips = 0 }
+fortitude = { dice = 0, pips = 1 }
+reflexes = { dice = 1, pips = 0 }
+willpower = { dice = 1, pips = 0 }
+
+# Bestiary 1 (3rd printing) p.288, "Zombie" (Human Zombie), CR 1/2, XP 200. "DR 5/slashing" --
+# same DR-with-bypass simplification as "human skeleton" above, just the other physical type
+# left out of resistance_tags this time. Special Quality "staggered" (can only take a single
+# move OR standard action each round) is Pattern B -- reference/pathfinder_mapping.toml's own
+# guidance is to flatten a pure action-economy effect down to its Pattern C dice-penalty half,
+# which rules.toml's own already-shipped "staggered" condition already is -- seeded permanently
+# the same way "troll" seeds its own "regenerating" above, rather than needing a new condition.
+# No armor -- a zombie's rags carry no real AC contribution, its whole non-touch AC is the "+2
+# natural" the real stat block lists.
+[[entity]]
+name = "human zombie"
+supertype = "creature"
+subtype = "undead"
+description = "A shambling corpse in soiled rags, rotting flesh sloughing from its bones as it lurches forward."
+
+max_hp = 12
+
+resistance_value = { dice = 2, pips = 0 }
+resistance_tags = [ "bludgeoning", "piercing" ]
+
+[entity.conditions.staggered]
+duration = "permanent"
+
+[[entity.abilities]]
+name = "slam"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "bludgeoning" ]
+damage_value = { dice = 2, pips = 0, bonus = 0 }
+
+[[entity.behavior]]
+requirements = [ { field = "hp_per_remain", operator = ">=", value = 0.01 } ]
+action = "slam"
+
+[entity.skills]
+brawling = { dice = 1, pips = 2 }
+dodge = { dice = 0, pips = 1 }
+fortitude = { dice = 0, pips = 1 }
+reflexes = { dice = 0, pips = 1 }
+willpower = { dice = 1, pips = 1 }
+
+# Bestiary 1 (3rd printing) p.232, "Rat, Dire" (Dire Rat), CR 1/3, XP 135. Same disease vector
+# as "giant rat" above -- reuses rules.toml's already-shipped "filth fever" condition unchanged
+# rather than authoring a second, near-identical disease entry (both creatures' own real DCs
+# differ slightly in Pathfinder; not worth splitting the condition catalog over).
+[[entity]]
+name = "dire rat"
+supertype = "creature"
+subtype = "animal"
+description = "A rat the size of a small dog, coarse-furred with a long scabby tail and glittering, hungry eyes."
+
+max_hp = 5
+
+[[entity.abilities]]
+name = "bite"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "piercing" ]
+damage_value = { dice = 1, pips = 0, bonus = 0 }
+on_hit_condition = { condition = "filth fever", chance = 100, duration = "permanent" }
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+    { field = "hp_per_remain", operator = "<", value = 0.30 },
+]
+action = "retreat"
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "bite"
+
+[entity.skills]
+brawling = { dice = 0, pips = 2 }
+dodge = { dice = 1, pips = 2 }
+fortitude = { dice = 1, pips = 1 }
+reflexes = { dice = 2, pips = 0 }
+willpower = { dice = 0, pips = 2 }
+stealth = { dice = 4, pips = 0 }
+
+# Bestiary 1 (3rd printing) p.278, "Wolf", CR 1, XP 400. The real stat block's own "bite plus
+# trip" (a free trip combat maneuver on a successful bite) isn't modeled -- no on-hit-triggered
+# combat-maneuver mechanism exists, the same "multi-action-within-one-behavior-entry" gap
+# reference/pathfinder_mapping.toml's own "Multiple natural attacks"/"Trample" rows already
+# describe; the bite's own damage already carries the encounter's real teeth.
+[[entity]]
+name = "wolf"
+supertype = "creature"
+subtype = "animal"
+description = "A lean gray predator with piercing yellow eyes, watching its prey in patient silence before it charges."
+
+max_hp = 13
+
+[[entity.abilities]]
+name = "bite"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "piercing" ]
+damage_value = { dice = 1, pips = 1, bonus = 0 }
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+    { field = "hp_per_remain", operator = "<", value = 0.25 },
+]
+action = "retreat"
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "bite"
+
+[entity.skills]
+brawling = { dice = 1, pips = 0 }
+dodge = { dice = 1, pips = 0 }
+fortitude = { dice = 2, pips = 0 }
+reflexes = { dice = 2, pips = 0 }
+willpower = { dice = 0, pips = 2 }
+
+# Bestiary 1 (3rd printing) p.155, "Gnoll", CR 1, XP 400. The real stat block's own melee/thrown
+# split (spear +3 melee, +1 thrown) collapses onto one "polearms" rating -- the engine has no
+# separate melee/ranged rating for the same weapon+skill pairing, so the higher (melee) bonus is
+# what's kept, the same "one candidate, not mixed from two different rolls" precedent
+# calculate_challenge_rating's own offense_side already follows.
+[[entity]]
+name = "gnoll"
+supertype = "creature"
+subtype = "humanoid"
+description = "A hunched, feral, hyena-headed humanoid standing slightly taller than an average human."
+
+max_hp = 11
+
+inventory = [ "spear", "leather armor", "heavy wooden shield" ]
+abilities = [ "spear" ]
+
+[entity.equipped]
+chest = "leather armor"
+lhand = "heavy wooden shield"
+rhand = "spear"
+
+# Gnolls "prefer to flee once it becomes clear that victory is not possible" (Bestiary flavor)
+# rather than fight to the last -- a real retreat threshold, unlike the ferocity-driven orc above.
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+    { field = "hp_per_remain", operator = "<", value = 0.30 },
+]
+action = "retreat"
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "spear"
+
+[entity.skills]
+polearms = { dice = 1, pips = 1 }
+dodge = { dice = 0, pips = 1 }
+fortitude = { dice = 1, pips = 2 }
+reflexes = { dice = 0, pips = 1 }
+willpower = { dice = 0, pips = 1 }
+
+# Bestiary 1 (3rd printing) p.146, "Ghoul", CR 1, XP 400. The real stat block's own bite (disease
+# + paralysis) and 2 claws (paralysis only) collapse onto one "claws" ability carrying paralysis
+# alone -- ghoul fever is dropped as the secondary rider, paralysis is the trait that actually
+# defines a ghoul encounter. rules.toml's own "paralyzed" condition (added alongside this entity)
+# is the shipped Pattern A recipe; chance = 50 approximates the real DC 13 Fortitude negate as a
+# flat coin-flip, since on_hit_condition has no mechanism for rolling a save of its own to resist
+# it (see that condition's own comment). "Defensive Ability channel resistance +2" isn't modeled
+# -- there's no channel energy mechanic in this engine for it to resist in the first place.
+[[entity]]
+name = "ghoul"
+supertype = "creature"
+subtype = "undead"
+description = "A gaunt, pallid humanoid with long, sharp teeth and starved flesh stretched tight over its frame."
+
+max_hp = 13
+
+[[entity.abilities]]
+name = "claws"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "slashing" ]
+damage_value = { dice = 1, pips = 1, bonus = 0 }
+on_hit_condition = { condition = "paralyzed", chance = 50, duration = "rounds", length = 3 }
+
+[[entity.behavior]]
+requirements = [ { field = "hp_per_remain", operator = ">=", value = 0.01 } ]
+action = "claws"
+
+[entity.skills]
+brawling = { dice = 1, pips = 1 }
+dodge = { dice = 1, pips = 0 }
+fortitude = { dice = 1, pips = 0 }
+reflexes = { dice = 1, pips = 0 }
+willpower = { dice = 2, pips = 0 }
+
+# Bestiary 1 (3rd printing) p.258, "Spider, Giant" (Giant Spider), CR 1, XP 400. Poison uses
+# rules.toml's new "giant spider venom" condition (a periodic_test ticking in rounds rather than
+# days -- see that condition's own comment). The real stat block's own "web" special attack
+# (a ranged entangle effect) isn't modeled -- no terrain/restraint mechanism fits it any better
+# than reference/pathfinder_mapping.toml's own "Trample"/"Swallow Whole" rows already found for
+# similarly bespoke special attacks. "Immune mind-affecting effects" isn't modeled -- no
+# mind-affecting tag category exists in this engine's damage/condition system to be immune to.
+[[entity]]
+name = "giant spider"
+supertype = "creature"
+subtype = "vermin"
+description = "A spider the size of a man, crawling silently from the depths of its funnel-shaped web."
+
+max_hp = 16
+
+[[entity.abilities]]
+name = "bite"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "piercing" ]
+damage_value = { dice = 1, pips = 0, bonus = 0 }
+on_hit_condition = { condition = "giant spider venom", chance = 100, duration = "permanent" }
+
+[[entity.behavior]]
+requirements = [ { field = "hp_per_remain", operator = ">=", value = 0.01 } ]
+action = "bite"
+
+[entity.skills]
+brawling = { dice = 1, pips = 0 }
+dodge = { dice = 1, pips = 1 }
+fortitude = { dice = 1, pips = 2 }
+reflexes = { dice = 1, pips = 2 }
+willpower = { dice = 0, pips = 2 }
+stealth = { dice = 2, pips = 2 }
+
+# Bestiary 1 (3rd printing) p.38, "Bugbear", CR 2, XP 600. Moderate natural armor (+3, folded
+# into the real AC total) isn't modeled -- same call as "wolf"/"gorilla" below: an ordinary
+# creature's own hide only gets a resistance_value entry when it's genuinely distinctive (an
+# elemental's hardiness, an undead's DR), not for routine toughness nearly every beast/humanoid
+# has some of.
+[[entity]]
+name = "bugbear"
+supertype = "creature"
+subtype = "goblinoid"
+description = "A hulking, dark-furred goblinoid a head taller than a man, its tiny milk-white eyes glittering with cruel anticipation."
+
+max_hp = 16
+
+inventory = [ "morningstar", "javelin", "leather armor", "light wooden shield" ]
+abilities = [ "morningstar", "javelin" ]
+
+[entity.equipped]
+chest = "leather armor"
+lhand = "light wooden shield"
+rhand = "morningstar"
+
+[[entity.behavior]]
+requirements = [
+    { field = "distance_to_target", operator = ">", value = 0 },
+]
+action = "javelin"
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "morningstar"
+
+[entity.skills]
+brawling = { dice = 2, pips = 0 }
+throwing = { dice = 1, pips = 1 }
+dodge = { dice = 0, pips = 2 }
+fortitude = { dice = 1, pips = 0 }
+reflexes = { dice = 1, pips = 2 }
+willpower = { dice = 0, pips = 2 }
+stealth = { dice = 3, pips = 2 }
+
+# Bestiary 1 (3rd printing) p.280, "Worg", CR 2, XP 600. The real stat block's own "bite plus
+# trip" isn't modeled, same simplification as "wolf" above.
+[[entity]]
+name = "worg"
+supertype = "creature"
+subtype = "animal"
+description = "An oversized, evil wolf with an unusually intelligent light in its eyes, big enough to carry a rider."
+
+max_hp = 26
+
+[[entity.abilities]]
+name = "bite"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "piercing" ]
+damage_value = { dice = 2, pips = 0, bonus = 0 }
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+    { field = "hp_per_remain", operator = "<", value = 0.20 },
+]
+action = "retreat"
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "bite"
+
+[entity.skills]
+brawling = { dice = 2, pips = 2 }
+dodge = { dice = 1, pips = 0 }
+fortitude = { dice = 2, pips = 0 }
+reflexes = { dice = 2, pips = 1 }
+willpower = { dice = 1, pips = 1 }
+stealth = { dice = 3, pips = 1 }
+
+# Bestiary 1 (3rd printing) p.78, "Devil, Imp" (Imp), CR 2, XP 600. Spell-like abilities
+# (constant detect good/magic, at-will invisibility, 1/day suggestion, 1/week commune) aren't
+# modeled at all -- there's no per-creature spell-slot/at-will-ability system anywhere in this
+# engine (even "fire elemental"/"wraith" are mundane-melee-only despite being supernatural), the
+# same "no per-cast picking UI, no SR" simplification reference/pathfinder_mapping.toml's own
+# spellcasting section already accepts. "DR 5/good or silver" uses resistance_bypass_tags'
+# documented "any tag in the list bypasses" semantics for the "or" directly -- no shipped weapon
+# actually carries a "good" or "silver" damage_tags entry yet, the same forward-authored, unused-
+# until-something-tags-for-it precedent "wraith"'s own "magic" bypass already set. "Resist acid
+# 10, cold 10" isn't modeled -- only one resistance_value/resistance_tags pair exists per entity,
+# already spent on the DR. "Fast healing 2" is the new "fast healing" condition above (distinct
+# from "regenerating" -- not suppressed by any damage type), seeded permanently.
+# medium = "air" (fly 50 ft., perfect) -- reference/pathfinder_mapping.toml's own Fly/Swim row.
+[[entity]]
+name = "imp"
+supertype = "creature"
+subtype = "outsider"
+description = "A diminutive, red-skinned fiend with leathery wings and a whip-thin, scorpion-like tail."
+
+max_hp = 16
+medium = "air"
+
+resistance_value = { dice = 2, pips = 0 }
+resistance_tags = [ "slashing", "piercing", "bludgeoning" ]
+resistance_bypass_tags = [ "good", "silver" ]
+immunity_tags = [ "fire", "poison" ]
+
+[entity.conditions."fast healing"]
+duration = "permanent"
+
+[[entity.abilities]]
+name = "sting"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "piercing" ]
+damage_value = { dice = 1, pips = 0, bonus = 0 }
+on_hit_condition = { condition = "imp poison", chance = 100, duration = "permanent" }
+
+# A clever, self-interested fiend, not a suicidal one -- breaks off once it's actually losing.
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+    { field = "hp_per_remain", operator = "<", value = 0.30 },
+]
+action = "retreat"
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "sting"
+
+[entity.skills]
+brawling = { dice = 3, pips = 0 }
+dodge = { dice = 2, pips = 1 }
+fortitude = { dice = 0, pips = 2 }
+reflexes = { dice = 2, pips = 1 }
+willpower = { dice = 1, pips = 2 }
+
+# Bestiary 1 (3rd printing) p.66, "Demon, Quasit" (Quasit), CR 2, XP 600. Same spell-like-
+# ability omission as "imp" above (change shape/spell-likes aren't modeled). "DR 5/cold iron or
+# good" -> resistance_bypass_tags = ["cold iron", "good"], same "or" semantics. "Resist acid 10,
+# cold 10, fire 10" isn't modeled for the same one-resistance_value-per-entity reason as imp.
+# "Fast healing 2" reuses the same new "fast healing" condition. medium = "air" (fly 50 ft.,
+# perfect).
+[[entity]]
+name = "quasit"
+supertype = "creature"
+subtype = "outsider"
+description = "A tiny, wiry demon with curling ram's horns and a thin, leathery body."
+
+max_hp = 16
+medium = "air"
+
+resistance_value = { dice = 2, pips = 0 }
+resistance_tags = [ "slashing", "piercing", "bludgeoning" ]
+resistance_bypass_tags = [ "cold iron", "good" ]
+immunity_tags = [ "electricity", "poison" ]
+
+[entity.conditions."fast healing"]
+duration = "permanent"
+
+[[entity.abilities]]
+name = "claws"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "slashing" ]
+damage_value = { dice = 0, pips = 2, bonus = 0 }
+on_hit_condition = { condition = "quasit poison", chance = 100, duration = "permanent" }
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+    { field = "hp_per_remain", operator = "<", value = 0.30 },
+]
+action = "retreat"
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "claws"
+
+[entity.skills]
+brawling = { dice = 2, pips = 2 }
+dodge = { dice = 1, pips = 2 }
+fortitude = { dice = 0, pips = 2 }
+reflexes = { dice = 2, pips = 0 }
+willpower = { dice = 1, pips = 2 }
+stealth = { dice = 5, pips = 2 }
+
+# Bestiary 1 (3rd printing) p.45, "Choker", CR 2, XP 600. "Grab"/"constrict"/"strangle" (seize a
+# victim by the throat, crush it, and stop it speaking or casting while grappled) collapses onto
+# rules.toml's already-shipped "grappled" condition applied directly on a landed hit -- the same
+# on_hit_condition-applies-the-restraining-condition-directly shape reference/pathfinder_
+# mapping.toml's own "Swallow Whole / Constrict" row describes, with the crush's own damage
+# folded into the tentacle attack's flat damage_value rather than a second, separate hit.
+# "Quickness" (an extra move action every round) isn't modeled -- no action-economy hook for
+# more-than-one-action-per-round exists (the same gap Pattern B already names).
+[[entity]]
+name = "choker"
+supertype = "creature"
+subtype = "aberration"
+description = "A hunched, wretched thing with long, rubbery arms ending in wide, spiny claws, lurking just out of the light."
+
+max_hp = 16
+
+[[entity.abilities]]
+name = "tentacles"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "bludgeoning" ]
+damage_value = { dice = 1, pips = 2, bonus = 0 }
+on_hit_condition = { condition = "grappled", chance = 100, duration = "rounds", length = 3 }
+
+[[entity.behavior]]
+requirements = [ { field = "hp_per_remain", operator = ">=", value = 0.01 } ]
+action = "tentacles"
+
+[entity.skills]
+brawling = { dice = 2, pips = 1 }
+dodge = { dice = 1, pips = 1 }
+fortitude = { dice = 1, pips = 0 }
+reflexes = { dice = 1, pips = 1 }
+willpower = { dice = 1, pips = 2 }
+stealth = { dice = 4, pips = 2 }
+
+# Bestiary 1 (3rd printing) p.197, "Lycanthrope, Wererat" (Wererat, Hybrid Form), CR 2, XP 600.
+# Converts the hybrid (combat) form specifically, not the human or dire-rat forms -- the shape
+# an actual encounter fights. "Sneak attack +1d6" now uses damage_bonus_if_condition (a
+# flanking-agnostic simplification -- it fires whenever the target is already flat_footed for
+# any reason, not specifically "flanked"), inlined onto its own copy of "short sword" rather than
+# on the shared equipment.toml item (which every other wielder also uses, and shouldn't all get a
+# wererat's own sneak attack). "Evasion" now uses the new negates_save_for_half field
+# (["reflexes"]), paired with an AoE ability's own save_for_half (ex: spells.toml's "fireball")
+# -- negates such a hit outright on a passed Reflex save instead of merely halving it; does
+# nothing against an ordinary single-target attack or a save_for_half keyed to a different
+# skill. "Curse of lycanthropy" (the bite's real disease-like
+# transmission) reuses the already-shipped "filth fever" condition as an honest stand-in for "a
+# dangerous bite-borne affliction," the same reuse "dire rat" above already leans on -- not a
+# literal disease,
+# but the closest existing mechanism to "an infected bite that lingers." "DR 10/silver" ->
+# resistance_bypass_tags = ["silver"], same forward-authored tag precedent as "imp"'s own "good"/
+# "silver" bypass -- scaled up one step from the undead's own DR 5 (resistance_value 2D0) to
+# reflect DR 10.
+[[entity]]
+name = "wererat"
+supertype = "creature"
+subtype = "humanoid"
+description = "A hunched figure in studded leather, fur creeping across a rat-like face, a long naked tail trailing behind it."
+
+max_hp = 20
+negates_save_for_half = [ "reflexes" ]
+
+resistance_value = { dice = 3, pips = 0 }
+resistance_tags = [ "slashing", "piercing", "bludgeoning" ]
+resistance_bypass_tags = [ "silver" ]
+
+inventory = [ "short sword", "light crossbow", "studded leather armor" ]
+# A mix of a catalog-item reference (a bare string) and two inline tables -- entity_schema.toml's
+# own "Abilities" comment: all land in the same "abilities" key, but TOML's `[[entity.abilities]]`
+# array-of-tables syntax can only ever hold tables, so mixing in a bare-string reference has to
+# use the flat-list-with-inline-tables form instead (the first Pathfinder conversion in this file
+# to actually need both at once). "short sword" is inlined here (rather than left as a bare
+# string like "light crossbow") specifically so its own damage_bonus_if_condition (sneak attack)
+# applies only to this entity's copy, not to every other wielder of the shared equipment.toml item.
+abilities = [
+    "light crossbow",
+    { name = "short sword", supertype = "object", subtype = "weapon", skill = "blades", damage_tags = [ "piercing" ], damage_value = { dice = 1, pips = 0, bonus = "strength_damage" }, damage_bonus_if_condition = { condition = "flat_footed", value = { dice = 1, pips = 0, bonus = 0 } } },
+    { name = "bite", supertype = "innate", subtype = "weapon", skill = "brawling", damage_tags = [ "piercing" ], damage_value = { dice = 1, pips = 0, bonus = 0 }, on_hit_condition = { condition = "filth fever", chance = 100, duration = "permanent" } },
+]
+
+[entity.equipped]
+chest = "studded leather armor"
+rhand = "short sword"
+
+[[entity.behavior]]
+requirements = [
+    { field = "distance_to_target", operator = ">", value = 0 },
+]
+action = "light crossbow"
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "short sword"
+
+[entity.skills]
+blades = { dice = 1, pips = 2 }
+missiles = { dice = 1, pips = 2 }
+brawling = { dice = 1, pips = 0 }
+dodge = { dice = 1, pips = 2 }
+fortitude = { dice = 1, pips = 1 }
+reflexes = { dice = 2, pips = 1 }
+willpower = { dice = 1, pips = 1 }
+stealth = { dice = 3, pips = 0 }
+
+# Bestiary 1 (3rd printing) p.198, "Lycanthrope, Werewolf" (Werewolf, Hybrid Form), CR 2, XP
+# 600. Same hybrid-form-only scope as "wererat" above; its own weaker secondary bite (+1, vs.
+# the longsword's +6) is dropped entirely rather than modeled as a second ability, the same
+# "pick the single best-paired attack" precedent calculate_challenge_rating's own offense_side
+# already follows. "Bravery +1" (a small bonus specifically vs. fear effects) isn't modeled --
+# too narrow a scope for a global modifier, and there's no separate "fear effect" tag on
+# incoming rolls to scope it to. "Breastplate" stands in for the real stat block's own
+# "chainmail" -- both are +6 armor in Pathfinder, so it's an exact AC match even though the
+# named item differs. "DR 10/silver" -- same shape as wererat's own.
+[[entity]]
+name = "werewolf"
+supertype = "creature"
+subtype = "humanoid"
+description = "A muscular, man-shaped creature with the snarling head and shaggy coat of a wolf."
+
+max_hp = 21
+
+resistance_value = { dice = 3, pips = 0 }
+resistance_tags = [ "slashing", "piercing", "bludgeoning" ]
+resistance_bypass_tags = [ "silver" ]
+
+inventory = [ "longsword", "light crossbow", "breastplate" ]
+abilities = [ "longsword", "light crossbow" ]
+
+[entity.equipped]
+chest = "breastplate"
+rhand = "longsword"
+
+[[entity.behavior]]
+requirements = [
+    { field = "distance_to_target", operator = ">", value = 0 },
+]
+action = "light crossbow"
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "longsword"
+
+[entity.skills]
+blades = { dice = 2, pips = 1 }
+missiles = { dice = 1, pips = 2 }
+dodge = { dice = 1, pips = 0 }
+fortitude = { dice = 2, pips = 1 }
+reflexes = { dice = 1, pips = 0 }
+willpower = { dice = 1, pips = 0 }
+
+# Bestiary 1 (3rd printing) p.17, "Ape, Gorilla" (Gorilla), CR 2, XP 600. Generally peaceful and
+# territorial (Bestiary flavor: makes a show of force before actually attacking) -- a real
+# retreat threshold, unlike a predator that fights to the end.
+[[entity]]
+name = "gorilla"
+supertype = "creature"
+subtype = "animal"
+description = "A broad-shouldered ape with a heavy brow and long, powerful arms, knuckles brushing the ground as it moves."
+
+max_hp = 19
+
+[[entity.abilities]]
+name = "slam"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "bludgeoning" ]
+damage_value = { dice = 1, pips = 2, bonus = 0 }
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+    { field = "hp_per_remain", operator = "<", value = 0.20 },
+]
+action = "retreat"
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "slam"
+
+[entity.skills]
+brawling = { dice = 1, pips = 1 }
+dodge = { dice = 0, pips = 2 }
+fortitude = { dice = 2, pips = 2 }
+reflexes = { dice = 2, pips = 0 }
+willpower = { dice = 1, pips = 0 }
+
+# Bestiary 1 (3rd printing) p.194, "Lizard, Monitor Lizard" (Monitor Lizard), CR 2, XP 600.
+# Poison uses the new "monitor lizard venom" condition (same periodic_test shape as "giant
+# spider venom", draining finesse instead of strength) -- the real "1/hour for 6 hours" cadence
+# is flattened to the same 1/round-style ticking every other poison in this file uses rather
+# than modeling a distinct hour-scale clock the engine has no tick for (tick_periodic_tests only
+# ever advances by "rounds" or "blocks"). "Grab" isn't modeled -- same on_hit-only-applies-one-
+# condition-per-ability scope already accepted for "ghoul"'s own bite above.
+[[entity]]
+name = "monitor lizard"
+supertype = "creature"
+subtype = "animal"
+description = "A large, powerfully built lizard, easily mistaken at a distance for something far more dangerous."
+
+max_hp = 22
+
+[[entity.abilities]]
+name = "bite"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "piercing" ]
+damage_value = { dice = 2, pips = 1, bonus = 0 }
+on_hit_condition = { condition = "monitor lizard venom", chance = 100, duration = "permanent" }
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+    { field = "hp_per_remain", operator = "<", value = 0.20 },
+]
+action = "retreat"
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "bite"
+
+[entity.skills]
+brawling = { dice = 2, pips = 0 }
+dodge = { dice = 1, pips = 0 }
+fortitude = { dice = 3, pips = 0 }
+reflexes = { dice = 2, pips = 0 }
+willpower = { dice = 1, pips = 0 }
+stealth = { dice = 3, pips = 2 }
+
+# Bestiary 1 (3rd printing) p.220, "Ogre", CR 3, XP 800. Touch AC 8 (a real Dex penalty, -1)
+# converts to a negative rating -- floored at untrained (omitted from entity.skills entirely),
+# the same "a real weak save reads as negative bonus -> untrained" precedent creatures.toml's
+# own worked-example comment on "goblin" already established for a negative PF bonus.
+[[entity]]
+name = "ogre"
+supertype = "creature"
+subtype = "giant"
+description = "A lumbering, ten-foot giant with beady, witless eyes and a wide mouth full of crooked teeth."
+
+max_hp = 30
+
+inventory = [ "greatclub", "javelin", "hide armor" ]
+abilities = [ "greatclub", "javelin" ]
+
+[entity.equipped]
+chest = "hide armor"
+rhand = "greatclub"
+
+[[entity.behavior]]
+requirements = [
+    { field = "distance_to_target", operator = ">", value = 0 },
+]
+action = "javelin"
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "greatclub"
+
+[entity.skills]
+brawling = { dice = 2, pips = 2 }
+throwing = { dice = 0, pips = 2 }
+fortitude = { dice = 2, pips = 1 }
+reflexes = { dice = 0, pips = 1 }
+willpower = { dice = 1, pips = 1 }
+
+# Bestiary 1 (3rd printing) p.238, "Rust Monster", CR 3, XP 800. Its defining trait -- antennae
+# that corrode an equipped metal item outright -- now uses the new destroy_equipped ability
+# field (Combat_Resolution.py's apply_destroy_equipped -> Inventory_Resolution.py's
+# destroy_equipped_item), deliberately simplified from the real stat block's own two-stage
+# "half max hp, a second hit destroys" effect down to a single destroy-or-nothing roll (chance =
+# 60, a rolled-down approximation of that real DC 15 Reflex-negates). No damage_value at all --
+# the antennae themselves deal no HP damage in Pathfinder either, only the rust effect. "bite" is
+# kept as a second candidate ability purely so _best_offense_package's own CR scoring (which
+# scans every ability regardless of what behavior actually picks) reads a real damage number
+# instead of the antennae's own zero -- behavior itself always picks antennae (there's no
+# "target still has something equipped" requirement field to gate a fallback on), matching the
+# real creature's own single-minded hunger for metal; once a target has nothing left in "rhand",
+# a further antennae attack is just a harmless per-round no-op rather than switching to biting.
+[[entity]]
+name = "rust monster"
+supertype = "creature"
+subtype = "aberration"
+description = "An insectile creature on four legs, a strange propeller-shaped tail and two long, feathery antennae twitching at the air."
+
+max_hp = 27
+
+[[entity.abilities]]
+name = "antennae"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+destroy_equipped = { slot = "rhand", chance = 60 }
+
+[[entity.abilities]]
+name = "bite"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "piercing" ]
+damage_value = { dice = 0, pips = 2, bonus = 0 }
+
+[[entity.behavior]]
+requirements = [ { field = "hp_per_remain", operator = ">=", value = 0.01 } ]
+action = "antennae"
+
+[entity.skills]
+brawling = { dice = 2, pips = 1 }
+dodge = { dice = 1, pips = 1 }
+fortitude = { dice = 1, pips = 0 }
+reflexes = { dice = 1, pips = 2 }
+willpower = { dice = 2, pips = 0 }
+
+# Bestiary 1 (3rd printing) p.276, "Wight", CR 3, XP 800. Energy drain uses the new "level
+# drained" condition (see that condition's own comment for how it differs from "energy
+# drained"); chance = 50 approximates the real DC 14 Fortitude negate the same way "ghoul"'s own
+# paralysis chance does. "Create spawn" now uses the new create_spawn ability field, gated to
+# humanoids only (the real Bestiary's own restriction) via "requirements" -- a slain humanoid
+# rises as a new wight 2 rounds later. "Resurrection vulnerability" still isn't modeled -- no
+# resurrection spell/mechanic exists in this engine for a vulnerability to it to matter against.
+[[entity]]
+name = "wight"
+supertype = "creature"
+subtype = "undead"
+description = "A rotting, skeletal corpse with red light burning in its hollow eye sockets."
+
+max_hp = 26
+
+[[entity.abilities]]
+name = "slam"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "bludgeoning" ]
+damage_value = { dice = 1, pips = 0, bonus = 0 }
+on_hit_condition = { condition = "level drained", chance = 50, duration = "permanent" }
+create_spawn = { name = "wight", delay_rounds = 2, requirements = [ { field = "subtype", operator = "==", value = "humanoid" } ] }
+
+[[entity.behavior]]
+requirements = [ { field = "hp_per_remain", operator = ">=", value = 0.01 } ]
+action = "slam"
+
+[entity.skills]
+brawling = { dice = 1, pips = 2 }
+dodge = { dice = 0, pips = 2 }
+fortitude = { dice = 1, pips = 1 }
+reflexes = { dice = 1, pips = 0 }
+willpower = { dice = 2, pips = 0 }
+stealth = { dice = 5, pips = 2 }
+
+# Bestiary 1 (3rd printing) p.245, "Shadow", CR 3, XP 800. Incorporeal -- same DR-with-bypass
+# stand-in "wraith" above already established (resistance_bypass_tags = ["magic"]), just at a
+# slightly higher resistance_value to reflect a shadow's own fuller incorporeality rather than
+# a wraith's partial one. Strength damage uses the new "energy drained" condition -- chance =
+# 100 since the real ability has no listed saving throw at all, unlike "wight"'s own
+# save-approximated "level drained". "Create spawn" now uses the new create_spawn ability field,
+# same humanoid-only gate as "wight"'s own (a humanoid killed by the Strength damage becomes a
+# new shadow 2 rounds later).
+[[entity]]
+name = "shadow"
+supertype = "creature"
+subtype = "undead"
+description = "A vaguely humanoid wisp of living darkness, barely seen except at the corner of the eye."
+
+max_hp = 19
+
+resistance_value = { dice = 3, pips = 0 }
+resistance_tags = [ "slashing", "piercing", "bludgeoning" ]
+resistance_bypass_tags = [ "magic" ]
+
+[[entity.abilities]]
+name = "incorporeal touch"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "negative" ]
+damage_value = { dice = 0, pips = 1, bonus = 0 }
+on_hit_condition = { condition = "energy drained", chance = 100, duration = "permanent" }
+create_spawn = { name = "shadow", delay_rounds = 2, requirements = [ { field = "subtype", operator = "==", value = "humanoid" } ] }
+
+[[entity.behavior]]
+requirements = [ { field = "hp_per_remain", operator = ">=", value = 0.01 } ]
+action = "incorporeal touch"
+
+[entity.skills]
+brawling = { dice = 1, pips = 1 }
+dodge = { dice = 2, pips = 0 }
+fortitude = { dice = 1, pips = 1 }
+reflexes = { dice = 1, pips = 1 }
+willpower = { dice = 1, pips = 2 }
+stealth = { dice = 3, pips = 0 }
+
+# Bestiary 1 (3rd printing) p.129, "Ettercap", CR 3, XP 800. Poison uses the new "ettercap
+# venom" condition. "Traps" (crafting deadfalls/nooses/spear traps ahead of time) and "web" (a
+# ranged entangle attack) aren't modeled -- same scope already accepted for "giant spider"'s own
+# web above. Not a brave creature (Bestiary flavor: "flees if an opponent gets free") -- a real
+# retreat threshold, unlike a mindless predator.
+[[entity]]
+name = "ettercap"
+supertype = "creature"
+subtype = "aberration"
+description = "A hideous, purple, upright creature with a spider's face and sickle-shaped claws for hands."
+
+max_hp = 30
+
+[[entity.abilities]]
+name = "bite"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "piercing" ]
+damage_value = { dice = 1, pips = 2, bonus = 0 }
+on_hit_condition = { condition = "ettercap venom", chance = 100, duration = "permanent" }
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+    { field = "hp_per_remain", operator = "<", value = 0.30 },
+]
+action = "retreat"
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "bite"
+
+[entity.skills]
+brawling = { dice = 2, pips = 0 }
+dodge = { dice = 1, pips = 1 }
+fortitude = { dice = 2, pips = 1 }
+reflexes = { dice = 1, pips = 2 }
+willpower = { dice = 2, pips = 1 }
+stealth = { dice = 2, pips = 2 }
+
+# Bestiary 1 (3rd printing) p.89, "Doppelganger", CR 3, XP 800. "Change shape"/"mimicry"/
+# "perfect copy" (assuming an arbitrary individual's exact appearance) isn't modeled -- the same
+# "no per-cast picking UI for an arbitrary target" gap reference/pathfinder_mapping.toml's own
+# Teleport row already accepts for a different ability shape; a doppelganger's own combat stats
+# (its natural claws) are what's actually converted here. "Immune charm, sleep" now uses the new
+# immune_conditions field (rules.toml's own "charmed"/"asleep", both subtype = "mind-affecting")
+# -- see that field's own entity_schema.toml comment.
+[[entity]]
+name = "doppelganger"
+supertype = "creature"
+subtype = "monstrous humanoid"
+description = "A gaunt, grayish humanoid with a narrow head and a strangely unfinished, noseless face."
+
+max_hp = 26
+immune_conditions = { subtypes = [ "mind-affecting" ] }
+
+[[entity.abilities]]
+name = "claws"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "slashing" ]
+damage_value = { dice = 2, pips = 2, bonus = 0 }
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+    { field = "hp_per_remain", operator = "<", value = 0.25 },
+]
+action = "retreat"
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "claws"
+
+[entity.skills]
+brawling = { dice = 3, pips = 0 }
+dodge = { dice = 1, pips = 0 }
+fortitude = { dice = 1, pips = 2 }
+reflexes = { dice = 2, pips = 0 }
+willpower = { dice = 2, pips = 1 }
+stealth = { dice = 2, pips = 0 }
+
+# Bestiary 1 (3rd printing) p.138, "Gelatinous Cube", CR 3, XP 800. Touch AC 4 (Dex -5) floors
+# well past untrained -- omitted entirely, same "goblin"-established precedent as "ogre" above,
+# for both dodge (Dex -5) and willpower/reflexes (both untrained-negative already). Paralysis
+# reuses the shipped "paralyzed" condition (see "ghoul" above) -- chance = 60, a rougher
+# approximation of the real DC 20 Fortitude save than ghoul's own DC 13 (a higher DC reads as a
+# harder save to make, so a higher chance of the condition actually landing). "Engulf" and
+# "transparent" (an ambush-by-invisibility trait) aren't modeled -- no mechanism exists for a
+# stationary hazard entity to automatically catch a wandering-in target, or to hide from
+# Perception the way stealth/miss_chance hide from a roll.
+[[entity]]
+name = "gelatinous cube"
+supertype = "creature"
+subtype = "ooze"
+description = "A quivering, translucent cube of slime, the bones and belongings of past victims dimly visible inside it."
+
+max_hp = 50
+immunity_tags = [ "electricity" ]
+
+[[entity.abilities]]
+name = "slam"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "bludgeoning", "acid" ]
+damage_value = { dice = 2, pips = 0, bonus = 0 }
+on_hit_condition = { condition = "paralyzed", chance = 60, duration = "rounds", length = 6 }
+
+[[entity.behavior]]
+requirements = [ { field = "hp_per_remain", operator = ">=", value = 0.01 } ]
+action = "slam"
+
+[entity.skills]
+brawling = { dice = 1, pips = 0 }
+fortitude = { dice = 3, pips = 1 }
+
+# Bestiary 1 (3rd printing) p.118, "Eagle, Giant" (Giant Eagle), CR 3, XP 800. medium = "air" --
+# this is the exact creature reference/pathfinder_mapping.toml's own Fly/Swim/Burrow row already
+# used as its illustrative recipe (that file is reference-only, never loaded as game data, so
+# this is the first time "giant eagle" is actually shipped as a real entity). The real stat
+# block's own secondary bite (tied with its claws at +7, but for less damage) is dropped in
+# favor of the claws alone, the same "one candidate, not two" precedent already followed
+# throughout this file. "Evasion" now uses the new negates_save_for_half field -- see
+# "wererat"'s own comment.
+[[entity]]
+name = "giant eagle"
+supertype = "creature"
+subtype = "animal"
+description = "An immense bird of prey with golden-brown feathers, a wingspan wide enough to blot out the sun."
+
+max_hp = 26
+medium = "air"
+negates_save_for_half = [ "reflexes" ]
+
+[[entity.abilities]]
+name = "claws"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "slashing" ]
+damage_value = { dice = 2, pips = 2, bonus = 0 }
+
+[[entity.behavior]]
+requirements = [ { field = "hp_per_remain", operator = ">=", value = 0.01 } ]
+action = "claws"
+
+[entity.skills]
+brawling = { dice = 2, pips = 2 }
+dodge = { dice = 1, pips = 0 }
+fortitude = { dice = 2, pips = 0 }
+reflexes = { dice = 2, pips = 2 }
+willpower = { dice = 1, pips = 1 }
+
+# Bestiary 1 (3rd printing) p.193, "Lion", CR 3, XP 800. "Pounce"/"rake" (a bonus attack only on
+# a charge) isn't modeled -- reference/pathfinder_mapping.toml's own "Trample / Powerful Charge /
+# Pounce" row calls this exact shape out as having no engine equivalent; the bite alone carries
+# the encounter's real teeth, its own damage already generous enough to read as dangerous
+# without also granting a charge-only bonus attack.
+[[entity]]
+name = "lion"
+supertype = "creature"
+subtype = "animal"
+description = "A tawny, powerfully built great cat, muscles flexing visibly beneath its skin as it bares its fangs."
+
+max_hp = 32
+
+[[entity.abilities]]
+name = "bite"
+supertype = "innate"
+subtype = "weapon"
+skill = "brawling"
+damage_tags = [ "piercing" ]
+damage_value = { dice = 2, pips = 2, bonus = 0 }
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+    { field = "hp_per_remain", operator = "<", value = 0.20 },
+]
+action = "retreat"
+
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "bite"
+
+[entity.skills]
+brawling = { dice = 2, pips = 2 }
+dodge = { dice = 1, pips = 0 }
+fortitude = { dice = 2, pips = 1 }
+reflexes = { dice = 2, pips = 2 }
+willpower = { dice = 1, pips = 0 }

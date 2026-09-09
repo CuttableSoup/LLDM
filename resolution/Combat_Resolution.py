@@ -41,6 +41,7 @@ COMPARATORS = {
     "between": lambda actual, value: value[0] <= actual <= value[1],
 }
 
+import resolution.Inventory_Resolution as Inventory_Resolution
 import resolution.Program_Interpreter as Program_Interpreter
 import resolution.Social_Resolution as Social_Resolution
 from resolution.Challenge_Rating import skill_rating, SKILL_RATING_DIVISOR
@@ -258,7 +259,15 @@ def _init_periodic_state(rules, condition_name):
 
 def apply_condition(entities, event_bus, entity_name, condition_name, duration=None, length=None, dismiss=None, rules=None):
     """!
-    @brief Marks a condition as active on an entity.
+    @brief Marks a condition as active on an entity -- a no-op if the entity's own
+        "immune_conditions" ({supertypes, subtypes}, the same shape cure/dispel/damage_bonus_vs
+        already use against matches_supertype_or_subtype) matches condition_name's own [[condition]]
+        entry (looked up via _find_condition_def, the same accessor dismiss_matching_conditions
+        already uses for "cure"). This is the Pathfinder "Immune to charm, sleep, mind-affecting"
+        shape -- immunity to a *named condition or condition kind*, distinct from immunity_tags
+        (which only ever matches an incoming hit's own damage_tags, never a condition's identity).
+        An entity with no "immune_conditions" at all, or a condition with no matching
+        supertype/subtype, is unaffected -- opt-in, same as every other declarative entity field.
     @param entities The live entities dict.
     @param event_bus The EventBus to publish a log_info line to.
     @param entity_name The name of the entity gaining the condition.
@@ -286,6 +295,11 @@ def apply_condition(entities, event_bus, entity_name, condition_name, duration=N
     entity = entities.get(entity_name)
     if entity is None:
         return
+    immune_spec = entity.get("immune_conditions")
+    if immune_spec:
+        condition_def = _find_condition_def(rules, condition_name)
+        if condition_def and matches_supertype_or_subtype(condition_def, immune_spec):
+            return
     active_conditions = entity.setdefault("active_conditions", {})
     # Drains/periodic state only seed once per gain, not on every reapplication/refresh (ex: an
     # extended duration on an already-active condition must not double-drain the same skill, or
@@ -1085,6 +1099,29 @@ def get_damage_bonus_vs(entities, defender_name, ability):
     return roll_dice(value.get("dice", 0), value.get("pips", 0)) + value.get("bonus", 0)
 
 
+def get_damage_bonus_if_condition(entities, defender_name, ability):
+    """!
+    @brief Rolls an ability's own damage_bonus_if_condition bonus -- extra damage that only
+        applies while the defender currently carries a named condition, checked via has_condition
+        rather than matches_supertype_or_subtype (get_damage_bonus_vs's own static "what kind of
+        thing is this" check). This is the Pathfinder Sneak Attack shape -- bonus damage against a
+        target's current *state* (flat-footed/flanked), not its type -- structurally a twin of
+        get_damage_bonus_vs, just keyed off the defender's own active_conditions instead.
+    @param entities The live entities dict.
+    @param defender_name The name of the entity taking damage.
+    @param ability A table optionally carrying "damage_bonus_if_condition" = {condition,
+        value = {dice, pips, bonus}}.
+    @return The rolled bonus damage, or 0 if the defender doesn't currently carry "condition".
+    """
+    spec = ability.get("damage_bonus_if_condition")
+    if not spec:
+        return 0
+    if not has_condition(entities, defender_name, spec.get("condition")):
+        return 0
+    value = spec.get("value", {})
+    return roll_dice(value.get("dice", 0), value.get("pips", 0)) + value.get("bonus", 0)
+
+
 def is_immune_to(entities, defender_name, damage_tags):
     """!
     @brief Whether an entity's immunity_tags fully negate an incoming attack's damage tags.
@@ -1142,13 +1179,39 @@ def apply_on_hit_condition(entities, rules, event_bus, defender_name, ability, d
     )
 
 
+def apply_destroy_equipped(entities, event_bus, defender_name, ability):
+    """!
+    @brief Rolls an ability's own destroy_equipped and, on success, destroys whatever the
+        defender currently has equipped in that slot outright (Inventory_Resolution.
+        destroy_equipped_item) -- no partial-damage tracking, a single destroy-or-nothing roll.
+        This is the Pathfinder Rust Monster corrosion / Sunder-a-weapon shape, deliberately
+        simplified from Pathfinder's own two-hit item-HP model (see destroy_equipped_item's own
+        comment). Mirrors apply_on_hit_condition's own "chance" roll shape exactly.
+    @param entities The live entities dict.
+    @param event_bus The EventBus, forwarded to destroy_equipped_item.
+    @param defender_name The name of the entity whose gear is at risk.
+    @param ability A table optionally carrying "destroy_equipped" = {slot, chance}. "chance"
+        (1-100, default 100) is the percent chance it actually lands -- absent means it always
+        does.
+    @return The destroyed item's own name, or None if nothing was destroyed (no
+        destroy_equipped authored, the chance roll failed, or the slot was already empty).
+    """
+    spec = ability.get("destroy_equipped")
+    if not spec:
+        return None
+    if random.randint(1, 100) > spec.get("chance", 100):
+        return None
+    return Inventory_Resolution.destroy_equipped_item(entities, event_bus, defender_name, spec["slot"])
+
+
 def calculate_damage(entities, rules, event_bus, attacker_name, defender_name, ability):
     """!
     @brief Calculates and applies damage from an attacker's ability to a defender, including
-        immunity, resistance/armor reduction, vulnerability, and a supertype/subtype-matched
-        damage_bonus_vs. Also records ability's own damage_tags onto defender_name's own
-        "recent_damage_tags", and applies the ability's own on_hit_condition (if any) directly
-        to the defender.
+        immunity, resistance/armor reduction, vulnerability, a supertype/subtype-matched
+        damage_bonus_vs, and a defender-active-condition-matched damage_bonus_if_condition (the
+        Pathfinder Sneak Attack shape). Also records ability's own damage_tags onto defender_name's
+        own "recent_damage_tags", and applies the ability's own on_hit_condition and
+        destroy_equipped (if any) directly to the defender.
     @param entities The live entities dict.
     @param rules The loaded rules dict.
     @param event_bus The EventBus to publish a log_info line to.
@@ -1166,13 +1229,16 @@ def calculate_damage(entities, rules, event_bus, attacker_name, defender_name, a
         reduction = raw_damage
         vulnerability_bonus = 0
         bonus_vs = 0
+        bonus_if_condition = 0
     else:
         reduction = get_damage_reduction(entities, defender_name, damage_tags)
         vulnerability_bonus = get_vulnerability_bonus(entities, defender_name, damage_tags)
         bonus_vs = get_damage_bonus_vs(entities, defender_name, ability)
-    net_damage = max(0, raw_damage + vulnerability_bonus + bonus_vs - reduction)
+        bonus_if_condition = get_damage_bonus_if_condition(entities, defender_name, ability)
+    net_damage = max(0, raw_damage + vulnerability_bonus + bonus_vs + bonus_if_condition - reduction)
     remaining_hp = apply_damage(entities, rules, event_bus, defender_name, net_damage, actor_name=attacker_name)
     apply_on_hit_condition(entities, rules, event_bus, defender_name, ability, damage_tags)
+    apply_destroy_equipped(entities, event_bus, defender_name, ability)
 
     defender = entities.get(defender_name)
     if defender is not None and damage_tags:
@@ -1183,6 +1249,7 @@ def calculate_damage(entities, rules, event_bus, attacker_name, defender_name, a
         f"{attacker_name} deals {raw_damage} raw damage to {defender_name}"
         f"{f' (+{vulnerability_bonus} vulnerability)' if vulnerability_bonus else ''}"
         f"{f' (+{bonus_vs} vs. type)' if bonus_vs else ''}"
+        f"{f' (+{bonus_if_condition} vs. condition)' if bonus_if_condition else ''}"
         f", reduced by {reduction} -> {net_damage} net damage."
     )
     return {
@@ -1192,6 +1259,7 @@ def calculate_damage(entities, rules, event_bus, attacker_name, defender_name, a
         "reduction": reduction,
         "vulnerability_bonus": vulnerability_bonus,
         "bonus_vs": bonus_vs,
+        "bonus_if_condition": bonus_if_condition,
         "net_damage": net_damage,
         "remaining_hp": remaining_hp,
     }

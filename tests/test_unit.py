@@ -1315,6 +1315,85 @@ class TestResolveTargets(DMTestCase):
         self.assertEqual(result.effects[0].defender, "gladstone")
 
 
+class TestSaveForHalf(DMTestCase):
+    """!
+    @brief save_for_half (an ability field) + negates_save_for_half (an entity field, a list of
+        skill names) + DM_Core.py's own _resolve_save_for_half -- the Pathfinder Reflex-half AoE
+        shape. Only ever checked for a target resolve_targets widened onto, never target_name
+        itself (which already resolved through the ordinary opposed roll). Arena's default
+        layout puts gladstone/thane/wolf/wolf_2 all at band 1 (see TestResolveTargets) -- "wolf"
+        is target_name (primary), "wolf_2" the AoE-widened secondary target; neither trains
+        "reflexes" at all, so an untrained defender's own flat save roll is a deterministic 0, no
+        random mocking needed -- difficulty = 0 forces a pass, any positive difficulty forces a
+        fail. negates_save_for_half is checked by literal skill match against the save's own
+        "skill" (the Pathfinder Evasion trait is exactly ["reflexes"]), not a bare boolean, so a
+        save_for_half effect keyed to a different skill is unaffected by it.
+    """
+
+    def _blast(self, difficulty):
+        return {
+            "damage_value": {"dice": 0, "pips": 0, "bonus": 10}, "damage_tags": [],
+            "targets": {"number": 0, "aoe": 0, "side": "all"},
+            "save_for_half": {"skill": "reflexes"}, "difficulty": difficulty,
+        }
+
+    def _effect_for(self, result, defender_name):
+        return next(e for e in result.effects if e.defender == defender_name)
+
+    def test_primary_target_is_never_affected_by_save_for_half(self):
+        # difficulty = 0 would force a *pass* if this were ever checked against wolf -- proving
+        # the primary target still always takes full, un-saved-against damage regardless.
+        result = RolledOutcome(entity="gladstone", skill="melee", roll=0, difficulty=0, success=True)
+        self.dm_core._apply_damage_if_hit(result, "melee", None, self._blast(0), "wolf", via_test=False)
+        self.assertEqual(self._effect_for(result, "wolf").net_damage, 10)
+
+    def test_secondary_target_takes_full_damage_on_a_failed_save(self):
+        result = RolledOutcome(entity="gladstone", skill="melee", roll=0, difficulty=0, success=True)
+        self.dm_core._apply_damage_if_hit(result, "melee", None, self._blast(10), "wolf", via_test=False)
+        self.assertEqual(self._effect_for(result, "wolf_2").net_damage, 10)
+
+    def test_secondary_target_takes_half_damage_on_a_passed_save_without_evasion(self):
+        result = RolledOutcome(entity="gladstone", skill="melee", roll=0, difficulty=0, success=True)
+        self.dm_core._apply_damage_if_hit(result, "melee", None, self._blast(0), "wolf", via_test=False)
+        self.assertEqual(self._effect_for(result, "wolf_2").net_damage, 5)
+
+    def test_secondary_target_with_evasion_takes_no_damage_on_a_passed_save(self):
+        self.dm_core.entities["wolf_2"]["negates_save_for_half"] = ["reflexes"]
+        result = RolledOutcome(entity="gladstone", skill="melee", roll=0, difficulty=0, success=True)
+        self.dm_core._apply_damage_if_hit(result, "melee", None, self._blast(0), "wolf", via_test=False)
+        self.assertNotIn("wolf_2", [e.defender for e in result.effects])
+
+    def test_evasion_does_nothing_on_a_failed_save(self):
+        self.dm_core.entities["wolf_2"]["negates_save_for_half"] = ["reflexes"]
+        result = RolledOutcome(entity="gladstone", skill="melee", roll=0, difficulty=0, success=True)
+        self.dm_core._apply_damage_if_hit(result, "melee", None, self._blast(10), "wolf", via_test=False)
+        self.assertEqual(self._effect_for(result, "wolf_2").net_damage, 10)
+
+    def test_evasion_does_not_apply_to_a_save_for_half_keyed_to_a_different_skill(self):
+        # Pathfinder's real Evasion is textually a Reflex-save-only trait -- a hypothetical
+        # fortitude-keyed save_for_half effect (a poison cloud, say) still only ever halves for
+        # an entity whose own negates_save_for_half lists "reflexes", never negates.
+        self.dm_core.entities["wolf_2"]["negates_save_for_half"] = ["reflexes"]
+        ability = {
+            "damage_value": {"dice": 0, "pips": 0, "bonus": 10}, "damage_tags": [],
+            "targets": {"number": 0, "aoe": 0, "side": "all"},
+            "save_for_half": {"skill": "fortitude"}, "difficulty": 0,
+        }
+        result = RolledOutcome(entity="gladstone", skill="melee", roll=0, difficulty=0, success=True)
+        self.dm_core._apply_damage_if_hit(result, "melee", None, ability, "wolf", via_test=False)
+        self.assertEqual(self._effect_for(result, "wolf_2").net_damage, 5)
+
+    def test_ability_with_no_save_for_half_is_unaffected(self):
+        ability = {
+            "damage_value": {"dice": 0, "pips": 0, "bonus": 10}, "damage_tags": [],
+            "targets": {"number": 0, "aoe": 0, "side": "all"},
+        }
+        result = RolledOutcome(entity="gladstone", skill="melee", roll=0, difficulty=0, success=True)
+        self.dm_core._apply_damage_if_hit(result, "melee", None, ability, "wolf", via_test=False)
+        self.assertEqual(self._effect_for(result, "wolf").net_damage, 10)
+        self.assertEqual(self._effect_for(result, "wolf_2").net_damage, 10)
+
+
 class TestActionDrivenAttitudeDrift(DMTestCase):
     """!
     @brief DM_Social.py's nudge_attitude_from_event -- the [[attitude_event]] (rules.toml)
@@ -4296,16 +4375,15 @@ class TestSocialResolutionPure(unittest.TestCase):
 
 class TestUniversalAbilities(DMTestCase):
     """!
-    @brief Universal (untrained) abilities -- maneuvers.toml's trip/sunder (listed under
-        athletics' own "abilities" field, alongside "disarm" -- temporarily missing, see
-        skills.toml's own comment) and intimidate (under intimidation's), plus
+    @brief Universal (untrained) abilities -- maneuvers.toml's trip/sunder/disarm (listed under
+        athletics' own "abilities" field) and intimidate (under intimidation's), plus
         resolve_named_ability's own skill-list fallback (DM_Combat.py).
     """
 
     def test_athletics_lists_its_own_cmb_style_maneuvers(self):
         self.assertEqual(
             set(self.dm_core.skills["athletics"]["abilities"]),
-            {"trip", "sunder", "bull rush", "grapple", "pin"},
+            {"trip", "sunder", "bull rush", "grapple", "pin", "disarm"},
         )
 
     def test_trickery_lists_its_own_maneuvers(self):
@@ -4319,7 +4397,7 @@ class TestUniversalAbilities(DMTestCase):
         self.assertEqual(
             self.dm_core.universal_abilities,
             {
-                "trip", "sunder", "bull rush", "grapple", "pin", "intimidate",
+                "trip", "sunder", "disarm", "bull rush", "grapple", "pin", "intimidate",
                 "dirty trick", "feint", "escape artist", "sleight of hand", "treat wounds", "charm",
             },
         )
@@ -5142,6 +5220,82 @@ class TestSummoning(DMTestCase):
         self.assertEqual(self.dm_core.entities["spectral wolf"]["summon_expires_in"], 3)  # 4 - 1
 
 
+class TestCreateSpawn(DMTestCase):
+    """!
+    @brief create_spawn (an ability field) + DM_Combat.py's own calculate_damage death-hook +
+        DM_Summoning.py's _advance_pending_spawn -- the Pathfinder Wight/Shadow "kills become
+        one of us" shape: a real kill stashes a pending-spawn record on the corpse, ticked down
+        once per round (even for a dead entity) until it instances a new, permanent entity at
+        the corpse's own band.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.dm_core._instance_entities([{"name": "pickpocket", "band": 1}])
+        self.dm_core.scenario_entities.append("pickpocket")
+
+    def _kill_with_create_spawn(self, target_name, requirements=None):
+        ability = {
+            "damage_value": {"dice": 10, "pips": 0, "bonus": 0}, "damage_tags": [],
+            "create_spawn": {"name": "coyote", "delay_rounds": 2, "requirements": requirements or []},
+        }
+        self.dm_core.calculate_damage("gladstone", target_name, ability)
+
+    def test_a_real_kill_matching_requirements_stashes_a_pending_spawn_on_the_corpse(self):
+        requirements = [{"field": "subtype", "operator": "==", "value": "humanoid"}]
+        self._kill_with_create_spawn("pickpocket", requirements)
+        self.assertEqual(self.dm_core.get_current_hp("pickpocket"), 0)
+        pending = self.dm_core.entities["pickpocket"]["pending_spawn"]
+        self.assertEqual(pending, {"name": "coyote", "band": self.dm_core.get_band("pickpocket"), "rounds_remaining": 2})
+
+    def test_a_kill_not_matching_requirements_stashes_nothing(self):
+        requirements = [{"field": "subtype", "operator": "==", "value": "humanoid"}]
+        self._kill_with_create_spawn("wolf", requirements)
+        self.assertNotIn("pending_spawn", self.dm_core.entities["wolf"])
+
+    def test_no_requirements_matches_anything(self):
+        self._kill_with_create_spawn("wolf")
+        self.assertIn("pending_spawn", self.dm_core.entities["wolf"])
+
+    def test_a_non_lethal_hit_stashes_nothing(self):
+        ability = {
+            "damage_value": {"dice": 0, "pips": 0, "bonus": 0}, "damage_tags": [],
+            "create_spawn": {"name": "coyote", "delay_rounds": 2},
+        }
+        self.dm_core.calculate_damage("gladstone", "pickpocket", ability)
+        self.assertNotIn("pending_spawn", self.dm_core.entities["pickpocket"])
+
+    def test_pending_spawn_ticks_down_and_instances_a_new_permanent_entity(self):
+        self._kill_with_create_spawn("pickpocket")
+        self.dm_core.run_round_upkeep()
+        self.assertEqual(self.dm_core.entities["pickpocket"]["pending_spawn"]["rounds_remaining"], 1)
+        self.assertNotIn("coyote", self.dm_core.scenario_entities)
+
+        self.dm_core.run_round_upkeep()
+
+        self.assertNotIn("pending_spawn", self.dm_core.entities["pickpocket"])
+        self.assertIn("coyote", self.dm_core.scenario_entities)
+        coyote = self.dm_core.entities["coyote"]
+        self.assertEqual(coyote["band"], self.dm_core.get_band("pickpocket"))
+        self.assertTrue(coyote["ad_hoc"])
+        self.assertNotIn("summon_expires_in", coyote)  # permanent, unlike an ordinary summon
+
+    def test_pending_spawn_keeps_ticking_on_a_dead_corpse_across_upkeep(self):
+        # The corpse itself has 0 HP and would otherwise be skipped by run_round_upkeep's own
+        # ordinary "if hp <= 0: continue" gate -- _advance_pending_spawn is deliberately called
+        # before that check.
+        self._kill_with_create_spawn("pickpocket")
+        self.assertEqual(self.dm_core.get_current_hp("pickpocket"), 0)
+        self.dm_core.run_round_upkeep()
+        self.dm_core.run_round_upkeep()
+        self.assertIn("coyote", self.dm_core.scenario_entities)
+
+    def test_ability_with_no_create_spawn_stashes_nothing(self):
+        ability = {"damage_value": {"dice": 10, "pips": 0, "bonus": 0}, "damage_tags": []}
+        self.dm_core.calculate_damage("gladstone", "pickpocket", ability)
+        self.assertNotIn("pending_spawn", self.dm_core.entities["pickpocket"])
+
+
 class TestDispelMagic(DMTestCase):
     """!
     @brief A spell's own "dispel" field ({supertypes, subtypes}), matches_supertype_or_subtype
@@ -5562,6 +5716,82 @@ class TestDamageBonusVs(DMTestCase):
         self.assertEqual(result["bonus_vs"], 0)
 
 
+class TestDamageBonusIfCondition(DMTestCase):
+    """!
+    @brief damage_bonus_if_condition (an ability field) + get_damage_bonus_if_condition
+        (Combat_Resolution.py) -- extra rolled damage that only applies while the defender
+        currently carries a named condition (the Pathfinder Sneak Attack shape), a twin of
+        damage_bonus_vs keyed off the defender's own state rather than its type.
+    """
+
+    def test_bonus_applies_when_defender_carries_the_condition(self):
+        self.dm_core.entities["wolf"]["active_conditions"] = {"flat_footed": {"duration": "permanent"}}
+        ability = {
+            "damage_value": {"dice": 0, "pips": 0, "bonus": 0},
+            "damage_tags": [],
+            "damage_bonus_if_condition": {"condition": "flat_footed", "value": {"dice": 0, "pips": 0, "bonus": 5}},
+        }
+        result = self.dm_core.calculate_damage("gladstone", "wolf", ability)
+        self.assertEqual(result["bonus_if_condition"], 5)
+        self.assertEqual(result["net_damage"], 5)
+
+    def test_bonus_does_not_apply_when_defender_lacks_the_condition(self):
+        ability = {
+            "damage_value": {"dice": 0, "pips": 0, "bonus": 0},
+            "damage_tags": [],
+            "damage_bonus_if_condition": {"condition": "flat_footed", "value": {"dice": 0, "pips": 0, "bonus": 5}},
+        }
+        result = self.dm_core.calculate_damage("gladstone", "wolf", ability)
+        self.assertEqual(result["bonus_if_condition"], 0)
+
+    def test_immune_defender_never_gets_the_bonus(self):
+        self.dm_core.entities["wolf"]["active_conditions"] = {"flat_footed": {"duration": "permanent"}}
+        self.dm_core.entities["wolf"]["immunity_tags"] = ["slashing"]
+        ability = {
+            "damage_value": {"dice": 1, "pips": 0, "bonus": 0},
+            "damage_tags": ["slashing"],
+            "damage_bonus_if_condition": {"condition": "flat_footed", "value": {"dice": 0, "pips": 0, "bonus": 5}},
+        }
+        result = self.dm_core.calculate_damage("gladstone", "wolf", ability)
+        self.assertEqual(result["bonus_if_condition"], 0)
+        self.assertEqual(result["net_damage"], 0)
+
+
+class TestConditionImmunity(DMTestCase):
+    """!
+    @brief immune_conditions (an entity field) + apply_condition's own immunity gate
+        (Combat_Resolution.py) -- immunity to a named condition or condition *kind*, matched by
+        that [[condition]] entry's own supertype/subtype (the Pathfinder "Immune to charm,
+        sleep, mind-affecting" shape), distinct from immunity_tags' damage-tag-only matching.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.dm_core.rules.setdefault("condition", []).append(
+            {"name": "charmed", "supertype": "affliction", "subtype": "charm",
+             "modifier": {"dice": 0, "pips": 0, "bonus": 0}}
+        )
+
+    def test_matching_subtype_blocks_the_condition_entirely(self):
+        self.dm_core.entities["wolf"]["immune_conditions"] = {"subtypes": ["charm"]}
+        self.dm_core.apply_condition("wolf", "charmed", duration="permanent")
+        self.assertNotIn("charmed", self.dm_core.entities["wolf"].get("active_conditions", {}))
+
+    def test_matching_supertype_blocks_the_condition_entirely(self):
+        self.dm_core.entities["wolf"]["immune_conditions"] = {"supertypes": ["affliction"]}
+        self.dm_core.apply_condition("wolf", "charmed", duration="permanent")
+        self.assertNotIn("charmed", self.dm_core.entities["wolf"].get("active_conditions", {}))
+
+    def test_non_matching_immune_conditions_still_lets_it_land(self):
+        self.dm_core.entities["wolf"]["immune_conditions"] = {"subtypes": ["sleep"]}
+        self.dm_core.apply_condition("wolf", "charmed", duration="permanent")
+        self.assertIn("charmed", self.dm_core.entities["wolf"]["active_conditions"])
+
+    def test_no_immune_conditions_field_is_unaffected(self):
+        self.dm_core.apply_condition("wolf", "charmed", duration="permanent")
+        self.assertIn("charmed", self.dm_core.entities["wolf"]["active_conditions"])
+
+
 class TestEquippedSkillBonus(DMTestCase):
     """!
     @brief equipped_skill_bonus (an item field) + get_equipped_skill_bonus (Combat_
@@ -5604,6 +5834,62 @@ class TestEquippedSkillBonus(DMTestCase):
         with patch("random.randint", return_value=3):
             result = self.dm_core.resolve_opposed_action("gladstone", "blades", "test_defender")
         self.assertEqual(result["difficulty"], 12)  # (2 + 2) * 3
+
+
+class TestDestroyEquipped(DMTestCase):
+    """!
+    @brief destroy_equipped (an ability field) + apply_destroy_equipped (Combat_Resolution.py)
+        -> Inventory_Resolution.destroy_equipped_item, and the matching "destroy_equipped"
+        Program_Interpreter op -- the Pathfinder Rust Monster / disarm shape: destroys whatever
+        the target has equipped in a given slot outright, no partial-damage tracking.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.dm_core.entities["wolf"]["inventory"] = ["rusty shortsword"]
+        self.dm_core.entities["wolf"]["equipped"] = {"rhand": "rusty shortsword"}
+        self.dm_core.entities["rusty shortsword"] = {"name": "rusty shortsword", "supertype": "object", "subtype": "weapon"}
+
+    def test_a_successful_hit_destroys_the_equipped_item(self):
+        ability = {
+            "damage_value": {"dice": 0, "pips": 0, "bonus": 0}, "damage_tags": [],
+            "destroy_equipped": {"slot": "rhand", "chance": 100},
+        }
+        self.dm_core.calculate_damage("gladstone", "wolf", ability)
+        self.assertNotIn("rhand", self.dm_core.entities["wolf"]["equipped"])
+        self.assertNotIn("rusty shortsword", self.dm_core.entities["wolf"]["inventory"])
+
+    def test_chance_below_100_can_fail_to_destroy(self):
+        ability = {
+            "damage_value": {"dice": 0, "pips": 0, "bonus": 0}, "damage_tags": [],
+            "destroy_equipped": {"slot": "rhand", "chance": 1},
+        }
+        with patch("random.randint", return_value=99):
+            self.dm_core.calculate_damage("gladstone", "wolf", ability)
+        self.assertEqual(self.dm_core.entities["wolf"]["equipped"]["rhand"], "rusty shortsword")
+
+    def test_empty_slot_is_a_harmless_no_op(self):
+        del self.dm_core.entities["wolf"]["equipped"]["rhand"]
+        ability = {
+            "damage_value": {"dice": 0, "pips": 0, "bonus": 0}, "damage_tags": [],
+            "destroy_equipped": {"slot": "rhand", "chance": 100},
+        }
+        self.dm_core.calculate_damage("gladstone", "wolf", ability)
+        self.assertIn("rusty shortsword", self.dm_core.entities["wolf"]["inventory"])
+
+    def test_ability_with_no_destroy_equipped_is_unaffected(self):
+        ability = {"damage_value": {"dice": 0, "pips": 0, "bonus": 0}, "damage_tags": []}
+        self.dm_core.calculate_damage("gladstone", "wolf", ability)
+        self.assertEqual(self.dm_core.entities["wolf"]["equipped"]["rhand"], "rusty shortsword")
+
+    def test_disarm_maneuvers_program_op_destroys_the_equipped_item(self):
+        run_program(
+            {"do": "destroy_equipped", "entity": "target", "slot": "rhand"},
+            {"actor": "gladstone", "target": "wolf"},
+            self.dm_core.entities, self.dm_core.rules, self.dm_core.event_bus,
+        )
+        self.assertNotIn("rhand", self.dm_core.entities["wolf"]["equipped"])
+        self.assertNotIn("rusty shortsword", self.dm_core.entities["wolf"]["inventory"])
 
 
 class TestAbilityCooldown(DMTestCase):

@@ -14,6 +14,13 @@ range = 5
 targets = { number = 0, aoe = 5, side = "all" }
 damage_value = { dice = 5, pips = 0, bonus = 0 }
 damage_tags = [ "fire" ]
+# Reflex half -- every target "targets" widens onto other than the one the original roll
+# resolved against gets its own flat reflexes save at this spell's own "difficulty" (10) before
+# taking damage; a pass halves it (or negates it outright for a creature whose own
+# negates_save_for_half lists "reflexes", ex: creatures.toml's "giant eagle"/"wererat" -- the
+# Pathfinder Evasion trait), a fail takes the roll in full. See entity_schema.toml's own
+# "save_for_half" comment for the exact mechanism (DM_Core.py's _resolve_save_for_half).
+save_for_half = { skill = "reflexes" }
 
 [[entity]]
 name = "splash flow"

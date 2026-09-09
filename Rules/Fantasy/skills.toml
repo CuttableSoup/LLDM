@@ -15,10 +15,10 @@ opposes = ["athletics", "observation"]
 # means not applicable" precedent every other declarative skill field already follows.
 combat_role = "offense"
 # Combat maneuvers any entity may attempt via athletics, no training implied -- see
-# maneuvers.toml's own "Universal (untrained) abilities". "disarm" is temporarily missing --
-# maneuvers.toml's own [[entity]] is commented out until it applies a real unequip/drop effect
-# instead of the removed "disarmed" condition; re-add it here once that lands.
-abilities = [ "trip", "sunder", "bull rush", "grapple", "pin" ]
+# maneuvers.toml's own "Universal (untrained) abilities". "disarm" now lands via the
+# "destroy_equipped" program op (Program_Interpreter.py -> Inventory_Resolution.py), replacing
+# the removed "disarmed" condition.
+abilities = [ "trip", "sunder", "bull rush", "grapple", "pin", "disarm" ]
 
 [[skill]]
 name = "blades"

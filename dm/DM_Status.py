@@ -358,6 +358,12 @@ class StatusMixin(DMCoreProtocol):
             self.scenario_entities directly), since a summon expiring this same call removes
             itself from that live list mid-iteration.
 
+            Also counts down any corpse's own "pending_spawn" (_advance_pending_spawn, DM_
+            Summoning.py -- the Pathfinder Wight/Shadow create_spawn shape) -- deliberately
+            called BEFORE the hp<=0 skip below, unlike everything else in this loop: a corpse is
+            exactly the entity a pending spawn needs to keep ticking on, so it can't be filtered
+            out the way a dead entity's own ordinary upkeep already is.
+
             Also ticks every active_conditions entry whose own "duration" is "rounds" by one
             (Combat_Resolution.tick_condition_durations) -- ex: "surprised", applied by night
             watch (DM_Travel.py's _roll_night_watch) with length=1, expiring the first time this
@@ -389,6 +395,7 @@ class StatusMixin(DMCoreProtocol):
             the moment they leave, rather than lingering once they step out.
         """
         for entity_name in list(self.scenario_entities):
+            self._advance_pending_spawn(entity_name)
             if self.get_current_hp(entity_name) <= 0:
                 continue
             self.apply_round_upkeep(entity_name)

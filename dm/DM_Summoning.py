@@ -70,6 +70,41 @@ class SummoningMixin(DMCoreProtocol):
         self.scenario_entities.append(name)
         return name
 
+    def _advance_pending_spawn(self, entity_name):
+        """!
+        @brief Counts down a corpse's own "pending_spawn" (stashed by DM_Combat.py's
+            calculate_damage on a killing blow whose ability authored "create_spawn") once per
+            combat round, instancing the named entity at the corpse's own band the round this
+            reaches 0 -- the Pathfinder Wight/Shadow "kills become one of us" shape. Deliberately
+            NOT built on top of _summon_creature above: a create_spawn creature is a permanent
+            new enemy, not a temporary conjured ally, so it's instanced directly (the same
+            _instance_entities primitive _summon_creature itself calls) without ever tagging
+            "summon_expires_in" -- nothing here ever counts it back down or removes it the way
+            _expire_summon_if_due does for a real summon. Still tagged "ad_hoc" for the same
+            save/load reachability reason _summon_creature's own docstring explains (no scenario/
+            room "entities" list re-derives it on a revisit). An entity with no "pending_spawn"
+            at all is untouched.
+        @param entity_name The name of the (possibly dead) entity to check -- called for every
+            scenario entity regardless of current HP, unlike the rest of run_round_upkeep, since
+            a corpse is exactly the entity this needs to keep ticking on.
+        """
+        entity = self.entities.get(entity_name)
+        pending = entity.get("pending_spawn") if entity else None
+        if pending is None:
+            return
+        pending["rounds_remaining"] -= 1
+        if pending["rounds_remaining"] > 0:
+            return
+        del entity["pending_spawn"]
+        instanced = self._instance_entities(
+            [{"name": pending["name"], "band": pending["band"]}], party_pool=self.persistent_entities,
+        )
+        if not instanced:
+            return
+        spawn_name = instanced[0]
+        self.entities[spawn_name]["ad_hoc"] = True
+        self.scenario_entities.append(spawn_name)
+
     def _expire_summon_if_due(self, entity_name):
         """!
         @brief Counts down a temporary summon's own "summon_expires_in" (set by

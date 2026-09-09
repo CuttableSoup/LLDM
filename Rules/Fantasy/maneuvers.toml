@@ -71,20 +71,25 @@ skill = [ "athletics" ]
 range = 0
 on_pass = { do = "condition", entity = "target", name = "prone", duration = "permanent" }
 
-# Commented out until there's a real "unequip target's weapon and drop it in the room" program
-# op -- being disarmed is an instantaneous equipment change, not a lasting condition (see
-# rules.toml's own note where the "disarmed" [[condition]] used to live), and this maneuver had
-# no other effect to fall back on in the meantime. A bare "I disarm the goblin" falls through to
-# an ordinary, effect-less athletics roll in the meantime (this file's own opening comment).
-# [[entity]]
-# name = "disarm"
-# supertype = "technique"
-# subtype = "maneuver"
-# description = "A grab and a twist meant to knock a weapon loose from an opponent's grip."
-# keywords = [ "disarm", "knock their weapon", "wrench their weapon loose" ]
-# skill = [ "athletics" ]
-# range = 0
-# on_pass = { do = "condition", entity = "target", name = "disarmed", duration = "scene" }
+# Was commented out until there was a real "unequip target's weapon" program op -- being
+# disarmed is an instantaneous equipment change, not a lasting condition (see rules.toml's own
+# note where the "disarmed" [[condition]] used to live), and this maneuver had no other effect to
+# fall back on in the meantime. Now uses the "destroy_equipped" op (Program_Interpreter.py ->
+# Inventory_Resolution.destroy_equipped_item) -- a known simplification, not a perfect fit: real
+# Pathfinder disarm knocks the weapon loose (it lands on the ground, still recoverable), while
+# this removes it from the target's inventory entirely (there's no existing "instance an item
+# into the current room's own entity list" primitive to drop it into cleanly). Unconditional (no
+# "chance" needed) since this only ever fires from a maneuver's own on_pass, already gated behind
+# a passed roll -- same as sunder's own on_pass just below.
+[[entity]]
+name = "disarm"
+supertype = "technique"
+subtype = "maneuver"
+description = "A grab and a twist meant to knock a weapon loose from an opponent's grip."
+keywords = [ "disarm", "knock their weapon", "wrench their weapon loose" ]
+skill = [ "athletics" ]
+range = 0
+on_pass = { do = "destroy_equipped", entity = "target", slot = "rhand" }
 
 [[entity]]
 name = "sunder"

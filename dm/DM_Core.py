@@ -26,7 +26,7 @@ from dm.DM_Time import TimeMixin
 from dm.DM_Travel import TravelMixin
 from dm.DM_Validation import ValidationMixin
 from intents.registry import HANDLERS as FREE_STANDING_INTENT_HANDLERS
-from resolution.Combat_Resolution import matches_supertype_or_subtype
+from resolution.Combat_Resolution import matches_supertype_or_subtype, resolve_damage_value
 from resolution.Program_Interpreter import run_program
 
 # Multi-instance combat targeting (see DMCore._resolve_named_instance_ambiguity): NLPCore's own
@@ -483,6 +483,48 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
 
         return modified
 
+    def _resolve_save_for_half(self, ability, defender_name):
+        """!
+        @brief Rolls defender_name's own flat save against ability's "save_for_half" =
+            {skill}, checked at ability's own "difficulty" (default 10, the same flat-check
+            default _resolve_roll's own difficulty-authored branch uses) -- the Pathfinder
+            Reflex-half shape for an AoE-widened secondary target (see _apply_damage_if_hit's
+            own call site, which never calls this for target_name itself). A failed save
+            changes nothing (a deep copy of ability, full damage as normal). A passed save
+            halves it, UNLESS defender_name's own "negates_save_for_half" (a list of skill
+            names) names this exact save's own "skill" -- Pathfinder's real Evasion is textually
+            a Reflex-save-only trait (no damage at all on a passed Reflex save specifically, not
+            any save-for-half effect in general), so the *skill it applies to* is data on the
+            entity, not a name this method hardcodes -- an entity authors
+            negates_save_for_half = ["reflexes"] for ordinary Evasion, and nothing stops a
+            different trait from naming "fortitude"/"willpower" instead for some other
+            save-for-half effect. The raw damage on a passed, non-negated save is rolled once
+            here (resolve_damage_value, the same roll calculate_damage would otherwise make
+            internally) and folded into a per-target copy of ability whose own "damage_value"
+            becomes a flat {dice: 0, pips: 0, bonus: <halved>} -- calculate_damage still runs its
+            own resistance/vulnerability/damage_bonus_vs on top of that fixed number exactly as
+            it would any other raw_damage, just never re-rolls it. Never mutates the shared
+            ability itself, the same "ephemeral per-cast copy" precedent _apply_ability_modifier
+            above already keeps.
+        @param ability The resolved AoE ability -- already confirmed to carry "save_for_half".
+        @param defender_name The secondary target rolling its own save.
+        @return A per-target copy of ability (unchanged on a failed save, halved damage_value on
+            a passed one), or None if defender_name's own "negates_save_for_half" names this
+            save's own skill -- the caller skips calculate_damage entirely for that target then.
+        """
+        spec = ability["save_for_half"]
+        check = self.resolve_action(defender_name, spec["skill"], difficulty=ability.get("difficulty", 10))
+        if not check["success"]:
+            return copy.deepcopy(ability)
+        if spec["skill"] in self.entities.get(defender_name, {}).get("negates_save_for_half", []):
+            return None
+        raw_damage = resolve_damage_value(
+            self.entities, self.rules, self.event_bus, self.player_name, ability.get("damage_value", {}),
+        )
+        halved = copy.deepcopy(ability)
+        halved["damage_value"] = {"dice": 0, "pips": 0, "bonus": raw_damage // 2}
+        return halved
+
     def _try_item_test_action(self, explicit_target, skill_name, input_text, dice_penalty=0):
         """!
         @brief Tries to resolve explicit_target as a named item one level deeper than the
@@ -928,7 +970,17 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
                 for defender_name in self.resolve_targets(self.player_name, target_name, ability):
                     if not defender_name:
                         continue
-                    damage = self.calculate_damage(self.player_name, defender_name, ability)
+                    hit_ability = ability
+                    # save_for_half only ever governs an AoE-widened secondary target, never
+                    # target_name itself -- that one already resolved through the ordinary
+                    # opposed hit-or-miss roll above, the same "primary target unaffected" scope
+                    # a real Reflex-save spell has (only the *caught* creatures get a save, not
+                    # the caster's own to-hit). See _resolve_save_for_half's own docstring.
+                    if defender_name != target_name and ability.get("save_for_half"):
+                        hit_ability = self._resolve_save_for_half(ability, defender_name)
+                        if hit_ability is None:
+                            continue
+                    damage = self.calculate_damage(self.player_name, defender_name, hit_ability)
                     result.effects.append(DamageEffect(
                         defender=damage["defender"], net_damage=damage["net_damage"],
                         remaining_hp=damage["remaining_hp"],

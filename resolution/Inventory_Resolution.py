@@ -120,6 +120,35 @@ def transfer_item(entities, event_bus, from_name, to_name, item_name):
     return True
 
 
+def destroy_equipped_item(entities, event_bus, entity_name, slot):
+    """!
+    @brief Destroys whatever entity_name currently has equipped in slot outright -- removed from
+        both [entity.equipped] and "inventory" entirely, not just unslotted (compare
+        DM_Inventory.py's own unequip_item, which only ever clears the slot mapping and leaves
+        the item sitting in inventory). This is the Pathfinder Rust Monster / Sunder-a-weapon
+        shape, deliberately simplified from Pathfinder's real two-hit item-HP model (an item's
+        own max_hp is never read here) to a single destroy-or-nothing roll -- see
+        Combat_Resolution.py's apply_destroy_equipped (the "chance" half of this) and
+        maneuvers.toml's own "disarm".
+    @param entities The live entities dict.
+    @param event_bus The EventBus to publish a log_info line to.
+    @param entity_name The entity whose gear is being destroyed.
+    @param slot The equip slot to target (ex: "rhand").
+    @return The destroyed item's own name, or None if entity_name had nothing equipped in slot.
+    """
+    entity = entities.get(entity_name)
+    if entity is None:
+        return None
+    item_name = entity.get("equipped", {}).pop(slot, None)
+    if item_name is None:
+        return None
+    inventory = entity.get("inventory", [])
+    if item_name in inventory:
+        inventory.remove(item_name)
+    event_bus.publish("log_info", f"{entity_name}'s {item_name} is destroyed.")
+    return item_name
+
+
 def place_new_item(entities, destination_name, item_name):
     """!
     @brief Adds item_name to destination_name's inventory with no source entity -- transfer_item

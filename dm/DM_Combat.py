@@ -153,6 +153,16 @@ class CombatMixin(DMCoreProtocol):
             positive HP down to 0 (a real kill, not a second hit against an already-dead
             corpse) and defender_name is_hostile toward the player, _award_xp_for_defeat runs
             before returning -- see that method and rules.toml's own [xp] table.
+            Also the sole trigger point for create_spawn (an ability field, the Pathfinder Wight/
+            Shadow "kills become one of us" shape): on that same real kill, if ability's own
+            "create_spawn" = {name, delay_rounds, requirements} is present and defender_name
+            matches "requirements" (ex: {field = "subtype", operator = "==", value = "humanoid"}
+            -- entity_matches_requirements, the same check a behavior/[entity.test] already
+            uses), a pending-spawn record is stashed directly on the corpse (defender_name)
+            rather than a new global registry -- see DM_Summoning.py's own _advance_pending_spawn
+            for how it actually resolves into a new entity a few rounds later. Deliberately not
+            gated on is_hostile like XP is -- create_spawn is a property of the killing ability
+            itself, unrelated to whether the kill was XP-worthy from the player's perspective.
         @param attacker_name The name of the entity dealing damage.
         @param defender_name The name of the entity taking damage.
         @param ability A table with damage_value {dice, pips, bonus} and damage_tags, such as a weapon, spell, or innate ability.
@@ -162,8 +172,18 @@ class CombatMixin(DMCoreProtocol):
         result = Combat_Resolution.calculate_damage(
             self.entities, self.rules, self.event_bus, attacker_name, defender_name, ability,
         )
-        if previous_hp > 0 and result["remaining_hp"] == 0 and self.is_hostile(defender_name, self.player_name):
+        killed = previous_hp > 0 and result["remaining_hp"] == 0
+        if killed and self.is_hostile(defender_name, self.player_name):
             self._award_xp_for_defeat(defender_name)
+        create_spawn = ability.get("create_spawn")
+        if killed and create_spawn and Combat_Resolution.entity_matches_requirements(
+            self.entities, self.event_bus, defender_name, create_spawn.get("requirements", []),
+        ):
+            self.entities[defender_name]["pending_spawn"] = {
+                "name": create_spawn["name"],
+                "band": self.get_band(defender_name),
+                "rounds_remaining": create_spawn.get("delay_rounds", 1),
+            }
         return result
 
     def resolve_targets(self, attacker_name, target_name, ability):
