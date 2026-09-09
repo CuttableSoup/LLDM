@@ -64,32 +64,62 @@ currently reach its target (`is_in_range`) — closing distance instead of stand
 `Challenge_Rating.py` is a pure, DMCore-independent module computing a single number for "how
 powerful is this entity," built entirely from its own dice/pips. `skill_rating(dice, pips)` is
 `dice * 3 + pips`, the shared "3 pips = 1 die" scale. `calculate_challenge_rating(offense_skill_
-rating, damage_dice, damage_pips, defense_skill_rating, save_ratings, max_hp, resistance_dice=0,
-resistance_pips=0, immunity_tags=None, vulnerability_dice=0, vulnerability_pips=0)` sums
-components on that same scale, each already resolved by the caller rather than derived from a
-generic "top skills" scan — an entity's own noncombat skills (`appraise`, `navigation`, ...)
-never contribute at all, only the ones that actually matter in a fight:
-- **offense** — `skill_rating` of the entity's single best attack's own skill, plus
-  `skill_rating` of that *same* attack's own damage `dice`/`pips` (not its `bonus` field, which
-  can be a `rules.toml` formula reference) — skill and damage always come from one matched
-  candidate, never mixed independently from two different weapons/abilities.
-- **defense** — the entity's own rating in whichever skill(s) `skills.toml` tags `combat_role =
-  "defense"` (Pathfinder/Fantasy/Zombie all use exactly one: `dodge`, the skill nearly every
-  physical attack skill's own `opposes` list leads with) — counted at full value, not diluted
-  into an average with unrelated skills the way a generic top-N scan would.
-- **save** — the average rating across whichever skill(s) are tagged `combat_role =
-  "resistive"` (`fortitude`/`reflexes`/`willpower` — Pathfinder's own three saves) — a distinct
-  axis from offense/defense: how hard this entity is to lock down with a save-or-suck
-  spell/condition, regardless of how it fares in a straight exchange. Averaged across *every*
-  resistive-role skill the setting defines, not just the ones an entity happens to train — an
-  untrained one still pulls the average down, the same way a real weak save would.
-- **hp** — `max_hp // 3`, the same `/3` scale as pips-to-dice.
-- **resistance / immunity / vulnerability** — `resistance_value`'s own rolled dice/pips add
-  directly (same scale as everything else); `immunity_tags` adds a flat credit
-  (`IMMUNITY_PER_TAG_BONUS` per specific tag, a bigger flat `IMMUNITY_ANY_BONUS` for the
-  reserved `"any"` wildcard — immunity has no dice/pips of its own to convert with, so these are
-  a deliberately simple stand-in); `vulnerability_value` *subtracts* — a real exploitable
-  weakness makes an entity easier to bring down, not harder.
+rating, damage_dice, damage_pips, defense_skill_rating, save_ratings, max_hp,
+hp_divisor=DEFAULT_HP_DIVISOR)` combines two sides, each already resolved by the caller rather
+than derived from a generic "top skills" scan — an entity's own noncombat skills (`appraise`,
+`navigation`, ...) never contribute at all, only the ones that actually matter in a fight:
+- **offense_side** — "how fast this entity can kill you": `skill_rating` of the entity's single
+  best attack's own skill, plus `skill_rating` of that *same* attack's own damage `dice`/`pips`
+  (not its `bonus` field, which can be a `rules.toml` formula reference) — skill and damage
+  always come from one matched candidate, never mixed independently from two different
+  weapons/abilities.
+- **survival_side** — "how long this entity lasts": the sum of —
+  - **defense** — the entity's own rating in whichever skill(s) `skills.toml` tags `combat_role =
+    "defense"` (Pathfinder/Fantasy/Zombie all use exactly one: `dodge`, the skill nearly every
+    physical attack skill's own `opposes` list leads with) — counted at full value, not diluted
+    into an average with unrelated skills the way a generic top-N scan would.
+  - **save** — the average rating across whichever skill(s) are tagged `combat_role =
+    "resistive"` (`fortitude`/`reflexes`/`willpower` — Pathfinder's own three saves) — a distinct
+    axis from offense/defense: how hard this entity is to lock down with a save-or-suck
+    spell/condition, regardless of how it fares in a straight exchange. Averaged across *every*
+    resistive-role skill the setting defines, not just the ones an entity happens to train — an
+    untrained one still pulls the average down, the same way a real weak save would.
+  - **hp** — `max_hp // hp_divisor`. `hp_divisor` is its own constant
+    (`DEFAULT_HP_DIVISOR`), deliberately not `skill_rating`'s own `/3`, since raw `max_hp` isn't
+    a `{dice, pips}` pair with the same real-world ceiling a D6 pool has. Not configurable per
+    setting (no `rules.toml` table reads it) — every setting uses the same default.
+
+  `resistance_value`/`vulnerability_value`/`immunity_tags` are deliberately **not** read at
+  all — every one of them only ever matters against an incoming hit whose own `damage_tags`
+  happens to match, which no particular encounter is guaranteed to bring; baking any of them
+  into every entity's own baseline rating overstated a defense (or weakness) that may simply
+  never come up.
+
+**The two sides combine by twice their geometric mean, not a flat sum:** `CR = round(2 *
+sqrt(offense_side * survival_side))`. This isn't an arbitrary rebalancing — a Monte Carlo combat
+simulator (`resolution/Combat_Simulator.py`, driven by `scripts/calibrate_challenge_rating.py`)
+found that plainly summing every component (the original design) is *not* shape-invariant: three
+creatures built to the identical additive CR total, but spending it very differently
+(offense/damage-heavy vs. HP-heavy vs. balanced), won at wildly different rates against a fixed
+reference PC — a balanced build beat both extremes by a wide margin regardless of how any single
+weight (ex: `hp_divisor`) was tuned, because win probability in a race-to-zero-HP fight behaves
+like a *product* of "time to kill" and "time to survive," not a sum of independently priced
+stats. `2*sqrt(A*B) <= A+B` always, with equality only at `A == B` (AM-GM) — so a balanced build
+keeps exactly its old additive-scale CR, while a lopsided build's CR is pulled toward 0 unless
+it's genuinely stronger overall to compensate for the skew, which is the direct fix for "a
+balanced build beats extremes at equal nominal CR." Re-running the simulator after this change
+showed the win-rate spread across shapes shrink substantially (not to zero — D6's own dice-pool
+swinginess means no closed-form formula fully captures every interaction, and a deeper split
+inside offense_side itself, ex: to-hit skill vs. damage-per-hit, is a distinct, not-yet-tuned
+sub-problem — see that script's own module docstring for the full numbers and known limits).
+
+**A disclosed behavior change**: an entity with `offense_side == 0` (no offense-tagged skill
+trained *and* no damage-dealing weapon/ability at all) always computes `CR = 0`, regardless of
+survival_side — `2*sqrt(0 * anything) = 0`. A creature that can never deal damage poses no combat
+danger, by construction. This is consistent with (not contrary to) the existing "Experience (XP)"
+caveat below that a trap's own CR is already a poor stand-in for its real danger and needs an
+explicit `exp` field — this formula change reinforces that same caveat rather than introducing a
+new one.
 
 A setting's own `[[skill]]` entries opt into `combat_role` (`skills.toml`) rather than the code
 ever hardcoding a skill name — Pathfinder/Fantasy/Zombie each tag their own equivalents, so nothing

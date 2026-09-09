@@ -128,3 +128,49 @@ survival = { dice = 2, pips = 0 }
 throwing = { dice = 2, pips = 0 }
 trickery = { dice = 2, pips = 0 }
 willpower = { dice = 2, pips = 0 }
+
+# A real, built-from-scratch Pathfinder 1e level 1 Human Fighter -- not a PC (no is_player;
+# gladstone alone holds that), a reference NPC for CR-calibration purposes, the appropriately
+# low-tier opponent creatures.toml's own "goblin" (Bestiary 1, CR 1/3) was actually meant to
+# threaten, per Pathfinder's real design intent -- unlike gladstone, whose own much higher D6 CR
+# (mid-50s, full spell list + magic-adjacent gear) reads as a PC well past 1st level, comparing a
+# CR 1/3 mook against him could never reproduce anything Bestiary-intended. Built with standard
+# array (15/14/13/12/10/8) -> Str 17 (human +2), Dex 14, Con 14, Int 10, Wis 10, Cha 8; hp 12
+# (1d10+2, max at level 1); AC 19, touch 12, flat-footed 17 (+5 scale mail, +2 heavy steel
+# shield, +2 Dex); Fort +4, Ref +2, Will +0; BAB +1; melee longsword +4 (1d8+3/19-20).
+# Converted with the exact same method creatures.toml's own goblin entry documents (rating =
+# PF bonus + 1, then dice/pips = rating // 3 / rating % 3; AC splits into touch-AC-only ->
+# dodge, armor/shield's own AC left to those items' own already-shipped armor_value once
+# equipped):
+#   blades:     melee attack +4  -> rating 5  -> 1D+2
+#   dodge:      touch AC 12 (bonus over 10 = 2) -> rating 3 -> 1D+0
+#   fortitude:  Fort +4          -> rating 5  -> 1D+2
+#   reflexes:   Ref +2           -> rating 3  -> 1D+0
+#   willpower:  Will +0          -> rating 1  -> 0D+1
+#   strength:   Str mod +3       -> rating 4  -> 1D+1 (feeds the longsword's own
+#               "strength_damage" bonus = dice // 2 = 0 -- a level 1 fighter's Str bonus is
+#               honestly modest at this dice scale, not a flaw in the conversion)
+# Equipped normally (rhand/chest/lhand) rather than the abilities-list workaround creatures.
+# toml's goblin needed -- one weapon, no equip-slot conflict to route around.
+[[entity]]
+name = "kesten varn"
+supertype = "creature"
+subtype = "humanoid"
+description = "A stocky human fighter in scale mail, longsword and shield already in hand."
+
+max_hp = 12
+
+inventory = [ "longsword", "scale mail", "heavy steel shield" ]
+
+[entity.equipped]
+rhand = "longsword"
+chest = "scale mail"
+lhand = "heavy steel shield"
+
+[entity.skills]
+blades = { dice = 1, pips = 2 }
+dodge = { dice = 1, pips = 0 }
+fortitude = { dice = 1, pips = 2 }
+reflexes = { dice = 1, pips = 0 }
+willpower = { dice = 0, pips = 1 }
+strength = { dice = 1, pips = 1 }

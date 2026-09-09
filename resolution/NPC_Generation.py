@@ -11,11 +11,12 @@
 """
 
 import json
+import math
 import os
 import random
 import tomllib
 
-from resolution.Challenge_Rating import calculate_challenge_rating, skill_rating
+from resolution.Challenge_Rating import DEFAULT_HP_DIVISOR, calculate_challenge_rating, skill_rating
 from llm.LLM_Client import call_chat_completion as _real_call_chat_completion
 from paths import PROJECT_ROOT
 
@@ -96,7 +97,61 @@ def load_npc_keywords(rules_dir=os.path.join("Rules", "Fantasy")):
     return keywords
 
 
-def fit_skills_to_cr(key_skills, target_cr, skills_catalog, hp_share=0.3, damage_dice=0, damage_pips=0):
+def _resolve_offense_survival_split(target_cr, offense_share, min_offense_side, fixed_offense_side, search_radius=200):
+    """!
+    @brief Solves calculate_challenge_rating's own "CR = round(2*sqrt(offense_side *
+        survival_side))" backwards: given target_cr, finds an (offense_side, survival_side)
+        integer pair reproducing it exactly. Unlike the old flat-sum model (where any three
+        numbers adding to target_cr trivially "round-tripped"), a product has no closed-form
+        integer inverse in general, so this does an analytic estimate (continuous math) followed
+        by a small local search for the exact integer hit -- the same "deterministic, land on
+        target_cr exactly" contract fit_skills_to_cr already promised, just solved differently.
+    @param target_cr The challenge rating to reproduce exactly (already a non-negative int).
+    @param offense_share Where offense_side should sit as a fraction of the total "power" this
+        entity spends (0-1, 0.5 = balanced) -- only consulted when fixed_offense_side is None;
+        purely a starting point for the search, not a guarantee (the search may drift from it
+        to actually land on target_cr, or to respect min_offense_side).
+    @param min_offense_side offense_side is never chosen below this floor -- callers pass
+        known_offense_rating (+ MIN_KEY_SKILL_RATING if a named offense skill will be assigned
+        on top of it) so a "trained" offense skill never lands at a suspicious 0D.
+    @param fixed_offense_side If not None, offense_side is pinned to exactly this value (no
+        named offense skill to assign a rating to -- offense_side can only ever be whatever
+        damage_dice/pips already supply) and only survival_side is searched.
+    @param search_radius How far past the analytic estimate to search for an exact integer
+        match, in either direction, before giving up and returning the closest candidate found.
+    @return (offense_side, survival_side), both non-negative ints. Exact (reproduces target_cr
+        precisely via calculate_challenge_rating) for every case this module's own tests cover;
+        falls back to the nearest achievable pair if no exact integer solution exists within
+        search_radius (an increasingly large offense_side/survival_side mismatch has real gaps
+        in which integer CR values are reachable at all -- see this function's own module note).
+    """
+    if target_cr <= 0:
+        return (max(min_offense_side, fixed_offense_side or 0), 0)
+
+    power = (target_cr / 2) ** 2
+    if fixed_offense_side is not None:
+        offense_side = fixed_offense_side
+    else:
+        ratio = offense_share / max(1 - offense_share, 1e-9)
+        offense_side = max(min_offense_side, round(math.sqrt(power * ratio)))
+    if offense_side <= 0:
+        return (offense_side, 0)
+
+    survival_estimate = round(power / offense_side)
+    best_survival = max(0, survival_estimate)
+    for delta in range(search_radius + 1):
+        for candidate in ({survival_estimate - delta, survival_estimate + delta} if delta else {survival_estimate}):
+            if candidate < 0:
+                continue
+            if round(2 * math.sqrt(offense_side * candidate)) == target_cr:
+                return (offense_side, candidate)
+    return (offense_side, best_survival)
+
+
+def fit_skills_to_cr(
+    key_skills, target_cr, skills_catalog, hp_share=0.3, damage_dice=0, damage_pips=0,
+    hp_divisor=DEFAULT_HP_DIVISOR, offense_share=0.5,
+):
     """!
     @brief Deterministically distributes a challenge-rating "budget" across key_skills (plus
         HP) so the result's own calculate_challenge_rating lands on target_cr exactly (modulo
@@ -105,19 +160,31 @@ def fit_skills_to_cr(key_skills, target_cr, skills_catalog, hp_share=0.3, damage
         keywords/key_skills were even chosen) -- this function itself is deterministic so it
         stays directly testable.
 
-        Reads each key_skill's own combat_role off skills_catalog (skills.toml's own field --
-        see Challenge_Rating.py's module note) to know which of calculate_challenge_rating's
-        components it actually feeds: "offense" and "defense" skills are each set to their own
-        bucket's full budget (not divided -- only the single best-rated one in a bucket is
-        ever actually read, via DM_Combat.py's _best_offense_package/get_challenge_rating's own
-        max-over-candidates, so tying every named offense/defense skill at the same rating
-        keeps the result exact regardless of which one ends up "best"); "resistive" skills
-        average against EVERY resistive-role skill the catalog defines, not just the ones
-        named here (an un-named one reads as untrained/0, pulling the real average down), so
-        the sum handed to the named ones has to already account for that. A key_skill with no
-        combat_role at all (ex: "strength", "stealth") is flavor only -- it still gets a
-        rating (so a generated NPC's sheet doesn't show a suspicious 0D the archetype named),
-        but calculate_challenge_rating never reads it.
+        Mirrors calculate_challenge_rating's own two-sided product (Challenge_Rating.py's
+        module note): first solves for an (offense_side, survival_side) integer pair
+        reproducing target_cr exactly (_resolve_offense_survival_split), then distributes each
+        side the same way the old flat-sum version distributed its own "remaining" budget --
+        offense_side (minus any already-known damage rating) goes to every named offense-role
+        key_skill, tied at the same rating (only the single best-rated one is ever actually
+        read forward, via DM_Combat.py's _best_offense_package/get_challenge_rating's own
+        max-over-candidates, so tying keeps the result exact regardless of which one ends up
+        "best"); survival_side splits into HP (via hp_share) and whatever's left for defense/
+        resistive, resistive skills averaging against EVERY resistive-role skill the catalog
+        defines, not just the ones named here (an un-named one reads as untrained/0, pulling the
+        real average down, so the sum handed to the named ones has to already account for it).
+        A key_skill with no combat_role at all (ex: "strength", "stealth") is flavor only -- it
+        still gets a rating (so a generated NPC's sheet doesn't show a suspicious 0D the
+        archetype named), but calculate_challenge_rating never reads it.
+
+        **No named offense-role key_skill and no supplied damage_dice/pips at all** means
+        offense_side is unavoidably 0 -- and since CR = round(2*sqrt(0 * survival_side)) is
+        always 0 regardless of survival_side (see Challenge_Rating.py's own docstring), there is
+        no target_cr split to solve for in that case: the entire budget is simply handed to
+        HP/defense/resistive as if it were survival_side (still a sensible-looking stat sheet
+        for a generated flavor NPC), and the resulting entity's own real CR will read 0, not
+        target_cr. This is a deliberate consequence of the underlying formula, not a bug in this
+        function -- see test_fit_skills_to_cr_round_trips_through_calculate_challenge_rating's
+        own "no combat-relevant skill at all" case.
     @param key_skills An ordered list of skill names (ex: the union of 1-2 keywords' own
         skill lists) -- duplicates are fine (deduped, order-preserving).
     @param target_cr The challenge rating to fit toward (already variance-rolled).
@@ -125,25 +192,40 @@ def fit_skills_to_cr(key_skills, target_cr, skills_catalog, hp_share=0.3, damage
         DM_Combat.py's self.skills) -- pure data, no live DMCore needed, the same "just a
         dict" precedent load_character_creation_data's own rules_dir scan already sets for a
         DMCore-independent module.
-    @param hp_share The fraction of target_cr's budget spent on HP (default 0.3, matching the
-        rough proportion hand-authored creatures.toml/characters.toml entries already show).
+    @param hp_share The fraction of survival_side's own budget spent on HP (default 0.3,
+        matching the rough proportion hand-authored creatures.toml/characters.toml entries
+        already show) -- the rest goes to defense/resistive. Only ever meaningful when a
+        defense or resistive-role key_skill is actually named; otherwise the whole of
+        survival_side becomes HP (nothing else to spend it on).
     @param damage_dice/damage_pips The entity's own best damage-dealing weapon/ability, if
         already known (ex: a hand-authored weapon on the same template) -- 0/0 (the default)
-        if none, in which case the full remaining budget goes to skills instead. Not resolved
-        automatically by this function; a caller with a real weapon must pass its dice/pips in
-        directly (see NPC generation's own known "generally match" simplification for a
-        generate=true template that also hand-supplies a weapon).
+        if none, in which case offense_side comes entirely from whatever offense-role key_skill
+        rating this function assigns. Not resolved automatically by this function; a caller with
+        a real weapon must pass its dice/pips in directly (see NPC generation's own known
+        "generally match" simplification for a generate=true template that also hand-supplies a
+        weapon).
+    @param hp_divisor Converts the HP share of survival_side back into raw max_hp -- must match
+        whatever hp_divisor calculate_challenge_rating itself will be called with (Challenge_
+        Rating.py's own DEFAULT_HP_DIVISOR, the default both sides always use today -- no
+        per-setting override exists) or this function's own "round-trips exactly" claim breaks
+        -- the exact arithmetic inverse of hp_component's own "max_hp // hp_divisor".
+    @param offense_share Where offense_side should sit as a fraction of target_cr's own
+        "power budget" (0-1, default 0.5 = balanced) -- the archetype knob replacing what
+        hp_share alone used to control before offense/survival became a product rather than
+        just more terms in the same sum. Only consulted when a named offense-role key_skill
+        exists to actually receive the resulting rating; ignored (offense_side is pinned to
+        whatever damage_dice/pips already supply) otherwise. See
+        _resolve_offense_survival_split for the actual solve.
     @return (skills_dict, max_hp) -- skills_dict is {skill_name: {"dice", "pips"}}, one entry
         per unique name in key_skills (an empty list yields an empty skills_dict and max_hp
-        derived from hp_share alone).
+        derived from the whole target_cr budget).
     """
     # target_cr arrives as a float once a caller has rolled variance into it
     # (target_cr * random.uniform(...), see generate_npc_stats) -- rounded to an int up
-    # front so every downstream value (hp_units, remaining, and therefore dice/pips) stays
-    # integer arithmetic throughout, not floats leaking into a {"dice", "pips"} skill entry.
+    # front so every downstream value stays integer arithmetic throughout, not floats leaking
+    # into a {"dice", "pips"} skill entry.
     target_cr = round(target_cr)
-    hp_units = round(target_cr * hp_share)
-    remaining = target_cr - hp_units - skill_rating(damage_dice, damage_pips)
+    known_offense_rating = skill_rating(damage_dice, damage_pips)
 
     unique_skills = list(dict.fromkeys(key_skills))  # dedupe, preserve first-seen order
     offense = [n for n in unique_skills if skills_catalog.get(n, {}).get("combat_role") == "offense"]
@@ -152,17 +234,33 @@ def fit_skills_to_cr(key_skills, target_cr, skills_catalog, hp_share=0.3, damage
     flavor = [n for n in unique_skills if n not in offense and n not in defense and n not in resistive]
     resistive_total = sum(1 for skill in skills_catalog.values() if skill.get("combat_role") == "resistive")
 
-    # No named skill feeds any of calculate_challenge_rating's own offense/defense/save
-    # components at all -- an ordinary skill split has nowhere combat-relevant to put the
-    # budget, so it all becomes HP instead (the one component every entity always has).
-    if not (offense or defense or resistive):
-        hp_units += remaining
-        remaining = 0
-    max_hp = hp_units * 3
+    if offense:
+        offense_side, survival_side = _resolve_offense_survival_split(
+            target_cr, offense_share, known_offense_rating + MIN_KEY_SKILL_RATING, fixed_offense_side=None,
+        )
+    elif known_offense_rating > 0:
+        offense_side, survival_side = _resolve_offense_survival_split(
+            target_cr, offense_share, known_offense_rating, fixed_offense_side=known_offense_rating,
+        )
+    else:
+        # No named offense-role key_skill AND no supplied damage at all -- offense_side is
+        # unavoidably 0, so CR is unavoidably 0 too (see this function's own docstring). Nothing
+        # to solve for; the whole budget becomes survival_side (HP/defense/resistive) instead.
+        offense_side, survival_side = 0, target_cr
 
-    buckets = {"offense": offense, "defense": defense, "resistive": resistive}
-    named_bucket_order = [name for name in ("offense", "defense", "resistive") if buckets[name]]
-    bucket_budget = {"offense": 0, "defense": 0, "resistive": 0}
+    # No defense/resistive key_skill named -- nothing else survival_side could go to, so all of
+    # it becomes HP (the one component every entity always has, mirroring the old collapse).
+    if defense or resistive:
+        hp_units = round(survival_side * hp_share)
+        remaining = survival_side - hp_units
+    else:
+        hp_units = survival_side
+        remaining = 0
+    max_hp = hp_units * hp_divisor
+
+    buckets = {"defense": defense, "resistive": resistive}
+    named_bucket_order = [name for name in ("defense", "resistive") if buckets[name]]
+    bucket_budget = {"defense": 0, "resistive": 0}
     if named_bucket_order:
         share, leftover = divmod(remaining, len(named_bucket_order))
         for index, name in enumerate(named_bucket_order):
@@ -170,12 +268,16 @@ def fit_skills_to_cr(key_skills, target_cr, skills_catalog, hp_share=0.3, damage
 
     skills_dict = {}
     used_ratings = []
-    for role in ("offense", "defense"):
-        if not buckets[role]:
-            continue
-        rating = max(bucket_budget[role], MIN_KEY_SKILL_RATING)
+    if offense:
+        rating = max(offense_side - known_offense_rating, MIN_KEY_SKILL_RATING)
         used_ratings.append(rating)
-        for name in buckets[role]:
+        for name in offense:
+            skills_dict[name] = {"dice": rating // 3, "pips": rating % 3}
+
+    if defense:
+        rating = max(bucket_budget["defense"], MIN_KEY_SKILL_RATING)
+        used_ratings.append(rating)
+        for name in defense:
             skills_dict[name] = {"dice": rating // 3, "pips": rating % 3}
 
     if resistive:
@@ -259,7 +361,7 @@ def _describe_qualities(qualities):
     return f"{sentence}, about {age} years old." if descriptor else f"They are about {age} years old."
 
 
-def _fallback_npc_stats(npc_keywords, target_cr, hp_share, skills_catalog):
+def _fallback_npc_stats(npc_keywords, target_cr, hp_share, skills_catalog, hp_divisor=DEFAULT_HP_DIVISOR):
     """!
     @brief The offline/failure path generate_npc_stats falls back to -- no network call at
         all, so it's instant and safe to use both when Ollama is genuinely unreachable and
@@ -271,12 +373,13 @@ def _fallback_npc_stats(npc_keywords, target_cr, hp_share, skills_catalog):
     @param target_cr The already variance-rolled challenge rating to fit toward.
     @param hp_share Forwarded to fit_skills_to_cr.
     @param skills_catalog Forwarded to fit_skills_to_cr.
+    @param hp_divisor Forwarded to fit_skills_to_cr.
     @return {"name", "description", "skills", "max_hp"}.
     """
     names = list(npc_keywords)
     chosen = random.sample(names, k=min(2, len(names))) if names else []
     key_skills = [skill for keyword in chosen for skill in npc_keywords.get(keyword, [])]
-    skills, max_hp = fit_skills_to_cr(key_skills, target_cr, skills_catalog, hp_share=hp_share)
+    skills, max_hp = fit_skills_to_cr(key_skills, target_cr, skills_catalog, hp_share=hp_share, hp_divisor=hp_divisor)
     return {
         "name": "Unnamed Stranger",
         "description": "A figure whose story remains untold for now.",
@@ -288,6 +391,7 @@ def _fallback_npc_stats(npc_keywords, target_cr, hp_share, skills_catalog):
 def generate_npc_stats(
     npc_keywords, target_cr, skills_catalog, hint=None, qualities=None, variance=0.15, cr_multiplier=1.0,
     hp_share=0.3, call_chat_completion=None, api_url=DEFAULT_API_URL, skip_llm_generation=False,
+    hp_divisor=DEFAULT_HP_DIVISOR,
 ):
     """!
     @brief The full NPC generation pipeline: ask the local LLM for a backstory + 1-2 archetype
@@ -324,6 +428,7 @@ def generate_npc_stats(
     @param skip_llm_generation If true, skips the network call entirely and goes straight to
         the offline fallback path -- used when reloading a save (DM_Persistence.py), where
         whatever this call produces is about to be overwritten by the saved values anyway.
+    @param hp_divisor Forwarded to fit_skills_to_cr/_fallback_npc_stats.
     @return {"name", "description", "skills", "max_hp"}. Falls back to _fallback_npc_stats on
         skip_llm_generation, an empty npc_keywords catalog, or any failure talking to the LLM
         (no tool_calls in the response, malformed JSON, network error, or timeout) -- this
@@ -333,7 +438,7 @@ def generate_npc_stats(
     rolled_cr = target_cr * cr_multiplier * random.uniform(1 - variance, 1 + variance)
 
     if skip_llm_generation or not npc_keywords:
-        return _fallback_npc_stats(npc_keywords, rolled_cr, hp_share, skills_catalog)
+        return _fallback_npc_stats(npc_keywords, rolled_cr, hp_share, skills_catalog, hp_divisor=hp_divisor)
 
     qualities_sentence = _describe_qualities(qualities)
     prompt = (
@@ -359,8 +464,8 @@ def generate_npc_stats(
         if not chosen_keywords:
             raise ValueError("No recognized keywords in LLM response")
     except Exception:
-        return _fallback_npc_stats(npc_keywords, rolled_cr, hp_share, skills_catalog)
+        return _fallback_npc_stats(npc_keywords, rolled_cr, hp_share, skills_catalog, hp_divisor=hp_divisor)
 
     key_skills = [skill for keyword in chosen_keywords for skill in npc_keywords.get(keyword, [])]
-    skills, max_hp = fit_skills_to_cr(key_skills, rolled_cr, skills_catalog, hp_share=hp_share)
+    skills, max_hp = fit_skills_to_cr(key_skills, rolled_cr, skills_catalog, hp_share=hp_share, hp_divisor=hp_divisor)
     return {"name": name, "description": backstory, "skills": skills, "max_hp": max_hp}

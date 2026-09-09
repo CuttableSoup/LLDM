@@ -40,25 +40,41 @@ a generated NPC can fight or what it carries is still decided by whoever authors
 OpenAI-style `tools` payload constraining the LLM to 1-2 keyword *names* (an enum, not free
 text — more reliable with small local models); `generate_npc_stats` resolves them to their
 union of real skills before fitting. `fit_skills_to_cr(key_skills, target_cr, skills_catalog,
-hp_share=0.3, damage_dice=0, damage_pips=0)` is the deterministic inverse of
-`calculate_challenge_rating`, reading each key_skill's own `combat_role` off `skills_catalog`
-(the setting's own `self.skills`, threaded through with no other DMCore dependency — see
-`docs/combat.md`'s "Challenge rating") the same way the forward formula does: `hp_units =
-round(target_cr * hp_share)`; the remaining budget splits evenly across however many of
-offense/defense/resistive actually have a named key_skill (a bucket nobody named gets none),
-with `"offense"`/`"defense"` key_skills all set to their own bucket's full rating (only the
-single best-rated one is ever actually read forward, so tying them keeps the round-trip exact
-regardless of which ends up "best") and `"resistive"` ones split so their sum, averaged across
-*every* resistive-role skill the catalog defines (not just the ones named), lands exactly on
-that bucket's own rating. A key_skill with no `combat_role` at all is flavor-only, rated off
-whatever combat skills were actually used (or a flat floor if none were). If key_skills names no
-combat-relevant skill whatsoever, the entire budget becomes HP instead — the one component every
-entity always has a use for. `generate_npc_stats` rolls `target_cr * cr_multiplier *
-random.uniform(1-variance, 1+variance)` before fitting — that plus keyword choice is where
-randomness comes from; `fit_skills_to_cr` itself stays deterministic and directly testable. On
-any failure (no `tool_calls`, malformed JSON, network error, timeout, or
-`skip_llm_generation=True`) it falls back to a random keyword pick with no network call —
-matching the app's "Ollama is best-effort, never blocks core gameplay" posture.
+hp_share=0.3, damage_dice=0, damage_pips=0, hp_divisor=DEFAULT_HP_DIVISOR, offense_share=0.5)`
+is the deterministic inverse of `calculate_challenge_rating`, reading each key_skill's own
+`combat_role` off `skills_catalog` (the setting's own `self.skills`, threaded through with no
+other DMCore dependency — see `docs/combat.md`'s "Challenge rating"), mirroring the forward
+formula's own two-sided product instead of a flat sum: `_resolve_offense_survival_split` first
+solves for an `(offense_side, survival_side)` integer pair reproducing `target_cr` exactly (an
+analytic AM-GM estimate from `offense_share`, refined by a small local integer search, since a
+product has no closed-form integer inverse the way a sum's remainder-splitting did) — `offense_
+share` is the archetype knob replacing what `hp_share` alone used to control before offense and
+survival became a product rather than just more terms in the same sum. `offense_side` (minus any
+already-known `damage_dice`/`damage_pips`) goes to every named offense-role key_skill, tied at
+the same rating (only the single best-rated one is ever actually read forward, so tying them
+keeps the round-trip exact regardless of which ends up "best"); `survival_side` then splits via
+`hp_share` into HP (`hp_units * hp_divisor`) and whatever's left for defense/resistive, the
+latter split evenly across however many of defense/resistive actually have a named key_skill,
+with `"resistive"` ones split so their sum, averaged across *every* resistive-role skill the
+catalog defines (not just the ones named), lands exactly on that sub-budget. A key_skill with no
+`combat_role` at all is flavor-only, rated off whatever combat skills were actually used (or a
+flat floor if none were).
+
+**If key_skills names no offense-role skill at all and no `damage_dice`/`damage_pips` is
+supplied**, `offense_side` is unavoidably 0 — and since `calculate_challenge_rating` reads
+`CR = round(2*sqrt(offense_side * survival_side))`, that means `CR = 0` regardless of `survival_
+side`, no matter how the budget is spent. There's no `target_cr` split to solve for in that
+case: the whole budget becomes HP/defense/resistive as if it were `survival_side` (a generated
+civilian's stat sheet still looks reasonable — `max_hp` still scales with `target_cr` — but its
+real CR reads 0, not `target_cr`). This is the deliberate consequence of the underlying formula
+(see `docs/combat.md`'s own callout), not a bug in `fit_skills_to_cr`.
+
+`generate_npc_stats` rolls `target_cr * cr_multiplier * random.uniform(1-variance, 1+variance)`
+before fitting — that plus keyword choice is where randomness comes from; `fit_skills_to_cr`
+itself stays deterministic and directly testable. On any failure (no `tool_calls`, malformed
+JSON, network error, timeout, or `skip_llm_generation=True`) it falls back to a random keyword
+pick with no network call — matching the app's "Ollama is best-effort, never blocks core
+gameplay" posture.
 
 `LLM_Client.py`'s `call_chat_completion` is a small, synchronous, stateless POST — deliberately
 not shared with `LLM_Core.py`'s async `fetch_from_llm` (`fetch_from_llm` must never raise; this

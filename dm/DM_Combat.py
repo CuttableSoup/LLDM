@@ -812,11 +812,10 @@ class CombatMixin(DMCoreProtocol):
     def get_challenge_rating(self, entity_name):
         """!
         @brief A single number describing how powerful entity_name currently is -- see
-            Challenge_Rating.py's calculate_challenge_rating for what it's built from.
-            Reflects live state (current max_hp/skills/equipped gear/abilities/resistance-
-            immunity-vulnerability), not a fixed character-creation-time value, so it changes
-            across play as an entity is healed/hurt long-term, re-equipped, or gains an
-            ability.
+            Challenge_Rating.py's calculate_challenge_rating for what it's built from. Reflects
+            live state (current max_hp/skills/equipped gear/abilities), not a fixed character-
+            creation-time value, so it changes across play as an entity is healed/hurt
+            long-term, re-equipped, or gains an ability.
         @param entity_name The name of the entity to rate.
         @return The entity's challenge rating (an int), or 0 if entity_name doesn't exist.
         """
@@ -831,13 +830,8 @@ class CombatMixin(DMCoreProtocol):
             default={},
         )
         save_ratings = [entity_skills.get(name, {}) for name in self._skills_with_role("resistive")]
-        resistance_value = entity.get("resistance_value") or {}
-        vulnerability_value = entity.get("vulnerability_value") or {}
         return calculate_challenge_rating(
             offense_skill_stats, damage_dice, damage_pips, defense_stats, save_ratings, entity.get("max_hp", 0),
-            resistance_dice=resistance_value.get("dice", 0), resistance_pips=resistance_value.get("pips", 0),
-            immunity_tags=entity.get("immunity_tags"),
-            vulnerability_dice=vulnerability_value.get("dice", 0), vulnerability_pips=vulnerability_value.get("pips", 0),
         )
 
     def _resolve_lore_skill(self, target_name):

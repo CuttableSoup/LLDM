@@ -2,6 +2,7 @@ import asyncio
 import copy
 import json
 import os
+import random
 import re
 import shutil
 import tempfile
@@ -39,6 +40,7 @@ from resolution.AdHoc_Generation import (
 )
 from gui.Character_Creation_GUI import CharacterCreationDialog
 from resolution.Challenge_Rating import calculate_challenge_rating, calculate_party_challenge_rating, skill_rating
+from resolution.Combat_Simulator import best_offense_skill, run_matchup, simulate_fight
 from dm.DM_ActionOutcome import (
     ActionOutcome, ActionPreventedOutcome, CraftEffect, CureEffect, DamageEffect, DefenderDetailsEffect,
     DispelEffect, LanguageBarrierOutcome, LootEffect, MissingMaterialsOutcome, MissingSpellMaterialsOutcome,
@@ -6458,50 +6460,147 @@ class TestChallengeRating(unittest.TestCase):
         self.assertEqual(skill_rating(dice=0, pips=0), 0)
 
     def test_calculate_challenge_rating_save_component_averages_across_every_save_given(self):
-        # One real save (fortitude 5D=15) plus two absent ones ({} -- untrained, rating 0) --
-        # the average has to be taken across all three slots (5, not 15), the same way an
-        # entity missing two of Pathfinder's own three saves reads as genuinely easier to
-        # lock down with a save-or-suck effect, not merely "unrated" on those two.
+        # offense_side has to be nonzero for survival_side's own components to show up at all
+        # (CR = round(2*sqrt(offense_side * survival_side)) -- zero on either side zeroes the
+        # whole thing, see Challenge_Rating.py's own module docstring), so every test below
+        # gives offense a real, nonzero baseline rather than isolating a survival-side component
+        # against an all-zero rest the way the old flat-sum formula could.
+        # offense_side: blades 5D=15. One real save (fortitude 5D=15) plus two absent ones ({}
+        # -- untrained, rating 0) -- the average has to be taken across all three slots (5, not
+        # 15), the same way an entity missing two of Pathfinder's own three saves reads as
+        # genuinely easier to lock down with a save-or-suck effect, not merely "unrated" on
+        # those two. survival_side = save_component(5) + defense(0) + hp(0) = 5.
+        # CR = round(2*sqrt(15*5)) = round(2*8.660) = 17.
+        offense_skill = {"dice": 5, "pips": 0}
         save_ratings = [{"dice": 5, "pips": 0}, {}, {}]
-        rating = calculate_challenge_rating({}, 0, 0, {}, save_ratings, max_hp=0)
-        self.assertEqual(rating, 5)
+        rating = calculate_challenge_rating(offense_skill, 0, 0, {}, save_ratings, max_hp=0)
+        self.assertEqual(rating, 17)
 
-    def test_calculate_challenge_rating_sums_offense_defense_save_and_hp_components(self):
-        # offense: blades 5D=15 + damage 5D=15 -> 30. defense: dodge 5D=15. save: fortitude
-        # 4D=12, willpower 2D=6, reflexes absent (0) -> round((12+6+0)/3)=6. hp: 36//3=12.
-        # 30+15+6+12=63.
+    def test_calculate_challenge_rating_combines_offense_and_survival_by_twice_their_geometric_mean(self):
+        # offense_side: blades 5D=15 + damage 5D=15 -> 30. survival_side: dodge 5D=15 + save
+        # (fortitude 4D=12, willpower 2D=6, reflexes absent=0 -> round(18/3)=6) + hp (36//3=12)
+        # -> 15+6+12=33. CR = round(2*sqrt(30*33)) = round(2*31.464) = 63 -- close to the old
+        # flat-sum total (30+15+6+12=63, identical here) because this build is nearly balanced
+        # (offense_side 30 vs survival_side 33) -- AM-GM's whole point is that a balanced split
+        # keeps its old additive-scale value; see the "no trained skills" test below for what a
+        # lopsided one does instead.
         offense_skill = {"dice": 5, "pips": 0}
         defense_skill = {"dice": 5, "pips": 0}
         save_ratings = [{"dice": 4, "pips": 0}, {"dice": 2, "pips": 0}, {}]
         rating = calculate_challenge_rating(offense_skill, 5, 0, defense_skill, save_ratings, max_hp=36)
         self.assertEqual(rating, 63)
 
+    def test_calculate_challenge_rating_zero_offense_side_is_always_zero_regardless_of_survival_side(self):
+        # No offense-tagged skill trained and no damage at all -> offense_side = 0 -> CR = 0 no
+        # matter how much HP/defense/save survival_side has -- a creature that can never deal
+        # damage poses no combat danger, by construction (Challenge_Rating.py's own module
+        # docstring); this is the deliberate, disclosed behavior change from the old flat-sum
+        # formula, where a durable-but-harmless entity still accumulated CR from HP alone.
+        self.assertEqual(calculate_challenge_rating({}, 0, 0, {}, [], max_hp=1000), 0)
+
     def test_calculate_challenge_rating_handles_an_entity_with_no_trained_skills(self):
+        # offense_side: no trained skill, but damage_dice/pips=1/1 given directly ->
+        # skill_rating(1,1)=4. survival_side: hp 9//3=3. CR = round(2*sqrt(4*3)) = round(6.928) = 7.
         self.assertEqual(calculate_challenge_rating({}, 1, 1, {}, [], max_hp=9), 7)
 
-    def test_calculate_challenge_rating_resistance_adds_and_vulnerability_subtracts(self):
-        base = calculate_challenge_rating({}, 0, 0, {}, [], max_hp=0)
-        with_resistance = calculate_challenge_rating(
-            {}, 0, 0, {}, [], max_hp=0, resistance_dice=2, resistance_pips=0,
-        )
-        with_vulnerability = calculate_challenge_rating(
-            {}, 0, 0, {}, [], max_hp=0, vulnerability_dice=2, vulnerability_pips=0,
-        )
-        self.assertEqual(with_resistance - base, 6)
-        self.assertEqual(with_vulnerability - base, -6)
-
-    def test_calculate_challenge_rating_immunity_tags_any_beats_a_specific_list(self):
-        base = calculate_challenge_rating({}, 0, 0, {}, [], max_hp=0)
-        one_tag = calculate_challenge_rating({}, 0, 0, {}, [], max_hp=0, immunity_tags=["fire"])
-        two_tags = calculate_challenge_rating({}, 0, 0, {}, [], max_hp=0, immunity_tags=["fire", "cold"])
-        any_tag = calculate_challenge_rating({}, 0, 0, {}, [], max_hp=0, immunity_tags=["any"])
-        self.assertGreater(one_tag, base)
-        self.assertGreater(two_tags, one_tag)
-        self.assertGreater(any_tag, two_tags)
+    def test_calculate_challenge_rating_rewards_balance_over_skew_at_equal_totals(self):
+        # The actual property the multiplicative combination was built for (Challenge_Rating.py's
+        # own module docstring): hold offense_side + survival_side fixed at the same total (32
+        # here), and a balanced split scores strictly higher than a lopsided one -- AM-GM
+        # (2*sqrt(A*B) <= A+B, equality only at A == B). This is a direct, unit-level proof of
+        # the fix, independent of the Monte Carlo simulator's own (noisier) win-rate evidence.
+        balanced = calculate_challenge_rating({"dice": 5, "pips": 1}, 0, 0, {}, [], max_hp=48)  # 16 & 16
+        skewed = calculate_challenge_rating({"dice": 9, "pips": 0}, 0, 0, {}, [], max_hp=15)  # 27 & 5, same total (32)
+        self.assertGreater(balanced, skewed)
 
     def test_calculate_party_challenge_rating_is_the_sum_not_the_average(self):
         self.assertEqual(calculate_party_challenge_rating([41, 26, 21]), 88)
         self.assertEqual(calculate_party_challenge_rating([]), 0)
+
+
+# A minimal skills_catalog fixture for Combat_Simulator's own tests -- unlike NpcGeneration's
+# own FAKE_SKILLS_CATALOG (below), this one authors "opposes" too, since resolve_opposed_action
+# needs it to find a real defending skill (an offense skill with no "opposes" entry always rolls
+# against difficulty 0, per Combat_Resolution.get_opposing_skill/resolve_opposed_action -- fine
+# for CR math, which never resolves an actual roll, but not for a simulated fight that does).
+SIM_SKILLS_CATALOG = {
+    "blades": {"combat_role": "offense", "opposes": ["dodge"]},
+    "dodge": {"combat_role": "defense", "opposes": ["blades"]},
+}
+
+
+class TestCombatSimulator(unittest.TestCase):
+    """!
+    @brief Combat_Simulator.py's pure Monte Carlo fight resolution -- no DMCore/live LLM,
+        exercised directly against bare entity dicts the same way TestNpcGeneration exercises
+        NPC_Generation.py's own pure functions.
+    """
+
+    def setUp(self):
+        random.seed(1234)  # deterministic across environments for the statistical assertions below
+
+    @staticmethod
+    def _fighter(name, dice, pips, max_hp, damage_dice=0, damage_pips=0):
+        return {
+            "name": name,
+            "skills": {"blades": {"dice": dice, "pips": pips}, "dodge": {"dice": dice, "pips": pips}},
+            "max_hp": max_hp,
+            "damage_value": {"dice": damage_dice, "pips": damage_pips, "bonus": 0},
+            "damage_tags": ["slashing"],
+        }
+
+    def test_best_offense_skill_picks_the_highest_rated_offense_tagged_skill(self):
+        entity = {"skills": {"blades": {"dice": 2, "pips": 0}, "dodge": {"dice": 5, "pips": 0}}}
+        self.assertEqual(best_offense_skill(entity, SIM_SKILLS_CATALOG), "blades")
+
+    def test_best_offense_skill_is_none_with_no_offense_tagged_skill_trained(self):
+        entity = {"skills": {"dodge": {"dice": 5, "pips": 0}}}
+        self.assertIsNone(best_offense_skill(entity, SIM_SKILLS_CATALOG))
+
+    def test_overwhelming_offense_beats_a_helpless_defender(self):
+        strong = lambda: self._fighter("strong", dice=8, pips=0, max_hp=30, damage_dice=4, damage_pips=0)
+        helpless = lambda: {"name": "helpless", "skills": {}, "max_hp": 6}
+        result = run_matchup(strong, helpless, rules={}, skills_catalog=SIM_SKILLS_CATALOG, trials=50)
+        self.assertGreater(result["a_win_rate"], 0.9)
+
+    def test_simulate_fight_terminates_within_max_rounds_when_neither_side_can_land_a_hit(self):
+        entities = {
+            "a": {"name": "a", "skills": {}, "max_hp": 10},
+            "b": {"name": "b", "skills": {}, "max_hp": 10},
+        }
+        outcome = simulate_fight(entities, {}, SIM_SKILLS_CATALOG, "a", "b", EventBus(), max_rounds=5)
+        self.assertTrue(outcome["timeout"])
+        self.assertIsNone(outcome["winner"])
+        self.assertEqual(outcome["rounds"], 5)
+
+    def test_run_matchup_win_rates_are_bounded_and_account_for_timeouts(self):
+        build_a = lambda: self._fighter("a", dice=4, pips=0, max_hp=20, damage_dice=2, damage_pips=0)
+        build_b = lambda: self._fighter("b", dice=3, pips=0, max_hp=15, damage_dice=1, damage_pips=0)
+        result = run_matchup(build_a, build_b, rules={}, skills_catalog=SIM_SKILLS_CATALOG, trials=100)
+        for rate in (result["a_win_rate"], result["b_win_rate"], result["timeout_rate"]):
+            self.assertGreaterEqual(rate, 0)
+            self.assertLessEqual(rate, 1)
+        self.assertAlmostEqual(
+            result["a_win_rate"] + result["b_win_rate"] + result["timeout_rate"], 1.0, places=9,
+        )
+
+    def test_identical_builds_land_close_to_an_even_split(self):
+        build = lambda: self._fighter("fighter", dice=4, pips=0, max_hp=20, damage_dice=2, damage_pips=0)
+        # Both sides use the same build factory but need distinct names -- run_matchup keys
+        # entities by each build's own "name", so a genuinely identical build has to be cloned
+        # with the other side's name swapped in, not the literal same dict twice.
+        def build_a():
+            entity = build()
+            entity["name"] = "a"
+            return entity
+
+        def build_b():
+            entity = build()
+            entity["name"] = "b"
+            return entity
+
+        result = run_matchup(build_a, build_b, rules={}, skills_catalog=SIM_SKILLS_CATALOG, trials=300)
+        self.assertLess(abs(result["a_win_rate"] - result["b_win_rate"]), 0.15)
 
 
 class TestChallengeRatingDMCoreIntegration(DMTestCase):
@@ -6517,27 +6616,28 @@ class TestChallengeRatingDMCoreIntegration(DMTestCase):
     def test_gladstone_rating_picks_arcane_and_fireball_as_the_best_offense_package(self):
         # _best_offense_package maximizes skill+damage together, not damage alone -- arcane
         # 2D=6 + fireball's own 5D=15 (=21) edges out blades 5D=15 + longsword's 1D+2=5 (=20),
-        # even though the longsword's own *skill* is rated higher on its own. defense: dodge
-        # 5D=15. save: fortitude/reflexes/willpower all 2D=6 each -> avg 6. hp: 36//3=12.
-        # 21+15+6+12=54.
-        self.assertEqual(self.dm_core.get_challenge_rating("gladstone"), 54)
+        # even though the longsword's own *skill* is rated higher on its own. offense_side=21.
+        # survival_side: dodge 5D=15 + save (fortitude/reflexes/willpower all 2D=6 each -> avg
+        # 6) + hp (36//3=12) -> 33. CR = round(2*sqrt(21*33)) = round(2*26.32) = 53.
+        self.assertEqual(self.dm_core.get_challenge_rating("gladstone"), 53)
 
     def test_thane_rating_uses_his_own_best_offense_package(self):
-        # offense: one of his 4D=12 combat skills + shortsword strike's own 2D=6 -> 18.
-        # defense: dodge 3D=9. save: fortitude 3D=9, reflexes/willpower 2D=6 each -> avg 7.
-        # hp: 24//3=8. 18+9+7+8=42.
+        # offense_side: one of his 4D=12 combat skills + shortsword strike's own 2D=6 -> 18.
+        # survival_side: dodge 3D=9 + save (fortitude 3D=9, reflexes/willpower 2D=6 each -> avg
+        # 7) + hp (24//3=8) -> 24. CR = round(2*sqrt(18*24)) = round(2*20.78) = 42.
         self.assertEqual(self.dm_core.get_challenge_rating("thane"), 42)
 
     def test_wolf_rating_uses_its_own_bite(self):
-        # offense: brawling 5D=15 + bite's own 1D=3 -> 18. defense: dodge 6D=18. save:
-        # fortitude/reflexes/willpower all 2D=6 each -> avg 6. hp: 16//3=5. 18+18+6+5=47.
-        self.assertEqual(self.dm_core.get_challenge_rating("wolf"), 47)
+        # offense_side: brawling 5D=15 + bite's own 1D=3 -> 18. survival_side: dodge 6D=18 +
+        # save (fortitude/reflexes/willpower all 2D=6 each -> avg 6) + hp (16//3=5) -> 29.
+        # CR = round(2*sqrt(18*29)) = round(2*22.85) = 46.
+        self.assertEqual(self.dm_core.get_challenge_rating("wolf"), 46)
 
     def test_unknown_entity_rates_zero(self):
         self.assertEqual(self.dm_core.get_challenge_rating("nobody"), 0)
 
     def test_party_rating_sums_gladstone_and_thane_but_not_the_wolves(self):
-        self.assertEqual(self.dm_core.get_party_challenge_rating(), 54 + 42)
+        self.assertEqual(self.dm_core.get_party_challenge_rating(), 53 + 42)
 
 
 class TestXpAward(DMTestCase):
@@ -6545,7 +6645,7 @@ class TestXpAward(DMTestCase):
     @brief _award_xp_for_defeat (DM_Combat.py), triggered from calculate_damage the moment a
         hostile entity's HP first reaches 0 -- debug.toml's own gladstone (is_player, starts
         with exp = 100)/thane (is_party, no authored "exp" -- starts at the implicit 0) and its
-        first wolf (hostile by default, challenge rating 47 -- TestChallengeRatingDMCoreIntegration).
+        first wolf (hostile by default, challenge rating 46 -- TestChallengeRatingDMCoreIntegration).
     """
 
     def _drop_the_wolf_to_one_hp(self):
@@ -6561,8 +6661,8 @@ class TestXpAward(DMTestCase):
         self._deal_five_damage()
 
         self.assertEqual(self.dm_core.get_current_hp("wolf"), 0)
-        self.assertEqual(self.dm_core.entities["gladstone"]["exp"], 100 + 47)
-        self.assertEqual(self.dm_core.entities["thane"]["exp"], 47)
+        self.assertEqual(self.dm_core.entities["gladstone"]["exp"], 100 + 46)
+        self.assertEqual(self.dm_core.entities["thane"]["exp"], 46)
 
     def test_custom_exp_field_overrides_the_challenge_rating_default(self):
         self.dm_core.entities["wolf"]["exp"] = 5
@@ -6586,14 +6686,14 @@ class TestXpAward(DMTestCase):
         self._drop_the_wolf_to_one_hp()
         self._deal_five_damage()
 
-        self.assertEqual(self.dm_core.entities["gladstone"]["exp"], 100 + 47 * 3)
+        self.assertEqual(self.dm_core.entities["gladstone"]["exp"], 100 + 46 * 3)
 
     def test_divide_between_party_splits_the_award_evenly_by_floor_division(self):
         self.dm_core.rules["xp"]["divide_between_party"] = True
         self._drop_the_wolf_to_one_hp()
         self._deal_five_damage()
 
-        # 47 // 2 party members (gladstone, thane) = 23 each, not 47 each.
+        # 46 // 2 party members (gladstone, thane) = 23 each, not 46 each.
         self.assertEqual(self.dm_core.entities["gladstone"]["exp"], 100 + 23)
         self.assertEqual(self.dm_core.entities["thane"]["exp"], 23)
 
@@ -6668,12 +6768,13 @@ class TestNpcGeneration(unittest.TestCase):
         return calculate_challenge_rating(_best("offense"), 0, 0, _best("defense"), save_ratings, max_hp)
 
     def test_fit_skills_to_cr_round_trips_through_calculate_challenge_rating(self):
-        # Every case should land *exactly* on target_cr -- fit_skills_to_cr is meant to be an
-        # exact inverse of calculate_challenge_rating's own math, not just "close".
+        # Every case naming a real offense-role key_skill should land *exactly* on target_cr --
+        # fit_skills_to_cr is meant to be an exact inverse of calculate_challenge_rating's own
+        # math, not just "close" (see _resolve_offense_survival_split, the helper actually
+        # doing this inversion under the new two-sided-product formula).
         cases = [
             (20, ["blades", "dodge", "athletics"]),       # offense + defense, no saves named
             (41, ["arcane", "linguistics"]),               # one offense skill + one flavor skill
-            (10, ["stealth"]),                              # no combat-relevant skill at all
             (60, ["blades", "dodge", "athletics", "strength", "brawling"]),  # multiple offense
         ]
         for target_cr, key_skills in cases:
@@ -6682,6 +6783,18 @@ class TestNpcGeneration(unittest.TestCase):
                 self._cr_from_skills(skills, max_hp), target_cr,
                 f"key_skills={key_skills} target_cr={target_cr}",
             )
+
+    def test_fit_skills_to_cr_with_no_combat_relevant_skill_named_reads_as_zero_cr(self):
+        # No offense/defense/resistive-role key_skill at all -- offense_side is unavoidably 0,
+        # so calculate_challenge_rating reads 0 regardless of how much HP this civilian's own
+        # stat sheet gets (see Challenge_Rating.py's own module docstring) -- a deliberate
+        # behavior change from the old flat-sum formula, where this same case still promised an
+        # exact target_cr back purely from HP. fit_skills_to_cr still sizes max_hp off target_cr
+        # (a generated civilian's stat sheet still looks reasonable), just no longer claims a
+        # real, nonzero threat rating for it.
+        skills, max_hp = fit_skills_to_cr(["stealth"], target_cr=10, skills_catalog=FAKE_SKILLS_CATALOG)
+        self.assertEqual(self._cr_from_skills(skills, max_hp), 0)
+        self.assertGreater(max_hp, 0)
 
     def test_fit_skills_to_cr_never_produces_negative_or_zero_dice(self):
         skills, max_hp = fit_skills_to_cr(["blades", "dodge"], target_cr=1, skills_catalog=FAKE_SKILLS_CATALOG)

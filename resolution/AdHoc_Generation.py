@@ -30,6 +30,7 @@ import json
 import random
 
 from llm.LLM_Client import call_chat_completion as _real_call_chat_completion
+from resolution.Challenge_Rating import DEFAULT_HP_DIVISOR
 from resolution.NPC_Generation import fit_skills_to_cr
 
 DEFAULT_API_URL = "http://127.0.0.1:11434/v1/chat/completions"
@@ -605,6 +606,7 @@ def _build_creature_tool_schema(npc_keywords):
 def generate_ad_hoc_creature(
     phrase, scene_description, target_cr, npc_keywords, skills_catalog,
     call_chat_completion=None, api_url=DEFAULT_API_URL, timeout=DEFAULT_TIMEOUT,
+    hp_divisor=DEFAULT_HP_DIVISOR, offense_share=0.5,
 ):
     """!
     @brief Asks the local LLM whether phrase (the player's own message to ADaM) describes a
@@ -629,6 +631,7 @@ def generate_ad_hoc_creature(
     @param skills_catalog Forwarded to fit_skills_to_cr -- the setting's own {skill_name:
         {"combat_role", ...}} table (ex: DM_Combat.py's self.skills).
     @param call_chat_completion/api_url/timeout See generate_ad_hoc_item's own docstring.
+    @param hp_divisor/offense_share Forwarded to fit_skills_to_cr.
     @return {"created": False, "reason": str} on decline, an empty npc_keywords, or any failure
             -- never raises. On success: {"created": True, "entity": {full entity dict,
             "ad_hoc": True}}.
@@ -672,7 +675,7 @@ def generate_ad_hoc_creature(
 
     key_skills = [skill for keyword in chosen_keywords for skill in npc_keywords.get(keyword, [])]
     rolled_cr = target_cr * POWER_MULTIPLIERS[power] * random.uniform(0.85, 1.15)
-    skills, max_hp = fit_skills_to_cr(key_skills, rolled_cr, skills_catalog)
+    skills, max_hp = fit_skills_to_cr(key_skills, rolled_cr, skills_catalog, hp_divisor=hp_divisor, offense_share=offense_share)
 
     entity = {
         "name": name,

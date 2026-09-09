@@ -6,17 +6,36 @@ Part of the [LLDM](../CLAUDE.md) docs — race/point-buy, and the three ways a g
 
 Race/point-buy skill dice, applied to the player entity once, before any scenario loads.
 `Character_Creation.py` is pure, UI- and DMCore-independent logic — `load_character_creation_
-data(rules_dir)` re-scans `Rules/Fantasy/*.toml` for `[[skill]]`, `[[race]]` (`races.toml`), and
+data(rules_dir)` re-scans `Rules/<setting>/*.toml` for `[[skill]]`, `[[race]]` (`races.toml`), and
 `rules.toml`'s `[character_creation]` table directly, since a character has to be buildable
 *before* a `DMCore` exists to read that data off of. `[character_creation]` holds `pool_dice`
-(15 — free dice to spend across skills) and `max_allocation_per_skill` (5). Each race
+(free dice to spend across skills) and `max_allocation_per_skill`. Each race
 (`races.toml`) is its own complete, *absolute* `[race.skill_dice]` table, one entry per skill
 (human included — no implicit "base_dice" default). `race_baseline_skills` reads a skill's
 value off the race's table, floored at 0, falling back to `UNTRAINED_DICE` (0) if missing.
-`elf`/`dwarf`/`half-orc`/`halfling` each raise four skills to 3D and lower four others to 1D
-around the 2D baseline, netting even before any allocation is spent. `validate_allocation`
-rejects an unknown skill, a negative entry, anything over the per-skill cap, or a total that
-isn't *exactly* `pool_dice`; `build_character_skills` is baseline + allocation for every skill.
+Every non-human race raises four skills and lowers four others around its own baseline, netting
+even before any allocation is spent. `validate_allocation` rejects an unknown skill, a negative
+entry, anything over the per-skill cap, or a total that isn't *exactly* `pool_dice`;
+`build_character_skills` is baseline + allocation for every skill.
+
+**Fantasy** uses a 2D baseline / 15D pool / 5D-per-skill cap — "a competent adventurer from the
+start," the deliberate curve that setting's own hand-authored `gladstone` sits on too.
+**Pathfinder** uses a much lower 0D baseline / 10D pool / 3D-per-skill cap instead — calibrated
+against a genuine from-scratch Pathfinder 1e level 1 conversion (`characters.toml`'s own "kesten
+varn", see that entity's own comment) rather than inherited from Fantasy's curve, since a real
+level 1 character's own converted numbers (a couple of skills around 1D, nothing near Fantasy's
+2D-baseline-before-spending-anything) sit nowhere near gladstone's own tier. An initial 7D/2D
+pass matched kesten varn almost exactly but only won ~75-80% against a single `creatures.toml`
+"goblin" and collapsed against two — 10D/3D, allocated with an eye toward `dodge` (which counts
+against every attacker in a group fight, not just whichever one you're trading blows with right
+now), reliably clears "a level 1 character should beat 2 goblins" instead (~98% in
+`Combat_Simulator.run_group_matchup`) while still falling off a cliff at 3+, matching goblins'
+own real "dangerous in a gang" Bestiary intent. A Monte Carlo
+combat simulator (`resolution/Combat_Simulator.py`, `scripts/calibrate_challenge_rating.py`)
+is what surfaced the mismatch in the first place: gladstone vs. `creatures.toml`'s own "goblin"
+(a real Bestiary 1 CR 1/3 conversion) doesn't track any real Pathfinder encounter math at all,
+while kesten varn vs. that same goblin does (a solo win rate that craters exactly where
+Pathfinder's own "goblins are dangerous in a gang, not alone" design intends it to).
 
 `DM_CharacterCreation.py`'s `apply_character_creation(character)` — `character` being
 `{"race", "allocation", "pip_spend", "name"}` — is the one piece that touches `DMCore` state,

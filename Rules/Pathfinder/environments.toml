@@ -30,9 +30,9 @@ night_encounter = [
 
 # Golarion's Lost Coast -- referenced only by world_map.toml's own "the Lost Coast" region, which
 # in turn is only ever reached from lost_coast.toml (see that scenario's own docstring). "goblin"
-# is that scenario's own local entity, the same "environment names a scenario-local encounter"
-# precedent "plains" above already sets with wild boar/coyote, just scoped to one scenario instead
-# of shared across every scenario in the setting.
+# is creatures.toml's own shared entity (a real Bestiary 1 conversion) -- unlike "plains" above's
+# wild boar/coyote, this one used to be a scenario-local placeholder here too, replaced once a
+# proper shared conversion existed to reuse instead.
 [[environment]]
 name = "lost_coast_wilds"
 watch_difficulty = 9

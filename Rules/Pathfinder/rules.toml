@@ -699,14 +699,31 @@ default_speed = 24
 
 # Point-buy constants for character creation (Character_Creation.py/DM_CharacterCreation.py).
 # A new character's starting dice come entirely from whichever race is picked -- every race
-# in races.toml spells out an absolute dice count for every skill (human's own is a flat 2D
+# in races.toml spells out an absolute dice count for every skill (human's own is a flat 0D
 # everywhere; there's no separate "base_dice" constant here for any race to fall back to).
 # What every race *does* share is how much is left to spend on top: pool_dice free dice to
 # allocate across skills however the player likes, capped at max_allocation_per_skill in any
-# single skill (so a 15D pool can't all pile into one skill).
+# single skill.
+#
+# 10D/3D-per-skill, not Fantasy's own 15D/5D -- calibrated against characters.toml's own "kesten
+# varn" (a from-scratch Pathfinder 1e level 1 Human Fighter conversion, see that entity's own
+# comment for the method) rather than inherited from Fantasy's "competent adventurer from the
+# start" curve, then bumped up from an initial 7D/2D pass once Combat_Simulator.py showed that
+# pass's own characters only won ~75-80% of the time against a single creatures.toml "goblin"
+# (Bestiary 1 CR 1/3) and collapsed against 2 -- reasonable for kesten varn specifically (a
+# literal from-book conversion, not optimized), but not the "a level 1 character should reliably
+# beat 2 goblins" bar this setting's own character creation is meant to clear. Combined with
+# races.toml's own 0D baseline (see that file's own header note), a 10D allocation prioritizing
+# dodge (defense counts against EVERY attacker in a group fight, unlike offense/fortitude, which
+# only ever help against whichever single attacker you're trading blows with) reliably clears
+# it: blades 3D/fortitude 2D/dodge 3D/reflexes 1D/strength 1D wins ~98% vs. 2 goblins and still
+# ~88% vs. 3 in Combat_Simulator.run_group_matchup, well past "reliably" for the 2-goblin case
+# the initial 7D/2D pass fell short of. See scripts/calibrate_challenge_rating.py's own sibling
+# investigation for the simulator evidence that gladstone's own tier (the OLD 15D/5D numbers)
+# badly mismatches what Pathfinder's own low-CR content is actually balanced to threaten.
 [character_creation]
-pool_dice = 15
-max_allocation_per_skill = 5
+pool_dice = 10
+max_allocation_per_skill = 3
 
 # Each entry contributes one skill's dice/pips to the combined initiative pool DMCore.roll_initiative
 # rolls once per round for turn ordering -- "dodge + observation" today, but a third contributing
@@ -863,6 +880,17 @@ familiarity = -2
 [[equip_slot]]
 supertype = "creature"
 subtype = "humanoid"
+slots = [ "head", "neck", "chest", "back", "rhand", "lhand", "ring", "feet" ]
+
+# Goblinoids (goblin/hobgoblin/bugbear) are their own Pathfinder creature type, distinct from
+# "humanoid" proper -- creatures.toml's own troll already sets the precedent of using PF's real
+# type as subtype (corrected from "monstrous humanoid" to "giant") rather than folding everything
+# vaguely person-shaped into "humanoid". Same slot list as humanoid -- a goblin wears/wields
+# gear exactly like any other small humanoid-shaped creature, this is purely a subtype-matching
+# distinction (lore checks, damage_bonus_vs, etc.), not a different equipment model.
+[[equip_slot]]
+supertype = "creature"
+subtype = "goblinoid"
 slots = [ "head", "neck", "chest", "back", "rhand", "lhand", "ring", "feet" ]
 
 [[equip_slot]]

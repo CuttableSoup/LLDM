@@ -2,17 +2,45 @@
 # shared point-buy constants every race uses identically: pool_dice, max_allocation_per_skill).
 # There is no separate "base_dice" constant -- a race's own [race.skill_dice] table is the
 # absolute, authoritative dice count for every single skill, human included (human is simply
-# "2 in everything," spelled out here the same as any other race, not an implicit default
-# every other race deviates from). Character_Creation.race_baseline_skills reads a skill's
-# value straight off this table, floored at 0; a skill genuinely missing from a race's own
-# table (a data-authoring mistake, not an intentional case any race below relies on) falls
+# "0 in everything except saves," spelled out here the same as any other race, not an implicit
+# default every other race deviates from). Character_Creation.race_baseline_skills reads a
+# skill's value straight off this table, floored at 0; a skill genuinely missing from a race's
+# own table (a data-authoring mistake, not an intentional case any race below relies on) falls
 # back to Character_Creation.UNTRAINED_DICE (0) -- deliberately not the general engine's own
 # "missing skill" convention of 1D (resolve_action/roll_initiative), since a chargen'd
 # character always gets an explicit entry for every skill either way, never an actually-absent
-# one. Every non-human race here raises four skills to 3D and lowers four others to 1D around
-# that 2D baseline, so no race starts with more or fewer total dice than any other before the
-# pool is even spent; that's a deliberate balance choice this data happens to follow, not
-# something any code enforces.
+# one.
+#
+# Baseline is 0D, not Fantasy's own 2D -- calibrated against a from-scratch Pathfinder 1e level
+# 1 conversion (characters.toml's own "kesten varn", a plain Human Fighter built straight from
+# the Core Rulebook and converted by creatures.toml's goblin-established method) rather than
+# inherited from the Fantasy setting's own "competent adventurer from the start" curve. A
+# from-scratch conversion's own touch-AC/save/attack numbers land at roughly 1D (rating 3-5) on
+# its handful of actually-trained skills and 0D (untrained) on everything else -- Fantasy's own
+# flat 2D-everywhere baseline alone (before a single point-buy die is even spent) already
+# exceeds that on every account, which is what let a from-scratch Pathfinder character
+# (gladstone, built under the OLD 2D/15-pool numbers) read as a far-higher-tier hero than a
+# real level 1 Pathfinder fighter -- see scripts/calibrate_challenge_rating.py's own sibling
+# investigation for the simulator evidence (kesten varn vs. creatures.toml's "goblin" tracks
+# real Pathfinder low-CR encounter math; gladstone vs. the same goblin doesn't, because
+# gladstone's own tier is nowhere near "level 1").
+#
+# **Saves are the one exception, fixed at 1D6 for every race, no exceptions.** fortitude/
+# reflexes/willpower sit outside the 0D baseline and outside each race's own raise/lower flavor
+# below -- every playable race gets a guaranteed floor of basic resilience regardless of its own
+# combat/skill flavor, a deliberate design floor (not itself derived from kesten varn's own real,
+# uneven Fortitude +4/Reflexes +2/Will +0 spread -- that's one specific fighter's own build, not
+# a rule every race must reproduce). A race that previously had a save in its own raised/lowered
+# list (dwarf's own "Fortitude" racial bonus; elf's own poor Fortitude) loses that slot to the
+# shared floor instead of being replaced with a different skill -- dwarf ends up with 3 raised
+# skills instead of 4, elf with 3 lowered, rather than inventing a new flavor pick just to hit a
+# round number the header note below no longer strictly promises once saves are pulled out of it.
+#
+# Every non-human race still raises (up to) four *non-save* skills and lowers (up to) four
+# others around the 0D baseline, same relative shape Fantasy's own races use, just shifted down
+# with it and now save-exempt (3D -> 1D for a raised skill; 1D -> 0D, the same floor the baseline
+# already sits at, for a lowered one -- at true level 1 a race's own weak skills and its
+# untrained baseline are honestly indistinguishable, only a natural *talent* still shows).
 #
 # Not loaded by DMCore.load_rules alone -- Character_Creation.load_character_creation_data
 # reads this same file independently (skill/race/character_creation keys only), so a character
@@ -35,46 +63,55 @@
 
 [[race]]
 name = "human"
-description = "Adaptable and unremarkable -- no innate skill strengths or weaknesses."
+description = "Versatile generalists, equally at home swinging a blade, reading a crowd, or reading the land -- no glaring weakness anywhere, but no singular natural gift either."
 language = "common"
 nonsense_phrase = "Oping tu stei laik cius go mo men"
 
 [race.skill_dice]
-acrobatics = 2
-appraise = 2
-arcane = 2
-artistry = 2
-athletics = 2
-axes = 2
-blades = 2
-brawling = 2
-charisma = 2
-disguise = 2
-dodge = 2
-escape = 2
-finesse = 2
-fly = 2
-forgery = 2
-fortitude = 2
-gambling = 2
-husbandry = 2
-intimidation = 2
-linguistics = 2
-medicine = 2
-miracles = 2
-missiles = 2
-navigation = 2
-observation = 2
-polearms = 2
-psionics = 2
-reflexes = 2
-stealth = 2
-streetwise = 2
-strength = 2
-survival = 2
-throwing = 2
-trickery = 2
-willpower = 2
+# Saves -- fixed at 1D6 for every race (see this file's own header note).
+fortitude = 1
+reflexes = 1
+willpower = 1
+# Raised to 1D, no lowered skills to pay for it -- real Pathfinder humans take no racial ability
+# penalty at all (just a free +2 to one ability of the player's own choice, a bonus feat, and a
+# bonus skill point/level), unlike every other race here, which trades four skills up for
+# roughly as many down. Being human was otherwise purely dominated (every other race gets the
+# same 1D6 save floor PLUS its own raised skills, while human sat at the floor everywhere) --
+# one skill from each broad domain (combat/social/knowledge/physical), deliberately not two
+# combat skills at once, so this reads as breadth, not a stealth combat buff.
+athletics = 1
+blades = 1
+observation = 1
+streetwise = 1
+# Everything else at the 0D baseline.
+acrobatics = 0
+appraise = 0
+arcane = 0
+artistry = 0
+axes = 0
+brawling = 0
+charisma = 0
+disguise = 0
+dodge = 0
+escape = 0
+finesse = 0
+fly = 0
+forgery = 0
+gambling = 0
+husbandry = 0
+intimidation = 0
+linguistics = 0
+medicine = 0
+miracles = 0
+missiles = 0
+navigation = 0
+polearms = 0
+psionics = 0
+stealth = 0
+strength = 0
+survival = 0
+throwing = 0
+trickery = 0
 
 [[race]]
 name = "elf"
@@ -83,44 +120,48 @@ language = "elvish"
 nonsense_phrase = "Sil'ai vethraen mio caelanthir"
 
 [race.skill_dice]
-# Raised to 3D
-acrobatics = 3
-arcane = 3
-observation = 3
-stealth = 3
-# Lowered to 1D
-brawling = 1
+# Saves -- fixed at 1D6 for every race (see this file's own header note; elf's own real
+# Pathfinder "poor Fortitude" save doesn't lower this shared floor).
 fortitude = 1
-intimidation = 1
-strength = 1
-# Everything else stays at the human baseline of 2D
-appraise = 2
-artistry = 2
-athletics = 2
-axes = 2
-blades = 2
-charisma = 2
-disguise = 2
-dodge = 2
-escape = 2
-finesse = 2
-fly = 2
-forgery = 2
-gambling = 2
-husbandry = 2
-linguistics = 2
-medicine = 2
-miracles = 2
-missiles = 2
-navigation = 2
-polearms = 2
-psionics = 2
-reflexes = 2
-streetwise = 2
-survival = 2
-throwing = 2
-trickery = 2
-willpower = 2
+reflexes = 1
+willpower = 1
+# Raised to 1D
+acrobatics = 1
+arcane = 1
+observation = 1
+stealth = 1
+# Lowered to 0D -- the same floor the baseline itself already sits at (see this file's own
+# header note: a race's own weak skills and an untrained baseline are indistinguishable at
+# true level 1).
+brawling = 0
+intimidation = 0
+strength = 0
+# Everything else stays at the human baseline of 0D
+appraise = 0
+artistry = 0
+athletics = 0
+axes = 0
+blades = 0
+charisma = 0
+disguise = 0
+dodge = 0
+escape = 0
+finesse = 0
+fly = 0
+forgery = 0
+gambling = 0
+husbandry = 0
+linguistics = 0
+medicine = 0
+miracles = 0
+missiles = 0
+navigation = 0
+polearms = 0
+psionics = 0
+streetwise = 0
+survival = 0
+throwing = 0
+trickery = 0
 
 [[race]]
 name = "dwarf"
@@ -129,44 +170,46 @@ language = "dwarvish"
 nonsense_phrase = "Grunthak dol bregnir uzdum"
 
 [race.skill_dice]
-# Raised to 3D
-appraise = 3
-fortitude = 3
-intimidation = 3
-strength = 3
-# Lowered to 1D
-acrobatics = 1
-arcane = 1
-charisma = 1
-stealth = 1
-# Everything else stays at the human baseline of 2D
-artistry = 2
-athletics = 2
-axes = 2
-blades = 2
-brawling = 2
-disguise = 2
-dodge = 2
-escape = 2
-finesse = 2
-fly = 2
-forgery = 2
-gambling = 2
-husbandry = 2
-linguistics = 2
-medicine = 2
-miracles = 2
-missiles = 2
-navigation = 2
-observation = 2
-polearms = 2
-psionics = 2
-reflexes = 2
-streetwise = 2
-survival = 2
-throwing = 2
-trickery = 2
-willpower = 2
+# Saves -- fixed at 1D6 for every race (see this file's own header note; dwarf's own real
+# Pathfinder "great Fortitude" racial bonus doesn't raise this shared floor any further).
+fortitude = 1
+reflexes = 1
+willpower = 1
+# Raised to 1D
+appraise = 1
+intimidation = 1
+strength = 1
+# Lowered to 0D
+acrobatics = 0
+arcane = 0
+charisma = 0
+stealth = 0
+# Everything else stays at the human baseline of 0D
+artistry = 0
+athletics = 0
+axes = 0
+blades = 0
+brawling = 0
+disguise = 0
+dodge = 0
+escape = 0
+finesse = 0
+fly = 0
+forgery = 0
+gambling = 0
+husbandry = 0
+linguistics = 0
+medicine = 0
+miracles = 0
+missiles = 0
+navigation = 0
+observation = 0
+polearms = 0
+psionics = 0
+streetwise = 0
+survival = 0
+throwing = 0
+trickery = 0
 
 [[race]]
 name = "half-orc"
@@ -175,44 +218,45 @@ language = "orcish"
 nonsense_phrase = "Ugrak thok bazgul morn"
 
 [race.skill_dice]
-# Raised to 3D
-brawling = 3
-intimidation = 3
-strength = 3
-survival = 3
-# Lowered to 1D
-arcane = 1
-artistry = 1
-charisma = 1
-linguistics = 1
-# Everything else stays at the human baseline of 2D
-acrobatics = 2
-appraise = 2
-athletics = 2
-axes = 2
-blades = 2
-disguise = 2
-dodge = 2
-escape = 2
-finesse = 2
-fly = 2
-forgery = 2
-fortitude = 2
-gambling = 2
-husbandry = 2
-medicine = 2
-miracles = 2
-missiles = 2
-navigation = 2
-observation = 2
-polearms = 2
-psionics = 2
-reflexes = 2
-stealth = 2
-streetwise = 2
-throwing = 2
-trickery = 2
-willpower = 2
+# Saves -- fixed at 1D6 for every race (see this file's own header note).
+fortitude = 1
+reflexes = 1
+willpower = 1
+# Raised to 1D
+brawling = 1
+intimidation = 1
+strength = 1
+survival = 1
+# Lowered to 0D
+arcane = 0
+artistry = 0
+charisma = 0
+linguistics = 0
+# Everything else stays at the human baseline of 0D
+acrobatics = 0
+appraise = 0
+athletics = 0
+axes = 0
+blades = 0
+disguise = 0
+dodge = 0
+escape = 0
+finesse = 0
+fly = 0
+forgery = 0
+gambling = 0
+husbandry = 0
+medicine = 0
+miracles = 0
+missiles = 0
+navigation = 0
+observation = 0
+polearms = 0
+psionics = 0
+stealth = 0
+streetwise = 0
+throwing = 0
+trickery = 0
 
 [[race]]
 name = "halfling"
@@ -221,41 +265,43 @@ language = "halfling"
 nonsense_phrase = "Pip'wick tumbly noren fen"
 
 [race.skill_dice]
-# Raised to 3D
-dodge = 3
-finesse = 3
-stealth = 3
-streetwise = 3
-# Lowered to 1D
-athletics = 1
-brawling = 1
-intimidation = 1
-strength = 1
-# Everything else stays at the human baseline of 2D
-acrobatics = 2
-appraise = 2
-arcane = 2
-artistry = 2
-axes = 2
-blades = 2
-charisma = 2
-disguise = 2
-escape = 2
-fly = 2
-forgery = 2
-fortitude = 2
-gambling = 2
-husbandry = 2
-linguistics = 2
-medicine = 2
-miracles = 2
-missiles = 2
-navigation = 2
-observation = 2
-polearms = 2
-psionics = 2
-reflexes = 2
-survival = 2
-throwing = 2
-trickery = 2
-willpower = 2
+# Saves -- fixed at 1D6 for every race (see this file's own header note; halfling's own real
+# Pathfinder "good Reflexes" racial bonus doesn't raise this shared floor any further).
+fortitude = 1
+reflexes = 1
+willpower = 1
+# Raised to 1D
+dodge = 1
+finesse = 1
+stealth = 1
+streetwise = 1
+# Lowered to 0D
+athletics = 0
+brawling = 0
+intimidation = 0
+strength = 0
+# Everything else stays at the human baseline of 0D
+acrobatics = 0
+appraise = 0
+arcane = 0
+artistry = 0
+axes = 0
+blades = 0
+charisma = 0
+disguise = 0
+escape = 0
+fly = 0
+forgery = 0
+gambling = 0
+husbandry = 0
+linguistics = 0
+medicine = 0
+miracles = 0
+missiles = 0
+navigation = 0
+observation = 0
+polearms = 0
+psionics = 0
+survival = 0
+throwing = 0
+trickery = 0
