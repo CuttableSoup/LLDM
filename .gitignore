@@ -8,3 +8,4 @@ vendor/
 .agents
 .claude
 skills-lock.json
+*.pdf
