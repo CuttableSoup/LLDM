@@ -37,6 +37,44 @@ the finite 100-message window. The cost: ADaM has no memory of its own past repl
 invocation is a fresh request built from whatever `DM_Help.py` gathers off live state.
 
 
+## Scene queries
+
+A fifth diceless channel, alongside ADaM: a free-standing, read-only question about the current
+scene ("what do I see", "who is here", "describe the room") that needs no "ADaM" address at all.
+Before this existed, a bare scene question with no recognized item verb fell through to
+`action_not_understood`/`generate_clarification_response` (no live-state grounding beyond the
+standing scenario/roster system message) or, worse, got misread as an `"examine"` with no
+matching item and reached `DM_Improvisation.py`'s ad hoc item generation — inventing something
+that was never actually in the scene. `Intent_Classification.py`'s `SCENE_QUERY_KEYWORDS`
+(`"what do i see"`, `"who is here"`, `"describe the room"`, ...) is checked as its own
+whole-input reserved gate, right after `ADAM_NAME_PATTERN` and ahead of item-interaction
+detection — so `"adam, what do i see"` still reaches the ADaM channel (ADaM is checked first
+either way), while a bare `"what do i see"` reaches this one instead. Deliberately long,
+distinguishing phrases, never a bare `"look"`/`"search"`/`"spot"`/`"notice"`/`"see"`/`"find"` —
+`observation`'s own `skills.toml` keywords list every one of those as a single word, so a genuine
+`"search the room for hidden traps"` (an actual perception check, meant to roll dice) is never
+swallowed here first.
+
+`DM_Help.py`'s `_on_scene_query_detected` answers from the same kind of live ground-truth
+snapshot ADaM's own `_on_help_detected` gathers (present roster, scene description, exits) plus
+one field ADaM's own payload gained alongside it: `_describe_ground_items()` (every loose item
+currently sitting in `_current_ground_items()`, `is_hidden`-filtered the same way the present
+roster already is) — the concrete gap that made "what do I see" specifically unanswerable before,
+even through ADaM. Deliberately its own handler, not a call into `_on_help_detected`: this
+channel never runs the `REMOVAL_KEYWORDS`/`CREATURE_KEYWORDS`/`EDIT_KEYWORDS` gates ADaM's own
+higher-risk mutation paths do, and never reports the player's own mechanical state
+(skills/abilities/equipped/inventory) — irrelevant to "what does the room look like."
+
+`LLMCore.generate_scene_query_response`/`_build_scene_query_system_message`/`_queue_scene_query`
+mirror ADaM's own trio, but differ in exactly the two ways the design calls for: the system
+message speaks as the ordinary in-fiction Game Master, not ADaM's own explicit out-of-character
+persona (while keeping the identical strict "use only the facts given below; never invent people,
+items, or exits that aren't listed" grounding instruction ADaM's own message already uses), and
+the exchange *does* join the shared `context_window` (tagged with this request's own
+`present_entities`, like any ordinary narration turn) rather than staying excluded the way ADaM's
+own is — "there's a locked chest here" is exactly the kind of fact a later turn should be able to
+build on, unlike ADaM's own mechanical/meta payload.
+
 ## Ad hoc entity creation and removal
 
 ADaM's second capability: improvising the world itself, not just explaining it.

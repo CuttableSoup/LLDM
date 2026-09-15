@@ -9,8 +9,8 @@
 
     IntentClassifier.classify() replaces NLP_Core.py's old _on_user_input -- see that method's
     former docstring (still recorded in docs/action-resolution.md's "Multiple actions" and
-    docs/adam-improvisation.md's "Ad hoc entity creation and removal" sections) for why five
-    unrelated whole-input concerns (save/load, ADaM, room direction,
+    docs/adam-improvisation.md's "Ad hoc entity creation and removal" sections) for why six
+    unrelated whole-input concerns (save/load, ADaM, scene query, room direction,
     item-vs-dialogue-vs-skill classification, improvisation fallback) resolve in this exact
     priority order. This module makes that order the *interface*: IntentMatcher is the one
     seam a caller has to satisfy (real embedding matching in production, a canned stub in
@@ -183,6 +183,29 @@ DIALOGUE_KEYWORDS = (
 # the same way DM_Rules.py's PLAYER_PLACEHOLDER reserves "player" -- no future entity in any
 # setting can be named Adam without colliding with this.
 ADAM_NAME_PATTERN = re.compile(r"\badam\b", re.IGNORECASE)
+
+# A free-standing, read-only "what's around me" question ("what do i see", "who is here") --
+# checked as its own whole-input reserved gate, the same tier as ADAM_NAME_PATTERN just below it
+# in classify()'s own gate order, so it never needs "adam" said aloud (unlike help_detected) but
+# also never falls through to EXAMINE_KEYWORDS/item-interaction detection (which, on no matching
+# item name, would otherwise reach DM_Improvisation.py's ad hoc item generation and invent
+# something not actually in the scene -- exactly the "nothing to back it up" failure mode this
+# intent exists to close). Answered from the same kind of live ground-truth snapshot ADaM's own
+# help_detected already gathers (see DM_Help.py), but through its own event/handler rather than
+# _on_help_detected: this channel is strictly read-only (never runs REMOVAL_KEYWORDS/
+# CREATURE_KEYWORDS/EDIT_KEYWORDS' own higher-risk mutation checks), and is answered in the
+# ordinary in-fiction Game Master voice rather than ADaM's own out-of-character persona (see
+# LLM_Core.py's generate_scene_query_response). Deliberately long, distinguishing phrases rather
+# than anything built on a bare "look"/"search"/"spot"/"notice"/"see"/"find" -- observation's own
+# skills.toml keywords list every one of those as a single word, so a genuine "search the room
+# for hidden traps" (an actual perception check, meant to roll dice) must never be swallowed here
+# first the way a bare "look"/"see" would risk.
+SCENE_QUERY_KEYWORDS = (
+    "what do i see", "what can i see", "what all do i see",
+    "who is here", "who's here", "who is around", "who's around",
+    "what's in the room", "what is in the room", "what's here", "what is here",
+    "describe the room", "describe my surroundings", "describe the scene",
+)
 
 # A cheap, local pre-check on top of ADAM_NAME_PATTERN -- attached to help_detected's own
 # payload as "removal_candidate" so DM_Help.py only pays for a synchronous ad hoc-removal LLM
@@ -494,6 +517,11 @@ def detect_help_intent(processed_text):
     return bool(ADAM_NAME_PATTERN.search(processed_text))
 
 
+def detect_scene_query_intent(processed_text):
+    """!@brief True if processed_text contains any SCENE_QUERY_KEYWORDS phrase."""
+    return _keyword_gate(processed_text, SCENE_QUERY_KEYWORDS)
+
+
 def detect_removal_intent(processed_text):
     """!@brief True if an ADaM-addressed message contains a REMOVAL_KEYWORDS phrase."""
     return _keyword_gate(processed_text, REMOVAL_KEYWORDS)
@@ -555,11 +583,14 @@ class IntentClassifier:
 
         classify()'s own gate order is two levels, mirroring the real control flow rather than
         forcing everything into one flat list: an outer sequence of whole-input gates
-        (save/load -> ADaM/help -> room direction -> [per-clause item pass] -> dialogue-if-
-        nothing-claimed -> [per-clause skill pass]), and a per-clause gate list the item pass
-        runs for each clause (exempt-movement -> no-lookup-item -> item-lookup -> defer). Final
-        aggregation (turn vs. improvisation-fallback vs. not-understood) is its own step, since
-        it's genuine accumulation logic over every clause's outcome, not a gate itself.
+        (save/load -> ADaM/help -> scene query -> room direction -> [per-clause item pass] ->
+        dialogue-if-nothing-claimed -> [per-clause skill pass]), and a per-clause gate list the
+        item pass runs for each clause (exempt-movement -> no-lookup-item -> item-lookup ->
+        defer). Final aggregation (turn vs. improvisation-fallback vs. not-understood) is its
+        own step, since it's genuine accumulation logic over every clause's outcome, not a gate
+        itself. Scene query sits right after ADaM/help (not before) so "adam, what do i see"
+        still reaches the out-of-character help channel rather than this in-fiction one --
+        ADAM_NAME_PATTERN is checked first either way.
     """
 
     def __init__(self, matcher):
@@ -606,6 +637,15 @@ class IntentClassifier:
                 "creature_candidate": detect_creature_intent(processed),
                 "edit_candidate": detect_edit_intent(processed),
             }})
+            return processed, events
+
+        if detect_scene_query_intent(processed):
+            # See SCENE_QUERY_KEYWORDS' own module note -- a free-standing, diceless,
+            # read-only question about the current scene, answered from live ground-truth
+            # state (DM_Help.py's _on_scene_query_detected) rather than left to fall through
+            # to item-interaction detection (and, on no matching item, ad hoc item
+            # generation) or an ungrounded clarification response.
+            events.append({"event": "scene_query_detected", "payload": {"input": processed}})
             return processed, events
 
         direction = detect_direction(processed)

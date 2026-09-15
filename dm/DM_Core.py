@@ -233,6 +233,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         self.event_bus.subscribe("item_interaction_detected", self._on_item_interaction_detected)
         self.event_bus.subscribe("dialogue_detected", self._on_dialogue_detected)
         self.event_bus.subscribe("help_detected", self._on_help_detected)
+        self.event_bus.subscribe("scene_query_detected", self._on_scene_query_detected)
         self.event_bus.subscribe("improvisation_requested", self._on_improvisation_requested)
         self.event_bus.subscribe("save_requested", self._on_save_requested)
         self.event_bus.subscribe("load_requested", self._on_load_requested)

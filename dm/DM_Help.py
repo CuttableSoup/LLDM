@@ -35,6 +35,15 @@ class HelpMixin(DMCoreProtocol):
         fallback the way ad hoc item *creation* is -- see DM_Improvisation.py's own module
         docstring for why these have such different risk profiles/triggers than plain item
         creation.
+
+        A fifth diceless channel, _on_scene_query_detected, lives alongside ADaM here too --
+        a free-standing "what do I see"/"who is here" question (NLP_Core.py's own
+        SCENE_QUERY_KEYWORDS), answered from the same kind of live ground-truth snapshot as
+        above, but *without* requiring "adam" to be said at all, and never running the
+        removal/creature/edit gates -- purely read-only. LLMCore answers it in the ordinary
+        in-fiction Game Master voice, not ADaM's own persona (generate_scene_query_response/
+        _build_scene_query_system_message), and its exchange joins context_window normally,
+        unlike ADaM's own deliberately-excluded one.
     """
 
     def _describe_player_skills(self):
@@ -67,6 +76,26 @@ class HelpMixin(DMCoreProtocol):
             name = resolved.get("name", "")
             description = resolved.get("description", "")
             described.append(f"{name}: {description}" if description else name)
+        return described
+
+    def _describe_ground_items(self):
+        """!
+        @brief Every item currently lying loose in the current room/location (see
+            DM_Inventory.py's _current_ground_items), resolved to a "name: description" line
+            the same way _describe_player_abilities already resolves the player's own
+            abilities -- skips anything still "hidden" (mirrors _describe_scenario_characters'
+            own is_hidden check) so a dropped item under an as-yet-unpassed [entity.notice]
+            check never gets spoiled here either, even though nothing shipped today actually
+            authors one on a loose item.
+        @return A list of formatted item strings ("name: description", or just the bare name
+                if the resolved entity has no description).
+        """
+        described = []
+        for item_name in self._current_ground_items():
+            if self.is_hidden(item_name):
+                continue
+            description = self.entities.get(item_name, {}).get("description", "")
+            described.append(f"{item_name}: {description}" if description else item_name)
         return described
 
     def _describe_available_exits(self):
@@ -151,6 +180,7 @@ class HelpMixin(DMCoreProtocol):
             "scene_description": self._current_scene_description(),
             "present": self._describe_scenario_characters(),
             "exits": self._describe_available_exits(),
+            "ground_items": self._describe_ground_items(),
             "removed": removal_outcome,
             "created_creature": creature_outcome,
             "edited": edit_outcome,
@@ -161,3 +191,29 @@ class HelpMixin(DMCoreProtocol):
             or (edit_outcome and edit_outcome.get("edited"))
         ):
             self._publish_party_status()
+
+    def _on_scene_query_detected(self, data):
+        """!
+        @brief Event handler for "scene_query_detected" (NLP_Core.py's own
+            SCENE_QUERY_KEYWORDS match) -- a free-standing, in-fiction "what do I see"/"who is
+            here" question, answered from the exact same kind of live ground-truth snapshot
+            ADaM's own _on_help_detected already gathers (present roster, scene description,
+            exits, ground items). Deliberately its own handler rather than reusing
+            _on_help_detected: this channel is strictly read-only, so it never runs the
+            REMOVAL_KEYWORDS/CREATURE_KEYWORDS/EDIT_KEYWORDS gates ADaM's own higher-risk
+            mutation paths do, and it's meant to be narrated in the ordinary in-fiction Game
+            Master voice, not ADaM's own out-of-character persona -- see LLM_Core.py's
+            generate_scene_query_response/_build_scene_query_system_message. Publishes no
+            "help_resolved" fields it doesn't need (skills/abilities/equipped/inventory are
+            the player's own mechanical state, irrelevant to "what does the room look like").
+        @param data The "scene_query_detected" payload ({"input": processed_text}).
+        """
+        self.event_bus.publish("scene_query_resolved", {
+            "input": data.get("input", ""),
+            "present_entities": list(self.scenario_entities),
+            "scene_name": self._current_scene_name(),
+            "scene_description": self._current_scene_description(),
+            "present": self._describe_scenario_characters(),
+            "exits": self._describe_available_exits(),
+            "ground_items": self._describe_ground_items(),
+        })

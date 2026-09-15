@@ -72,6 +72,7 @@ from nlp.Intent_Classification import (
     OPEN_KEYWORDS,
     REST_KEYWORDS,
     RETREAT_KEYWORDS,
+    SCENE_QUERY_KEYWORDS,
     SPEAK_LANGUAGE_KEYWORDS,
     TAKE_KEYWORDS,
     TRADE_KEYWORDS,
@@ -85,6 +86,7 @@ from nlp.Intent_Classification import (
     detect_help_intent,
     detect_item_intent,
     detect_save_load_intent,
+    detect_scene_query_intent,
     split_action_clauses,
 )
 import LLDM
@@ -556,6 +558,16 @@ class TestIntentClassification(unittest.TestCase):
         self.assertFalse(detect_help_intent("this sword is adamantine"))
         self.assertFalse(detect_help_intent("attack the wolf"))
 
+    def test_detect_scene_query_intent_vs_item_and_skill_phrasing(self):
+        self.assertTrue(detect_scene_query_intent("what do i see"))
+        self.assertTrue(detect_scene_query_intent("who is here"))
+        self.assertTrue(detect_scene_query_intent("describe the room"))
+        # A genuine perception check must never be swallowed here first -- see
+        # SCENE_QUERY_KEYWORDS' own module note on why it avoids bare "look"/"search"/etc.
+        self.assertFalse(detect_scene_query_intent("search the room for hidden traps"))
+        self.assertFalse(detect_scene_query_intent("look at the chest"))
+        self.assertFalse(detect_scene_query_intent("attack the wolf"))
+
     def test_detect_save_load_intent_parses_slot_names(self):
         self.assertEqual(detect_save_load_intent("save as arena run 1"), ("save", "arena run 1"))
         self.assertEqual(detect_save_load_intent("save game as arena-run-1"), ("save", "arena-run-1"))
@@ -710,6 +722,26 @@ class TestIntentClassification(unittest.TestCase):
         self.assertFalse(events[0]["payload"]["creature_candidate"])
         self.assertFalse(events[0]["payload"]["edit_candidate"])
 
+    def test_bare_scene_query_reaches_its_own_channel_not_examine_or_clarification(self):
+        # No "adam" said at all -- before this intent existed, "what do i see" matched no
+        # EXAMINE_KEYWORDS phrase and would have fallen through to action_not_understood (or,
+        # for an item-shaped phrasing, ad hoc item generation) with nothing to ground it.
+        classifier = IntentClassifier(FakeMatcher())
+        _processed, events = classifier.classify("what do i see")
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["event"], "scene_query_detected")
+        self.assertEqual(events[0]["payload"], {"input": "what do i see"})
+
+    def test_adam_addressed_scene_question_still_reaches_the_help_channel(self):
+        # ADAM_NAME_PATTERN is checked first regardless -- "adam, what do i see" must still
+        # reach the out-of-character help channel, not this in-fiction one.
+        classifier = IntentClassifier(FakeMatcher())
+        _processed, events = classifier.classify("adam, what do i see")
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["event"], "help_detected")
+
     def test_unmatched_item_verb_triggers_improvisation_instead_of_action_not_understood(self):
         # FakeMatcher's map_to_item/map_to_action both miss (default) for this phrase -- the
         # whole turn would otherwise resolve to nothing at all, so the recognized-but-unmatched
@@ -814,6 +846,7 @@ class TestIntentClassification(unittest.TestCase):
             "HITCH_KEYWORDS": HITCH_KEYWORDS,
             "UNHITCH_KEYWORDS": UNHITCH_KEYWORDS,
             "LORE_KEYWORDS": LORE_KEYWORDS,
+            "SCENE_QUERY_KEYWORDS": SCENE_QUERY_KEYWORDS,
         }
         # No known exceptions remain: appraise's own skills.toml keywords deliberately exclude
         # "examine" (EXAMINE_KEYWORDS' own item-detection word, checked first) precisely so this
@@ -10215,6 +10248,18 @@ class TestHelpChannel(DMTestCase):
         self.assertEqual(result["input"], "adam, what can i do")
         self.assertEqual(set(result["present_entities"]), set(self.dm_core.scenario_entities))
 
+    def test_reports_ground_items_hidden_ones_excluded(self):
+        # The concrete gap docs/adam-improvisation.md's "Scene queries" names: before
+        # _describe_ground_items existed, "what do I see" (even through ADaM) couldn't reflect
+        # anything actually dropped in the room.
+        self.dm_core._current_ground_items().append("dagger")
+        result = self._ask()
+        self.assertTrue(any(entry.startswith("dagger:") for entry in result["ground_items"]))
+
+        self.dm_core.apply_condition("dagger", "hidden")
+        result = self._ask()
+        self.assertFalse(any(entry.startswith("dagger:") for entry in result["ground_items"]))
+
 
 class TestHelpChannelExits(DMTestCase):
     """!
@@ -10233,6 +10278,57 @@ class TestHelpChannelExits(DMTestCase):
         # "entrance" (the starting room) has exactly one exit, "forward" to "hall_of_webs" --
         # whose own room name ("The Hall of Webs") should be reported, not the raw room key.
         self.assertEqual(result["exits"], [{"direction": "forward", "destination_name": "The Hall of Webs"}])
+
+
+class TestSceneQueryChannel(DMTestCase):
+    """!
+    @brief DM_Help.py's own _on_scene_query_detected -- the free-standing, no-"adam"-needed
+        counterpart to TestHelpChannel above. Shares the same live-ground-truth-snapshot shape
+        (present roster, scene description, exits, ground items) but never the player's own
+        mechanical state, and never runs ADaM's own removal/creature/edit mutation gates.
+    """
+    scenario_name = "debug"
+
+    def setUp(self):
+        super().setUp()
+        self.scene_query_events = self._capture("scene_query_resolved")
+
+    def _ask(self, input_text="what do i see"):
+        self.dm_core._on_scene_query_detected({"input": input_text})
+        return self.scene_query_events[-1]
+
+    def test_reports_the_current_scene_and_present_entities(self):
+        result = self._ask()
+
+        self.assertTrue(result["scene_name"])
+        self.assertTrue(result["scene_description"])
+        self.assertEqual(result["present"], self.dm_core._describe_scenario_characters())
+        self.assertEqual(set(result["present_entities"]), set(self.dm_core.scenario_entities))
+
+    def test_reports_ground_items(self):
+        self.dm_core._current_ground_items().append("dagger")
+        result = self._ask()
+        self.assertTrue(any(entry.startswith("dagger:") for entry in result["ground_items"]))
+
+    def test_no_exits_in_a_flat_single_room_scenario(self):
+        result = self._ask()
+        self.assertEqual(result["exits"], [])
+
+    def test_input_is_carried_through(self):
+        result = self._ask("who is here")
+        self.assertEqual(result["input"], "who is here")
+
+    def test_never_reports_player_mechanical_state_or_mutates_the_scene(self):
+        # Unlike help_resolved, this payload has no skills/abilities/equipped/inventory at all
+        # -- and a phrase that would smell like a removal request through ADaM's own gates must
+        # never actually remove anything here, since this channel never runs those checks.
+        result = self._ask("destroy the wolf, what do i see")
+
+        self.assertNotIn("skills", result)
+        self.assertNotIn("abilities", result)
+        self.assertNotIn("equipped", result)
+        self.assertNotIn("inventory", result)
+        self.assertNotIn("wolf", self.dm_core.removed_entities)
 
 
 class TestAttitudePhrases(DMTestCase):
@@ -11470,6 +11566,71 @@ class TestAdamNarration(LLMTestCase):
 
         self.assertEqual(response_events, ["You know blades and finesse."])
         self.assertEqual(self.llm_core.context_window, [])
+
+
+class TestSceneQueryNarration(LLMTestCase):
+    """!
+    @brief LLMCore's own side of DM_Help.py's scene-query channel: generate_scene_query_response/
+        _build_scene_query_system_message/_queue_scene_query. The two load-bearing properties
+        under test are the mirror image of TestAdamNarration's: this one speaks as the ordinary
+        Game Master (never ADaM's own persona) and *does* join context_window (unlike ADaM's own
+        deliberately-excluded exchanges).
+    """
+
+    def _scene_payload(self, **overrides):
+        payload = {
+            "input": "what do i see",
+            "present_entities": ["gladstone"],
+            "scene_name": "The Arena",
+            "scene_description": "A large arena.",
+            "present": ["gladstone - A man"],
+            "ground_items": ["dagger: A slim, balanced dagger built for speed rather than force."],
+            "exits": [{"direction": "forward", "destination_name": "The Hall of Webs"}],
+        }
+        payload.update(overrides)
+        return payload
+
+    def test_system_message_speaks_as_the_gm_not_adam_and_grounds_strictly(self):
+        message = self.llm_core._build_scene_query_system_message(self._scene_payload(), rag_query=None)
+
+        self.assertIn("Game Master", message)
+        self.assertNotIn("ADaM", message)
+        self.assertNotIn("out-of-character", message)
+        # The same strict anti-hallucination discipline ADaM's own system message uses.
+        self.assertIn("never invent", message)
+        # The live, dynamic payload.
+        self.assertIn("The Arena", message)
+        self.assertIn("gladstone - A man", message)
+        self.assertIn("dagger: A slim", message)
+        self.assertIn("The Hall of Webs", message)
+
+    def test_publishing_scene_query_resolved_appends_to_context_window(self):
+        # The opposite assertion from TestAdamNarration's own isolation test -- this channel is
+        # meant to be built on by later turns, unlike ADaM's own excluded exchanges.
+        self.assertEqual(self.llm_core.context_window, [])
+
+        with patch("threading.Thread"):
+            self.event_bus.publish("scene_query_resolved", self._scene_payload())
+
+        self.assertEqual(len(self.llm_core.context_window), 1)
+        self.assertEqual(self.llm_core.context_window[0]["present"], ["gladstone"])
+
+    def test_fetch_publishes_llm_response_ready_and_stores_the_reply_in_context(self):
+        response_events = []
+        self.event_bus.subscribe("llm_response_ready", response_events.append)
+        fake_response = MagicMock()
+        fake_response.read.return_value = json.dumps(
+            {"choices": [{"message": {"content": "You see a dagger glinting on the floor."}}]}
+        ).encode("utf-8")
+
+        with patch("threading.Thread") as mock_thread, \
+             patch("urllib.request.urlopen", return_value=fake_response):
+            self.event_bus.publish("scene_query_resolved", self._scene_payload())
+            mock_thread.call_args.kwargs["target"]()
+
+        self.assertEqual(response_events, ["You see a dagger glinting on the floor."])
+        self.assertEqual(len(self.llm_core.context_window), 2)
+        self.assertEqual(self.llm_core.context_window[1]["role"], "assistant")
 
 
 class FakeRagIndex:

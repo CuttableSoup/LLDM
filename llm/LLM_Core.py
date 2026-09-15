@@ -204,6 +204,7 @@ class LLMCore:
         self.event_bus.subscribe("encounter_triggered", self.generate_encounter_response)
         self.event_bus.subscribe("dialogue_resolved", self.generate_npc_dialogue)
         self.event_bus.subscribe("help_resolved", self.generate_adam_response)
+        self.event_bus.subscribe("scene_query_resolved", self.generate_scene_query_response)
         self.event_bus.subscribe("save_requested", self._on_save_requested)
         self.event_bus.subscribe("load_requested", self._on_load_requested)
         self.event_bus.subscribe("game_load_failed", self.generate_load_failed_response)
@@ -966,6 +967,8 @@ class LLMCore:
             )
         if help_data.get("present"):
             system_message += "\nPresent here: " + " | ".join(help_data["present"])
+        if help_data.get("ground_items"):
+            system_message += "\nOn the ground here: " + "; ".join(help_data["ground_items"])
         if help_data.get("exits"):
             # A room exit carries a "direction" ("forward", to a sibling room in the same
             # location); a location exit doesn't (reachable by naming the destination itself,
@@ -1030,6 +1033,96 @@ class LLMCore:
 
         def fetch_from_llm():
             self._fetch_and_publish(messages, present_entities=None, store_in_context=False)
+
+        threading.Thread(target=fetch_from_llm, daemon=True).start()
+
+    def generate_scene_query_response(self, data):
+        """!
+        @brief Narrates a reply to a free-standing "what do I see"/"who is here" scene query
+            (see DM_Help.py's own _on_scene_query_detected) -- always resolves, the same way
+            ADaM's own help channel does, but speaks as the ordinary in-fiction Game Master
+            instead of ADaM's out-of-character persona, and joins context_window like any other
+            narration trigger (unlike ADaM's own deliberately-excluded exchanges), since "there's
+            a locked chest here" is exactly the kind of fact a later turn should be able to
+            build on.
+        @param data The "scene_query_resolved" payload (DM_Help.py's
+            HelpMixin._on_scene_query_detected).
+        """
+        self.event_bus.publish("log_info", "Generating scene query response.")
+        prompt = f"The player asks: \"{data.get('input', '')}\""
+        self._queue_scene_query(prompt, data, rag_query=data.get("input"))
+
+    def _build_scene_query_system_message(self, scene_data, rag_query):
+        """!
+        @brief The scene-query counterpart to _build_adam_system_message -- the same strict
+            "use only the facts given below; never invent" grounding discipline (this intent
+            exists specifically to close the "the LLM goes wild describing things that aren't
+            there" gap for a bare, unaddressed scene question, the same gap ADaM's own help
+            channel already closed for explicitly-addressed OOC questions), but speaks as the
+            omniscient in-fiction Game Master, never breaking character into ADaM's own explicit
+            meta persona.
+        @param scene_data The "scene_query_resolved" payload.
+        @param rag_query What to retrieve sourcebook lore against (see perform_rag).
+        @return The complete system message string for this one request.
+        """
+        system_message = (
+            "You are the Game Master, answering the player's own direct question about what "
+            "their character currently perceives. Answer plainly and concisely, in-fiction, "
+            "using only the facts given below; never invent people, items, or exits that "
+            "aren't listed, and never describe anything not actually present."
+        )
+        if scene_data.get("scene_name") or scene_data.get("scene_description"):
+            system_message += (
+                f"\n\nCurrent scene: \"{scene_data.get('scene_name', '')}\" - "
+                f"{scene_data.get('scene_description', '')}"
+            )
+        if scene_data.get("present"):
+            system_message += "\nPresent here: " + " | ".join(scene_data["present"])
+        if scene_data.get("ground_items"):
+            system_message += "\nOn the ground here: " + "; ".join(scene_data["ground_items"])
+        if scene_data.get("exits"):
+            # Same "direction (to destination)" vs. bare destination-name rendering
+            # _build_adam_system_message's own exits line already uses.
+            exits = ", ".join(
+                f"{exit_info['direction']} (to {exit_info.get('destination_name')})"
+                if exit_info.get("direction") else str(exit_info.get("destination_name"))
+                for exit_info in scene_data["exits"]
+            )
+            system_message += f"\nExits from here: {exits}"
+
+        rag_context = self.perform_rag(rag_query)
+        if rag_context:
+            system_message += (
+                "\nReference lore from the campaign sourcebook, relevant to this moment "
+                f"(use only what applies; don't contradict it):\n{rag_context}"
+            )
+        return system_message
+
+    def _queue_scene_query(self, prompt, scene_data, rag_query=None):
+        """!
+        @brief The scene-query counterpart to _queue_narration/_queue_dialogue -- appends the
+            exchange to the shared rolling context_window like any ordinary narration trigger
+            (unlike _queue_adam_response, which deliberately never does -- see that method's own
+            docstring for why ADaM's own exchanges stay excluded), tagged with this request's own
+            live present_entities snapshot the same way _queue_narration/_queue_dialogue already
+            tag theirs, so a later NPC dialogue turn's own _filter_present_history can pick it up.
+        @param prompt The user-role prompt: the player's own words.
+        @param scene_data The "scene_query_resolved" payload, threaded through to
+            _build_scene_query_system_message.
+        @param rag_query What to retrieve sourcebook lore against -- the player's own raw input,
+            same convention every other narration trigger follows.
+        """
+        present_entities = scene_data.get("present_entities")
+        self.context_window.append({"role": "user", "content": prompt, "present": present_entities})
+
+        if len(self.context_window) > 100:
+            self.context_window = self.context_window[-100:]
+
+        system_message = self._build_scene_query_system_message(scene_data, rag_query if rag_query else prompt)
+
+        def fetch_from_llm():
+            messages = [{"role": "system", "content": system_message}] + self._api_messages(self.context_window)
+            self._fetch_and_publish(messages, present_entities)
 
         threading.Thread(target=fetch_from_llm, daemon=True).start()
 

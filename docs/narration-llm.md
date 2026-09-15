@@ -20,6 +20,10 @@ into an actual narrated line, "Summoning" above) and background-fetch plumbing
 - `game_load_failed` → `generate_load_failed_response`.
 - `help_resolved` → `generate_adam_response` — routes through `_queue_adam_response`, the one
   trigger here that never touches `context_window` at all.
+- `scene_query_resolved` → `generate_scene_query_response` — a free-standing "what do I see"/
+  "who is here" question (see `docs/adam-improvisation.md`'s "Scene queries"), routed through
+  `_queue_scene_query`; answered in the ordinary GM voice, grounded the same strict way ADaM is,
+  and (unlike ADaM) does join `context_window`.
 - `encounter_triggered` → `generate_encounter_response` — a location/room's own random
   encounter roll (see "Random encounters"), the one trigger here that's never a response to
   something the player did.
