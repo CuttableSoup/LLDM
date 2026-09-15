@@ -35,6 +35,23 @@ request, so narration stays grounded even after the intro scrolls out of the rol
 addressed entity, grounded in `persona`/`attitude` plus that entity's own presence-filtered
 history, never the standing GM framing.
 
+**Denial-path grounding.** Every trigger above that can fire with *nothing* real to narrate —
+`generate_clarification_response` (no action matched at all), `generate_item_interaction_response`
+'s own `"found": false` branch (a locked/absent/unaffordable item), and `generate_npc_dialogue`'s
+own `"found": false` branch (no one by that name present) — is the one place the model has the
+least real state to work from, and so the easiest place for it to fill the gap with an invented
+person, item, or explanation (ex: narrating that an unaddressable NPC "just stepped away with
+someone" rather than simply saying they aren't here). Each of these three prompts explicitly
+forbids that rather than relying on the standing system message alone, the same
+belt-and-suspenders convention `generate_load_failed_response`'s own "without inventing what the
+save might have contained" and `"open"`'s own "describing only what's actually there" already
+followed before this was made consistent across every denial path. This is deliberately a
+per-prompt discipline, not a blanket system-message rule — ordinary narration (a resolved roll, a
+combat round, an opened container's real contents) already has real state behind it and loses
+nothing by staying free to add sensory color; only the "nothing resolved" paths needed the
+explicit guardrail. Scene query and ADaM (above) already carried this same discipline from the
+day they shipped, being built around exactly this risk from the start.
+
 Every `_queue_narration`/`_queue_dialogue` call's background fetch also publishes
 `llm_debug_updated {"query", "response"}` alongside `llm_response_ready` — consumed only by
 `GUICore`'s Debug tab, never stored in `context_window` itself.

@@ -403,7 +403,15 @@ class LLMCore:
         @brief Narrates a brief in-character non-response when the player's input didn't match
             any recognizable skill (below NLPCore's confidence_threshold), so the player gets
             feedback instead of the app silently doing nothing (no dice roll, no event past
-            NLPCore) and appearing to have stalled.
+            NLPCore) and appearing to have stalled. This is the one narration trigger with the
+            least real state behind it -- nothing resolved, nothing found, no reason string the
+            way item/dialogue denial carry -- so it's also the easiest for the model to fill the
+            gap with invented people/places/events (ex: a scene question phrased in a way
+            NLPCore's own keyword gates miss entirely -- see docs/adam-improvisation.md's "Scene
+            queries" for the intent this is a fallback *underneath*, not a substitute for). The
+            prompt explicitly forbids that rather than relying on the standing system message
+            alone, the same belt-and-suspenders convention generate_load_failed_response's own
+            "without inventing what the save might have contained" already follows.
         @param data The "action_not_understood" payload ({input, score}).
         """
         self.event_bus.publish("log_info", "Generating clarification response for unmatched input.")
@@ -412,7 +420,8 @@ class LLMCore:
             f"The player said: \"{data.get('input', '')}\"\n"
             f"This didn't match any recognizable action or skill check - no dice were rolled.\n"
             f"Respond in-character as the Game Master in 1-2 sentences: acknowledge what they "
-            f"said without resolving any roll"
+            f"said without resolving any roll, and without inventing any new character, item, "
+            f"or location that hasn't already been established in this scene."
         )
         # This is the single most common place a player asks a genuine lore question (ex: "tell
         # me about Brevoy") that doesn't map to any skill -- exactly why the bare input, not the
@@ -427,6 +436,12 @@ class LLMCore:
             DMCore._on_item_interaction_detected) and, for the free-standing group, narrated
             entirely by its own module under intents/ (intents/registry.py's own HANDLERS
             manifest), including its own failure-reason text, rather than a branch here.
+            A denied attempt ("found" false) narrates its own real reason (DMCore's own
+            "locked"/"not_present"/"cant_afford"/... below) but is told explicitly not to invent
+            anything past it -- the same "state the real fact, don't embellish with fiction"
+            discipline "open"'s own empty/non-empty branches and generate_load_failed_response
+            already follow.
+
             "examine" only ever describes; it's the deliberate alternative to items being
             auto-looted into the player's inventory the moment a container opens (ex: a cursed
             weapon should be seen and described before anyone decides to touch it).
@@ -473,7 +488,9 @@ class LLMCore:
             prompt = (
                 f"The player tries to {intent} {subject} "
                 f"(input: \"{data.get('input', '')}\"), but {reason_text} -- no roll involved.\n"
-                f"Narrate a brief, in-character explanation in 1-2 sentences as the Game Master."
+                f"Narrate a brief, in-character explanation in 1-2 sentences as the Game Master, "
+                f"stating only that reason -- don't invent any other person, item, or detail to "
+                f"explain it."
             )
         elif intent == "examine":
             # "revealed" is only ever set once DMCore.is_identified(item_name) is true (a
@@ -626,6 +643,14 @@ class LLMCore:
             Addressing a hostile entity is allowed (see DialogueMixin._resolve_dialogue) --
             whatever the model produces is free to read as hostile/dismissive in character,
             but the attempt itself is never denied for it.
+
+            A "not found" target (no one by that name present, or nothing present at all) falls
+            back to an ordinary third-person Game Master explanation instead -- there's no
+            persona/attitude to speak from when nothing was actually addressed. That explanation
+            names its own real reason (DialogueMixin's own "not_present"/"cant_talk"/
+            "no_one_here") but is otherwise told explicitly not to invent anything past it (ex:
+            where a named-but-absent target supposedly went) -- without this, the model reliably
+            fabricated a whole scene to explain the absence rather than just stating it.
         @param data The "dialogue_resolved" payload ({target, input, found, present_entities,
             persona?, attitude?, reason?, language_barrier?, target_language?,
             nonsense_phrase?}).
@@ -642,7 +667,9 @@ class LLMCore:
             prompt = (
                 f"The player tries to say something (input: \"{data.get('input', '')}\"), but "
                 f"{reason_text} -- no reply is possible.\n"
-                f"Narrate a brief, in-character explanation in 1-2 sentences as the Game Master."
+                f"Narrate a brief, in-character explanation in 1-2 sentences as the Game Master, "
+                f"stating only that reason -- don't invent where anyone went, who they're with, "
+                f"or any other detail to explain their absence."
             )
             self._queue_narration(
                 prompt, rag_query=data.get("input"), present_entities=data.get("present_entities"),

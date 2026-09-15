@@ -884,6 +884,17 @@ class TestClarificationResponse(LLMTestCase):
         self.assertNotIn("Skill used:", prompt)
         self.assertNotIn("difficulty", prompt)
 
+    def test_prompt_explicitly_forbids_inventing_a_new_character_item_or_location(self):
+        # This is the narration trigger with the least real state behind it -- see
+        # docs/narration-llm.md's "Denial-path grounding" -- so the prompt has to say so itself
+        # rather than trusting the standing system message alone (ex: a bare "who is here"-
+        # shaped question that missed SCENE_QUERY_KEYWORDS previously fell through to here and
+        # got three fully invented patrons back).
+        self.event_bus.publish("action_not_understood", {"input": "who all is here", "score": 0.1})
+
+        prompt = self.llm_core.context_window[-1]["content"]
+        self.assertIn("without inventing", prompt)
+
     def test_describe_outcome_includes_loot_so_the_llm_isnt_left_guessing(self):
         # Without this, the LLM has no idea what was actually gained and will happily invent
         # contents that don't match the real game state (observed: it narrated a "silver key
@@ -949,6 +960,19 @@ class TestFreeformDialogueNarration(LLMTestCase):
 
         prompt = self.llm_core.context_window[-1]["content"]
         self.assertIn("no one here to talk to", prompt)
+
+    def test_not_found_dialogue_forbids_inventing_an_explanation_for_the_absence(self):
+        # Regression: this exact branch is what turned "ask the merchant" (no such entity ever
+        # authored) into a fully invented scene of the merchant slipping into a doorway with a
+        # "shadowy figure" -- the real fact (not present) has to be stated plainly, nothing more.
+        self.event_bus.publish("dialogue_resolved", {
+            "target": "merchant", "input": "what are you selling", "found": False,
+            "reason": "not_present", "present_entities": ["gladstone"],
+        })
+
+        prompt = self.llm_core.context_window[-1]["content"]
+        self.assertIn("isn't here to respond", prompt)
+        self.assertIn("don't invent", prompt)
 
     def test_language_barrier_dialogue_queues_gibberish_prompt_not_the_players_words(self):
         # DM_Dialogue.py's _detect_language_barrier still resolves "found": True (the target is
@@ -3744,6 +3768,23 @@ class TestGenerateItemInteractionResponseDispatchesFreeStandingIntents(LLMTestCa
             "characters": [], "input": "go forward",
         })
         self.assertEqual(self.llm_core.scenario_description, "Dust hangs in the still air.")
+
+
+class TestDeniedItemInteractionNarration(LLMTestCase):
+    """!
+    @brief The "found": false branch of generate_item_interaction_response -- states its own
+        real reason (DMCore's own "locked"/"not_present"/"cant_afford"/...) but must not
+        embellish past it (see docs/narration-llm.md's "Denial-path grounding").
+    """
+
+    def test_prompt_states_the_real_reason_and_forbids_inventing_more(self):
+        self.llm_core.generate_item_interaction_response({
+            "intent": "take", "item_name": "sword", "found": False, "reason": "not_present",
+            "input": "take the sword",
+        })
+        prompt = self.llm_core.context_window[-1]["content"]
+        self.assertIn("there's no \"sword\" here to take", prompt)
+        self.assertIn("don't invent", prompt)
 
 
 class TestSpellMaterials(DMTestCase):
