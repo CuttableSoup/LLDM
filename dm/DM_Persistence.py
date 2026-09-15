@@ -13,9 +13,10 @@ class PersistenceMixin(DMCoreProtocol):
         self.entities/self.event_bus/self.player_name/self.round_number/self.current_target/
         self.scenario_key/self.scenario_entities/self.scenario, set up by DMCore.__init__).
         load_game/save_game call back into RulesMixin's load_rules/load_scenario_definition/
-        load_scenario and StatusMixin's get_current_hp, mirroring DMCore.__init__'s own
-        bootstrap sequence. Inherits DMCoreProtocol purely so type checkers can resolve
-        these shared attributes/cross-mixin methods -- see DM_Types.py.
+        load_scenario/_resolve_player_name, CharacterCreationMixin's _rename_player_entity, and
+        StatusMixin's get_current_hp, mirroring DMCore.__init__'s own bootstrap sequence.
+        Inherits DMCoreProtocol purely so type checkers can resolve these shared attributes/
+        cross-mixin methods -- see DM_Types.py.
     """
 
     def _save_slot_dir(self, slot_name):
@@ -222,6 +223,20 @@ class PersistenceMixin(DMCoreProtocol):
                 # own description already saves above; the two flags never need to stack.
                 state["edited"] = True
                 state["description"] = entity.get("description", "")
+            if name == self.player_name:
+                # Character creation (DM_CharacterCreation.py's apply_character_creation) can
+                # freely diverge the player's own skills/qualities/languages from the
+                # template's own hand-authored baseline (race/point-buy allocation, plus
+                # whatever race language/starting gear chargen applied) -- unlike an ordinary
+                # hand-authored entity, none of that has any other source of truth to
+                # re-derive from on reload (load_scenario's own _instance_entities always
+                # deep-copies fresh from the *template's* own hand-authored fields), so it has
+                # to round-trip explicitly here or a customized character's build would
+                # silently revert to the template's defaults on every reload. Independent of
+                # generated/edited above -- a player is never either.
+                state["skills"] = entity.get("skills", {})
+                state["qualities"] = entity.get("qualities", {})
+                state["languages"] = entity.get("languages", [])
             # A live polymorph/shapeshift (Combat_Resolution.py's "form" condition field) has
             # already overwritten FORM_OVERRIDE_FIELDS on this instance; "active_conditions"
             # above saves the _form snapshot needed to revert it, but load_scenario/_enter_
@@ -433,6 +448,17 @@ class PersistenceMixin(DMCoreProtocol):
             template. Re-running load_rules first is what actually makes a resumed save
             pick up current TOML stats rather than freezing stale in-memory ones.
 
+            That same fresh load_rules call also re-seeds the player entity back under its
+            *original* template key (ex: "gladstone"), undoing any character-creation rename
+            the live session applied (see DM_CharacterCreation.py's apply_character_creation) --
+            self.player_name is therefore re-resolved fresh (_resolve_player_name) right after
+            load_rules, and _rename_player_entity replays the saved rename (data's own
+            "player_name") on top before load_scenario_definition/load_scenario ever run, the
+            same ordering apply_character_creation's own rename already follows relative to
+            load_scenario(). Without this, every self.entities[self.player_name] lookup below
+            (starting with load_scenario's own _enter_location) would raise a bare KeyError on
+            the saved, renamed name.
+
             Publishes "game_loaded" on success -- deliberately not "scenario_loaded", so
             LLMCore restores its own saved state silently instead of narrating a brand-new
             opening scene on every resume. Publishes "game_load_failed" if the slot doesn't
@@ -456,7 +482,7 @@ class PersistenceMixin(DMCoreProtocol):
         with open(path, "r") as f:
             data = json.load(f)
 
-        self.player_name = data.get("player_name", self.player_name)
+        saved_player_name = data.get("player_name", self.player_name)
         self.round_number = data.get("round_number", 0)
         self.current_block = data.get("current_block", 0)
         self.watch_rotation_index = data.get("watch_rotation_index", 0)
@@ -471,7 +497,37 @@ class PersistenceMixin(DMCoreProtocol):
         # above follows, though nothing here actually consults it until a later travel attempt;
         # load_scenario()'s own known_locations seeding re-unions harmlessly on top of this.
         self.known_locations = set(data.get("known_locations", []))
+        # This session's own outgoing player identity, if load_game is running against an
+        # already-booted DMCore (ex: character creation renamed the player to "Ivan" earlier
+        # this run, and the player then chose Load from the menu instead of restarting the
+        # app) -- captured before load_rules touches anything, since it's about to be
+        # completely superseded by whatever the save restores.
+        previous_player_name = self.player_name
         self.load_rules(os.path.join("Rules", self.setting))
+        # load_rules just rebuilt every entity fresh from static TOML under its own authored
+        # name -- including the player's *original* template (ex: "gladstone", still carrying
+        # its own is_player = true), regardless of whatever self.player_name was renamed to
+        # earlier this session. If that earlier renamed identity is still sitting in
+        # self.entities as a leftover (load_rules never touches a key that isn't authored in
+        # any TOML file), it's now a stale duplicate *also* carrying is_player = true --
+        # left in place, _resolve_player_name's own "the one is_player entity" lookup below is
+        # ambiguous between the two and may resolve back to the stale copy instead of the fresh
+        # template _rename_player_entity actually needs to rename. Only drop it once some
+        # *other* key has already proven it's a duplicate, not the sole source of truth (ex: a
+        # first-ever load, or reloading with no rename at all, where previous_player_name
+        # already *is* the fresh template's own key).
+        if any(
+            entity.get("is_player") and name != previous_player_name
+            for name, entity in self.entities.items()
+        ):
+            self.entities.pop(previous_player_name, None)
+        self.player_name = self._resolve_player_name()
+        # Replay the same rename apply_character_creation applied mid-session, if the save's
+        # own player_name differs from the fresh template's own original name (see
+        # _rename_player_entity's own docstring for why this is load-bearing: without it, every
+        # self.entities[self.player_name] lookup below raises a bare KeyError on the saved,
+        # renamed name).
+        self._rename_player_entity(saved_player_name)
         self.load_scenario_definition(self.scenario_key)
         # load_scenario_definition just rebuilt self.locations purely from TOML, which has no
         # notion of a mid-journey ambush's own ephemeral scratch scene -- reinject it (see
@@ -564,10 +620,20 @@ class PersistenceMixin(DMCoreProtocol):
             elif state.get("edited"):
                 entity["edited"] = True
                 entity["description"] = state.get("description", entity.get("description", ""))
-            # Mirrors the save-side comment above -- entity has just been re-instanced fresh
-            # from its own static template (base form), so a saved form_override has to be
-            # reapplied on top the same way active_conditions was, or a mid-polymorph save
-            # would load back in base form with the shapeshifting condition still ticking.
+            if name == self.player_name:
+                # Mirrors the save-side comment above -- entity has just been re-instanced
+                # fresh from the template's own hand-authored skills/qualities/languages,
+                # discarding whatever character creation actually built; restore the saved
+                # values on top the same unconditional way inventory/equipped already are a
+                # few lines up.
+                entity["skills"] = state.get("skills", entity.get("skills", {}))
+                entity["qualities"] = state.get("qualities", entity.get("qualities", {}))
+                entity["languages"] = state.get("languages", entity.get("languages", []))
+            # Mirrors the corresponding save-side form_override comment -- entity has just
+            # been re-instanced fresh from its own static template (base form), so a saved
+            # form_override has to be reapplied on top the same way active_conditions was, or
+            # a mid-polymorph save would load back in base form with the shapeshifting
+            # condition still ticking.
             # Absent from FORM_OVERRIDE_FIELDS means it was absent on the live entity too (the
             # form template didn't define it) -- popped again here rather than left at
             # whatever the freshly re-instanced base template happens to provide.

@@ -8658,6 +8658,61 @@ class TestCharacterCreationRename(unittest.TestCase):
         # Untouched -- characters.toml's own hand-authored value, not race_baseline_skills'.
         self.assertEqual(dm.entities["Aria"]["skills"]["blades"], {"dice": 5, "pips": 0})
 
+    def test_a_renamed_character_survives_save_and_load(self):
+        # Regression: load_rules() (called from load_game) rebuilds self.entities fresh from
+        # static TOML, which re-seeds the player back under their *original* template key
+        # ("gladstone"), not the renamed one -- previously nothing replayed the rename
+        # afterward, so _enter_location's own self.entities[self.player_name]["band"] = 1
+        # raised a bare KeyError on the saved, renamed name the moment a renamed character's
+        # save was ever reloaded.
+        dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds", character={"name": "Aria"})
+        slot_name = "test_renamed_character_round_trip_slot"
+        self.addCleanup(shutil.rmtree, dm._save_slot_dir(slot_name), ignore_errors=True)
+
+        dm.save_game(slot_name)
+        dm.load_game(slot_name)  # must not raise
+
+        self.assertEqual(dm.player_name, "Aria")
+        self.assertNotIn("gladstone", dm.entities)
+        self.assertEqual(dm.entities["Aria"]["name"], "Aria")
+        self.assertIn("Aria", dm.scenario_entities)
+
+    def test_a_customized_characters_build_survives_save_and_load(self):
+        # Regression: load_scenario's own _instance_entities always deep-copies fresh from the
+        # template's own hand-authored skills/qualities/languages, and (unlike a "generated"
+        # NPC) nothing previously saved a chargen-customized player's actual build -- so a
+        # reload silently reverted any point-buy allocation/race choice back to the template's
+        # bare defaults, whether or not the character was also renamed.
+        character = {
+            "race": "elf", "allocation": {"arcane": 5, "stealth": 5, "observation": 5}, "name": "Aria",
+        }
+        dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds", character=character)
+        slot_name = "test_customized_character_round_trip_slot"
+        self.addCleanup(shutil.rmtree, dm._save_slot_dir(slot_name), ignore_errors=True)
+        built_skills = dict(dm.entities["Aria"]["skills"])
+        built_languages = list(dm.entities["Aria"]["languages"])
+
+        dm.save_game(slot_name)
+        dm.load_game(slot_name)
+
+        self.assertEqual(dm.entities["Aria"]["skills"], built_skills)
+        self.assertEqual(dm.entities["Aria"]["qualities"]["race"], "elf")
+        self.assertEqual(dm.entities["Aria"]["languages"], built_languages)
+
+    def test_an_uncustomized_default_character_is_unaffected(self):
+        # No character= at all -- the ordinary "no chargen ran" boot path (every test/scenario
+        # that doesn't pass character) must keep working exactly as before: the template's own
+        # hand-authored skills round-trip unchanged, nothing new to break.
+        dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds")
+        slot_name = "test_default_character_round_trip_slot"
+        self.addCleanup(shutil.rmtree, dm._save_slot_dir(slot_name), ignore_errors=True)
+        original_skills = dict(dm.entities["gladstone"]["skills"])
+
+        dm.save_game(slot_name)
+        dm.load_game(slot_name)
+
+        self.assertEqual(dm.entities["gladstone"]["skills"], original_skills)
+
 
 class TestZombieArchetypeCharacterCreation(unittest.TestCase):
     """!
@@ -10801,9 +10856,13 @@ class TestSaveLoad(DMTestCase):
 
     def test_save_writes_a_diff_not_a_raw_entity_dump(self):
         # Only the fields anything actually mutates at runtime should be saved -- not a dump
-        # of the whole template (ex: no "skills"/"max_hp" keys, which never change
-        # post-instancing today). "equipped" *is* included -- see
-        # test_equipped_slot_mapping_round_trips_through_save_load below for why.
+        # of the whole template (ex: no "max_hp" key, which never changes post-instancing
+        # today). "equipped" *is* included -- see
+        # test_equipped_slot_mapping_round_trips_through_save_load below for why. "skills"/
+        # "qualities"/"languages" *are* included too, for the player specifically -- see
+        # TestCharacterCreationRename's own test_a_customized_characters_build_survives_save_
+        # and_load for why (character creation can diverge these from the template's own
+        # baseline, with no other source of truth to re-derive them from on reload).
         slot = self._track("test_save_writes_diff")
         self.dm_core.save_game(slot)
         data = self._read_dm_state(slot)
@@ -10817,7 +10876,7 @@ class TestSaveLoad(DMTestCase):
             {
                 "hp", "active_conditions", "currency", "exp", "inventory", "equipped", "band",
                 "attitude_deltas", "action_attitude_deltas", "current_language", "prompt_directive",
-                "mount",
+                "mount", "skills", "qualities", "languages",
             },
         )
 

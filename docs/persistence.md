@@ -18,8 +18,36 @@ has no request/response mechanism, so each core owns and persists its own slice.
 (every visited location's own `{persistent_names, visited_rooms}` cache — see "Scenarios,
 locations, and rooms"), `scenario_entities`, `ground`, and per-instance `{hp, active_conditions,
 currency, exp, inventory, equipped, band, attitude_deltas, action_attitude_deltas,
-current_language, prompt_directive, mount}`. `load_game` re-runs `load_rules()`, then re-instances
-every location the save file's own `location_runtime` says was ever visited (each location's own
+current_language, prompt_directive, mount}` — plus, for whichever instance is the player
+specifically, `skills`/`qualities`/`languages` too (see below). `load_game` re-runs
+`load_rules()` — which re-seeds the player entity back under its *original* template key (ex:
+`"gladstone"`), undoing any character-creation rename the live session applied
+(`DM_CharacterCreation.py`'s `apply_character_creation`, see `docs/character-creation.md`) — so
+`self.player_name` is re-resolved fresh (`_resolve_player_name`) and `_rename_player_entity`
+replays the save's own `player_name` on top of that, before `load_scenario_definition`/
+`load_scenario` ever run; without this, every `self.entities[self.player_name]` lookup during the
+reload (starting with `_enter_location`'s own arrival-band write) raises a bare `KeyError` on the
+saved, renamed name. One subtlety in the resolve itself: if `load_game` runs against an
+already-booted `DMCore` whose player was renamed earlier in the same session (ex: the in-app Load
+menu, not a fresh process), that earlier renamed entity is still sitting in `self.entities` (a key
+`load_rules()` never touches) and still carries its own `is_player = true` — left in place
+alongside the freshly reloaded template's own `is_player = true` copy, `_resolve_player_name`'s
+"the one `is_player` entity" lookup is ambiguous between the two, so `load_game` drops the stale
+one first whenever some *other* key has already proven it's the real template (i.e., whenever
+more than one `is_player` entity exists right after `load_rules()`).
+
+Character creation (`apply_character_creation`) can freely diverge the player's own
+`skills`/`qualities`/`languages` from the template's own hand-authored baseline (race/point-buy
+allocation, plus whatever race language/starting gear chargen applied) — unlike an ordinary
+hand-authored entity, none of that has any other source of truth to re-derive from on reload
+(`load_scenario`'s own `_instance_entities` always deep-copies fresh from the *template's* own
+hand-authored fields), so these three round-trip unconditionally for the player specifically, the
+same way a `generated` NPC's own skills/qualities already do — without it, a customized
+character's build would silently revert to the template's defaults on every reload, whether or
+not the character was also renamed.
+
+`load_game` then re-instances every location the save file's own `location_runtime` says was ever
+visited (each location's own
 `entities` once, each of its visited rooms' own entities once — mirroring exactly how a single
 room's own instance list was already re-derived from the room's static entities rather than
 trusted directly, so `_instance_entities`' own idempotent occurrence-counting reproduces the

@@ -131,29 +131,56 @@ class CharacterCreationMixin(DMCoreProtocol):
                 player["exp"] = remaining_exp
 
         new_name = (character.get("name") or "").strip()
-        if new_name and new_name != self.player_name:
-            if new_name in self.entities:
-                # Refuses to clobber another already-loaded template/entity under the same
-                # key (ex: naming a character "wolf") -- the skill/race override above still
-                # applies, only the identity change is rejected, so a bad name can't silently
-                # corrupt unrelated game data.
-                self.event_bus.publish(
-                    "log_error",
-                    f"Character creation rename rejected: '{new_name}' already names "
-                    "another entity.",
-                )
-            else:
-                old_name = self.player_name
-                del self.entities[self.player_name]
-                player["name"] = new_name
-                self.entities[new_name] = player
-                self.player_name = new_name
-                self._rekey_attitude_overrides(old_name, new_name)
+        if new_name and new_name != self.player_name and new_name in self.entities:
+            # Refuses to clobber another already-loaded template/entity under the same key
+            # (ex: naming a character "wolf") -- the skill/race override above still applies,
+            # only the identity change is rejected, so a bad name can't silently corrupt
+            # unrelated game data.
+            self.event_bus.publish(
+                "log_error",
+                f"Character creation rename rejected: '{new_name}' already names "
+                "another entity.",
+            )
+        else:
+            self._rename_player_entity(new_name)
 
         suffix = f" is now a {race_name}." if allocation else "."
         self.event_bus.publish(
             "log_info", f"Character creation applied: {self.player_name}{suffix}"
         )
+
+    def _rename_player_entity(self, new_name):
+        """!
+        @brief Re-keys the player entity from self.player_name to new_name -- the actual
+            identity-change mechanism apply_character_creation's own rename above needs, and
+            (see DM_Persistence.py's load_game) a resumed save needs too: load_rules() rebuilds
+            self.entities fresh from static TOML on every load, which re-seeds the player back
+            under their *original* template key (ex: "gladstone"), not whatever they were
+            renamed to mid-session -- without replaying this same rename afterward, every
+            subsequent self.entities[self.player_name] lookup (ex: _enter_location's own
+            arrival-band write) raises a bare KeyError on the saved (renamed) name. Factored out
+            so the two call sites can't drift apart.
+
+            A no-op if new_name is blank, already self.player_name, or already names another
+            entity (the caller decides whether that last case deserves a logged rejection --
+            apply_character_creation's own caller does; load_game's doesn't, since a name
+            collision there would mean the TOML itself changed underneath an existing save,
+            not a bad player-supplied name).
+        @param new_name The player's new name.
+        @return True if the rename actually happened.
+        """
+        if not new_name or new_name == self.player_name or new_name in self.entities:
+            return False
+        player = self.entities.get(self.player_name)
+        if player is None:
+            return False
+        old_name = self.player_name
+        del self.entities[self.player_name]
+        player["name"] = new_name
+        self.entities[new_name] = player
+        self.player_name = new_name
+        self._rekey_attitude_overrides(old_name, new_name)
+        return True
 
     def _rekey_attitude_overrides(self, old_name, new_name):
         """!

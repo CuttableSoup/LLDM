@@ -44,18 +44,25 @@ loads. `"allocation"`, if non-empty, is validated and overwrites `self.entities[
 ["skills"]` entirely and updates `qualities.race`; if absent, the override is skipped and the
 template's own hand-authored skills are left untouched (this is what lets `LLDM.py`'s CLI
 quick-boot pass a bare `{"name": ...}` through this same method rather than needing a separate
-rename-only path). `"name"`, if non-blank and different from the current `player_name`, renames
-the player entity: `self.entities[self.player_name]` is popped and re-inserted under the new
-key, and `self.player_name` repoints at it. A name colliding with any other already-loaded
-entity is rejected outright (`log_error`, not raised) — `DMCore.__init__` runs
-`load_scenario_definition` *before* `apply_character_creation` specifically so this check also
-sees a scenario file's own local entities, not just the shared `Rules/<setting>/*.toml`
-catalog. Renaming also rewrites any other entity's own `[[entity.attitudes.name]]` override
-still keyed to the old name (`_rekey_attitude_overrides`) — a hand-authored disposition toward
-the player's original template name (ex: `debug.toml`'s own `anne`, in its `crypt` area, keyed
-to `gladstone`) keeps
+rename-only path). `"name"`, if non-blank, different from the current `player_name`, and not
+already claimed by another already-loaded entity (checked here and rejected outright via
+`log_error`, not raised — `DMCore.__init__` runs `load_scenario_definition` *before*
+`apply_character_creation` specifically so this check also sees a scenario file's own local
+entities, not just the shared `Rules/<setting>/*.toml` catalog), is handed to
+`_rename_player_entity(new_name)`: `self.entities[self.player_name]` is popped and re-inserted
+under the new key, `self.player_name` repoints at it, and any other entity's own
+`[[entity.attitudes.name]]` override still keyed to the old name is rewritten
+(`_rekey_attitude_overrides`) — a hand-authored disposition toward the player's original
+template name (ex: `debug.toml`'s own `anne`, in its `crypt` area, keyed to `gladstone`) keeps
 applying to whoever they were actually renamed to. `character=None` (every caller that omits
 it) is a complete no-op.
+
+`_rename_player_entity` is factored out of `apply_character_creation` specifically so
+`DM_Persistence.py`'s `load_game` can replay the exact same rename on every resumed save (see
+`docs/persistence.md`) — `load_rules()` rebuilds `self.entities` fresh from static TOML on every
+load, which re-seeds the player back under their *original* template key, undoing any rename a
+prior session applied; without replaying it, every `self.entities[self.player_name]` lookup
+during the reload would raise a bare `KeyError` on the saved, renamed name.
 
 **Starting gear.** A `[[race]]` table can also author `"starting_items"` (a flat inventory list)
 and `"starting_equipped"` (a plain `slot -> item_name` map, `entity_schema.toml`'s own
