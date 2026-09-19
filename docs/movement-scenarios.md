@@ -186,14 +186,40 @@ own `[[location.exit]]` list for any destination whose `name` (or an `aliases` e
 whole-word/case-insensitive in the input, the same "search input for a known name" pattern
 `_resolve_dialogue_target`/`_resolve_formation_intent` already use for entity names — detected
 by `Intent_Classification.py`'s `detect_travel_intent` (a `TRAVEL_KEYWORDS` phrase table plus a
-`\bleave\b` word-boundary check, publishing a generic `"travel"` item-interaction intent with no
-pre-parsed destination at all, unlike `"move"`'s own direction). `_resolve_travel_intent` falls
+`\bleave\b` word-boundary check) or, for a phrasing that table never listed, by the semantic
+router (see `docs/action-resolution.md`'s "Last-chance semantic routing").
+`_resolve_travel_intent` falls
 back to the current location's own `return_to` (a generic "leave"/"go outside" phrase) if no
 destination is named, denied `reason="no_exit"` if that's also absent. **Hostile gate:** never
 blocks a move taken from a location's own freeform space; always blocks one taken from inside a
 `[[location.room]]` — the exact same `blocked_by_enemies` check `_resolve_room_transition_intent`
 already runs for an ordinary room-to-room move, scoped to that one room's own occupants, whether
 the destination is another room in the same location or a jump to a different location entirely.
+
+**The literal name scan runs first; the semantic one only rescues what it missed.** A whole-word
+scan can never get from "the tavern" to a destination authored as "The White Deer Tavern and
+Inn", and authoring `"tavern"` as an alias on every tavern in town is exactly the
+phrase-by-phrase treadmill the router replaces — so `NLPCore` also scores the input against the
+current location's own exits (`map_to_destination`) and threads a `destination` key through the
+`"travel"` payload, which `_resolve_location_exit` consults **only after** its own literal scan
+comes up empty. That ordering is the same literal-before-fuzzy discipline `match_modifier`
+applies (stripping a named modifier before `map_to_action` scores the remainder) and that
+`_resolve_formation_intent` applies for party member names, and it's what makes a fuzzy match
+safe to add at all: a destination the player named outright can never be rerouted to some other
+exit that merely scored well. It costs nothing for the case that motivated it either — "the
+tavern" has no literal hit regardless, so the semantic key is what rescues it either way. The key
+is verified against this location's live exit list rather than trusted, so a stale registration
+just falls through to `return_to`/`no_exit` exactly as an unrecognized destination always has;
+ties resolve to the first-declared exit. The bank itself is published by `DM_Rules.py`'s
+`_publish_location_exits`, called from `_enter_location` — the single mutation site for
+`current_location_key`, so that one hook covers scenario start, travel, grid arrival, teleport
+and `load_game` restore alike, and an exitless location publishes `[]` to *clear* the previous
+location's bank rather than leaving it matchable. Grid travel (`_resolve_grid_destination`) is
+deliberately still literal-only: its candidate set is every *known, gridded* location rather than
+this location's exits, so it invalidates on a different axis and belongs in a sibling
+`grid_destinations` key when it's added. That leaves a real, temporary inconsistency — a gridded
+hub that also authors exits has semantic matching on its exits and regex-only on its grid
+neighbors.
 
 **Gridded locations fall back to grid connectivity, not exclusively to it.** An optional
 `grid = {x, y}` field on a `[[location]]` — see `docs/downtime.md`'s "Travel" — adds pure grid

@@ -67,6 +67,7 @@ from nlp.Intent_Classification import (
     FORMATION_BEHIND_KEYWORDS,
     GIVE_KEYWORDS,
     HITCH_KEYWORDS,
+    INTENT_PROTOTYPES,
     LORE_KEYWORDS,
     MOUNT_KEYWORDS,
     OPEN_KEYWORDS,
@@ -384,6 +385,68 @@ class TestNlpConfidenceThreshold(unittest.TestCase):
         self.assertEqual(len(not_understood), 1)
         self.assertIn("innkeeper", not_understood[0]["input"])
 
+    def test_intent_router_separates_held_out_paraphrases_from_ordinary_actions(self):
+        # The calibration artifact for INTENT_PROTOTYPES. FakeMatcher can prove the classifier
+        # *routes* on a score, but only the real model can prove the scores actually separate
+        # -- and this feature is worthless if they don't. Every phrase here is deliberately
+        # held out of INTENT_PROTOTYPES itself (asserted below), so this measures
+        # generalization rather than memorization.
+        #
+        # The negatives matter more than the positives: a false negative is just today's
+        # behavior, while a false positive is a confidently wrong action where an honest "I
+        # don't understand" was correct. Note several negatives are rejected because
+        # OTHER_INTENT wins the argmax outright, not because they fall under a threshold --
+        # that bucket, not the cutoff, is what does the real work here.
+        positives = [
+            ("check out the room", "scene_query"),
+            ("who else is around", "scene_query"),
+            ("whats in this place", "scene_query"),
+            ("take a look around", "scene_query"),
+            ("lets head over to the docks", "travel"),
+            ("walk into the temple", "travel"),
+            ("camp here until sunrise", "rest"),
+            ("what do i know about goblins", "lore_check"),
+            ("get behind me anne", "formation_behind"),
+            ("walk next to me", "formation_abreast"),
+        ]
+        negatives = [
+            "look at the chest", "examine the dagger", "search the room for hidden traps",
+            "inspect the lock", "take the rope", "attack the wolf", "hey there innkeeper",
+            "buy a rope", "who are you", "sharpen my blade",
+        ]
+        authored = {phrase for phrases in INTENT_PROTOTYPES.values() for phrase in phrases}
+
+        for phrase, expected in positives:
+            self.assertNotIn(phrase, authored, f"{phrase!r} must stay held out to mean anything")
+            matched, score = self.nlp_core.matcher.map_to_intent(phrase)
+            self.assertEqual(matched, expected, f"{phrase!r} scored {score:.3f}")
+
+        for phrase in negatives:
+            matched, score = self.nlp_core.matcher.map_to_intent(phrase)
+            self.assertIsNone(matched, f"{phrase!r} wrongly routed to {matched} at {score:.3f}")
+
+    def test_destination_matching_resolves_a_generic_noun_the_literal_scan_cannot(self):
+        # The motivating case: DM_Movement.py's own whole-word name/alias scan can never get
+        # from "the tavern" to a destination authored as "The White Deer Tavern and Inn", and
+        # authoring "tavern" as an alias on every tavern in town is the phrase-by-phrase
+        # treadmill this replaces. The bank is installed/restored explicitly because the
+        # matcher is class-shared (same precedent as the register_item test below).
+        matcher = self.nlp_core.matcher
+        saved = (matcher.destination_embeddings, matcher.destination_indices)
+        try:
+            matcher.set_destinations([
+                {"key": "white_deer", "name": "The White Deer Tavern and Inn", "aliases": []},
+                {"key": "sandpoint_garrison", "name": "The Sandpoint Garrison", "aliases": []},
+                {"key": "goblin_squash", "name": "Goblin Squash Stables", "aliases": []},
+            ])
+            self.assertEqual(matcher.map_to_destination("head into the tavern")[0], "white_deer")
+            # An empty bank is a legitimate state (a location authoring no exits), and must
+            # clear the previous one rather than leaving it matchable.
+            matcher.set_destinations([])
+            self.assertEqual(matcher.map_to_destination("head into the tavern"), (None, 0.0))
+        finally:
+            matcher.destination_embeddings, matcher.destination_indices = saved
+
     def test_clear_action_still_triggers_above_threshold(self):
         detected_actions = []
         self.event_bus.subscribe("turn_detected", detected_actions.append)
@@ -448,10 +511,15 @@ class FakeMatcher:
         one authored just in case.
     """
 
-    def __init__(self, actions=None, items=None, targets=None, sentiments=None, threats=None, familiarities=None, modifiers=None):
+    def __init__(self, actions=None, items=None, targets=None, sentiments=None, threats=None, familiarities=None, modifiers=None, intents=None, destinations=None, intent_override=0.65):
         self._actions = actions or {}
         self._items = items or {}
         self._targets = targets or {}
+        self._intents = intents or {}
+        self._destinations = destinations or {}
+        # Mirrors SentenceTransformerMatcher.intent_override_threshold, so the two-tier
+        # strict= gate (IntentClassifier._route_intent) is exercisable with no model loaded.
+        self._intent_override = intent_override
         self._sentiments = sentiments or {}
         self._threats = threats or {}
         self._familiarities = familiarities or {}
@@ -481,6 +549,18 @@ class FakeMatcher:
 
     def map_to_target(self, processed_text):
         return self._targets.get(processed_text, (None, 0.0))
+
+    def map_to_intent(self, processed_text, strict=False):
+        intent, score = self._intents.get(processed_text, (None, 0.0))
+        if strict and score < self._intent_override:
+            return None, score
+        return intent, score
+
+    def set_destinations(self, destinations):
+        pass
+
+    def map_to_destination(self, processed_text):
+        return self._destinations.get(processed_text, (None, 0.0))
 
     def classify_sentiment(self, processed_text):
         return self._sentiments.get(processed_text, (None, 0.0))
@@ -732,6 +812,76 @@ class TestIntentClassification(unittest.TestCase):
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["event"], "scene_query_detected")
         self.assertEqual(events[0]["payload"], {"input": "what do i see"})
+
+    def test_semantic_router_rescues_a_phrasing_every_keyword_gate_missed(self):
+        # The whole point of the router: "who all is here" is a trivial paraphrase of
+        # SCENE_QUERY_KEYWORDS' own "who is here", and a total miss to a substring check.
+        # Before this, it reached action_not_understood and the clarification prompt invented
+        # three tavern patrons out of nothing.
+        classifier = IntentClassifier(FakeMatcher(intents={"who all is here": ("scene_query", 0.9)}))
+        _processed, events = classifier.classify("who all is here")
+
+        self.assertEqual(events, [{"event": "scene_query_detected", "payload": {
+            "input": "who all is here",
+        }}])
+
+    def test_semantic_router_never_shadows_a_real_skill_match(self):
+        # THE regression guard for this feature. The router is only safe because it runs at
+        # _finalize's give-up point -- if it ever ran earlier, or ran despite a matched clause,
+        # it could silently reroute a genuine action. A matcher that would confidently route
+        # this to scene_query must still lose to the skill that actually matched.
+        classifier = IntentClassifier(FakeMatcher(
+            actions={"search the room for hidden traps": ("observation", 0.8)},
+            intents={"search the room for hidden traps": ("scene_query", 0.99)},
+        ))
+        _processed, events = classifier.classify("search the room for hidden traps")
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["event"], "turn_detected")
+        self.assertEqual(events[0]["payload"]["clauses"][0]["skill"], "observation")
+
+    def test_semantic_router_declines_below_threshold_and_action_not_understood_still_fires(self):
+        # A false negative costs nothing -- it's exactly today's behavior. That asymmetry is
+        # why the intent thresholds sit above confidence_threshold rather than at it.
+        classifier = IntentClassifier(FakeMatcher())
+        _processed, events = classifier.classify("mrrgghfff")
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["event"], "action_not_understood")
+
+    def test_semantic_router_outranks_improvisation_only_on_the_stricter_bar(self):
+        # EXAMINE_KEYWORDS' own "check out" makes this a recognized item verb while no
+        # SCENE_QUERY_KEYWORDS phrase matches it, so without the router it reaches ad hoc item
+        # generation and gets asked to conjure "the room" as a takeable object. (Note "look at
+        # who's here" is NOT such a case -- it contains SCENE_QUERY_KEYWORDS' own "who's here"
+        # and the keyword gate claims it long before either path.) The router is allowed to
+        # take this -- but only on the higher bar, since it's displacing a working path rather
+        # than filling a silent give-up. FakeMatcher applies the same 0.65 override threshold
+        # the real matcher does.
+        confident = IntentClassifier(FakeMatcher(intents={"check out the room": ("scene_query", 0.73)}))
+        _processed, events = confident.classify("check out the room")
+        self.assertEqual(events[0]["event"], "scene_query_detected")
+
+        # Below it, improvisation keeps the turn exactly as it does today.
+        marginal = IntentClassifier(FakeMatcher(intents={"check out the room": ("scene_query", 0.56)}))
+        _processed, events = marginal.classify("check out the room")
+        self.assertEqual(events[0]["event"], "improvisation_requested")
+
+    def test_travel_carries_a_semantic_destination_from_both_producers(self):
+        # One shared _travel_event builds this payload for the TRAVEL_KEYWORDS gate and the
+        # router alike, so the two can't drift -- "the tavern" never matches "The White Deer
+        # Tavern and Inn" literally, which is exactly what the destination key is for.
+        matcher = FakeMatcher(
+            destinations={"go to the tavern": ("white_deer", 0.8), "head into the tavern": ("white_deer", 0.8)},
+            intents={"head into the tavern": ("travel", 0.9)},
+        )
+        # Producer 1: the keyword gate ("go to " is a TRAVEL_KEYWORDS phrase).
+        _processed, events = IntentClassifier(matcher).classify("go to the tavern")
+        self.assertEqual(events[0]["payload"]["destination"], "white_deer")
+        # Producer 2: the router ("head into" is not a TRAVEL_KEYWORDS phrase at all).
+        _processed, events = IntentClassifier(matcher).classify("head into the tavern")
+        self.assertEqual(events[0]["payload"]["intent"], "travel")
+        self.assertEqual(events[0]["payload"]["destination"], "white_deer")
 
     def test_adam_addressed_scene_question_still_reaches_the_help_channel(self):
         # ADAM_NAME_PATTERN is checked first regardless -- "adam, what do i see" must still
@@ -3478,6 +3628,46 @@ class TestWorldMapExpansion(DMTestCase):
         self.assertTrue(result["found"])
         self.assertEqual(self.dm_core.current_location_key, "rusty_dragon")
 
+    def test_semantic_destination_rescues_a_generic_noun_but_never_outranks_a_named_one(self):
+        # Both halves of _resolve_location_exit's precedence, against real authored Sandpoint
+        # content. The literal whole-word scan runs first and always wins, so a destination the
+        # player named outright can never be rerouted by a fuzzy match on some other exit --
+        # that ordering is what makes adding a semantic match safe at all.
+        resolved_events = self._capture("item_interaction_resolved")
+
+        self.dm_core._on_item_interaction_detected({
+            "intent": "travel", "item_name": None,
+            "input": "i travel to the rusty dragon", "destination": "goblin_squash_stables",
+        })
+        self.assertEqual(self.dm_core.current_location_key, "rusty_dragon")
+
+        # And the half the literal scan could never do: "the tavern" names no exit whole-word,
+        # so without a semantic key this denies with reason "no_exit" (or wanders off to
+        # "return_to") no matter how obvious the player's meaning was.
+        self.dm_core._enter_location("sandpoint")
+        self.dm_core._on_item_interaction_detected({
+            "intent": "travel", "item_name": None,
+            "input": "head into the tavern", "destination": "rusty_dragon",
+        })
+        self.assertTrue(resolved_events[-1]["found"])
+        self.assertEqual(self.dm_core.current_location_key, "rusty_dragon")
+
+    def test_entering_a_location_publishes_its_exits_for_semantic_matching(self):
+        # _enter_location is the single mutation site for current_location_key, so this one
+        # hook is what keeps NLPCore's destination bank in sync across scenario start, travel,
+        # grid arrival, teleport and load_game alike -- no separate persistence hook needed.
+        published = self._capture("location_exits_updated")
+
+        self.dm_core._enter_location("sandpoint")
+
+        keys = {entry["key"] for entry in published[-1]["destinations"]}
+        self.assertIn("rusty_dragon", keys)
+        # Carries the destination's friendly name (what "the tavern" actually has to match
+        # against), never its description -- see set_destinations.
+        rusty = next(e for e in published[-1]["destinations"] if e["key"] == "rusty_dragon")
+        self.assertTrue(rusty["name"])
+        self.assertNotIn("description", rusty)
+
     def test_magnimar_expansion_added_its_nine_districts_and_their_landmarks(self):
         # Magnimar's own sourcebook ("Magnimar, City of Monuments") frames the whole city as
         # nine districts, each with its own lettered gazetteer -- unlike Sandpoint's single flat
@@ -3639,6 +3829,21 @@ class TestFreeStandingIntentHandlers(unittest.TestCase):
             "location_description": "A bustling square.", "characters": [],
         }, llm_core)
         self.assertNotIn("block(s) of travel time", prompt)
+
+    def test_narrate_travel_names_the_location_not_just_the_arrival_room(self):
+        # A player who typed "the tavern" and is narrated arriving in "Common Room" alone has
+        # no way to tell a correct destination match from a wrong one -- and semantic
+        # destination matching (NLP_Core.py's map_to_destination) makes the player's words and
+        # the arrival room's authored name differ routinely, where the literal name scan alone
+        # mostly guaranteed they'd agree. Naming the location back is what keeps a guessed
+        # destination checkable by the person who guessed at it.
+        prompt = self._narrate("travel", {
+            "intent": "travel", "found": True,
+            "location_name": "The White Deer Tavern and Inn", "room_name": "Common Room",
+            "room_description": "A low-beamed taproom.", "characters": [],
+        }, self._FakeLLMCore())
+        self.assertIn("The White Deer Tavern and Inn", prompt)
+        self.assertIn("Common Room", prompt)
 
     def test_narrate_travel_explains_each_failure_reason(self):
         for reason, expected_phrase in (

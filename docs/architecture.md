@@ -64,13 +64,13 @@ rather than assuming a particular path.
   `_run_interact_program`) ahead of their own dispatch in `DM_Core.py` that a per-intent split
   would only duplicate.
 - **`NLP_Core.py`** (`nlp/`) — thin EventBus glue: subscribes to `user_input_submitted`/
-  `rules_loaded`/`item_catalog_updated`, delegates to `Intent_Classification.py`'s
-  `IntentClassifier`, and publishes whatever events come back. Also defines
-  `SentenceTransformerMatcher`, the production `IntentMatcher` adapter — owns the loaded
-  `sentence-transformers` (`all-MiniLM-L6-v2`) model and every precomputed skill/item/target
-  embedding tensor, and is the one place in this file that still touches the EventBus for
-  granular "mapped input to X" diagnostics, since encoding/scoring is where those facts become
-  known. `NLPCore` itself owns no classification logic.
+  `rules_loaded`/`item_catalog_updated`/`location_exits_updated`, delegates to
+  `Intent_Classification.py`'s `IntentClassifier`, and publishes whatever events come back. Also
+  defines `SentenceTransformerMatcher`, the production `IntentMatcher` adapter — owns the loaded
+  `sentence-transformers` (`all-MiniLM-L6-v2`) model and every precomputed skill/item/target/
+  intent/destination embedding tensor, and is the one place in this file that still touches the
+  EventBus for granular "mapped input to X" diagnostics, since encoding/scoring is where those
+  facts become known. `NLPCore` itself owns no classification logic.
 - **`Intent_Classification.py`** (`nlp/`) — pure, EventBus-independent: `IntentClassifier.classify()`
   returns `(processed_text, events)` — a list of
   one or more `{"event", "payload"}` dicts for the glue layer to publish, rather than publishing
@@ -89,9 +89,14 @@ rather than assuming a particular path.
   one `turn_detected {clauses: [{kind: "item", intent, item_name} | {kind: "action", skill,
   score, target?}, ...], input}` event, always a list, even for the ordinary single-clause input
   (see "Multiple actions" for the full classification order); if no clause resolves to anything,
-  publishes `action_not_understood` instead. `IntentMatcher.register_item` incrementally
-  re-registers a newly-created/reload-restored ad hoc entity's name/description on
-  `item_catalog_updated`, the one event here that isn't input-driven.
+  publishes `action_not_understood` instead — unless the semantic intent router claims it first
+  (see "Last-chance semantic routing" in `docs/action-resolution.md`). Two events here aren't
+  input-driven: `IntentMatcher.register_item` incrementally *appends* a newly-created/reload-
+  restored ad hoc entity's name/description on `item_catalog_updated`, and
+  `IntentMatcher.set_destinations` wholesale *replaces* the current location's reachable-exit
+  bank on `location_exits_updated` (`DM_Rules.py`'s `_enter_location`) — replace, not append,
+  because the reachable set changes completely on every move, which is exactly why it carries a
+  different verb from `register_item`.
 - **`LLM_Core.py`** (`llm/`) — posts to Ollama's OpenAI-compatible `/v1/chat/completions` on a
   background thread, with a rolling 100-message context window. Subscribes to nine narration
   triggers (see "Narration").

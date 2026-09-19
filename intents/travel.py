@@ -29,11 +29,15 @@ def resolve_travel(core, data, resolved):
         gridded destination only) if the straight-line route crosses terrain no currently-
         present party member can cross (see docs/downtime.md's "Terrain, roads, and polities").
     @param core The DMCore instance.
-    @param data The item_interaction_detected payload ({input, ...}).
+    @param data The item_interaction_detected payload ({input, destination?, ...}) --
+        "destination" is NLPCore's own semantic match (Intent_Classification.py's
+        _travel_event), absent/None whenever nothing was named confidently.
     @param resolved The item_interaction_resolved publisher closure from
         DMCore._on_item_interaction_detected.
     """
-    core._resolve_travel_intent(data.get("input"), resolved)
+    core._resolve_travel_intent(
+        data.get("input"), resolved, destination_key=data.get("destination"),
+    )
 
 
 def narrate_travel(llm_core, data):
@@ -67,7 +71,18 @@ def narrate_travel(llm_core, data):
             f"{reason_text} -- no roll involved.\n"
             f"Narrate a brief, in-character explanation in 1-2 sentences as the Game Master."
         )
-    scene_name = data.get("room_name") or data.get("location_name", "")
+    # Both when both exist, not just the room. A player who says "the tavern" and is narrated
+    # arriving in "Common Room" alone has no way to tell a correct destination match from a
+    # wrong one -- and semantic destination matching (NLP_Core.py's map_to_destination) makes
+    # the player's own words and the arrival room's authored name differ routinely, where the
+    # literal name scan alone mostly guaranteed they'd agree. Naming the location back is what
+    # keeps a guessed destination checkable by the person who guessed at it.
+    room_name = data.get("room_name")
+    location_name = data.get("location_name", "")
+    if room_name and location_name:
+        scene_name = f"{location_name} ({room_name})"
+    else:
+        scene_name = room_name or location_name
     llm_core.scenario_description = data.get("room_description") or data.get("location_description", "")
     llm_core.scenario_characters = data.get("characters", [])
     characters_text = (

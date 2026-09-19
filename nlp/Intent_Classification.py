@@ -250,6 +250,93 @@ TRAVEL_KEYWORDS = ("go to ", "head to ", "walk to ", "enter the ", "go outside",
 # common word like this needs, same precedent ADAM_NAME_PATTERN already sets.
 LEAVE_PATTERN = re.compile(r"\bleave\b")
 
+# The one intent name that is never published -- a deliberate "none of the above" class for
+# map_to_intent's own argmax (see INTENT_PROTOTYPES). Leading underscore so it can never collide
+# with a real intent string in HANDLERS (intents/registry.py).
+OTHER_INTENT = "_other"
+
+# Semantic backstop for the keyword gates above, scored by the same embedding matcher skill/item/
+# target matching already uses (map_to_intent) and consulted ONLY at _finalize's own give-up point
+# -- so it can never shadow a skill, item, or dialogue match that already succeeded, which is the
+# entire safety argument for routing this way at all rather than widening the keyword tables.
+# The gates stay as precise fast paths; this only ever converts what would have been an
+# action_not_understood (or, for a recognized-but-unmatched item verb, an ad hoc improvisation
+# attempt) into a real intent.
+#
+# Why this exists: a keyword table can only ever list phrasings someone thought of. SCENE_QUERY_
+# KEYWORDS has "who is here" but not "who all is here"; TRAVEL_KEYWORDS has "head to " but not
+# "head into" -- trivial paraphrases to a human, total misses to a substring check, and the tail
+# of them doesn't converge no matter how many get added.
+#
+# PHRASES MUST BE AUTHORED POST-process_input: lowercased, and with no leading filler prefix,
+# since that function strips one ("i want to ", "i ", ...) before anything here is ever scored
+# against. "head into the tavern", never "i head into the tavern" -- an unstripped prefix silently
+# embeds a phrase the matcher will never see the equivalent of.
+#
+# OTHER_INTENT is load-bearing, not filler. Without a negative class, argmax picks one of the
+# real intents for literally every input on earth, leaving an absolute cosine cutoff as the only
+# thing standing between an ordinary action and a confidently mis-routed one; with it, the
+# decision is discriminative and the threshold is only a backstop. Its phrases are deliberately
+# ordinary skill/item actions -- exactly what reaches _finalize having merely scored below
+# confidence_threshold, rather than anything exotic.
+#
+# Scope: read-only/low-stakes intents only. "rest" and "lore_check" are the two members with real
+# side effects on a false positive (rest advances the block clock; lore_check rolls dice) -- both
+# are still bounded and player-visible, unlike an item verb that could silently give away or drop
+# something, which is why no item-named intent is routed here.
+INTENT_PROTOTYPES = {
+    # "look around"/"look over" phrasings belong here even though SCENE_QUERY_KEYWORDS
+    # deliberately excludes a bare "look"/"search" -- that exclusion exists because a substring
+    # gate runs BEFORE skill matching and would swallow a genuine perception check ("search the
+    # room for hidden traps", an actual observation roll). This runs AFTER skill matching has
+    # already declined, so the check it was protecting has had its shot and lost; excluding them
+    # here bought nothing and left "look around the room" and "take a look around" stranded in
+    # ad hoc item generation, being asked to conjure "a look around" as a physical object.
+    "scene_query": (
+        "what is around me", "what do i see", "who all is here", "who else is in the room",
+        "describe my surroundings", "what does this place look like", "what is nearby",
+        "look around the room", "look over this place", "have a look about the area",
+        "take a look at this place", "take stock of the area",
+    ),
+    # No "step inside the inn" here, deliberately: "inn" sits close enough to "innkeeper" that
+    # a plain greeting ("hey there innkeeper") scored 0.56 against it and routed as travel.
+    # A prototype whose distinguishing noun is also a common NPC role word earns its whole
+    # intent a false positive on every greeting aimed at that role -- "head into the tavern"
+    # already covers entering a named building without that collision.
+    "travel": (
+        "head into the tavern", "go over to the market square", "walk to the blacksmith shop",
+        "make my way to the temple", "step inside the guild hall", "leave here for the docks",
+    ),
+    "rest": (
+        "make camp for the night", "set up camp and sleep", "take a long rest",
+        "bed down until morning", "sleep until dawn",
+    ),
+    "lore_check": (
+        "what do i know about trolls", "recall what i have heard about this creature",
+        "remember any lore about goblins", "what can i recall about this monster",
+    ),
+    "formation_behind": (
+        "stay behind me", "keep back and follow me", "fall in behind me",
+    ),
+    "formation_abreast": (
+        "walk beside me", "stay at my side", "move up alongside me",
+    ),
+    # Greetings and address-someone phrasings earn their place here as much as the action ones
+    # do: "hey there innkeeper" scored 0.56 against travel's own "step inside the inn" purely on
+    # "inn"/"innkeeper" before these existed -- a confident mis-route on an input whose correct
+    # answer is "no action at all". Whatever reaches _finalize is what this bucket has to
+    # cover, and greetings demonstrably reach it.
+    OTHER_INTENT: (
+        "attack the guard with my sword", "pick the lock on the chest",
+        "search the room for hidden traps", "give the sword to anne",
+        "cast a healing spell on thane", "climb the wall", "hide in the shadows",
+        "persuade the merchant to lower his price", "drink the healing potion",
+        "throw a dagger at the wolf",
+        "good day to you shopkeeper", "hello there friend", "greetings traveler",
+        "good morning to you", "hey you over there", "ask the guard about the road",
+    ),
+}
+
 DIRECTION_PHRASES = {
     "forward": (
         "next room", "proceed deeper", "continue deeper", "go deeper", "through the door",
@@ -364,6 +451,35 @@ class IntentMatcher:
 
     def map_to_target(self, processed_text):
         """!@brief Returns (entity_name, score); entity_name is None below confidence."""
+        raise NotImplementedError
+
+    def map_to_intent(self, processed_text, strict=False):
+        """!
+        @brief Scores processed_text against INTENT_PROTOTYPES -- the semantic backstop for the
+            keyword intent gates, consulted only at _finalize's own give-up point.
+        @param processed_text The whole processed input.
+        @param strict Apply the higher of the two confidence bars, for when a match would
+            displace an improvisation attempt rather than a bare action_not_understood.
+        @return (intent_name, score) -- intent_name is None below confidence OR when
+            OTHER_INTENT ("none of the above") wins the argmax, which is an ordinary,
+            expected outcome here rather than a failure.
+        """
+        raise NotImplementedError
+
+    def set_destinations(self, destinations):
+        """!
+        @brief REPLACES the current location's reachable-exit bank for map_to_destination.
+            Deliberately not named register_* like register_item: that one appends (the item
+            catalog only ever grows), while this one must discard the previous location's exits
+            outright, since the reachable set changes wholesale on every move.
+        @param destinations A list of {"key", "name", "aliases"} dicts -- possibly empty, which
+            is a legitimate state (a location authoring no exits at all).
+        """
+        raise NotImplementedError
+
+    def map_to_destination(self, processed_text):
+        """!@brief Returns (destination_key, score) against the bank set_destinations last
+            installed; destination_key is None below confidence or with no bank loaded."""
         raise NotImplementedError
 
     def classify_sentiment(self, processed_text):
@@ -550,6 +666,26 @@ def detect_travel_intent(processed_text):
     return bool(LEAVE_PATTERN.search(processed_text)) or _keyword_gate(processed_text, TRAVEL_KEYWORDS)
 
 
+def _travel_event(processed_text, matcher):
+    """!
+    @brief Builds the one "travel" item_interaction_detected event, for BOTH producers -- the
+        TRAVEL_KEYWORDS gate in classify() and the semantic router in _finalize. Deliberately
+        shared rather than duplicated: the payload now carries a matcher-resolved "destination",
+        and two hand-synced copies of that shape would drift the first time either gains a field.
+        A None destination is the ordinary case (no exit bank loaded, or nothing named
+        confidently) and means DMCore falls back to its own literal name/alias scan, exactly as
+        before this existed -- see DM_Movement.py's _resolve_location_exit.
+    @param processed_text The whole processed input.
+    @param matcher The IntentMatcher seam.
+    @return One {"event", "payload"} dict.
+    """
+    destination, _score = matcher.map_to_destination(processed_text)
+    return {"event": "item_interaction_detected", "payload": {
+        "intent": "travel", "item_name": None, "input": processed_text, "score": None,
+        "destination": destination,
+    }}
+
+
 def detect_save_load_intent(processed_text):
     """!
     @brief Checks processed input for a "save"/"load" command, ahead of item and skill
@@ -608,6 +744,10 @@ class IntentClassifier:
         """!@brief Forwards one ad hoc item's name/description to the matcher's own catalog."""
         self.matcher.register_item(name, description)
 
+    def set_destinations(self, destinations):
+        """!@brief Forwards the current location's reachable exits to the matcher's own bank."""
+        self.matcher.set_destinations(destinations)
+
     def classify(self, raw_input):
         """!
         @brief Classifies one whole turn of raw player input. See this class's own docstring
@@ -661,11 +801,11 @@ class IntentClassifier:
             return processed, events
 
         if detect_travel_intent(processed):
-            # Same tier as the direction check above, but for location-to-location travel --
-            # see TRAVEL_KEYWORDS' own module note for why no destination is resolved here.
-            events.append({"event": "item_interaction_detected", "payload": {
-                "intent": "travel", "item_name": None, "input": processed, "score": None,
-            }})
+            # Same tier as the direction check above, but for location-to-location travel.
+            # Unlike every other gate here, this one does consult the matcher (for the named
+            # destination -- see _travel_event); DMCore still gets the raw input and still
+            # resolves the destination literally first, so a None here changes nothing.
+            events.append(_travel_event(processed, self.matcher))
             return processed, events
 
         turn_clauses, remaining_clauses, found_exempt, unmatched_item_verbs = self._classify_item_pass(
@@ -804,11 +944,11 @@ class IntentClassifier:
 
     def _finalize(self, processed, turn_clauses, found_exempt, unmatched_item_verbs, best_score, events):
         """!
-        @brief Decides the turn's final event once both passes have run: a merged
-            turn_detected if anything claimed the turn, else an improvisation_requested
-            fallback if a recognized-but-unmatched item verb is available, else
-            action_not_understood -- unless an exempt clause already claimed the whole input
-            (found_exempt with nothing else), in which case nothing further publishes at all.
+        @brief Decides the turn's final event once both passes have run, in order: a merged
+            turn_detected if anything claimed the turn; nothing at all if an exempt clause
+            already claimed the whole input; else the semantic router (_route_intent); else an
+            improvisation_requested fallback if a recognized-but-unmatched item verb is
+            available; else action_not_understood.
         @param events The classify()-owned events list; the final decision is appended here.
         """
         if turn_clauses:
@@ -817,7 +957,32 @@ class IntentClassifier:
             # the whole downstream pipeline (DMCore, LLMCore) is built around one consistent
             # shape rather than special-casing N=1 or a single clause kind.
             events.append({"event": "turn_detected", "payload": {"clauses": turn_clauses, "input": processed}})
-        elif not found_exempt and unmatched_item_verbs:
+            return
+        if found_exempt:
+            # An exempt clause (ex: a bare "retreat") already published its own free-standing
+            # event and claimed the whole input -- nothing further to decide.
+            return
+
+        # Semantic backstop, reached only now that both passes have declined -- so it can never
+        # shadow a real skill/item/dialogue match (see INTENT_PROTOTYPES). Called lazily, here
+        # rather than up front, so an ordinary turn never pays for the encode at all.
+        #
+        # Ordered AHEAD of improvisation, but gated harder when improvisation is actually
+        # available. "After improvisation" would really mean "never" for any input carrying a
+        # recognized item verb, because DM_Improvisation.py's own decline path publishes
+        # action_not_understood itself, from DMCore, where there is no matcher to consult -- and
+        # that overlap set is exactly the wrong one to lose: EXAMINE_KEYWORDS' own "look at"/
+        # "check out" make "look at who's here" and "check out the room" recognized examine
+        # verbs, so they'd reach ad hoc item generation and be asked to conjure "who's here" as
+        # a physical object, the precise invention the scene-query channel exists to prevent.
+        # Displacing a working-ish path needs stronger evidence than a clean give-up does,
+        # hence strict=.
+        routed = self._route_intent(processed, strict=bool(unmatched_item_verbs))
+        if routed:
+            events.append(routed)
+            return
+
+        if unmatched_item_verbs:
             # The whole turn would otherwise resolve to nothing at all, but at least one clause
             # was a recognized item verb naming something that just doesn't exist yet -- last
             # resort before giving up: DM_Improvisation.py's own generate_ad_hoc_item gets a
@@ -828,8 +993,35 @@ class IntentClassifier:
             events.append({"event": "improvisation_requested", "payload": {
                 "intent": candidate["intent"], "phrase": candidate["phrase"], "input": processed,
             }})
-        elif not found_exempt:
-            # Below confidence_threshold on every remaining clause, and the item pass found
-            # nothing either: publish this instead of staying silent, so the player gets some
-            # response rather than the app appearing to stall.
-            events.append({"event": "action_not_understood", "payload": {"input": processed, "score": best_score}})
+            return
+
+        # Below confidence_threshold on every remaining clause, the item pass found nothing, and
+        # the semantic router declined too: publish this instead of staying silent, so the player
+        # gets some response rather than the app appearing to stall.
+        events.append({"event": "action_not_understood", "payload": {"input": processed, "score": best_score}})
+
+    def _route_intent(self, processed, strict):
+        """!
+        @brief The semantic intent backstop (see INTENT_PROTOTYPES/_finalize) -- maps a whole
+            input that every keyword gate and both matching passes already declined onto one of
+            the routable intents, and builds the SAME event that intent's own keyword gate would
+            have, so nothing downstream can tell the two producers apart.
+        @param processed The whole processed input.
+        @param strict True when a recognized-but-unmatched item verb is available, so an
+            improvisation attempt is what this would be displacing rather than a bare
+            action_not_understood -- raises the bar the match has to clear.
+        @return One {"event", "payload"} dict, or None to let the caller fall through.
+        """
+        intent, _score = self.matcher.map_to_intent(processed, strict=strict)
+        if not intent:
+            return None
+        if intent == "scene_query":
+            return {"event": "scene_query_detected", "payload": {"input": processed}}
+        if intent == "travel":
+            return _travel_event(processed, self.matcher)
+        # Every other routable intent is a free-standing item interaction (intents/registry.py's
+        # own HANDLERS), carrying no item name -- the exact shape detect_item_intent's own exempt
+        # clauses already publish.
+        return {"event": "item_interaction_detected", "payload": {
+            "intent": intent, "item_name": None, "input": processed, "score": None,
+        }}

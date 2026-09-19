@@ -1048,6 +1048,43 @@ class RulesMixin(DMCoreProtocol):
         self._resolve_location_encounter(self._current_room() or location)
         self._run_on_enter_programs()
         self._evaluate_arrival_statuses()
+        self._publish_location_exits()
+
+    def _publish_location_exits(self):
+        """!
+        @brief Publishes this location's own reachable [[location.exit]] destinations for
+            NLPCore's semantic destination matching (see NLP_Core.py's set_destinations/
+            map_to_destination) -- so "the tavern" can reach a destination whose authored name
+            is "The White Deer Tavern and Inn", which _resolve_location_exit's own whole-word
+            name/alias scan never could.
+
+            Called from _enter_location alone, which is the single mutation site for
+            self.current_location_key -- so this one hook covers scenario start, player travel,
+            grid arrival, teleport, AND load_game's own restore, with no separate persistence
+            hook of the kind item_catalog_updated needs.
+
+            An empty list is published deliberately rather than skipped: a location authoring no
+            exits at all (ex: a gridded trailhead) has to CLEAR the previous location's bank, or
+            a destination the player can no longer reach would keep matching.
+
+            Deliberately carries no "description" -- see set_destinations. Grid-reachable
+            locations (DM_Travel.py's _resolve_grid_destination) are deliberately out of scope
+            here; when they're added they belong in a sibling "grid_destinations" key rather
+            than folded into this one, since their candidate set is global and invalidates on a
+            different axis (known_locations), not on this one.
+        """
+        location = self.locations.get(self.current_location_key, {})
+        destinations = []
+        for exit_def in location.get("exit", []):
+            destination_key = exit_def.get("destination")
+            if not destination_key:
+                continue
+            destinations.append({
+                "key": destination_key,
+                "name": self.locations.get(destination_key, {}).get("name", ""),
+                "aliases": list(exit_def.get("aliases", [])),
+            })
+        self.event_bus.publish("location_exits_updated", {"destinations": destinations})
 
     def _run_on_enter_programs(self):
         """!

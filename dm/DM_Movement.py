@@ -660,14 +660,31 @@ class MovementMixin(DMCoreProtocol):
             characters=self._describe_scenario_characters(),
         )
 
-    def _resolve_location_exit(self, input_text):
+    def _resolve_location_exit(self, input_text, destination_key=None):
         """!
         @brief Finds the current location's own declared [[location.exit]] named in input_text
             -- searching for any exit's destination location's own "name" (or one of its
             "aliases"), whole-word and case-insensitive, present in input_text. Same
             "search the raw input for a known name" pattern _resolve_formation_intent already
             uses for a party member's own name, just against multi-word phrases.
+
+            **The literal scan runs first and always wins**; NLPCore's own semantic match
+            (destination_key, from map_to_destination) is only ever consulted for what the scan
+            missed. That ordering is the same literal-before-fuzzy discipline match_modifier
+            already applies (stripping a named modifier before map_to_action ever scores the
+            remainder) and that _resolve_formation_intent applies for party member names, and
+            it's what makes this safe to add: a destination the player actually named outright
+            can never be rerouted by a fuzzy match on some other exit. It also costs nothing for
+            the case that motivated the semantic match at all -- "the tavern" has no literal
+            whole-word hit against "The White Deer Tavern and Inn", so the scan misses and the
+            semantic key is what rescues it either way.
+
+            The semantic key is verified against this location's own live exit list rather than
+            trusted outright, so a stale registration (ex: an event delivered out of order) is
+            harmless -- it simply finds nothing and falls through to "return_to"/"no_exit"
+            exactly as an unrecognized destination always has.
         @param input_text The raw (lowercased, prefix-stripped) player input.
+        @param destination_key A destination key NLPCore matched semantically, or None.
         @return The matched [[location.exit]] table, or None if no destination is named.
         """
         location = self.locations.get(self.current_location_key, {})
@@ -677,9 +694,13 @@ class MovementMixin(DMCoreProtocol):
             for phrase in candidates:
                 if phrase and re.search(rf"\b{re.escape(phrase.lower())}\b", input_text or ""):
                     return exit_def
+        if destination_key:
+            for exit_def in location.get("exit", []):
+                if exit_def.get("destination") == destination_key:
+                    return exit_def
         return None
 
-    def _resolve_travel_intent(self, input_text, resolved):
+    def _resolve_travel_intent(self, input_text, resolved, destination_key=None):
         """!
         @brief Handles "travel" -- taking a declared [[location.exit]] to a different
             [[location]] entirely, the location-graph counterpart to
@@ -723,6 +744,8 @@ class MovementMixin(DMCoreProtocol):
         @param input_text The raw (lowercased, prefix-stripped) player input.
         @param resolved The item_interaction_resolved publisher closure from
             DMCore._on_item_interaction_detected.
+        @param destination_key A destination NLPCore matched semantically, or None -- only ever
+            consulted for what _resolve_location_exit's own literal scan missed (see there).
         """
         if self.pending_downtime and not self._any_hostile_present():
             self._resume_pending_downtime()
@@ -730,7 +753,7 @@ class MovementMixin(DMCoreProtocol):
             resolved(False, reason="downtime_interrupted")
             return
 
-        exit_def = self._resolve_location_exit(input_text)
+        exit_def = self._resolve_location_exit(input_text, destination_key)
         if exit_def is not None:
             destination_key = exit_def["destination"]
             arrival_room = exit_def.get("arrival_room")

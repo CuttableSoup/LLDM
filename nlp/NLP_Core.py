@@ -18,7 +18,13 @@ import torch
 from sentence_transformers import SentenceTransformer, util
 from transformers import pipeline
 
-from nlp.Intent_Classification import CURRENCY_SYNONYMS, IntentClassifier, IntentMatcher
+from nlp.Intent_Classification import (
+    CURRENCY_SYNONYMS,
+    INTENT_PROTOTYPES,
+    OTHER_INTENT,
+    IntentClassifier,
+    IntentMatcher,
+)
 
 # classify_sentiment's own model -- a general-purpose natural-language-inference model, not this
 # class's own semantic-similarity embedding model and not a purpose-trained sentiment head.
@@ -152,6 +158,38 @@ class SentenceTransformerMatcher(IntentMatcher):
         # "meaningfully more confident than chance," not an arbitrary tone-strength cutoff the
         # way VADER's old compound-score threshold was.
         self.sentiment_confidence_threshold = 0.5
+        # Deliberately higher than confidence_threshold, because the error costs run the opposite
+        # way here. For an item or skill, the right answer is usually somewhere in the catalog;
+        # for an intent, the overwhelming majority of inputs that ever reach map_to_intent are
+        # genuinely none of the routable ones, and a false positive is strictly worse than the
+        # status quo it replaces -- a mis-routed travel narrates "there's no way through in that
+        # direction" (intents/travel.py), confidently wrong, where an honest "I don't understand"
+        # would have been correct. A false negative costs nothing at all: it's today's behavior.
+        self.intent_confidence_threshold = 0.55
+        # The strict= bar (see _route_intent): displacing an improvisation attempt is a stronger
+        # claim than filling a silent give-up, so it takes stronger evidence.
+        self.intent_override_threshold = 0.65
+        self.destination_confidence_threshold = 0.55
+
+        # Static and setting-independent (INTENT_PROTOTYPES is a module constant, not rules
+        # data), so this is built once here rather than rebuilt on every on_rules_loaded call --
+        # which genuinely fires more than once per process, and would be pure waste every time.
+        # Building it in __init__ also means map_to_intent never needs the "is None" guard
+        # all_embeddings/item_embeddings both have to carry.
+        prototype_phrases = []
+        prototype_indices = []
+        for intent_name, phrases in INTENT_PROTOTYPES.items():
+            for phrase in phrases:
+                prototype_phrases.append(phrase)
+                prototype_indices.append(intent_name)
+        self.intent_embeddings = self.model.encode(prototype_phrases, convert_to_tensor=True)
+        self.intent_indices = prototype_indices
+
+        # Installed wholesale by set_destinations on every location change (see that method) --
+        # None until the first one arrives, which is the ordinary state at construction time
+        # since NLPCore is built before DMCore in every boot path.
+        self.destination_embeddings = None
+        self.destination_indices = []
 
     def _add_phrases(self, all_phrases, indices, key, data):
         """!
@@ -639,6 +677,99 @@ class SentenceTransformerMatcher(IntentMatcher):
         self.event_bus.publish("log_info", f"Mapped input to target: {best_target} (Score: {best_score:.4f})")
         return best_target, best_score
 
+    def map_to_intent(self, processed_text, strict=False):
+        """!
+        @brief Maps a whole input onto one of INTENT_PROTOTYPES' own routable intents, the same
+            encode/cos_sim/argmax shape map_to_target uses -- the semantic backstop for the
+            keyword intent gates, called only from IntentClassifier._finalize's give-up point.
+        @param processed_text The whole processed input.
+        @param strict Score against intent_override_threshold instead of
+            intent_confidence_threshold -- see those two attributes.
+        @return (intent_name, score); intent_name is None below the applicable threshold, or
+            when OTHER_INTENT wins.
+        """
+        input_embedding = self.model.encode(processed_text, convert_to_tensor=True)
+        cosine_scores = util.cos_sim(input_embedding, self.intent_embeddings)[0]
+
+        best_phrase_idx = np.argmax(cosine_scores.cpu().numpy())
+        best_score = cosine_scores[best_phrase_idx].item()
+        best_intent = self.intent_indices[best_phrase_idx]
+
+        threshold = self.intent_override_threshold if strict else self.intent_confidence_threshold
+        if best_score < threshold:
+            return None, best_score
+        if best_intent == OTHER_INTENT:
+            # An ordinary action that simply scored below confidence_threshold on every skill --
+            # the modal case here, and exactly what this class exists to absorb (see
+            # INTENT_PROTOTYPES). Report the score so the caller can still log it.
+            return None, best_score
+
+        self.event_bus.publish("log_info", f"Mapped input to intent: {best_intent} (Score: {best_score:.4f})")
+        return best_intent, best_score
+
+    def set_destinations(self, destinations):
+        """!
+        @brief Installs the current location's reachable [[location.exit]] destinations as the
+            bank map_to_destination scores against. REPLACES wholesale -- unlike register_item,
+            which appends via torch.cat because the item catalog only ever grows, the reachable
+            exit set changes completely on every move, so last location's exits must not linger.
+            Embeds each destination's name, its aliases, and its key with underscores spaced out;
+            deliberately NOT its description -- location prose is long and would both dilute the
+            match and let unrelated input ("the smell of ale") score against a destination.
+        @param destinations A list of {"key", "name", "aliases"} dicts, possibly empty (a
+            location authoring no exits at all, ex: a gridded trailhead).
+        """
+        phrases = []
+        indices = []
+        for destination in destinations or []:
+            key = destination.get("key")
+            if not key:
+                continue
+            for phrase in [destination.get("name", ""), key.replace("_", " ")] + list(destination.get("aliases", [])):
+                if phrase:
+                    phrases.append(phrase)
+                    indices.append(key)
+
+        if phrases:
+            self.destination_embeddings = self.model.encode(phrases, convert_to_tensor=True)
+            self.destination_indices = indices
+        else:
+            self.destination_embeddings = None
+            self.destination_indices = []
+
+        self.event_bus.publish("log_info", f"NLPCore: {len(phrases)} destination phrases encoded for {len(set(indices))} exits.")
+
+    def map_to_destination(self, processed_text):
+        """!
+        @brief Maps the processed text to one of the current location's own exit destination
+            keys, so "the tavern" can reach "The White Deer Tavern and Inn" -- which
+            DM_Movement.py's own whole-word name/alias scan never could. That literal scan still
+            runs FIRST and still wins (see _resolve_location_exit); this only ever rescues what
+            it missed, which is what keeps a fuzzy match from ever rerouting a destination the
+            player named outright.
+        @param processed_text The whole processed input.
+        @return (destination_key, score); destination_key is None below
+            destination_confidence_threshold or with no bank loaded. Ties resolve to the
+            first-declared exit (np.argmax returns the first maximum and the bank is built in
+            the location's own authoring order), the same inherent limitation map_to_target
+            already documents for identically-named instances.
+        """
+        if self.destination_embeddings is None:
+            return None, 0.0
+
+        input_embedding = self.model.encode(processed_text, convert_to_tensor=True)
+        cosine_scores = util.cos_sim(input_embedding, self.destination_embeddings)[0]
+
+        best_phrase_idx = np.argmax(cosine_scores.cpu().numpy())
+        best_score = cosine_scores[best_phrase_idx].item()
+        best_destination = self.destination_indices[best_phrase_idx]
+
+        if best_score < self.destination_confidence_threshold:
+            return None, best_score
+
+        self.event_bus.publish("log_info", f"Mapped input to destination: {best_destination} (Score: {best_score:.4f})")
+        return best_destination, best_score
+
 
 class NLPCore:
     """!
@@ -661,6 +792,10 @@ class NLPCore:
         # DM_Improvisation.py publishes this whenever an ad hoc entity is created or restored
         # from a save -- see SentenceTransformerMatcher.register_item's own docstring.
         self.event_bus.subscribe("item_catalog_updated", self._on_item_catalog_updated)
+        # DM_Rules.py's _enter_location publishes this on every location change -- see
+        # SentenceTransformerMatcher.set_destinations' own docstring. The other non-input-driven
+        # catalog feed, alongside item_catalog_updated above.
+        self.event_bus.subscribe("location_exits_updated", self._on_location_exits_updated)
 
         self.event_bus.publish("log_info", "NLPCore initialized with SentenceTransformer.")
 
@@ -692,3 +827,13 @@ class NLPCore:
         """
         for entry in data.get("entities", []):
             self.classifier.register_item(entry.get("name"), entry.get("description", ""))
+
+    def _on_location_exits_updated(self, data):
+        """!
+        @brief Forwards the current location's reachable exits to the classifier's own
+            set_destinations -- one whole-bank replace, not a per-entry append like
+            _on_item_catalog_updated, since the previous location's exits must not survive.
+        @param data The "location_exits_updated" payload ({"destinations": [{"key", "name",
+            "aliases"}, ...]}) -- an empty list is legitimate and clears the bank.
+        """
+        self.classifier.set_destinations(data.get("destinations", []))

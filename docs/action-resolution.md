@@ -103,6 +103,38 @@ clause is classified independently, in two passes:
    to a list of exactly one entry. Same-skill-multiplier phrasing (ex: "attack it twice") is
    out of scope — only distinct clauses are detected as distinct actions.
 
+**Last-chance semantic routing.** Every intent gate above is a literal substring table
+(`_keyword_gate`), which can only ever recognize phrasings someone thought to list:
+`SCENE_QUERY_KEYWORDS` had `"who is here"` but not `"who all is here"`, `TRAVEL_KEYWORDS` had
+`"head to "` but not `"head into"` — trivial paraphrases to a human, total misses to a substring
+check, and a tail that doesn't converge however many get added (the observed failure: `"who all
+is here"` reached `action_not_understood`, whose clarification prompt then invented three tavern
+patrons). So `_finalize` consults one more matcher call, `map_to_intent`, against
+`INTENT_PROTOTYPES` — a handful of example phrasings per routable intent, embedded in the same
+space skill/item/target matching already uses — and on a confident hit publishes the *same* event
+that intent's own keyword gate would have, so nothing downstream can tell the two producers
+apart. **It runs only at the give-up point**, after both passes have declined, which is the whole
+safety argument: it can never shadow a skill, item, or dialogue match that already succeeded, so
+the worst case is a wrong answer where an honest non-answer would have been. It sits *ahead* of
+`improvisation_requested` but must clear a higher bar (`intent_override_threshold`) to displace
+it, because "after improvisation" would mean *never* for any input carrying a recognized item
+verb — `DM_Improvisation.py`'s own decline path publishes `action_not_understood` itself, from
+DMCore, where there is no matcher left to ask — and that overlap is the worst one to lose:
+`EXAMINE_KEYWORDS`' own `"check out"` makes `"check out the room"` a recognized examine verb, so
+it would reach ad hoc item generation and be asked to conjure "the room" as a takeable object.
+Two things keep the false-positive rate down, and the *first* matters more than the second: a
+deliberate `OTHER_INTENT` ("none of the above") prototype bucket, without which `argmax` picks a
+real intent for literally every input on earth and an absolute cosine cutoff is the only defense;
+and thresholds set above `confidence_threshold`, because the error costs run opposite to item
+matching here — the right answer is usually *not* in the catalog, and a mis-routed travel
+confidently narrates "there's no way through in that direction" where "I don't understand" was
+correct, while a false negative costs exactly nothing (it's the old behavior). Scope is read-only
+and low-stakes intents only; no item-named intent is routed this way. Calibration is an
+executable artifact, not prose —
+`test_intent_router_separates_held_out_paraphrases_from_ordinary_actions` scores a held-out
+battery through the real model, asserting the phrases aren't themselves prototypes so it measures
+generalization rather than memorization.
+
 **Resolution.** `dice_penalty = max(0, len(clauses) - 1)`, computed once per turn from the
 combined item + action clause count and threaded through every dice-rolling action-kind entry:
 `resolve_action`/`resolve_opposed_action` (`DM_Combat.py`) subtract whole dice (never pips) from
