@@ -68,6 +68,33 @@ lists every locally pulled model (Ollama's native `/api/tags` is the same catalo
 shaped); a chat completion against a model name that hasn't been pulled 404s rather than
 falling back to whatever's loaded.
 
+**Context budgeting.** The model's own context window covers the prompt and the reply
+*together*, and this endpoint gives no way to raise it — Ollama's `/v1/chat/completions`
+silently ignores `num_ctx` (verified against a live server: passing it changes neither
+`prompt_tokens` nor the cap), so the only lever on this side of the wire is keeping the prompt
+small enough to leave room to answer inside it. `context_window`'s own cap is **100 messages**,
+which has no idea how big a message is, so a long session grew prompts to ~4000 tokens against
+a 4096 ceiling and left ~95 for the reply: every narration came back
+`finish_reason="length"` — silently truncated mid-sentence, which nothing was checking for —
+and roughly half the time the model spent that sliver without emitting any content at all and
+returned an empty string, which was then published verbatim as the turn's narration *and*
+appended to `context_window` as an assistant turn. A blank turn from a pipeline that had
+resolved the action perfectly well. `_fit_history` fixes the cause, dropping the oldest entries
+until the system message plus what's left clears `RESPONSE_TOKEN_RESERVE`; it's a separate axis
+from the 100-message cap rather than a replacement, since that one bounds what the game
+*remembers* while this bounds what any single request *sends* (a long scene keeps its full
+history for `_filter_present_history` and later turns, it just stops putting all of it on the
+wire at once). At least one entry always survives even if it alone blows the budget — sending
+the prompt that actually prompted this turn and letting the model truncate beats sending a bare
+system message with no player action in it. The reserve is measured, not guessed: an ordinary
+2-3 sentence narration runs ~550 completion tokens, and capping at 512 visibly truncated one
+mid-sentence. Behind that, `_fetch_and_publish` retries once on an empty completion and, if it
+is still empty, publishes a `System:` notice rather than a blank turn and **never stores it in
+`context_window`** — an empty assistant turn isn't something the scene witnessed, and keeping it
+would spend budget on nothing and teach the model that empty replies belong here. This is a
+per-symptom guard, not a substitute for the budget: if empties start appearing again, the prompt
+has outgrown its room and `_fit_history` is what needs revisiting.
+
 `Ollama_Launcher.py`'s `ensure_ollama_running` is a best-effort local server bootstrap, called
 once from `LLDM.py`'s own `main()` on a background daemon thread, started right after `GUICore`
 is constructed (before `NLPCore`/`LLMCore`/`DMCore`) — specifically so its window already exists

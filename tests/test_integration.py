@@ -380,7 +380,12 @@ class TestMountingConversation(_LivePipelineTestCase):
         self.assertTrue(resolved_events[-1]["found"])
         self.assertEqual(resolved_events[-1]["target"], self.horse_name)
         self.assertEqual(self.dm_core.entities[player_name]["mount"], self.horse_name)
-        self.assertEqual(self.dm_core._party_travel_speed(), 48)  # creatures.toml's own horse
+        # 40, not 2x rules.toml's own default_speed -- creatures.toml's horse deliberately
+        # carries Pathfinder's own 40 miles/day overland figure rather than any multiple of
+        # default_speed (see its own comment there, and test_unit.py's
+        # test_party_travel_speed_uses_a_mounted_players_own_horse, which asserts the same 40).
+        # This line said 48 until the empty-narration fix let the test reach it again.
+        self.assertEqual(self.dm_core._party_travel_speed(), 40)  # creatures.toml's own horse
 
         # Already mounted -- denied outright before the boar is even considered as a target.
         say(f"I try to mount the {self.boar_name}")

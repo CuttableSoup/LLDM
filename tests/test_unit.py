@@ -92,7 +92,13 @@ from nlp.Intent_Classification import (
 )
 import LLDM
 from intents.registry import HANDLERS as FREE_STANDING_INTENT_HANDLERS
-from llm.LLM_Core import LLMCore, _OUTCOME_FORMATTERS
+from llm.LLM_Core import (
+    CHARS_PER_TOKEN,
+    CONTEXT_TOKEN_BUDGET,
+    RESPONSE_TOKEN_RESERVE,
+    LLMCore,
+    _OUTCOME_FORMATTERS,
+)
 import llm.Ollama_Launcher as Ollama_Launcher
 from llm.Ollama_Launcher import ensure_ollama_running
 from llm.LLM_Rag import RagIndex
@@ -11789,6 +11795,69 @@ class TestLlmDebugEvent(LLMTestCase):
         self.assertIn("[system]", debug_events[0]["query"])
         self.assertIn("The wolf attacks.", debug_events[0]["query"])
         self.assertEqual(debug_events[0]["response"], "The wolf snarls.")
+
+
+class TestContextBudgetAndEmptyResponses(LLMTestCase):
+    """!
+    @brief The two halves of the starved-context bug (see LLM_Core.py's CONTEXT_TOKEN_BUDGET
+        note): context_window's own 100-*message* cap has no idea how big a message is, so a
+        long session grew prompts until the model had almost no room left to reply in -- every
+        narration came back truncated, and about half the time it returned nothing at all,
+        which was then published as the turn's narration and stored as an assistant turn.
+        Observed live against Ollama at prompt_tokens=4001/completion_tokens=95, and caught by
+        two integration tests that died on a blank response several turns in.
+    """
+
+    def _fake_response(self, content):
+        response = MagicMock()
+        response.read.return_value = json.dumps(
+            {"choices": [{"message": {"content": content}}]}
+        ).encode("utf-8")
+        return response
+
+    def test_fit_history_drops_oldest_until_there_is_room_to_reply(self):
+        # Far more history than could ever fit, newest last.
+        history = [{"role": "user", "content": f"{i} " + "x" * 2000} for i in range(50)]
+        kept = self.llm_core._fit_history("system message", history)
+
+        budget_chars = (CONTEXT_TOKEN_BUDGET - RESPONSE_TOKEN_RESERVE) * CHARS_PER_TOKEN
+        self.assertLess(sum(len(e["content"]) for e in kept), budget_chars)
+        self.assertLess(len(kept), len(history))
+        # Newest kept, oldest dropped -- recent turns are what ground the current moment.
+        self.assertEqual(kept[-1], history[-1])
+
+    def test_fit_history_always_sends_at_least_the_triggering_turn(self):
+        # One entry over budget on its own still goes: sending the prompt that prompted this
+        # turn and letting the model truncate beats sending a system message with no action.
+        history = [{"role": "user", "content": "x" * 999999}]
+        self.assertEqual(len(self.llm_core._fit_history("system message", history)), 1)
+
+    def test_an_empty_response_is_retried_once_and_never_published_raw(self):
+        responses = []
+        self.event_bus.subscribe("llm_response_ready", responses.append)
+        with patch("threading.Thread") as mock_thread,              patch("urllib.request.urlopen", side_effect=[
+                 self._fake_response(""), self._fake_response("The wolf snarls."),
+             ]):
+            self.llm_core._queue_narration("The wolf attacks.")
+            mock_thread.call_args.kwargs["target"]()
+
+        self.assertEqual(responses, ["The wolf snarls."])
+
+    def test_a_persistently_empty_response_never_pollutes_the_context_window(self):
+        # An empty assistant turn isn't something the scene witnessed -- storing it would
+        # spend budget on nothing and teach the model that empty replies belong here.
+        responses = []
+        self.event_bus.subscribe("llm_response_ready", responses.append)
+        with patch("threading.Thread") as mock_thread,              patch("urllib.request.urlopen", side_effect=[
+                 self._fake_response(""), self._fake_response("   "),
+             ]):
+            self.llm_core._queue_narration("The wolf attacks.")
+            mock_thread.call_args.kwargs["target"]()
+
+        self.assertTrue(responses[-1].strip())
+        self.assertNotIn(
+            "assistant", [entry["role"] for entry in self.llm_core.context_window],
+        )
 
 
 class TestAdamNarration(LLMTestCase):

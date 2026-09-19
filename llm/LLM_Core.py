@@ -57,6 +57,28 @@ def _format_cure_effect(effect, actor):
     return f" {effect.target.capitalize()} is cured of {', '.join(effect.conditions)}."
 
 
+# The model's own context window is the real ceiling on a request, and it covers the prompt and
+# the reply TOGETHER -- Ollama's /v1/chat/completions silently ignores num_ctx (verified against
+# a live server: passing it changes neither prompt_tokens nor the cap), so the only lever this
+# side of the wire is keeping the prompt small enough to leave room to answer inside it.
+#
+# The bug this exists to prevent: context_window's own 100-*message* cap (_queue_narration) has
+# no idea how big a message is, so a long session grew prompts to ~4000 tokens, leaving ~95 for
+# the reply. Every narration came back finish_reason="length" -- silently truncated mid-sentence
+# -- and roughly half the time the model spent that sliver without emitting any content at all
+# and returned an empty string, which _fetch_and_publish then published as the turn's narration.
+# A blank turn, from a pipeline that resolved the action perfectly well.
+CONTEXT_TOKEN_BUDGET = 4096
+# Held back for the reply. Measured, not guessed: an ordinary 2-3 sentence narration runs ~550
+# completion tokens, and capping at 512 visibly truncated one mid-sentence, so this is that plus
+# real headroom.
+RESPONSE_TOKEN_RESERVE = 900
+# Deliberately a crude chars-per-token estimate rather than a real tokenizer -- the exact count
+# doesn't matter when the whole point is to stay well clear of a hard ceiling, and importing a
+# tokenizer here would pull a model load into a module that otherwise needs none.
+CHARS_PER_TOKEN = 4
+
+
 # _describe_outcome's own dispatch table for a RolledOutcome's Effect list -- each formatter
 # takes (effect, actor) and returns a narration fragment (leading with its own space/newline,
 # or "" if it has nothing to add), so a new Effect subtype only ever needs one new entry here,
@@ -786,6 +808,57 @@ class LLMCore:
         """
         return [entry for entry in self.context_window if entity_name in (entry.get("present") or ())]
 
+    def _request_completion(self, data):
+        """!
+        @brief One POST to Ollama, returning the model's own reply text. An empty string is a
+            real thing a local model returns rather than an error case, so it comes back as-is
+            for the caller to decide about; only transport/decode failures raise.
+        @param data The request body to send.
+        @return The reply content, "" included.
+        """
+        req = urllib.request.Request(
+            self.api_url,
+            data=json.dumps(data).encode('utf-8'),
+            headers={'Content-Type': 'application/json'},
+        )
+        response = urllib.request.urlopen(req)
+        result = json.loads(response.read().decode('utf-8'))
+        return result['choices'][0]['message']['content'] or ""
+
+    def _fit_history(self, system_message, history):
+        """!
+        @brief Drops the oldest history entries until the system message plus what's left
+            leaves RESPONSE_TOKEN_RESERVE worth of room for the reply inside the model's own
+            context window (see this module's CONTEXT_TOKEN_BUDGET note for the truncation/
+            empty-narration bug this exists to prevent).
+
+            This is a separate axis from context_window's own 100-message cap, not a
+            replacement for it: that one bounds what the game REMEMBERS, this one bounds what
+            any single request SENDS. A long scene keeps its full remembered history for
+            _filter_present_history and later turns; it just stops trying to put all of it on
+            the wire at once.
+
+            The newest entries are kept, oldest dropped, since recent turns ground the current
+            moment. At least one entry always survives even if it alone blows the budget --
+            sending the prompt that actually prompted this turn and letting the model truncate
+            beats sending a bare system message with no player action in it at all.
+        @param system_message The system message this request will carry, counted against the
+            same budget.
+        @param history The context_window-shaped entries to fit.
+        @return The kept entries, oldest-first, ready for _api_messages.
+        """
+        allowance = (CONTEXT_TOKEN_BUDGET - RESPONSE_TOKEN_RESERVE) * CHARS_PER_TOKEN - len(system_message)
+        kept = []
+        used = 0
+        for entry in reversed(history):
+            cost = len(entry.get("content") or "")
+            if kept and used + cost > allowance:
+                break
+            used += cost
+            kept.append(entry)
+        kept.reverse()
+        return kept
+
     def _fetch_and_publish(self, messages, present_entities, store_in_context=True):
         """!
         @brief The network call + response handling shared by _queue_narration/_queue_dialogue/
@@ -805,20 +878,27 @@ class LLMCore:
             whose exchanges are deliberately excluded from the shared window entirely (see
             _queue_adam_response's own docstring for why).
         """
-        data = {"model": self.model, "messages": messages, "temperature": 0.7, "max_tokens": 4096}
+        data = {"model": self.model, "messages": messages, "temperature": 0.7,
+                "max_tokens": RESPONSE_TOKEN_RESERVE}
         # Exactly what's about to go over the wire, formatted for a human -- see
         # display_llm_debug (GUI_Core.py)'s Debug tab, not narration itself.
         query_text = "\n\n".join(f"[{m['role']}]\n{m['content']}" for m in messages)
-        req = urllib.request.Request(
-            self.api_url,
-            data=json.dumps(data).encode('utf-8'),
-            headers={'Content-Type': 'application/json'}
-        )
-
         try:
-            response = urllib.request.urlopen(req)
-            result = json.loads(response.read().decode('utf-8'))
-            llm_text = result['choices'][0]['message']['content']
+            llm_text = self._request_completion(data)
+            if not llm_text.strip():
+                # Belt and suspenders behind _fit_history's own budget: an empty completion is
+                # overwhelmingly a starved-context symptom, but it costs one extra call to rule
+                # out a one-off rather than hand the player a blank turn.
+                self.event_bus.publish("log_warning", "LLM returned an empty response; retrying once.")
+                llm_text = self._request_completion(data)
+            if not llm_text.strip():
+                # Deliberately NOT stored in context_window -- an empty assistant turn is not
+                # something the scene witnessed, and keeping it would spend budget on nothing
+                # and teach the model that empty replies belong here.
+                self.event_bus.publish("log_error", "LLM returned an empty response twice; nothing to narrate this turn.")
+                self.event_bus.publish("llm_response_ready", "System: The local LLM returned an empty response.")
+                self.event_bus.publish("llm_debug_updated", {"query": query_text, "response": "[EMPTY]"})
+                return
             if store_in_context:
                 self.context_window.append({"role": "assistant", "content": llm_text, "present": present_entities})
             self.event_bus.publish("llm_response_ready", llm_text)
@@ -856,7 +936,8 @@ class LLMCore:
         system_message = self._build_system_message(rag_query if rag_query else prompt)
 
         def fetch_from_llm():
-            messages = [{"role": "system", "content": system_message}] + self._api_messages(self.context_window)
+            messages = [{"role": "system", "content": system_message}] + self._api_messages(
+                self._fit_history(system_message, self.context_window))
             self._fetch_and_publish(messages, present_entities)
 
         threading.Thread(target=fetch_from_llm, daemon=True).start()
@@ -928,7 +1009,8 @@ class LLMCore:
             # another narration/dialogue call could append to the shared window between
             # queueing and actually fetching.
             history = self._filter_present_history(target)
-            messages = [{"role": "system", "content": system_message}] + self._api_messages(history)
+            messages = [{"role": "system", "content": system_message}] + self._api_messages(
+                self._fit_history(system_message, history))
             self._fetch_and_publish(messages, present_entities)
 
         threading.Thread(target=fetch_from_llm, daemon=True).start()
@@ -1148,7 +1230,8 @@ class LLMCore:
         system_message = self._build_scene_query_system_message(scene_data, rag_query if rag_query else prompt)
 
         def fetch_from_llm():
-            messages = [{"role": "system", "content": system_message}] + self._api_messages(self.context_window)
+            messages = [{"role": "system", "content": system_message}] + self._api_messages(
+                self._fit_history(system_message, self.context_window))
             self._fetch_and_publish(messages, present_entities)
 
         threading.Thread(target=fetch_from_llm, daemon=True).start()
