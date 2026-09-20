@@ -129,3 +129,139 @@ requirements = [
     { field = "hp_per_remain", operator = ">=", value = 0.01 },
 ]
 action = "pump shotgun"
+
+# Alternate playable characters: every is_player = true template in a setting is offered by
+# the GUI's Character -> Choose Default... (list_available_characters, DM_Rules.py); the chosen
+# one becomes the active player and the others are dropped for that game. Each raises four skills
+# to 3D and lowers four to 1D around the 2D baseline, like Rules/Zombie/archetypes.toml.
+
+[[entity]]
+name = "dana"
+supertype = "creature"
+subtype = "survivor"
+description = "A former paramedic with a steady voice and a pack full of supplies."
+is_player = true
+
+max_hp = 26
+
+currency = 0
+
+inventory = [
+    "pistol",
+    "first aid kit",
+    "first aid kit",
+    "pain pills",
+]
+
+languages = [ "common" ]
+memories = [ "Patients she could not reach" ]
+quotes = [ "Breathe. Then move." ]
+
+abilities = [
+    { name = "punch", supertype = "innate", subtype = "weapon", skill = "brawling", damage_tags = [ "bludgeoning" ], damage_value = { dice = 0, pips = 0, bonus = "user.strength_damage" } },
+]
+
+[entity.equipped]
+secondary = "pistol"
+medkit = "first aid kit"
+
+[entity.attitudes]
+default = [ 0, 0, 0 ]
+
+[[entity.attitudes.supertype]]
+infected = [ -100, -100, -100 ]
+
+[entity.qualities]
+body = "average"
+eye = "hazel"
+gender = "female"
+hair = "brown"
+height = "average"
+skin = "olive"
+size = "medium"
+age = 34
+
+[entity.conditions]
+
+[entity.skills]
+firearms = { dice = 2, pips = 0 }
+melee = { dice = 1, pips = 0 }
+brawling = { dice = 2, pips = 0 }
+throwing = { dice = 1, pips = 0 }
+strength = { dice = 1, pips = 0 }
+athletics = { dice = 2, pips = 0 }
+reflexes = { dice = 2, pips = 0 }
+dodge = { dice = 2, pips = 0 }
+stealth = { dice = 2, pips = 0 }
+observation = { dice = 3, pips = 0 }
+fortitude = { dice = 2, pips = 0 }
+willpower = { dice = 3, pips = 0 }
+medicine = { dice = 3, pips = 0 }
+survival = { dice = 3, pips = 0 }
+mechanics = { dice = 1, pips = 0 }
+charisma = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "cole"
+supertype = "creature"
+subtype = "survivor"
+description = "A broad ex-soldier who treats every doorway as a firing lane."
+is_player = true
+
+max_hp = 34
+
+currency = 0
+
+inventory = [
+    "combat rifle",
+    "machete",
+    "pain pills",
+]
+
+languages = [ "common" ]
+memories = [ "A unit that did not make it out" ]
+quotes = [ "Eyes up. Muzzle down. Move." ]
+
+abilities = [
+    { name = "punch", supertype = "innate", subtype = "weapon", skill = "brawling", damage_tags = [ "bludgeoning" ], damage_value = { dice = 0, pips = 0, bonus = "user.strength_damage" } },
+]
+
+[entity.equipped]
+primary = "combat rifle"
+melee = "machete"
+
+[entity.attitudes]
+default = [ 0, 0, 0 ]
+
+[[entity.attitudes.supertype]]
+infected = [ -100, -100, -100 ]
+
+[entity.qualities]
+body = "muscular"
+eye = "blue"
+gender = "male"
+hair = "buzzed"
+height = "tall"
+skin = "fair"
+size = "medium"
+age = 38
+
+[entity.conditions]
+
+[entity.skills]
+firearms = { dice = 3, pips = 0 }
+melee = { dice = 2, pips = 0 }
+brawling = { dice = 2, pips = 0 }
+throwing = { dice = 2, pips = 0 }
+strength = { dice = 3, pips = 0 }
+athletics = { dice = 2, pips = 0 }
+reflexes = { dice = 2, pips = 0 }
+dodge = { dice = 2, pips = 0 }
+stealth = { dice = 1, pips = 0 }
+observation = { dice = 2, pips = 0 }
+fortitude = { dice = 3, pips = 0 }
+willpower = { dice = 3, pips = 0 }
+medicine = { dice = 1, pips = 0 }
+survival = { dice = 2, pips = 0 }
+mechanics = { dice = 1, pips = 0 }
+charisma = { dice = 1, pips = 0 }

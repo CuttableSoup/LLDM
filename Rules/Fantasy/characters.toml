@@ -128,3 +128,275 @@ survival = { dice = 2, pips = 0 }
 throwing = { dice = 2, pips = 0 }
 trickery = { dice = 2, pips = 0 }
 willpower = { dice = 2, pips = 0 }
+
+# Alternate playable characters: every is_player = true template in a setting is offered by
+# the GUI's Character -> Choose Default... (list_available_characters, DM_Rules.py); the chosen
+# one becomes the active player and the others are dropped for that game. Each is a legal 2D-baseline / 15D
+# point-buy result, same as gladstone.
+
+[[entity]]
+name = "vesper"
+supertype = "creature"
+subtype = "humanoid"
+description = "A quick-fingered woman in a dark hood, more comfortable in shadow than in a crowd."
+is_player = true
+
+max_hp = 30
+
+currency = 60
+exp = 100
+
+inventory = [
+    "dagger",
+    "short bow",
+    "health potion",
+    "health potion",
+]
+
+languages = [ "common" ]
+memories = [ "A debt owed to the wrong people" ]
+quotes = [ "Never take the front door." ]
+
+abilities = [
+    { name = "punch", supertype = "innate", subtype = "weapon", skill = "brawling", damage_tags = [ "bludgeoning" ], damage_value = { dice = 0, pips = 0, bonus = "user.strength_damage" } },
+]
+
+[entity.equipped]
+rhand = "dagger"
+
+[entity.attitudes]
+default = [ 0, 0, 0 ]
+
+[[entity.attitudes.supertype]]
+undead = [ -100, 100, -100 ]
+
+[entity.qualities]
+body = "lithe"
+eye = "green"
+gender = "female"
+hair = "auburn"
+height = "average"
+skin = "fair"
+size = "medium"
+race = "human"
+age = 27
+
+[entity.conditions]
+
+[entity.skills]
+acrobatics = { dice = 4, pips = 0 }
+appraise = { dice = 2, pips = 0 }
+arcane = { dice = 2, pips = 0 }
+artistry = { dice = 2, pips = 0 }
+athletics = { dice = 2, pips = 0 }
+axes = { dice = 2, pips = 0 }
+blades = { dice = 2, pips = 0 }
+brawling = { dice = 2, pips = 0 }
+charisma = { dice = 2, pips = 0 }
+disguise = { dice = 2, pips = 0 }
+dodge = { dice = 5, pips = 0 }
+escape = { dice = 2, pips = 0 }
+finesse = { dice = 5, pips = 0 }
+fly = { dice = 2, pips = 0 }
+forgery = { dice = 2, pips = 0 }
+fortitude = { dice = 2, pips = 0 }
+gambling = { dice = 2, pips = 0 }
+husbandry = { dice = 2, pips = 0 }
+intimidation = { dice = 2, pips = 0 }
+linguistics = { dice = 2, pips = 0 }
+medicine = { dice = 2, pips = 0 }
+miracles = { dice = 2, pips = 0 }
+missiles = { dice = 4, pips = 0 }
+navigation = { dice = 2, pips = 0 }
+observation = { dice = 2, pips = 0 }
+polearms = { dice = 2, pips = 0 }
+psionics = { dice = 2, pips = 0 }
+reflexes = { dice = 2, pips = 0 }
+stealth = { dice = 5, pips = 0 }
+streetwise = { dice = 2, pips = 0 }
+strength = { dice = 2, pips = 0 }
+survival = { dice = 2, pips = 0 }
+throwing = { dice = 2, pips = 0 }
+trickery = { dice = 4, pips = 0 }
+willpower = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "brother aldric"
+supertype = "creature"
+subtype = "humanoid"
+description = "A broad, weathered priest in a battered mail shirt, armed with a plain club."
+is_player = true
+
+max_hp = 38
+
+currency = 40
+exp = 100
+
+inventory = [
+    "club",
+    "chain mail",
+    "health potion",
+    "health potion",
+    "health potion",
+]
+
+languages = [ "common" ]
+memories = [ "A village that still prays for him" ]
+quotes = [ "Peace, friend. Then, if needed, the club." ]
+
+abilities = [
+    "cure disease",
+    "dispel magic",
+    { name = "punch", supertype = "innate", subtype = "weapon", skill = "brawling", damage_tags = [ "bludgeoning" ], damage_value = { dice = 0, pips = 0, bonus = "user.strength_damage" } },
+]
+
+[entity.equipped]
+rhand = "club"
+chest = "chain mail"
+
+[entity.attitudes]
+default = [ 0, 0, 0 ]
+
+[[entity.attitudes.supertype]]
+undead = [ -100, 100, -100 ]
+
+[entity.qualities]
+body = "stout"
+eye = "grey"
+gender = "male"
+hair = "grey"
+height = "tall"
+skin = "tan"
+size = "medium"
+race = "human"
+age = 52
+
+[entity.conditions]
+
+[entity.skills]
+acrobatics = { dice = 2, pips = 0 }
+appraise = { dice = 2, pips = 0 }
+arcane = { dice = 2, pips = 0 }
+artistry = { dice = 2, pips = 0 }
+athletics = { dice = 2, pips = 0 }
+axes = { dice = 2, pips = 0 }
+blades = { dice = 2, pips = 0 }
+brawling = { dice = 4, pips = 0 }
+charisma = { dice = 4, pips = 0 }
+disguise = { dice = 2, pips = 0 }
+dodge = { dice = 2, pips = 0 }
+escape = { dice = 2, pips = 0 }
+finesse = { dice = 2, pips = 0 }
+fly = { dice = 2, pips = 0 }
+forgery = { dice = 2, pips = 0 }
+fortitude = { dice = 4, pips = 0 }
+gambling = { dice = 2, pips = 0 }
+husbandry = { dice = 2, pips = 0 }
+intimidation = { dice = 2, pips = 0 }
+linguistics = { dice = 2, pips = 0 }
+medicine = { dice = 5, pips = 0 }
+miracles = { dice = 5, pips = 0 }
+missiles = { dice = 2, pips = 0 }
+navigation = { dice = 2, pips = 0 }
+observation = { dice = 2, pips = 0 }
+polearms = { dice = 2, pips = 0 }
+psionics = { dice = 2, pips = 0 }
+reflexes = { dice = 2, pips = 0 }
+stealth = { dice = 2, pips = 0 }
+streetwise = { dice = 2, pips = 0 }
+strength = { dice = 2, pips = 0 }
+survival = { dice = 2, pips = 0 }
+throwing = { dice = 2, pips = 0 }
+trickery = { dice = 2, pips = 0 }
+willpower = { dice = 5, pips = 0 }
+
+[[entity]]
+name = "iona"
+supertype = "creature"
+subtype = "humanoid"
+description = "A wiry scholar with ink-stained fingers and a hand always near her spellbook."
+is_player = true
+
+max_hp = 26
+
+currency = 80
+exp = 100
+
+inventory = [
+    "dagger",
+    "spellbook",
+    "health potion",
+    "health potion",
+    "iron filings",
+]
+
+languages = [ "common" ]
+memories = [ "A master who vanished mid-lesson" ]
+quotes = [ "Knowledge is the sharpest edge." ]
+
+abilities = [
+    "fireball",
+    "arc lance",
+    "dispel magic",
+    "summon spectral wolf",
+    { name = "punch", supertype = "innate", subtype = "weapon", skill = "brawling", damage_tags = [ "bludgeoning" ], damage_value = { dice = 0, pips = 0, bonus = "user.strength_damage" } },
+]
+
+[entity.equipped]
+rhand = "dagger"
+
+[entity.attitudes]
+default = [ 0, 0, 0 ]
+
+[[entity.attitudes.supertype]]
+undead = [ -100, 100, -100 ]
+
+[entity.qualities]
+body = "slight"
+eye = "blue"
+gender = "female"
+hair = "black"
+height = "short"
+skin = "pale"
+size = "medium"
+race = "human"
+age = 31
+
+[entity.conditions]
+
+[entity.skills]
+acrobatics = { dice = 2, pips = 0 }
+appraise = { dice = 4, pips = 0 }
+arcane = { dice = 7, pips = 0 }
+artistry = { dice = 2, pips = 0 }
+athletics = { dice = 2, pips = 0 }
+axes = { dice = 2, pips = 0 }
+blades = { dice = 2, pips = 0 }
+brawling = { dice = 2, pips = 0 }
+charisma = { dice = 2, pips = 0 }
+disguise = { dice = 2, pips = 0 }
+dodge = { dice = 4, pips = 0 }
+escape = { dice = 2, pips = 0 }
+finesse = { dice = 2, pips = 0 }
+fly = { dice = 2, pips = 0 }
+forgery = { dice = 2, pips = 0 }
+fortitude = { dice = 2, pips = 0 }
+gambling = { dice = 2, pips = 0 }
+husbandry = { dice = 2, pips = 0 }
+intimidation = { dice = 2, pips = 0 }
+linguistics = { dice = 4, pips = 0 }
+medicine = { dice = 2, pips = 0 }
+miracles = { dice = 2, pips = 0 }
+missiles = { dice = 2, pips = 0 }
+navigation = { dice = 2, pips = 0 }
+observation = { dice = 4, pips = 0 }
+polearms = { dice = 2, pips = 0 }
+psionics = { dice = 2, pips = 0 }
+reflexes = { dice = 2, pips = 0 }
+stealth = { dice = 2, pips = 0 }
+streetwise = { dice = 2, pips = 0 }
+strength = { dice = 2, pips = 0 }
+survival = { dice = 2, pips = 0 }
+throwing = { dice = 2, pips = 0 }
+trickery = { dice = 2, pips = 0 }
+willpower = { dice = 4, pips = 0 }

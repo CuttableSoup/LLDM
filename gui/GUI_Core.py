@@ -9,10 +9,13 @@ from collections import Counter
 import resolution.Combat_Resolution as Combat_Resolution
 from resolution.Character_Creation import load_character_creation_data, load_player_starting_exp
 from gui.Character_Creation_GUI import run_character_creation_dialog
-from dm.DM_Rules import list_available_scenarios, list_available_settings
+from dm.DM_Rules import list_available_characters, list_available_scenarios, list_available_settings
 from paths import PROJECT_ROOT
 
-DEFAULT_SETTING = "Fantasy"
+DEFAULT_SETTING = "Pathfinder"
+# Settings that exist purely as test fixtures: still loadable (tests, --setting on the CLI) but
+# not offered in the Ruleset menu.
+HIDDEN_SETTINGS = {"Fantasy"}
 
 SAVES_DIR = "Saves"
 
@@ -82,16 +85,14 @@ class GUICore:
         self.menu_bar = tk.Menu(self.root, tearoff=0)
         self.character_menu = tk.Menu(self.menu_bar, tearoff=0)
         self.character_menu.add_command(label="Create...", command=self.request_character_creation)
-        self.menu_bar.add_cascade(label="Character", menu=self.character_menu)
+        self.character_menu.add_command(label="Choose Default...", command=self.request_default_character)
         self.file_menu = tk.Menu(self.menu_bar, tearoff=0)
         self.file_menu.add_command(label="Save...", command=self.request_save)
         self.file_menu.add_command(label="Load...", command=self.request_load)
-        self.menu_bar.add_cascade(label="File", menu=self.file_menu)
         self.scenario_menu = tk.Menu(self.menu_bar, tearoff=0)
         self.scenario_menu.add_command(
             label="Load...", command=self.request_scenario_load, state=tk.DISABLED,
         )
-        self.menu_bar.add_cascade(label="Scenario", menu=self.scenario_menu)
 
         # Ruleset picks which Rules/<setting> (and, by extension, Settings/<setting> for RAG
         # sourcebooks) everything below reads from -- Character -> Create...'s own
@@ -104,7 +105,7 @@ class GUICore:
         # the moment a character exists/a game has started, the same "can't retarget mid-game"
         # rule Scenario -> Load... enforces on itself once past its own one valid window.
         self.ruleset_menu = tk.Menu(self.menu_bar, tearoff=0)
-        available_settings = list_available_settings()
+        available_settings = [s for s in list_available_settings() if s not in HIDDEN_SETTINGS]
         if default_setting not in available_settings:
             available_settings = [default_setting] + available_settings
         self.setting_var = tk.StringVar(value=default_setting)
@@ -112,7 +113,12 @@ class GUICore:
             self.ruleset_menu.add_radiobutton(
                 label=setting_name, variable=self.setting_var, value=setting_name,
             )
+
+        # Menu bar order follows the natural flow: File | Ruleset | Character | Scenario.
+        self.menu_bar.add_cascade(label="File", menu=self.file_menu)
         self.menu_bar.add_cascade(label="Ruleset", menu=self.ruleset_menu)
+        self.menu_bar.add_cascade(label="Character", menu=self.character_menu)
+        self.menu_bar.add_cascade(label="Scenario", menu=self.scenario_menu)
 
         self.root.config(menu=self.menu_bar)
 
@@ -346,6 +352,55 @@ class GUICore:
         )
         if character is None:
             return
+        self._accept_character(character)
+
+    def request_default_character(self):
+        """!
+        @brief Character -> Choose Default...: a popup listing every ready-made player
+            character in the current Ruleset (list_available_characters -- each is_player = true
+            entity template), as a quick alternative to the point-buy dialog. Picking one goes
+            through the same path a created character does (_accept_character) with
+            {"template": name}, which DMCore resolves to that is_player entity (its own skills,
+            gear and name untouched).
+        """
+        characters = list_available_characters(self.setting_var.get())
+        picker = tk.Toplevel(self.root)
+        picker.title("Choose Character")
+        picker.transient(self.root)
+        picker.grab_set()
+        if not characters:
+            tk.Label(picker, text="No default characters found.").pack(padx=10, pady=10)
+            tk.Button(picker, text="Close", command=picker.destroy).pack(pady=(0, 10))
+            return
+
+        listbox = tk.Listbox(picker, width=70)
+        for name, description in characters:
+            listbox.insert(tk.END, f"{name} -- {description}" if description else name)
+        listbox.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        listbox.selection_set(0)
+
+        def choose_selected(event=None):
+            selection = listbox.curselection()
+            if not selection:
+                return
+            name = characters[selection[0]][0]
+            picker.destroy()
+            self._accept_character({"template": name})
+
+        listbox.bind("<Double-Button-1>", choose_selected)
+        button_row = tk.Frame(picker)
+        button_row.pack(fill=tk.X, padx=10, pady=(0, 10))
+        tk.Button(button_row, text="Choose", command=choose_selected).pack(side=tk.LEFT)
+        tk.Button(button_row, text="Cancel", command=picker.destroy).pack(side=tk.RIGHT)
+
+    def _accept_character(self, character):
+        """!
+        @brief Shared tail of Create... and Choose Default...: publishes "character_created" and,
+            if no game has started yet, holds it as the pending character (unlocking Scenario ->
+            Load... and locking the Ruleset menu).
+        @param character The character dict (see request_character_creation's result shape, or
+            {"template": name} for a default).
+        """
         self.event_bus.publish("character_created", {"character": character})
         if self._game_started:
             return

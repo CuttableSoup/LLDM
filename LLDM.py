@@ -9,11 +9,12 @@ from Event_Bus import EventBus
 from Logger import Logger
 from llm.LLM_Core import LLMCore
 from dm.DM_Core import DMCore, scenario_exists
+from dm.DM_Rules import list_available_characters
 from gui.GUI_Core import GUICore
 from nlp.NLP_Core import NLPCore
 from llm.Ollama_Launcher import ensure_ollama_running, stop_ollama
 
-DEFAULT_SCENARIO = "debug"
+DEFAULT_SCENARIO = "lost_coast"
 
 # When True, Logger (below) also mirrors every log line -- plus each complete LLM query/
 # response pair -- into a timestamped file under Logs/ (gitignored). See Logger.py's own
@@ -58,7 +59,7 @@ def main():
         "scenario",
         nargs="?",
         default=None,
-        help="Scenario to load, matching a file in Rules/Fantasy/scenarios/ (ex: 'debug'). "
+        help="Scenario to load, matching a file in Rules/<setting>/scenarios/ (ex: 'lost_coast'). "
              "Boots straight into it, skipping the Character menu entirely, the moment it's "
              "given -- omit it to open the window and pick Character -> Create/Load instead.",
     )
@@ -72,10 +73,10 @@ def main():
     )
     parser.add_argument(
         "--setting",
-        default="Fantasy",
-        help="Which Rules/ subdirectory to boot from (ex: 'Fantasy', 'Zombie') -- each is a "
+        default="Pathfinder",
+        help="Which Rules/ subdirectory to boot from (ex: 'Pathfinder', 'Zombie') -- each is a "
              "self-contained TOML data pack (skills/entities/rules/scenarios). Only meaningful "
-             "alongside 'scenario'. Defaults to 'Fantasy'.",
+             "alongside 'scenario'. Defaults to 'Pathfinder'.",
     )
     args = parser.parse_args()
 
@@ -159,7 +160,7 @@ def main():
     # handler no-ops as soon as dm_core is no longer None.
     dm_core = None
 
-    def start_game(scenario_name, character, setting="Fantasy", publish_intro_narration=True):
+    def start_game(scenario_name, character, setting="Pathfinder", publish_intro_narration=True):
         nonlocal dm_core
         if dm_core is not None:
             return
@@ -230,7 +231,14 @@ def main():
         # DM_CharacterCreation.py's apply_character_creation, whose skill/race override step
         # is skipped whenever "allocation" is absent); leave it off to keep that template's
         # own name and skills exactly as characters.toml authored them.
-        character = {"name": args.character_name} if args.character_name else None
+        # A name matching a shipped is_player template picks that character; anything else
+        # is a rename of the default one.
+        if not args.character_name:
+            character = None
+        elif args.character_name in [n for n, _d in list_available_characters(args.setting)]:
+            character = {"template": args.character_name}
+        else:
+            character = {"name": args.character_name}
         start_game(args.scenario, character, setting=args.setting)
 
     event_bus.publish("log_info", "Application started successfully.")

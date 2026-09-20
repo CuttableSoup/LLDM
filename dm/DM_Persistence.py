@@ -272,6 +272,7 @@ class PersistenceMixin(DMCoreProtocol):
             "setting": self.setting,
             "scenario_key": self.scenario_key,
             "player_name": self.player_name,
+            "player_template": self.player_template,
             "round_number": self.round_number,
             "current_block": self.current_block,
             "watch_rotation_index": self.watch_rotation_index,
@@ -515,18 +516,16 @@ class PersistenceMixin(DMCoreProtocol):
         # earlier this session. If that earlier renamed identity is still sitting in
         # self.entities as a leftover (load_rules never touches a key that isn't authored in
         # any TOML file), it's now a stale duplicate *also* carrying is_player = true --
-        # left in place, _resolve_player_name's own "the one is_player entity" lookup below is
-        # ambiguous between the two and may resolve back to the stale copy instead of the fresh
-        # template _rename_player_entity actually needs to rename. Only drop it once some
-        # *other* key has already proven it's a duplicate, not the sole source of truth (ex: a
-        # first-ever load, or reloading with no rename at all, where previous_player_name
-        # already *is* the fresh template's own key).
-        if any(
-            entity.get("is_player") and name != previous_player_name
-            for name, entity in self.entities.items()
-        ):
+        # ambiguous with the fresh template _rename_player_entity actually needs to rename.
+        # It's a leftover exactly when it differs from the original template key the session
+        # started from (self.player_template); an unrenamed player *is* the fresh template.
+        if previous_player_name != self.player_template:
             self.entities.pop(previous_player_name, None)
-        self.player_name = self._resolve_player_name()
+        # Which is_player template the save was started from (older saves predate the key --
+        # fall back to the saved name itself, then to the setting's first template).
+        saved_template = data.get("player_template", saved_player_name)
+        self.player_name = self._resolve_player_name(saved_template)
+        self.player_template = self.player_name
         # Replay the same rename apply_character_creation applied mid-session, if the save's
         # own player_name differs from the fresh template's own original name (see
         # _rename_player_entity's own docstring for why this is load-bearing: without it, every

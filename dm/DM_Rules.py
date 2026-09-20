@@ -152,6 +152,34 @@ def list_available_settings():
     )
 
 
+def list_available_characters(setting):
+    """!
+    @brief Every playable character template in a setting -- each [[entity]] under
+        Rules/<setting>/*.toml with is_player = true, for a UI to offer as a ready-made
+        character before any DMCore exists (same "re-scan the directory directly" precedent
+        list_available_settings/list_available_scenarios set).
+    @param setting The Rules/<setting> subdirectory to scan.
+    @return A list of (name, description) tuples, in file/authoring order (so a setting's
+        first-authored player, ex: "gladstone", stays the default), or [] if none.
+    """
+    setting_dir = os.path.join(PROJECT_ROOT, "Rules", setting)
+    if not os.path.isdir(setting_dir):
+        return []
+    results = []
+    for filename in sorted(os.listdir(setting_dir)):
+        if not filename.endswith(".toml"):
+            continue
+        try:
+            with open(os.path.join(setting_dir, filename), "rb") as f:
+                data = tomllib.load(f)
+        except (OSError, tomllib.TOMLDecodeError):
+            continue
+        for entity in data.get("entity", []):
+            if entity.get("is_player") and entity.get("name"):
+                results.append((entity["name"], entity.get("description", "")))
+    return results
+
+
 class RulesMixin(DMCoreProtocol):
     """!
     @brief TOML rules/entity loading and scenario instancing (DMCore mixin -- only ever
@@ -510,10 +538,17 @@ class RulesMixin(DMCoreProtocol):
                         f"(valid slots: {valid_slots or 'none'})."
                     )
 
-    def _resolve_player_name(self):
+    def _resolve_player_name(self, template=None):
         """!
-        @brief Finds the one entity template marked `is_player = true` (ex: characters.toml's
-            gladstone) and returns its name, to stand in as the active player character.
+        @brief Picks the active player character from the entity templates marked
+            `is_player = true` (ex: characters.toml's gladstone) and returns its name. A
+            setting can author several such templates -- they're the pool of ready-made
+            characters (see list_available_characters) -- but only one is ever the player in a
+            given game: every *other* is_player template is dropped from self.entities here, so
+            nothing downstream (party CR, NLP, GUI party tab) mistakes a candidate for a second
+            player. load_rules re-adds them all fresh on every load, so this is safe to repeat.
+        @param template The is_player template to use, or None/unknown to take the first one
+            authored (the pre-selection default).
         @raises ValueError if no loaded entity template has `is_player = true` -- fatal on
                 purpose, same reasoning as load_scenario_definition's missing-scenario-file
                 check: silently falling back to some default here would let the rest of
@@ -521,10 +556,14 @@ class RulesMixin(DMCoreProtocol):
                 in confusing, indirect ways instead of failing clearly at boot.
         @return The name of the player entity template.
         """
-        for name, entity in self.entities.items():
-            if entity.get("is_player"):
-                return name
-        raise ValueError("No entity template has is_player = true; cannot determine the player character.")
+        candidates = [name for name, entity in self.entities.items() if entity.get("is_player")]
+        if not candidates:
+            raise ValueError("No entity template has is_player = true; cannot determine the player character.")
+        chosen = template if template in candidates else candidates[0]
+        for name in candidates:
+            if name != chosen:
+                del self.entities[name]
+        return chosen
 
     def load_scenario_definition(self, scenario_name):
         """!

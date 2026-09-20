@@ -174,3 +174,124 @@ fortitude = { dice = 1, pips = 2 }
 reflexes = { dice = 1, pips = 0 }
 willpower = { dice = 0, pips = 1 }
 strength = { dice = 1, pips = 1 }
+
+# Alternate playable characters: every is_player = true template in a setting is offered by
+# the GUI's Character -> Choose Default... (list_available_characters, DM_Rules.py); the chosen
+# one becomes the active player and the others are dropped for that game. Each is a legal 0D-baseline / 10D
+# point-buy result (3D-per-skill cap), matching Pathfinder's own curve; a skill left off is 0D.
+
+[[entity]]
+name = "seren"
+supertype = "creature"
+subtype = "humanoid"
+description = "A nimble human scout with a rapier at her hip and a crossbow across her back."
+is_player = true
+
+max_hp = 14
+
+currency = 50
+exp = 100
+
+inventory = [
+    "rapier",
+    "light crossbow",
+    "leather armor",
+    "health potion",
+]
+
+languages = [ "common" ]
+memories = [ "A brother lost to the Lost Coast" ]
+quotes = [ "Quiet feet, quick hands." ]
+
+abilities = [
+    { name = "punch", supertype = "innate", subtype = "weapon", skill = "brawling", damage_tags = [ "bludgeoning" ], damage_value = { dice = 0, pips = 0, bonus = "user.strength_damage" } },
+]
+
+[entity.equipped]
+rhand = "rapier"
+chest = "leather armor"
+
+[entity.attitudes]
+default = [ 0, 0, 0 ]
+
+[[entity.attitudes.supertype]]
+undead = [ -100, 100, -100 ]
+
+[entity.qualities]
+body = "lithe"
+eye = "green"
+gender = "female"
+hair = "red"
+height = "average"
+skin = "fair"
+size = "medium"
+race = "human"
+age = 24
+
+[entity.conditions]
+
+[entity.skills]
+blades = { dice = 2, pips = 0 }
+dodge = { dice = 2, pips = 0 }
+missiles = { dice = 1, pips = 0 }
+stealth = { dice = 2, pips = 0 }
+observation = { dice = 1, pips = 0 }
+reflexes = { dice = 2, pips = 0 }
+
+[[entity]]
+name = "tam"
+supertype = "creature"
+subtype = "humanoid"
+description = "A sturdy cleric of the road in a chain shirt, a light mace always ready."
+is_player = true
+
+max_hp = 16
+
+currency = 30
+exp = 100
+
+inventory = [
+    "light mace",
+    "chain shirt",
+    "health potion",
+    "health potion",
+]
+
+languages = [ "common" ]
+memories = [ "A chapel he keeps meaning to return to" ]
+quotes = [ "The light asks only that you try." ]
+
+abilities = [
+    { name = "punch", supertype = "innate", subtype = "weapon", skill = "brawling", damage_tags = [ "bludgeoning" ], damage_value = { dice = 0, pips = 0, bonus = "user.strength_damage" } },
+]
+
+[entity.equipped]
+rhand = "light mace"
+chest = "chain shirt"
+
+[entity.attitudes]
+default = [ 0, 0, 0 ]
+
+[[entity.attitudes.supertype]]
+undead = [ -100, 100, -100 ]
+
+[entity.qualities]
+body = "stout"
+eye = "brown"
+gender = "male"
+hair = "black"
+height = "average"
+skin = "tan"
+size = "medium"
+race = "human"
+age = 40
+
+[entity.conditions]
+
+[entity.skills]
+brawling = { dice = 2, pips = 0 }
+dodge = { dice = 1, pips = 0 }
+fortitude = { dice = 2, pips = 0 }
+willpower = { dice = 2, pips = 0 }
+medicine = { dice = 2, pips = 0 }
+miracles = { dice = 1, pips = 0 }

@@ -10,7 +10,7 @@ engine itself is fantasy-specific — `DMCore(event_bus, scenario_name, setting=
 `setting` param picks which one to boot from (`Rules/<setting>/scenarios/<scenario_name>.toml`
 and every sibling `Rules/<setting>/*.toml`), and it round-trips through a save file
 (`dm_state.json`'s own `"setting"` key) so a resumed save reloads from the same setting it was
-saved under. `Rules/Fantasy/` is the deep, primary setting; `Rules/Zombie/` is a bare-bones
+saved under. `Rules/Fantasy/` is the deep base ruleset, but now a test fixture only — hidden from the GUI's Ruleset menu (`HIDDEN_SETTINGS`, `GUI_Core.py`) and no longer the default; the GUI and CLI default to `Pathfinder` (its only scenario is `lost_coast`; use `--setting Fantasy debug` for the debug scenario); `Rules/Zombie/` is a bare-bones
 second one (a Left 4 Dead-inspired survival shooter) that proves the engine is setting-agnostic
 — see `Rules/Zombie/scenarios/rooftop.toml` (`python LLDM.py rooftop --setting Zombie`).
 `Rules/Pathfinder/` started as a full copy of `Rules/Fantasy/`'s own base ruleset and layers on

@@ -114,6 +114,17 @@ pressed, or `None` if cancelled. `GUICore.request_character_creation` loads
 and — only when not cancelled — publishes `"character_created"`.
 
 
+**Default characters.** Every `[[entity]]` with `is_player = true` under `Rules/<setting>/*.toml`
+is a ready-made, selectable character (`list_available_characters(setting)`, `DM_Rules.py`):
+Fantasy ships gladstone/vesper/brother aldric/iona, Zombie riley/dana/cole, Pathfinder
+gladstone/seren/tam. Character → Choose Default... (`GUICore.request_default_character`) lists
+them and feeds `{"template": name}` through the same pending-character path as Create...;
+the CLI's `character_name` picks a template if it names one, otherwise renames as before.
+`_resolve_player_name(template)` picks the chosen (or first-authored) one and **drops every other
+is_player template from `self.entities`** for that game, so nothing downstream sees a second
+player. `player_template` (the original key, surviving a rename) is saved in `dm_state.json` so
+`load_game` restores the same character.
+
 ## Booting the game
 
 `LLDM.py`'s `main()` never constructs `DMCore` unconditionally — no scenario loads and nothing

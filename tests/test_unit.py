@@ -8846,6 +8846,55 @@ class TestCharacterCreationDMCoreIntegration(DMTestCase):
         self.assertTrue(any("XP spend rejected" in e for e in errors))
 
 
+class TestDefaultPlayerCharacters(unittest.TestCase):
+    """!
+    @brief Every is_player = true template in a setting is a selectable default character
+        (list_available_characters); DMCore boots as the chosen one ("template") and drops the
+        other candidates, and a save round-trips which one it was.
+    """
+
+    def test_every_setting_offers_several_defaults_gladstone_or_first_authored_first(self):
+        from dm.DM_Rules import list_available_characters
+        self.assertEqual(
+            [n for n, _d in list_available_characters("Fantasy")],
+            ["gladstone", "vesper", "brother aldric", "iona"],
+        )
+        self.assertEqual([n for n, _d in list_available_characters("Zombie")], ["riley", "dana", "cole"])
+        self.assertGreaterEqual(len(list_available_characters("Pathfinder")), 3)
+        self.assertEqual(list_available_characters("NoSuchSetting"), [])
+
+    def test_template_picks_that_character_and_drops_the_other_candidates(self):
+        dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds",
+                    character={"template": "iona"})
+        self.assertEqual(dm.player_name, "iona")
+        self.assertEqual(dm.entities["iona"]["skills"]["arcane"], {"dice": 7, "pips": 0})
+        self.assertIn("iona", dm.scenario_entities)
+        for other in ("gladstone", "vesper", "brother aldric"):
+            self.assertNotIn(other, dm.entities)
+
+    def test_no_template_keeps_the_first_authored_player(self):
+        dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds")
+        self.assertEqual(dm.player_name, "gladstone")
+        self.assertNotIn("iona", dm.entities)
+
+    def test_zombie_default_boots(self):
+        dm = DMCore(EventBus(), scenario_name="rooftop", setting="Zombie", character={"template": "cole"})
+        self.assertEqual(dm.player_name, "cole")
+
+    def test_chosen_default_survives_save_and_load(self):
+        dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds",
+                    character={"template": "vesper", "name": "Wren"})
+        slot_name = "test_default_character_round_trip_slot"
+        self.addCleanup(shutil.rmtree, dm._save_slot_dir(slot_name), ignore_errors=True)
+        dm.save_game(slot_name)
+        dm.load_game(slot_name)
+        self.assertEqual(dm.player_name, "Wren")
+        self.assertEqual(dm.player_template, "vesper")
+        self.assertNotIn("vesper", dm.entities)
+        self.assertNotIn("gladstone", dm.entities)
+        self.assertEqual(dm.entities["Wren"]["skills"]["stealth"], {"dice": 5, "pips": 0})
+
+
 class TestCharacterCreationRename(unittest.TestCase):
     """!
     @brief apply_character_creation's own optional "name" override (Character_Creation_GUI.py's
@@ -12407,12 +12456,20 @@ class TestGUICore(unittest.TestCase):
         self.assertIn("[System] Ollama already running.", content)
 
     def test_menu_bar_layout_character_create_file_save_load_scenario_load(self):
-        self.assertEqual(self.gui.menu_bar.entrycget(0, "label"), "Character")
-        self.assertEqual(self.gui.menu_bar.entrycget(1, "label"), "File")
-        self.assertEqual(self.gui.menu_bar.entrycget(2, "label"), "Scenario")
+        self.assertEqual(
+            [self.gui.menu_bar.entrycget(i, "label") for i in range(4)],
+            ["File", "Ruleset", "Character", "Scenario"],
+        )
+        self.assertEqual(self.gui.setting_var.get(), "Pathfinder")
+        ruleset_labels = [
+            self.gui.ruleset_menu.entrycget(i, "label")
+            for i in range(self.gui.ruleset_menu.index("end") + 1)
+        ]
+        self.assertNotIn("Fantasy", ruleset_labels)
 
-        self.assertEqual(self.gui.character_menu.index("end"), 0)
+        self.assertEqual(self.gui.character_menu.index("end"), 1)
         self.assertEqual(self.gui.character_menu.entrycget(0, "label"), "Create...")
+        self.assertEqual(self.gui.character_menu.entrycget(1, "label"), "Choose Default...")
 
         self.assertEqual(self.gui.file_menu.index("end"), 1)
         self.assertEqual(self.gui.file_menu.entrycget(0, "label"), "Save...")
@@ -12428,6 +12485,7 @@ class TestGUICore(unittest.TestCase):
     def test_character_creation_unlocks_scenario_menu_and_load_publishes_scenario_selected(
         self, mock_load, mock_exp, mock_dialog,
     ):
+        self.gui.setting_var.set("Fantasy")  # the hidden test-fixture setting that owns "debug"
         mock_dialog.return_value = {"race": "elf", "allocation": {"arcane": 5}, "name": "Aria"}
         self.gui.request_character_creation()
 

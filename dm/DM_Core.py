@@ -242,12 +242,16 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         # know which scenarios/*.toml file a saved slot belongs to.
         self.scenario_key = scenario_name
         self.load_rules(os.path.join("Rules", self.setting))
-        # No party/character selection exists yet, so the one entity template marked
-        # is_player = true (characters.toml's gladstone) stands in as the active player
-        # character. Resolved once here, from templates, rather than per-scenario-load, so
+        # The entity template marked is_player = true (characters.toml's gladstone by default)
+        # stands in as the active player character. Resolved once here, from templates, rather than per-scenario-load, so
         # ad-hoc test scenarios that omit gladstone entirely still keep the same player_name
         # they booted with.
-        self.player_name = self._resolve_player_name()
+        # A character carrying "template" (the GUI's Choose Default... / a CLI name matching a
+        # shipped is_player entity) picks which is_player template that is; otherwise the first
+        # one authored. self.player_template remembers the original template key even after a
+        # rename, so save_game can round-trip which one it was.
+        self.player_name = self._resolve_player_name((character or {}).get("template"))
+        self.player_template = self.player_name
         # load_scenario_definition before apply_character_creation (reversed from this
         # project's earlier ordering) so a character-creation rename's own collision check
         # sees scenario-local entities too, not just the shared Rules/<setting>/*.toml

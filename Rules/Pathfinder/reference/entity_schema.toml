@@ -54,7 +54,7 @@ description = "Flavor text shown to the LLM narrator and to a passed skill check
                                             # listing -- keep it non-empty even when deliberately
                                             # vague (ex: health potion's description hides what
                                             # it does until identified).
-is_player = false                          # Exactly one loaded template must set this true
+is_player = false                          # At least one loaded template must set this true; several = a pool of playable characters (one is chosen per game)
                                             # (characters.toml's gladstone) -- DMCore.__init__
                                             # raises ValueError at boot if none does. A
                                             # scenario/room's own "entities" list never names
