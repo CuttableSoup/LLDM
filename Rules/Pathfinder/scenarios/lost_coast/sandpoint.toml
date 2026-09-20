@@ -6,8 +6,9 @@
 # table -- only one component file may define it, and lost_coast.toml already does.
 #
 # The 52 numbered "Exploring Sandpoint" landmarks from the Paizo sourcebook "Sandpoint, Light
-# of the Lost Coast" (Settings/Fantasy/), pulled from the book's own extracted text (its RAG
-# chunk cache) rather than general foreknowledge of the setting -- flat hub-and-spoke off
+# of the Lost Coast" (Settings/Pathfinder/, RAG-indexed alongside the setting's other Golarion
+# sourcebooks), pulled from the book's own extracted text (its RAG chunk cache) rather than
+# general foreknowledge of the setting -- flat hub-and-spoke off
 # sandpoint itself, exactly like debug.toml's own debug_hub, since sandpoint already carries a
 # grid for the Magnimar road trip and _resolve_travel_intent now tries a location's own named
 # exits before falling back to grid travel. Each landmark below is its own freeform

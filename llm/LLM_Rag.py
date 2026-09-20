@@ -1,18 +1,20 @@
 """!
 @file LLM_Rag.py
-@brief Builds and queries a local retrieval index over PDF sourcebooks under Settings/Fantasy/
-    (ex: "Inner Sea World Guide.pdf"), so LLMCore.perform_rag can ground narration in actual
-    campaign-setting text instead of letting the LLM invent lore wholesale. RagIndex is a
-    self-contained helper LLMCore owns by composition, not a mixin -- unlike DMCore's mixins
-    (DM_Combat.py etc.), which all share DMCore's own entities/rules/skills state, RagIndex
-    needs nothing from LLMCore beyond the event bus for logging, so plain ownership
-    (self.rag_index = RagIndex(event_bus) in LLMCore.__init__) is the simpler fit.
+@brief Builds and queries a local retrieval index over PDF sourcebooks under
+    Settings/<setting>/ (ex: "Inner Sea Primer.pdf" under Settings/Pathfinder/), so
+    LLMCore.perform_rag can ground narration in actual campaign-setting text instead of
+    letting the LLM invent lore wholesale. RagIndex is a self-contained helper LLMCore owns by
+    composition, not a mixin -- unlike DMCore's mixins (DM_Combat.py etc.), which all share
+    DMCore's own entities/rules/skills state, RagIndex needs nothing from LLMCore beyond the
+    event bus for logging, so plain ownership (self.rag_index = RagIndex(event_bus) in
+    LLMCore.__init__) is the simpler fit.
 
-    Deliberately data-driven the same way Rules/Fantasy/*.toml is: indexes every *.pdf found
-    under Settings/Fantasy/ generically, so dropping in a second sourcebook needs no code
-    change. Mirrors NLPCore's own embed-and-cosine-match pattern (SentenceTransformer +
-    numpy) rather than pulling in a dedicated vector-store dependency, since the corpus here
-    (a few thousand chunks at most) never needs an index structure fancier than a flat matrix.
+    Deliberately data-driven the same way Rules/<setting>/*.toml is: indexes every *.pdf found
+    under whichever Settings/<setting>/ LLMCore.set_setting last pointed it at, generically, so
+    dropping in a second sourcebook needs no code change. Mirrors NLPCore's own
+    embed-and-cosine-match pattern (SentenceTransformer + numpy) rather than pulling in a
+    dedicated vector-store dependency, since the corpus here (a few thousand chunks at most)
+    never needs an index structure fancier than a flat matrix.
 """
 
 import glob
@@ -36,6 +38,16 @@ from paths import PROJECT_ROOT
 MAX_CHUNK_WORDS = 180
 MIN_CHUNK_WORDS = 40
 
+# Guards SentenceTransformer's own construction (never .encode() -- see _build) against two
+# RagIndex instances loading concurrently on separate background threads, ex: vectorize_pdf.py's
+# own "every setting" mode starting several RagIndex builds before waiting on any. Without this,
+# two concurrent from_pretrained() calls race on torch's own meta-device weight materialization
+# and one loses, surfacing as "Cannot copy out of meta tensor; no data!" rather than a clean
+# model. The live app never actually needs this today -- LLMCore.set_setting only ever
+# constructs one RagIndex at a time -- but it's a real correctness gap for any concurrent
+# caller, this script included, so it belongs on the class, not worked around per call site.
+_MODEL_LOAD_LOCK = threading.Lock()
+
 
 class RagIndex:
     """!
@@ -51,8 +63,10 @@ class RagIndex:
             no matches until self.ready is True; there's no blocking wait anywhere.
         @param event_bus The central event bus instance, used only for log_info/log_warning/
             log_error -- RagIndex never publishes or subscribes to gameplay events.
-        @param source_dir Directory to scan for *.pdf files. Defaults to Settings/Fantasy/,
-            next to Rules/Fantasy/ -- the only setting actually wired into any scenario today.
+        @param source_dir Directory to scan for *.pdf files. Defaults to Settings/Fantasy/;
+            LLMCore.set_setting repoints this at Settings/<setting>/ for whichever setting the
+            player actually picked (ex: Settings/Pathfinder/, backing the lost_coast scenario's
+            Golarion sourcebooks).
         @param cache_dir Directory for the cached chunks/embeddings. Defaults to a
             .rag_cache/ subdirectory of source_dir.
         @param top_k Maximum number of chunks a single query() call returns.
@@ -102,7 +116,8 @@ class RagIndex:
                 self.event_bus.publish("log_warning", f"RagIndex: no PDFs found in {self.source_dir}.")
                 return
 
-            self.model = SentenceTransformer("all-MiniLM-L6-v2")
+            with _MODEL_LOAD_LOCK:
+                self.model = SentenceTransformer("all-MiniLM-L6-v2")
 
             cache_key = self._cache_key(pdf_paths)
             chunks, embeddings = self._load_cache(cache_key)

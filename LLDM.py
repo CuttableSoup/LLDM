@@ -15,6 +15,11 @@ from llm.Ollama_Launcher import ensure_ollama_running, stop_ollama
 
 DEFAULT_SCENARIO = "debug"
 
+# When True, Logger (below) also mirrors every log line -- plus each complete LLM query/
+# response pair -- into a timestamped file under Logs/ (gitignored). See Logger.py's own
+# __init__ docstring for exactly what that captures.
+DEBUG = True
+
 
 def _peek_saved_scenario_key(slot_name, fallback, fallback_setting="Fantasy"):
     """!
@@ -86,7 +91,7 @@ def main():
 
     # 1. Initialize Event Bus and Logger
     event_bus = EventBus()
-    logger = Logger(event_bus)
+    logger = Logger(event_bus, debug=DEBUG)
 
     # 1.5. GUICore is constructed before everything else below it, specifically so its window
     # already exists for the Ollama bootstrap (next) to report progress into -- none of its own
@@ -154,7 +159,7 @@ def main():
     # handler no-ops as soon as dm_core is no longer None.
     dm_core = None
 
-    def start_game(scenario_name, character, setting="Fantasy"):
+    def start_game(scenario_name, character, setting="Fantasy", publish_intro_narration=True):
         nonlocal dm_core
         if dm_core is not None:
             return
@@ -166,8 +171,12 @@ def main():
         llm_core.set_setting(setting)
         # 3. Constructed last, as it publishes 'rules_loaded' in its __init__ and needs to
         # hear 'turn_detected' from NLPCore -- both already subscribed above regardless of
-        # when this actually fires.
-        dm_core = DMCore(event_bus, scenario_name=scenario_name, character=character, setting=setting)
+        # when this actually fires. publish_intro_narration is forwarded as-is -- True for
+        # every caller except on_load_requested below (see that call site's own comment).
+        dm_core = DMCore(
+            event_bus, scenario_name=scenario_name, character=character, setting=setting,
+            publish_intro_narration=publish_intro_narration,
+        )
 
     def on_character_created(data):
         # Doesn't start a game itself -- GUICore holds the new character as its own
@@ -200,7 +209,14 @@ def main():
         scenario_name, setting = _peek_saved_scenario_key(
             slot, args.scenario or DEFAULT_SCENARIO, args.setting,
         )
-        start_game(scenario_name, None, setting=setting)
+        # publish_intro_narration=False -- this DMCore exists only to hand to load_game()
+        # below a moment later (the documented "throwaway" construction, see
+        # _peek_saved_scenario_key's own docstring); its own background-NPC rolls and roster
+        # are about to be superseded by load_game()'s fresh re-instancing, so narrating an
+        # intro from this snapshot could describe entities (ex: a background NPC that
+        # happened to roll "dwarf" here) the player never actually gets once the real load
+        # finishes (see DMCore.__init__'s own publish_intro_narration docstring).
+        start_game(scenario_name, None, setting=setting, publish_intro_narration=False)
         dm_core.load_game(slot)
 
     event_bus.subscribe("character_created", on_character_created)

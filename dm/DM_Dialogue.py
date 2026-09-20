@@ -118,9 +118,31 @@ class DialogueMixin(DMCoreProtocol):
                 nothing could be resolved at all, "not_present" if the resolved name isn't
                 currently here/alive/noticed, "cant_talk" if it's an inanimate object).
         """
-        target_name = forced_target or self._resolve_dialogue_target(input_text)
+        # Resolution method captured alongside target_name itself (rather than just calling
+        # _resolve_dialogue_target and re-deriving it after the fact) specifically so it can be
+        # logged below -- without this, a case like "the player typed a real name, but nothing
+        # in the current scene actually answers to it anymore (ex: a background NPC re-rolled
+        # to a different display name since the input was typed against an older roster) so the
+        # literal scan misses and this silently falls back to whoever's default" was invisible
+        # in the logs and had to be reconstructed by hand from unrelated "Placed background
+        # NPC"/system-message roster lines.
+        if forced_target:
+            target_name = forced_target
+            resolution = "promoted -- just materialized into the scene on reference"
+        else:
+            target_name = self._literal_dialogue_target(input_text)
+            if target_name:
+                resolution = "literal match -- named by key/display name/alias in the input"
+            else:
+                target_name = self._get_target_name(include_background=True)
+                resolution = "fallback default -- no name matched in the input" if target_name else None
+
         if not target_name:
+            self.event_bus.publish(
+                "log_info", "Resolved dialogue target: none -- nothing present to fall back to.",
+            )
             return {"target": None, "found": False, "reason": "no_one_here"}
+        self.event_bus.publish("log_info", f"Resolved dialogue target: '{target_name}' ({resolution}).")
 
         if (
             target_name not in self.scenario_entities

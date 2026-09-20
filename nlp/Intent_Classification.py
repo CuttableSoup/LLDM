@@ -868,10 +868,13 @@ class IntentClassifier:
         @param raw_input The raw string from "user_input_submitted".
         @return (processed_text, events) -- processed_text for the caller's own "Processing
             player input" log line, and events a list of one or more {"event", "payload"}
-            dicts to publish, in order. Almost always length 1; more than one only when an
+            dicts to publish, in order. Almost always length 1; more than one when an
             EXEMPT_ITEM_INTENTS clause (ex: "retreat") shares the input with a real turn (ex:
             "attack the wolf and retreat" publishes the retreat's own item_interaction_detected
-            immediately, then a separate turn_detected for the attack).
+            immediately, then a separate turn_detected for the attack), or with dialogue (ex:
+            "I approach the merchant and ask about the celebration" publishes the approach's own
+            item_interaction_detected immediately, then a dialogue_detected for the question --
+            see the dialogue check below).
         """
         processed = process_input(raw_input)
         events = []
@@ -923,10 +926,28 @@ class IntentClassifier:
             processed, events,
         )
 
-        # Dialogue is checked once, on the whole input, only once the item pass found nothing
-        # at all (no item interaction, no exempt movement/formation clause) -- the same
-        # priority the old single-clause code already gave item intents over dialogue.
-        if not turn_clauses and not found_exempt and detect_dialogue_intent(processed):
+        # Dialogue is checked once, on the whole input, whenever the item pass didn't claim a
+        # real, turn-costing item interaction -- an exempt clause (ex: "advance") is allowed to
+        # share the turn with it, the same way an exempt "retreat" clause already shares a turn
+        # with a following skill-pass action below: "I approach the merchant and ask about the
+        # celebration" is two free, diceless actions, not one that silently drops the other.
+        # Only a genuine item_interaction turn_clauses entry -- something that actually costs
+        # the turn action -- still suppresses dialogue outright, the same priority the old
+        # single-clause code already gave item intents over dialogue.
+        if not turn_clauses and detect_dialogue_intent(processed):
+            if found_exempt:
+                # The exempt clause(s) just appended above (ex: "advance") are about to share
+                # this turn with real dialogue -- the movement is mechanically real (DMCore
+                # still repositions the player for it) but its own narration is nearly always
+                # meaningless filler ("you push through the crowd") next to an actual NPC
+                # reply a few seconds later. "quiet" tells LLMCore's own
+                # generate_item_interaction_response to skip narrating this specific
+                # item_interaction_resolved rather than spend a second LLM call and a second
+                # chat bubble on it -- the dialogue reply already implies the player reached
+                # whoever they just addressed.
+                for event in events:
+                    if event["event"] == "item_interaction_detected":
+                        event["payload"]["quiet"] = True
             # Classified here, not left to DMCore, since sentiment-of-an-utterance is the same
             # kind of fast local model judgment call skill/item/target matching already is --
             # the matcher seam is what lets this stay local classification (see

@@ -172,11 +172,16 @@ narration during that window degrades to "Could not connect to the local LLM"
 
 ## RAG / sourcebook grounding
 
-`LLM_Rag.py`'s `RagIndex` indexes every `*.pdf` under `Settings/Fantasy/` (a gitignored
-directory), building its index on a daemon background thread; `query()` returns `[]` until
-`self.ready` is `True`. Chunks/embeddings are cached to
+`LLM_Rag.py`'s `RagIndex` indexes every `*.pdf` under `Settings/Fantasy/` by default (a
+gitignored directory), building its index on a daemon background thread; `query()` returns `[]`
+until `self.ready` is `True`. Chunks/embeddings are cached to
 `Settings/Fantasy/.rag_cache/<hash>.{chunks.json,embeddings.npy}`, keyed by a hash of every
-source PDF's path/size/mtime.
+source PDF's path/size/mtime. `LLMCore.set_setting(setting)` (`LLDM.py`'s `start_game`, before
+`DMCore` is constructed) repoints this at `Settings/<setting>/` instead — each setting keeps its
+own sourcebooks/cache (ex: `Settings/Pathfinder/` holds the Golarion PDFs backing the
+`lost_coast` scenario's Sandpoint/Magnimar content, since those never shipped generic-Fantasy
+lore in the first place); a setting with no matching `Settings/<setting>/` directory just yields
+an empty index, same as an empty/missing `Settings/Fantasy/` would.
 
 Chunking is sentence-bounded (`_chunk_page_text`, capped at `MAX_CHUNK_WORDS`=180, dropping
 fragments under `MIN_CHUNK_WORDS`=40). Retrieval is per-request, appended to that request's

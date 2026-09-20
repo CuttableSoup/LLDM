@@ -105,7 +105,10 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         docstring.
     """
 
-    def __init__(self, event_bus, scenario_name="debug", character=None, setting="Fantasy", start_location=None):
+    def __init__(
+        self, event_bus, scenario_name="debug", character=None, setting="Fantasy", start_location=None,
+        publish_intro_narration=True,
+    ):
         """!
         @brief Initializes the DM core and loads system references.
         @param event_bus The central event bus instance.
@@ -133,6 +136,17 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             the default (every existing caller that doesn't pass this keeps loading from
             Rules/Fantasy exactly as before). "Zombie" is a second, bare-bones setting proving
             that out.
+        @param publish_intro_narration False tags the "scenario_loaded" payload below with
+            "skip_intro": True, which LLMCore.generate_scene_intro reads to skip queuing an
+            actual LLM narration call (see that method's own docstring). True (the default)
+            keeps every existing caller narrating exactly as before. LLDM.py's own
+            on_load_requested is the one caller that passes False -- it constructs a DMCore
+            purely to hand to load_game() a moment later (see that function's own "throwaway"
+            note), so this constructor's own background-NPC rolls, roster, and hence this
+            scenario_loaded payload are all about to be superseded by load_game()'s fresh
+            re-instancing anyway; narrating an intro from a snapshot that's already stale by
+            the time the LLM call would return can describe entities (ex: a background NPC
+            rolled a "dwarf" here) that the load's own re-roll doesn't actually carry over.
         """
         self.event_bus = event_bus
         self.setting = setting
@@ -270,6 +284,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             # below), so a later per-entity dialogue query can tell what a given NPC has
             # actually seen apart from the DM's own always-omniscient narration.
             "present_entities": list(self.scenario_entities),
+            "skip_intro": not publish_intro_narration,
         })
         self.event_bus.subscribe("turn_detected", self._on_turn_detected)
         self.event_bus.subscribe("item_interaction_detected", self._on_item_interaction_detected)
@@ -1446,6 +1461,11 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
                 # roster by the time this fires -- correct, since this narration is witnessed
                 # by whoever's present now, not whoever was present when the input arrived.
                 "present_entities": list(self.scenario_entities),
+                # Carried straight through from item_interaction_detected -- set by
+                # IntentClassifier.classify (Intent_Classification.py) when this exempt clause
+                # shares its turn with real dialogue, so LLMCore.generate_item_interaction_
+                # response knows to skip narrating it (see that flag's own module note there).
+                "quiet": data.get("quiet", False),
                 **extra,
             })
             self._publish_party_status()
