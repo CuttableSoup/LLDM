@@ -30,6 +30,11 @@ kind = "district"                           # Freeform, purely descriptive (like
 entities = [
     { name = "town crier" },
     { name = "market stall" },
+    # count = N places N independent instances of one entry (town crier, town crier_2, ...).
+    # MUST be a plain positive integer, never a varied {min, max}/weighted choice: a crowd size
+    # rolled fresh on reload would shift every later occurrence suffix and silently orphan the
+    # saved state of anything past it (see docs/movement-scenarios.md).
+    { template = "market_regular", count = 2 },
 ]
 
 # Random encounters -- layered on top of hand-placed entities, re-rolled fresh every time

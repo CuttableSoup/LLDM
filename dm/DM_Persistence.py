@@ -287,6 +287,11 @@ class PersistenceMixin(DMCoreProtocol):
             "removed_entities": list(self.removed_entities),
             "known_locations": list(self.known_locations),
             "entity_instancing_order": [list(entry) for entry in self.entity_instancing_order],
+            # Grounding for NPC promotion, not game state -- see DM_Core.py's
+            # recent_narration. Losing it would only cost a resumed save the last beat or
+            # two of flavor, but it is two lines to keep and the LLM half of the same
+            # history (LLMCore.context_window) already persists in the sibling file.
+            "recent_narration": list(self.recent_narration),
         }
         with open(os.path.join(slot_dir, "dm_state.json"), "w") as f:
             json.dump(data, f, indent=2)
@@ -650,6 +655,21 @@ class PersistenceMixin(DMCoreProtocol):
         # a resumed fight keeps targeting whoever it was actually fighting rather than
         # snapping back to the default.
         self.current_target = data.get("current_target", self.current_target)
+
+        # Restored here rather than in the prologue above: nothing during re-instancing reads
+        # it, and the mid-load narration this very method triggers would otherwise be the
+        # first thing appended to it. Absent from an older save, which is harmless -- see
+        # DM_Core.py's _on_llm_response_ready.
+        self.recent_narration.clear()
+        self.recent_narration.extend(data.get("recent_narration", []))
+
+        # _enter_location/enter_room already published a roster mid-load, but every restored
+        # ad hoc entity and every generated entity's saved name/description landed *after*
+        # that -- so the roster published then described the freshly-re-instanced scene, not
+        # the saved one. Republishing here is what makes the resumed scene's own cast reach
+        # the narrator (DM_Rules.py's _publish_scene_roster); the dirty guard lets it through
+        # precisely because the prose really did change.
+        self._publish_scene_roster()
 
         self.event_bus.publish("log_info", f"Game loaded from slot '{slot_name}'.")
         self.event_bus.publish("game_loaded", {

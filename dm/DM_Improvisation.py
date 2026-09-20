@@ -3,6 +3,7 @@ import os
 from resolution.AdHoc_Generation import (
     GROUND_AWARE_INTENTS, TARGET_CENTRIC_INTENTS, decide_entity_edit,
     decide_entity_removal, generate_ad_hoc_creature, generate_ad_hoc_item,
+    generate_referenced_npc,
 )
 from dm.DM_Types import DMCoreProtocol
 from resolution.NPC_Generation import load_npc_keywords
@@ -15,6 +16,14 @@ from resolution.NPC_Generation import load_npc_keywords
 # Unrelated to GROUND_AWARE_INTENTS/TARGET_CENTRIC_INTENTS (imported from AdHoc_Generation.py,
 # above) -- Intent_Classification.py has no mirror of this one, so it stays local.
 SCENE_PLACED_SUBTYPES = frozenset({"container", "trap"})
+
+# How many ad hoc entities a single scene may hold before dialogue promotion stops firing.
+# Without a ceiling, a long session in one town accretes a talked-into-existence crowd on
+# top of whatever the location actually authored.
+MAX_PROMOTED_PER_SCENE = 3
+# A materialized bystander is a bystander: a fraction of the player's own challenge rating,
+# matching what a background crowd template authors as its own cr_multiplier.
+BYSTANDER_CR_SHARE = 0.25
 
 
 class ImprovisationMixin(DMCoreProtocol):
@@ -34,22 +43,37 @@ class ImprovisationMixin(DMCoreProtocol):
         DM_Types.py. AdHoc_Generation.py is the pure, DMCore-independent LLM-calling half this
         mixin is glue for -- same split DM_NpcGeneration.py is to NPC_Generation.py.
 
-        Two genuinely different risk profiles, not one symmetric mechanic -- each new
-        capability slots into whichever of these two an item's own creation/removal already
-        established:
-        - **Automatic fallback**, no explicit invocation required (low risk): plain item
-          creation, now extended to a container/trap (still generate_ad_hoc_item, just a
-          subtype carrying its own [entity.test]) and to ambient scenery detail (a third
-          "describe_scenery" outcome with no entity created at all) -- see
-          _on_improvisation_requested.
-        - **ADaM-gated**, behind explicitly addressing ADaM by name (higher risk -- can affect
+        Three risk profiles, not one symmetric mechanic. The invariant that assigns them:
+        **a capability may run automatically only if it can neither change combat balance nor
+        mutate hand-authored data.** Everything else is gated behind the player explicitly
+        addressing ADaM by name.
+        - **Automatic, unprompted** (lowest risk): plain item creation, extended to a
+          container/trap (still generate_ad_hoc_item, just a subtype carrying its own
+          [entity.test]) and to ambient scenery detail (a third "describe_scenery" outcome with
+          no entity created at all) -- see _on_improvisation_requested.
+        - **Automatic, player-referenced** (middle): dialogue promotion
+          (_attempt_dialogue_promotion) -- materializing an ordinary person the player
+          addressed as though they were already present. This creates a *creature*, which the
+          tier below otherwise reserves for ADaM, and it earns its place here on both halves of
+          the invariant. It cannot touch combat balance: generate_referenced_npc's disposition
+          enum excludes "hostile" at the schema level, and only a hostile creature is ever
+          given abilities/behavior (AdHoc_Generation.py's _build_creature_entity), so what it
+          produces structurally cannot attack, cannot take a turn in a round, and cannot be an
+          AoE enemy. And it mutates nothing: it only ever adds. What separates it from the tier
+          below is its *trigger* -- a literal noun phrase the player typed, extracted
+          mechanically (Intent_Classification.py's extract_address_phrase) after DMCore's own
+          literal and semantic scans both found nobody present who answers to it. Never the
+          narrator's prose: DMCore.recent_narration flavors what gets created and never causes
+          it.
+        - **ADaM-gated**, behind explicitly addressing ADaM by name (highest risk -- can affect
           combat balance or mutate any existing entity, hand-authored included): entity removal
-          (remove_entity_from_scene/_attempt_entity_removal), creature/NPC conjuring
-          (_attempt_creature_conjuring -- a hostile one can fight, changing the scene's
-          balance), and entity editing (_attempt_entity_edit -- can rewrite any entity's own
-          description or apply/dismiss a condition on it). See DM_Help.py's own
-          "removal_candidate"/"creature_candidate"/"edit_candidate" handling for how NLP_Core.py
-          gates each of these behind a cheap local keyword pre-check.
+          (remove_entity_from_scene/_attempt_entity_removal), unrestricted creature/NPC
+          conjuring (_attempt_creature_conjuring -- which may produce a *hostile* creature, now
+          the one thing genuinely separating it from promotion above), and entity editing
+          (_attempt_entity_edit -- can rewrite any entity's own description or apply/dismiss a
+          condition on it). See DM_Help.py's own "removal_candidate"/"creature_candidate"/
+          "edit_candidate" handling for how NLP_Core.py gates each of these behind a cheap
+          local keyword pre-check.
     """
 
     def _on_improvisation_requested(self, data):
@@ -83,7 +107,13 @@ class ImprovisationMixin(DMCoreProtocol):
         phrase = data.get("phrase", "")
         input_text = data.get("input", "")
 
-        target_name = self._get_target_name() if intent in TARGET_CENTRIC_INTENTS else None
+        # include_background: "trade" is the one improvisation intent that addresses a person,
+        # and in a town square the only people present are often exactly the ambient crowd --
+        # without this, "buy some figs" in a location whose entire roster is background
+        # townsfolk finds no target at all and declines before the item is ever generated.
+        target_name = (
+            self._get_target_name(include_background=True) if intent in TARGET_CENTRIC_INTENTS else None
+        )
         if intent in TARGET_CENTRIC_INTENTS and not target_name:
             self.event_bus.publish("action_not_understood", {"input": input_text, "score": 0.0})
             return
@@ -223,6 +253,7 @@ class ImprovisationMixin(DMCoreProtocol):
         # a later room revisit or a reload -- see DM_Rules.py's _instance_entities, the one
         # check point that consults this set.
         self.removed_entities.add(name)
+        self._publish_scene_roster()
         self.event_bus.publish("log_info", f"Removed '{name}' from the scene.")
         return {"removed": True, "name": name}
 
@@ -312,6 +343,9 @@ class ImprovisationMixin(DMCoreProtocol):
             self.scenario_entities.append(name)
         if claim_target:
             self._claim_current_target_if_free(name)
+        # One hook covering every ad hoc placement (container/trap, conjured creature, and
+        # dialogue promotion), since all three already funnel through here.
+        self._publish_scene_roster()
 
     def _claim_current_target_if_free(self, name):
         """!
@@ -338,8 +372,10 @@ class ImprovisationMixin(DMCoreProtocol):
         """!
         @brief Called from DM_Help.py's _on_help_detected when NLP_Core.py's own creature
             keyword gate flagged the player's message to ADaM as a plausible request to conjure
-            a living creature/NPC -- never automatic (see this class's own module docstring for
-            why). target_cr is the player's own current challenge rating (get_challenge_rating,
+            a living creature/NPC. Never automatic, because this is the one creature path that
+            may return a *hostile* creature and so change the scene's balance -- the
+            narrower, non-hostile-by-schema _attempt_dialogue_promotion below is what runs
+            automatically instead (see this class's own module docstring for the three tiers). target_cr is the player's own current challenge rating (get_challenge_rating,
             CombatMixin) -- a single-target encounter framing appropriate for an ad hoc,
             mid-scene spawn, unlike real NPC generation's own party-pool resolution (see
             DM_NpcGeneration.py's _resolve_npc_target_cr), which isn't needed here since there's
@@ -376,6 +412,86 @@ class ImprovisationMixin(DMCoreProtocol):
         })
 
         return {"created_creature": True, "name": name}
+
+    def _attempt_dialogue_promotion(self, address_phrase):
+        """!
+        @brief Materializes an ordinary person the player just addressed who isn't in the scene
+            -- "ask the merchant what he is selling" in a market square that describes a crowd.
+            Called from DMCore's own _on_dialogue_detected, and from nowhere else, only once
+            every cheaper way of resolving the addressee has already come back empty (see that
+            method for the four-layer gate).
+
+            This is the one creature-creating path that runs WITHOUT ADaM being addressed by
+            name (see this class's own module docstring for the risk tiers and why this one
+            qualifies). What earns it that: the created NPC is enum-constrained non-hostile at
+            the schema level, so it carries no abilities and no behavior and therefore cannot
+            fight, cannot take a turn in a round, and cannot be an AoE enemy -- and its trigger
+            is a literal noun phrase the player typed, mechanically extracted, never the
+            narrator's prose and never a guess at an unstated intent.
+
+            Every gate below is checked before any network call, so the common case -- a player
+            talking to someone who is actually standing there -- costs nothing at all.
+        @param address_phrase The noun phrase the player used (see Intent_Classification.py's
+            extract_address_phrase).
+        @return The new entity's own self.entities key on success, or None on any decline --
+                in which case the caller simply resolves dialogue as it always has, landing on
+                the grounded "there's no one like that here" narration.
+        """
+        # Nobody wanders into a knife fight to sell you fruit. Deliberately stricter than
+        # _target_is_engaged(), which only inspects self.current_target: a hostile standing
+        # anywhere in the scene is enough to refuse, whether or not it is what the player is
+        # currently aimed at.
+        if any(
+            self.is_hostile(name, self.player_name) and self.get_current_hp(name) > 0
+            for name in self.scenario_entities
+        ):
+            return None
+
+        # A scene-level budget on how many people can be talked into existence. Derived from
+        # live state rather than a counter, so it needs no persistence of its own and survives
+        # a reload for free (ad hoc entities round-trip whole -- see DM_Persistence.py).
+        ad_hoc_present = sum(
+            1 for name in self.scenario_entities if self.entities.get(name, {}).get("ad_hoc")
+        )
+        if ad_hoc_present >= MAX_PROMOTED_PER_SCENE:
+            return None
+
+        npc_keywords = load_npc_keywords(os.path.join("Rules", self.setting))
+        result = generate_referenced_npc(
+            address_phrase,
+            self._current_scene_description(),
+            [
+                self.entities.get(name, {}).get("name", name)
+                for name in self.scenario_entities if name != self.player_name
+            ],
+            list(self.recent_narration),
+            self.get_challenge_rating(self.player_name) * BYSTANDER_CR_SHARE,
+            npc_keywords,
+            self.skills,
+        )
+        if not result.get("created"):
+            return None
+
+        entity = result["entity"]
+        # Declined, not defanged. A hostile result means the model misread the request; quietly
+        # stripping its teeth would leave an NPC whose description and demeanour don't match
+        # what it actually is, and the honest "no one like that is here" narration is a
+        # perfectly good floor to fall back to. The schema should already make this impossible
+        # -- this is the assertion that it did.
+        if entity.get("abilities") or entity.get("behavior"):
+            self.event_bus.publish(
+                "log_warning",
+                f"Declined promoting '{address_phrase}': generation returned a combat-capable entity.",
+            )
+            return None
+
+        name = self._unique_entity_key(entity["name"])
+        self._place_and_register_scene_entity(name, entity, insert_front=False, claim_target=False)
+        self.event_bus.publish("item_catalog_updated", {
+            "entities": [{"name": name, "description": entity.get("description", "")}],
+        })
+        self.event_bus.publish("log_info", f"Promoted '{address_phrase}' into the scene as '{name}'.")
+        return name
 
     def _attempt_entity_edit(self, input_text):
         """!

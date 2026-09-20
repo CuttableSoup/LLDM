@@ -171,6 +171,28 @@ DIALOGUE_KEYWORDS = (
     "talk to ", "speak to ", "speak with ", "ask ", "tell ", "say to ", "greet ", "chat with ",
 )
 
+# extract_address_phrase's own three word lists (see that function for why a keyword-shaped
+# mechanism is acceptable here and nowhere else in this file).
+# A remainder OPENING with one of these means the player addressed no one nameable -- either
+# they asked the room a question ("ask about the weather") or they used a pronoun for someone
+# already in play ("tell them to back off"). Checked before articles are stripped, since these
+# are exactly the words that can't be preceded by one.
+ADDRESS_NON_ADDRESSEES = frozenset({
+    "about", "what", "whats", "where", "wheres", "why", "how", "when", "whether", "if", "that",
+    "me", "them", "him", "her", "it", "us", "you", "everyone", "anyone", "someone", "myself",
+})
+ADDRESS_ARTICLES = frozenset({"the", "a", "an", "this", "my", "his", "her", "their", "our"})
+# Where the addressee ends and the rest of the sentence begins.
+ADDRESS_TERMINATORS = frozenset({
+    "about", "what", "where", "why", "how", "when", "whether", "if", "that", "to", "for",
+    "and", "by", "near", "at", "in", "with", "over", "from", "behind", "beside",
+})
+# Punctuation to shave off each candidate word -- the player's own typing, not a token.
+ADDRESS_STRIP_CHARS = ".,;:!?\"'"
+# A crowd's worth of adjectives is still one person ("the old man by the fire"); past three
+# words it stops being a way of naming someone and starts being a sentence.
+MAX_ADDRESS_WORDS = 3
+
 # Reserved persona name for the out-of-character help/guidance channel (see DM_Help.py) -- a
 # fixed, always-available meta-command in the same spirit as save/load, not an in-fiction
 # dialogue target: no scene entity is ever named "adam", so DialogueMixin's own "search
@@ -482,6 +504,35 @@ class IntentMatcher:
             installed; destination_key is None below confidence or with no bank loaded."""
         raise NotImplementedError
 
+    def set_present_entities(self, entities):
+        """!
+        @brief REPLACES the bank of who is currently in the scene, for map_to_present_entity.
+            Same wholesale-replacement shape as set_destinations (and for the same reason: the
+            present cast changes completely on every move), driven by DMCore's own
+            scene_roster_updated -- see DM_Rules.py's _publish_scene_roster.
+        @param entities A list of {"key", "name", "subtype", "aliases"} dicts -- possibly
+            empty, which is legitimate (a scene with nobody else in it).
+        """
+        raise NotImplementedError
+
+    def map_to_present_entity(self, processed_text):
+        """!
+        @brief Returns (entity_key, score) for "is this phrase plausibly someone already
+            standing here?" against the bank set_present_entities last installed.
+
+            A genuinely different question from map_to_target, which scores against a GLOBAL,
+            never-scene-filtered catalog of every creature in the rules -- fine for "attack the
+            wolf", useless for deciding whether "the merchant" names someone in this room or
+            a merchant three towns away.
+
+            Its confidence bar is deliberately its own, and deliberately permissive: the only
+            consequence of a false positive here is that nobody gets materialized (today's
+            behavior), while a false negative invents a duplicate of someone already present.
+        @param processed_text The address phrase to score (see extract_address_phrase).
+        @return (entity_key, score); entity_key is None below confidence or with no bank.
+        """
+        raise NotImplementedError
+
     def classify_sentiment(self, processed_text):
         """!@brief Returns (sentiment_label, score) for the disposition axis; label is None
             below confidence."""
@@ -628,6 +679,62 @@ def detect_dialogue_intent(processed_text):
     return _keyword_gate(processed_text, DIALOGUE_KEYWORDS)
 
 
+def extract_address_phrase(processed_text):
+    """!
+    @brief The noun phrase the player used to address someone, if they used one at all --
+        ex: "ask the merchant what he is selling" -> "merchant". Published alongside
+        dialogue_detected, which otherwise carries no notion of *who* at all.
+
+        Exists for the promotion gate (DM_Core.py's _on_dialogue_detected): materializing an
+        NPC the player reached for requires first knowing that they reached for anyone. That
+        makes this deliberately mechanical rather than clever -- it extracts, it never
+        classifies. Every DIALOGUE_KEYWORDS phrase is a prefix ("talk to ", "ask ", "greet "),
+        so the addressee, when there is one, sits immediately after whichever one matched
+        earliest.
+
+        This is keyword-shaped machinery in a file that just moved *away* from keyword tables
+        (see INTENT_PROTOTYPES/map_to_intent), which is only acceptable because it fails
+        CLOSED: an unrecognized shape returns None, None means no promotion, and no promotion
+        means exactly today's behavior. Nothing is ever created because this function guessed
+        well; things are only ever *not* created because it guessed badly. The semantic layer
+        behind it (map_to_present_entity) is what catches the phrasings the word lists miss,
+        so the fix for a missed phrasing is to lean on that, not to keep growing these tuples.
+    @param processed_text The cleaned, lowercased player input.
+    @return The address phrase (1-3 words, articles stripped), or None if the player addressed
+            no one nameable -- a question opener ("ask about the weather"), a pronoun ("tell
+            them to back off"), or nothing at all after the keyword.
+
+        Known limitation, accepted rather than worked around: an addressee named BEFORE the
+        keyword isn't found ("walk up to the merchant and ask what he is selling" reads the
+        remainder after "ask " and correctly declines on "what"). Recovering it would mean
+        guessing which earlier noun was the object of some other verb, which is precisely the
+        kind of cleverness that fails open. That phrasing is a movement clause anyway, and the
+        follow-up turn ("ask the merchant what he is selling") extracts cleanly.
+    """
+    earliest = None
+    for keyword in DIALOGUE_KEYWORDS:
+        match = re.search(rf"\b{re.escape(keyword.strip())}\b", processed_text or "")
+        if match and (earliest is None or match.end() < earliest):
+            earliest = match.end()
+    if earliest is None:
+        return None
+
+    words = [word.strip(ADDRESS_STRIP_CHARS) for word in (processed_text[earliest:] or "").split()]
+    words = [word for word in words if word]
+    if not words or words[0] in ADDRESS_NON_ADDRESSEES:
+        return None
+
+    while words and words[0] in ADDRESS_ARTICLES:
+        words.pop(0)
+
+    phrase = []
+    for word in words[:MAX_ADDRESS_WORDS]:
+        if word in ADDRESS_TERMINATORS:
+            break
+        phrase.append(word)
+    return " ".join(phrase) or None
+
+
 def detect_help_intent(processed_text):
     """!@brief True if processed_text contains the whole word "adam" (any case)."""
     return bool(ADAM_NAME_PATTERN.search(processed_text))
@@ -748,6 +855,10 @@ class IntentClassifier:
         """!@brief Forwards the current location's reachable exits to the matcher's own bank."""
         self.matcher.set_destinations(destinations)
 
+    def set_present_entities(self, entities):
+        """!@brief Forwards the current scene's own cast to the matcher's own bank."""
+        self.matcher.set_present_entities(entities)
+
     def classify(self, raw_input):
         """!
         @brief Classifies one whole turn of raw player input. See this class's own docstring
@@ -827,6 +938,18 @@ class IntentClassifier:
             sentiment, sentiment_score = self.matcher.classify_sentiment(processed)
             threat_sentiment, threat_score = self.matcher.classify_threat(processed)
             familiarity_sentiment, familiarity_score = self.matcher.classify_familiarity(processed)
+            # Evidence for DMCore's promotion gate, not a decision: "the player addressed
+            # someone by this phrase" (mechanical -- see extract_address_phrase) and "somebody
+            # already in the scene plausibly answers to it" (semantic). DMCore still resolves
+            # the addressee literally first and is free to ignore both (see
+            # _on_dialogue_detected) -- the same division of labour the travel path already
+            # uses, where NLP offers a destination match and DM_Movement.py's literal exit
+            # scan still wins. The matcher is only consulted when there's a phrase to score,
+            # so an ordinary "ask about the weather" costs nothing extra.
+            address_phrase = extract_address_phrase(processed)
+            address_match, address_score = (
+                self.matcher.map_to_present_entity(address_phrase) if address_phrase else (None, 0.0)
+            )
             events.append({
                 "event": "dialogue_detected",
                 "payload": {
@@ -834,6 +957,8 @@ class IntentClassifier:
                     "sentiment": sentiment, "sentiment_score": sentiment_score,
                     "threat_sentiment": threat_sentiment, "threat_score": threat_score,
                     "familiarity_sentiment": familiarity_sentiment, "familiarity_score": familiarity_score,
+                    "address_phrase": address_phrase,
+                    "address_match": address_match, "address_score": address_score,
                 },
             })
             return processed, events

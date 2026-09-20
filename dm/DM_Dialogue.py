@@ -2,6 +2,10 @@ import re
 
 from dm.DM_Types import DMCoreProtocol
 
+# The whole-word wrapper every literal name scan in this file shares -- a bare substring
+# search would let "anne" match "annexed" and "risa" match "risky".
+WORD_BOUNDARY = r"\b%s\b"
+
 
 class DialogueMixin(DMCoreProtocol):
     """!
@@ -23,33 +27,61 @@ class DialogueMixin(DMCoreProtocol):
         all. See NLP_Core.py's DIALOGUE_KEYWORDS for what triggers this.
     """
 
-    def _resolve_dialogue_target(self, input_text):
+    def _literal_dialogue_target(self, input_text):
         """!
-        @brief Figures out who's being addressed: a literal, whole-word, case-insensitive
-            search of input_text for any currently-in-scene entity's own name (excluding the
-            player) -- the same "DMCore, not NLPCore, decides who's named" approach
+        @brief The literal half of _resolve_dialogue_target: a whole-word, case-insensitive
+            search of input_text for any currently-in-scene entity (excluding the player) --
+            the same "DMCore, not NLPCore, decides who's named" approach
             DM_Movement.py's _resolve_formation_intent already uses for party positioning,
             generalized here to every scenario entity, not just party members, since a
             dialogue partner can be any NPC or creature present, not only an ally. Declaration
             order in self.scenario_entities breaks a tie the same way every other
-            first-match-wins list in this codebase already does. Falls back to
+            first-match-wins list in this codebase already does.
+
+            Three phrases per entity rather than one: its self.entities *key*, its own "name"
+            field, and each entry of an optional "aliases" list. The key alone became a real
+            gap the moment instanced crowds existed -- a background instance keyed
+            "sandpoint_townsfolk_2" but displayed to the player as "Fishmonger" was
+            unaddressable by the only name the player ever sees. "aliases" is the same
+            mechanism [[location.exit]] already uses for "the tavern" reaching "The White Deer
+            Tavern and Inn", applied to people: it's what lets "greet the barkeep" reach
+            Garridan Viskalai without anyone having to author that phrasing as a keyword.
+
+            Split out from _resolve_dialogue_target specifically so the promotion gate can ask
+            the unambiguous question "did the player name someone who is actually here?"
+            without the default-target fallback masking the answer -- see DM_Core.py's
+            _on_dialogue_detected.
+        @param input_text The player's raw (already lowercased) input.
+        @return The addressed entity's name, or None if nothing present is named at all.
+        """
+        text = input_text or ""
+        for name in self.scenario_entities:
+            if name == self.player_name:
+                continue
+            entity = self.entities.get(name, {})
+            for phrase in (name, entity.get("name", ""), *entity.get("aliases", [])):
+                if phrase and re.search(WORD_BOUNDARY % re.escape(phrase.lower()), text):
+                    return name
+        return None
+
+    def _resolve_dialogue_target(self, input_text):
+        """!
+        @brief Figures out who's being addressed: whoever _literal_dialogue_target (above)
+            names, falling back to
             _get_target_name()'s own default scene target (the first non-party entity present)
             if no name is found in the input at all, the same default every item-interaction
             intent already falls back to -- so a bare "ask about the weather" still addresses
-            whoever's obviously being talked to in a two-person scene.
+            whoever's obviously being talked to in a two-person scene. Deliberately the one
+            call site passing include_background=True (see DM_Core.py's _get_target_name): an
+            ambient crowd member is exactly who an unaddressed remark in a market square should
+            land on, even though the same entity must never become the default "open it" target.
         @param input_text The player's raw (already lowercased) input.
         @return The addressed entity's name, or None if nothing named matches and there's no
                 default target either (ex: an empty scene).
         """
-        named = [
-            name for name in self.scenario_entities
-            if name != self.player_name and re.search(rf"\b{re.escape(name.lower())}\b", input_text or "")
-        ]
-        if named:
-            return named[0]
-        return self._get_target_name()
+        return self._literal_dialogue_target(input_text) or self._get_target_name(include_background=True)
 
-    def _resolve_dialogue(self, input_text, sentiments=None):
+    def _resolve_dialogue(self, input_text, sentiments=None, forced_target=None):
         """!
         @brief Resolves a dialogue attempt against whoever _resolve_dialogue_target names:
             gated on actually being present (in self.scenario_entities right now -- a room-
@@ -62,6 +94,14 @@ class DialogueMixin(DMCoreProtocol):
             produces for a hostile target is free to read as dismissive or aggressive in
             character, but the attempt itself is never denied for it.
         @param input_text The player's raw (already lowercased) input.
+        @param forced_target An addressee to use instead of running _resolve_dialogue_target
+            at all -- passed only by DMCore's own _on_dialogue_detected after it has just
+            materialized this entity into the scene (see
+            ImprovisationMixin._attempt_dialogue_promotion). It deliberately bypasses only the
+            *resolution* step, not the gates below: a promoted NPC is a live, present, alive,
+            visible, non-object entity, so it passes them all on its own merits and flows into
+            the ordinary found=True path. That is what makes a promoted turn produce one
+            coherent in-character reply rather than a denial followed by a second narration.
         @param sentiments {axis_name: (label, score)} -- NLPCore's own local classification of
             input_text's tone, one entry per attitude axis (disposition/threat/familiarity),
             applied via nudge_attitude (SocialMixin, DM_Social.py) before persona/attitude are
@@ -78,7 +118,7 @@ class DialogueMixin(DMCoreProtocol):
                 nothing could be resolved at all, "not_present" if the resolved name isn't
                 currently here/alive/noticed, "cant_talk" if it's an inanimate object).
         """
-        target_name = self._resolve_dialogue_target(input_text)
+        target_name = forced_target or self._resolve_dialogue_target(input_text)
         if not target_name:
             return {"target": None, "found": False, "reason": "no_one_here"}
 

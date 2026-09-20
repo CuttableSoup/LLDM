@@ -76,3 +76,19 @@ publish, never a raised exception — "malformed data degrades quietly, on purpo
 Entirely setting-agnostic (no `Rules/Fantasy`-specific assumption anywhere), so both passes apply
 unchanged to `Rules/Zombie/`.
 
+
+## Fields added for background crowds
+
+`background` (bool) and `display_name` (str, or a varied weighted choice) on an
+`[[entity_template]]`; `aliases` (list of strings) on any `[[entity]]`/`[[entity_template]]`;
+`count` (positive int) on a location/room `entities` entry. See `docs/npc-generation.md` for what
+each does.
+
+All four are listed in `DM_Validation.py`'s own spec tables, and that matters more than it looks:
+`SCALAR_FIELD_TYPES` is a **type spec, not a whitelist** — a field absent from it entirely is
+silently never type-checked. Leaving `background` out would mean a typo'd `backround = true`
+failed *open*: the template would read as an ordinary generating one and pay a blocking 20s
+network call on every location entry, with nothing anywhere saying why. Two further rules are
+enforced beyond types: a `background` template must author `[entity_template.attitudes]`
+(`_validate_entity_template_shape`), and `count` must be a plain positive integer
+(`_check_entity_entries`).

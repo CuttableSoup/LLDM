@@ -18,23 +18,30 @@
 """
 
 import atexit
+import json
 import os
 import random
 import shutil
 import time
 import unittest
 import urllib.request
+from unittest.mock import patch
 
 import pytest
 
 import dm.DM_Encounters as DM_Encounters
+import resolution.NPC_Generation as NPC_Generation
 from dm.DM_ActionOutcome import DamageEffect, DefenderDetailsEffect, RevealEffect
 from dm.DM_Core import DMCore
 from dm.DM_Travel import ROAD_ENCOUNTER_KEY
 from Event_Bus import EventBus
 from llm.LLM_Core import LLMCore
-from llm.Ollama_Launcher import ensure_ollama_running
+from llm.LLM_Client import DEFAULT_MODEL
+from llm.Ollama_Launcher import ensure_ollama_running, stop_ollama
 from nlp.NLP_Core import NLPCore
+from dm.DM_Improvisation import BYSTANDER_CR_SHARE
+from resolution.AdHoc_Generation import generate_referenced_npc
+from resolution.NPC_Generation import load_npc_keywords
 from resolution.Social_Resolution import set_prompt_directive
 from gui.Textual_Core import TextualCore
 from textual.widgets import RichLog
@@ -51,12 +58,56 @@ def _ollama_reachable():
 # Boots a local Ollama (installing one first if this machine has never had one) before any
 # @unittest.skipUnless(_ollama_reachable(), ...)/@pytest.mark.skipif below evaluates -- those
 # evaluate at import time, so this has to run synchronously here rather than on a background
-# thread the way LLDM.py's own bootstrap does. Only ever terminates the process this call itself
+# thread the way LLDM.py's own bootstrap does. Only ever stops the process this call itself
 # started (mirrors LLDM.py main()'s own _stop_ollama_if_started) -- a pre-existing Ollama
 # instance, or one left running from an earlier test session, is never touched.
+#
+# Goes through stop_ollama rather than terminate() because this file is what made the cost of
+# the difference obvious: terminating ollama.exe alone strands its llama-server.exe child with
+# the model still resident in VRAM, one per run, until the card is full and every later run
+# quietly falls back to CPU and fails on timeouts that look like a hardware problem. See
+# stop_ollama's own docstring for the measurements.
 _ollama_process = ensure_ollama_running(log=lambda message: print(f"[Ollama bootstrap] {message}"))
 if _ollama_process is not None:
-    atexit.register(lambda: _ollama_process.poll() is None and _ollama_process.terminate())
+    atexit.register(stop_ollama, _ollama_process, lambda message: print(f"[Ollama bootstrap] {message}"))
+
+
+def _warm_up_model(timeout=300):
+    """!
+    @brief Forces the configured model resident before any test runs, so nothing in this file
+        pays its load time out of its own budget.
+
+        Needed precisely *because* the bootstrap above now shuts Ollama down properly. While
+        the old teardown was stranding llama-server children (see stop_ollama), those orphans
+        were incidentally keeping the model warm between runs -- so the cold-load cost only
+        became visible once the leak was fixed. It lands on the tightest budget in the file:
+        every ad hoc call (AdHoc_Generation.DEFAULT_TIMEOUT) allows 8s, and a cold load is
+        comfortably more than that, so without this the first real call of a session reports
+        "unavailable" and its test skips for a reason that has nothing to do with the model's
+        judgment.
+
+        Deliberately best-effort: a failure here is logged and ignored, leaving each test's own
+        gate (an "unavailable" reason, or _wait_for_responses' timeout) to decide what to do
+        about it, exactly as before.
+    """
+    body = json.dumps({
+        "model": DEFAULT_MODEL, "messages": [{"role": "user", "content": "Say OK."}], "stream": False,
+    }).encode()
+    request = urllib.request.Request(
+        "http://127.0.0.1:11434/v1/chat/completions", data=body,
+        headers={"Content-Type": "application/json"},
+    )
+    started = time.time()
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            response.read()
+        print(f"[Ollama bootstrap] Model warm after {time.time() - started:.1f}s.")
+    except Exception as error:
+        print(f"[Ollama bootstrap] Warm-up failed ({error}); tests will fall back to their own gates.")
+
+
+if _ollama_reachable():
+    _warm_up_model()
 
 
 def lines_of(app, widget_id):
@@ -1115,6 +1166,264 @@ class TestNpcGenerationLive(unittest.TestCase):
 
         roster_line = dm_core.describe_character("generated_stranger")
         self.assertTrue(roster_line.startswith(entity["name"]))
+
+
+@unittest.skipUnless(_ollama_reachable(), "Ollama not reachable at http://127.0.0.1:11434")
+class TestReferencedNpcLive(unittest.TestCase):
+    """!
+    @brief Real, live tool-calling round trips against generate_referenced_npc
+        (AdHoc_Generation.py) -- the sibling of TestAdHocRemovalLive, and here for the same
+        reason. Promotion is the one creature-creating path that runs WITHOUT the player
+        invoking ADaM (see DM_Improvisation.py's own risk-tier docstring), so what the model
+        agrees to fill in matters more here than anywhere else in this file.
+
+        Two of its three guardrails are structural and already proven offline: the disposition
+        enum excludes "hostile" at the schema level, and test_unit.py's own
+        TestReferencedNpcGeneration pins the resulting entity shape with an injected fake. The
+        third is pure model judgment and cannot be faked -- **does the currently-loaded model
+        actually decline** when the phrase names someone already standing there, or names
+        something that isn't an ordinary person at all? A model that says yes to everything
+        would duplicate every NPC the player addresses by a synonym, and quietly turn "ask the
+        dragon about its hoard" into a dragon.
+
+        These assert on the generator's own "reason" rather than just "nobody was created",
+        because those are not the same thing: a timed-out call also creates nobody, and a test
+        that accepted that would report a passing guardrail on a machine where the model never
+        answered at all. An "unavailable" reason skips instead -- the same "this environment
+        can't support the question, so don't pretend to have asked it" posture the
+        _ollama_reachable() gate takes one level up. It fires for real: a CPU-bound host (no
+        GPU, so ollama's /api/ps reports size_vram far below size) takes ~50-60s per call
+        against the shipped model, well past the 8s DEFAULT_TIMEOUT every ad hoc call uses.
+    """
+
+    def setUp(self):
+        self.dm_core = DMCore(EventBus(), scenario_name="debug", start_location="town_square")
+        self.before = list(self.dm_core.scenario_entities)
+        self.npc_keywords = load_npc_keywords(os.path.join("Rules", self.dm_core.setting))
+
+    def _ask(self, phrase):
+        """One real round trip, skipping rather than failing when the model can't answer in time."""
+        result = generate_referenced_npc(
+            phrase,
+            self.dm_core._current_scene_description(),
+            [self.dm_core.entities.get(n, {}).get("name", n)
+             for n in self.dm_core.scenario_entities if n != self.dm_core.player_name],
+            [],
+            # The same bystander CR the live path computes, not a hand-picked number -- an
+            # earlier draft passed a flat 2, which fit_skills_to_cr correctly turns into a
+            # 0 HP stat block, and the test then "failed" over a fixture nobody would ever
+            # produce in play (the real figure here is ~13).
+            self.dm_core.get_challenge_rating(self.dm_core.player_name) * BYSTANDER_CR_SHARE,
+            self.npc_keywords,
+            self.dm_core.skills,
+        )
+        if result.get("reason") == "unavailable":
+            self.skipTest("model did not answer within the ad hoc timeout (CPU-bound host?)")
+        print(f"\n=== promotion: {phrase} ===\n{result}")
+        return result
+
+    def test_fills_in_an_ordinary_bystander_the_scene_implies(self):
+        # A blacksmith is about as plausible as a market square gets -- town_square literally
+        # has an exit to one -- so a model that declines this is being uselessly conservative,
+        # and the feature would never fire in practice.
+        result = self._ask("blacksmith")
+
+        self.assertTrue(result["created"], f"model declined a plainly plausible bystander: {result}")
+        entity = result["entity"]
+        self.assertTrue(entity["name"])
+        self.assertTrue(entity["skills"])
+        self.assertGreater(entity["max_hp"], 0)
+        self.assertTrue(entity["ad_hoc"])
+
+    def test_a_dropped_description_still_yields_a_usable_bystander(self):
+        # The regression this pair of tests actually exists to hold: measured against the
+        # shipped gemma4, the model returns a good name and keywords but omits "description"
+        # on roughly seven of every eight create_creature calls, despite the schema requiring
+        # it. Before _build_creature_entity took a fallback, that dropped straight into
+        # "incomplete" -- i.e. the feature declining almost every time, for a reason that has
+        # nothing to do with whether the person belongs in the scene. Whatever the model does
+        # with the field, what comes back has to be describable.
+        result = self._ask("blacksmith")
+
+        self.assertTrue(result["created"], f"model declined a plainly plausible bystander: {result}")
+        self.assertTrue(result["entity"]["description"].strip())
+
+    def test_a_materialized_bystander_can_never_fight(self):
+        # The schema constraint, verified against a real model rather than a fake that was
+        # told what to return: a non-hostile disposition is the only thing on offer, and only
+        # a hostile one is ever given abilities/behavior (_build_creature_entity).
+        result = self._ask("blacksmith")
+        self.assertTrue(result["created"], f"model declined a plainly plausible bystander: {result}")
+        entity = result["entity"]
+
+        self.assertNotIn("abilities", entity)
+        self.assertNotIn("behavior", entity)
+        self.assertGreater(entity["attitudes"]["default"][0], -100)  # -100 is the hostility bar
+
+    def test_declines_to_duplicate_someone_already_standing_there(self):
+        # The prompt's own "decline if this refers to someone already listed as present"
+        # clause -- the third anti-duplicate backstop, behind DMCore's literal and semantic
+        # scans (both offline-covered). "town crier" is in the roster this call hands the
+        # model verbatim, so a model that creates anyway leaves two criers in one square.
+        result = self._ask("town crier")
+
+        self.assertFalse(result["created"], f"model duplicated an NPC already in the scene: {result}")
+
+    def test_declines_to_pass_a_monster_off_as_a_bystander(self):
+        # "an ordinary person the scene implies" is the whole remit. A model willing to fill in
+        # a dragon on request has turned a dialogue convenience into a free summoning spell --
+        # and while the disposition enum means it would arrive harmless, a harmless dragon
+        # standing in a market square is its own kind of broken.
+        result = self._ask("dragon")
+
+        self.assertFalse(result["created"], f"model materialized a monster as a bystander: {result}")
+
+    def test_the_dmcore_glue_places_a_promoted_npc_as_a_harmless_bystander(self):
+        # One pass through the real glue (_attempt_dialogue_promotion), rather than the
+        # generator alone: disambiguated key, placed at the player's band, registered with the
+        # scene, and pointedly NOT claiming current_target.
+        if not self._ask("blacksmith").get("created"):
+            self.skipTest("model declined this phrase on the probe call; nothing to place")
+
+        name = self.dm_core._attempt_dialogue_promotion("blacksmith")
+        self.assertIsNotNone(name, "glue declined a creation the generator had just allowed")
+
+        self.assertEqual([n for n in self.dm_core.scenario_entities if n not in self.before], [name])
+        self.assertFalse(self.dm_core.is_hostile(name, self.dm_core.player_name))
+        self.assertNotEqual(self.dm_core.current_target, name)
+        self.assertEqual(self.dm_core.get_band(name), self.dm_core.get_band(self.dm_core.player_name))
+
+    def test_a_background_crowd_still_costs_no_generation_call_with_ollama_up(self):
+        # test_unit.py proves this with a patched client standing in for the network; this
+        # proves it in an environment where a network call would really have succeeded, by
+        # counting calls through a wrapper that still delegates. Deliberately a call count and
+        # not a stopwatch: an earlier draft asserted the boot finished inside 5s, which is true
+        # on a GPU host and false on a CPU-bound one whose cores are already pegged by another
+        # test's inference -- a flake that says nothing about whether the crowd path is
+        # offline.
+        calls = []
+        real = NPC_Generation._real_call_chat_completion
+
+        def counting_call(*args, **kwargs):
+            calls.append(args)
+            return real(*args, **kwargs)
+
+        with patch.object(NPC_Generation, "_real_call_chat_completion", counting_call):
+            dm_core = DMCore(EventBus(), scenario_name="debug", start_location="town_square")
+
+        crowd = [n for n in dm_core.scenario_entities if dm_core.entities[n].get("background")]
+        self.assertTrue(crowd, "town_square's own background crowd never instanced")
+        self.assertEqual(calls, [], "a background crowd called the network")
+        for name in crowd:
+            self.assertNotEqual(dm_core.entities[name]["name"], "Unnamed Stranger")
+
+
+@unittest.skipUnless(_ollama_reachable(), "Ollama not reachable at http://127.0.0.1:11434")
+class TestCrowdConversation(_LivePipelineTestCase):
+    """!
+    @brief The grounded-crowd/promotion feature end to end, through literal
+        user_input_submitted publishes: real NLP classification, real sentence-transformer
+        present-entity matching, real DMCore gating, real narration.
+
+        What only this can catch: two of the four promotion layers are made of real
+        embeddings, and their thresholds decide whether the feature ever fires at all. A
+        present-entity bank that scores too eagerly suppresses every promotion (the feature
+        silently does nothing); one that scores too timidly duplicates the NPC the player is
+        already talking to. Neither shows up against FakeMatcher's canned lookups, and neither
+        shows up in a prompt-shape assertion. This is also the only place a turn materializes
+        an entity and then immediately narrates it, which has to come back as ONE coherent
+        in-character reply rather than a denial followed by a second narration.
+
+        "town_square" (debug.toml) is the shipped Fantasy crowd fixture: two background
+        "market_regular" extras, a named town crier, a market stall, and no hostiles (so
+        _attempt_dialogue_promotion's own "never while a live hostile is present" gate isn't
+        what's being measured).
+    """
+    scenario_name = "debug"
+    start_location = "town_square"
+
+    def setUp(self):
+        self._boot()
+        self._settle()
+        self.dialogue_events = []
+        self.event_bus.subscribe("dialogue_resolved", self.dialogue_events.append)
+
+    def _settle(self):
+        """!
+        @brief Waits out any narration still in flight after boot, then resets the response
+            count _say does its own accounting against.
+
+            town_square authors an on_enter [[location.encounter]] that fires roughly seven
+            times in ten (its own table is 70% real outcomes, 30% "nothing"), and it narrates
+            through the same llm_response_ready channel as everything else. That is a second
+            response arriving from a single boot, which would otherwise be handed straight to
+            the first _say call as though it were the reply to the player's input -- making
+            this class's printed transcripts wrong and its response assertions nondeterministic
+            in a way that has nothing to do with what is being tested. Quiet-period poll rather
+            than a fixed sleep, since how long that narration takes is entirely a function of
+            how fast the host's model is.
+        """
+        quiet_for = 0.0
+        seen = len(self.responses)
+        while quiet_for < 4.0:
+            time.sleep(0.5)
+            if len(self.responses) != seen:
+                seen = len(self.responses)
+                quiet_for = 0.0
+            else:
+                quiet_for += 0.5
+        self.responses.clear()
+
+    def test_a_background_crowd_is_real_enough_to_talk_to(self):
+        # The tier-1 half, and the original Sandpoint failure inverted: "the merchant" used to
+        # have nothing behind it, so the narrator invented one and the player could never
+        # reach him again. Now it resolves against an actual market_regular (whose template
+        # carries "merchant" among its aliases), the semantic layer scores that ~1.0, and
+        # promotion correctly stands down -- nobody new is created at all.
+        before = list(self.dm_core.scenario_entities)
+        response = self._say("I ask the merchant what he is selling.")
+        print(f"\n=== crowd conversation ===\n> I ask the merchant what he is selling.\n{response}\n")
+
+        self.assertTrue(response.strip())
+        self.assertNotIn("Could not connect to the local LLM", response)
+        self.assertEqual(self.dm_core.scenario_entities, before, "a real crowd member got duplicated")
+        resolved = self.dialogue_events[-1]
+        self.assertTrue(resolved["found"])
+        self.assertTrue(
+            self.dm_core._is_background(resolved["target"]),
+            f"expected a crowd member, got {resolved['target']}",
+        )
+
+    def test_addressing_someone_absent_materializes_them_and_answers_in_character(self):
+        # The tier-2 half. "blacksmith" scores ~0.41 against this square's own present-entity
+        # bank -- under the 0.45 bar -- so the semantic layer correctly reports "nobody here
+        # answers to that" and promotion is allowed to fire. A model that can't answer the
+        # creation call in time leaves the turn on its grounded denial instead, which is the
+        # designed fallback rather than a regression, so that skips rather than failing.
+        before = list(self.dm_core.scenario_entities)
+        response = self._say("I ask the blacksmith about repairs.")
+        print(f"\n=== promotion conversation ===\n> I ask the blacksmith about repairs.\n{response}\n")
+
+        self.assertTrue(response.strip())
+        self.assertNotIn("Could not connect to the local LLM", response)
+
+        added = [name for name in self.dm_core.scenario_entities if name not in before]
+        if not added:
+            self.skipTest("model declined or timed out on the promotion call; denial path took over")
+
+        self.assertEqual(len(added), 1, f"expected exactly one materialized NPC, got {added}")
+        promoted = added[0]
+        self.assertTrue(self.dm_core.entities[promoted]["ad_hoc"])
+        self.assertFalse(self.dm_core.is_hostile(promoted, self.dm_core.player_name))
+        self.assertTrue(self.dm_core.entities[promoted]["description"].strip())
+
+        # One turn, one reply, spoken by the person who was just filled in -- not a denial
+        # followed by a second narration.
+        self.assertEqual(len(self.dialogue_events), 1)
+        resolved = self.dialogue_events[-1]
+        self.assertTrue(resolved["found"])
+        self.assertEqual(resolved["target"], promoted)
+        self.assertIn(promoted, resolved["present_entities"])
 
 
 @pytest.mark.skipif(not _ollama_reachable(), reason="Ollama not reachable at 127.0.0.1:11434")

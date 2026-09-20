@@ -219,6 +219,7 @@ class LLMCore:
         self.scenario_description = ""
         self.scenario_characters = []
         self.event_bus.subscribe("scenario_loaded", self.generate_scene_intro)
+        self.event_bus.subscribe("scene_roster_updated", self._on_scene_roster_updated)
         self.event_bus.subscribe("round_resolved", self.generate_round_response)
         self.event_bus.subscribe("action_resolved", self.generate_response)
         self.event_bus.subscribe("action_not_understood", self.generate_clarification_response)
@@ -230,6 +231,24 @@ class LLMCore:
         self.event_bus.subscribe("save_requested", self._on_save_requested)
         self.event_bus.subscribe("load_requested", self._on_load_requested)
         self.event_bus.subscribe("game_load_failed", self.generate_load_failed_response)
+
+    def _on_scene_roster_updated(self, data):
+        """!
+        @brief Repoints self.scenario_characters at whoever is present in the scene *now* --
+            the roster _build_system_message injects as its own " Characters: ..." line on
+            every single narration.
+
+            Before this existed that attribute was written only by generate_scene_intro (on
+            scenario_loaded, once per playthrough) and load_state, so it described the
+            scenario's *starting* scene forever: walk from Sandpoint's market into the tavern
+            and every later narration was still told the market's cast was standing there.
+            DMCore publishes this from every site that mutates scenario_entities -- see
+            DM_Rules.py's _publish_scene_roster, which also owns the dirty guard that keeps
+            this from firing on an unchanged scene.
+        @param data The "scene_roster_updated" payload -- only "characters" is read here
+            ("entities" is NLPCore's half of the same event).
+        """
+        self.scenario_characters = list(data.get("characters", []))
 
     def set_setting(self, setting):
         """!

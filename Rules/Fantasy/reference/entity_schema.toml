@@ -38,6 +38,14 @@ supertype = "creature"                     # See above. Also gates is_hostile: s
                                             # of attitude data.
 subtype = "humanoid"                       # See above. Also gates DM_Core's open/close
                                             # handling (subtype == "container" only).
+aliases = [ "the barkeep", "garridan" ]     # Optional extra phrases the player can address this
+                                            # entity by, beyond its own name/key -- the same
+                                            # mechanism [[location.exit]] uses for destinations,
+                                            # applied to people. Checked whole-word by
+                                            # DM_Dialogue.py's _literal_dialogue_target, and
+                                            # worth authoring for anyone the player is likely to
+                                            # name by role or first name rather than in full
+                                            # (see docs/social-dialogue.md).
 description = "Flavor text shown to the LLM narrator and to a passed skill check's outcome."
                                             # Read by describe_character (roster/defender_details)
                                             # and by examine (item_interaction_resolved's own

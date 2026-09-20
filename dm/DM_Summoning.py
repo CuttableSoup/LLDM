@@ -68,6 +68,7 @@ class SummoningMixin(DMCoreProtocol):
         instance["ad_hoc"] = True
         instance["summon_expires_in"] = summon_spec.get("duration", 1)
         self.scenario_entities.append(name)
+        self._publish_scene_roster()
         return name
 
     def _advance_pending_spawn(self, entity_name):
@@ -104,6 +105,7 @@ class SummoningMixin(DMCoreProtocol):
         spawn_name = instanced[0]
         self.entities[spawn_name]["ad_hoc"] = True
         self.scenario_entities.append(spawn_name)
+        self._publish_scene_roster()
 
     def _expire_summon_if_due(self, entity_name):
         """!

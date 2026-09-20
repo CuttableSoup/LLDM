@@ -304,3 +304,25 @@ room, simply has no access to entries tagged before/without it. The exchange its
 appended to the *shared* `context_window`, so it becomes part of what everyone present has now
 witnessed — letting a second NPC later recall what was just said to the first.
 
+
+## Addressee resolution
+
+`_resolve_dialogue_target` is now a literal scan (`_literal_dialogue_target`) with a default-target
+fallback, split apart so the promotion gate can ask the unambiguous question "did the player name
+someone who is actually here?" without the fallback masking the answer.
+
+The literal scan checks three phrases per present entity — the `self.entities` key, the displayed
+`name`, and an optional `aliases` list — where it previously checked only the key. That was a real
+gap once instanced crowds existed: an instance keyed `sandpoint_townsfolk_2` but displayed as
+"Fishmonger" was unaddressable by the only name the player ever sees. `aliases` is the same
+mechanism `[[location.exit]]` already uses, applied to people, and it's what lets "greet the
+barkeep" reach `Garridan Viskalai` without anyone authoring that phrasing as a keyword.
+
+The fallback passes `include_background=True` — the one call site that does. A bare "ask about the
+weather" landing on whichever townsperson is standing there is exactly right, even though the same
+entity must never become the default "open it" target (see `docs/npc-generation.md`).
+
+`_resolve_dialogue` also takes an optional `forced_target`, passed only by DMCore after it has just
+materialized that entity into the scene. It bypasses resolution, never the gates — a promoted NPC
+is present, alive, visible and not an object, so it passes them on its own merits. See
+`docs/adam-improvisation.md`'s "Promotion on reference".

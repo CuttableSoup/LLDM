@@ -41,6 +41,20 @@ target_cr = "player"                        # A number, or the literal strings "
                                             # baked in at authoring time). NOT itself a varied
                                             # value -- cr_multiplier/variance below are the
                                             # mechanism for spreading the resulting CR out.
+background = false                          # Optional. true makes this a CROWD template:
+                                            # ambient scene population, resolved entirely
+                                            # locally with no LLM call at all, so a location
+                                            # full of them costs nothing to walk into (see
+                                            # docs/npc-generation.md). A background template
+                                            # MUST author [entity_template.attitudes] -- an
+                                            # entity with no attitudes table at all is treated
+                                            # as hostile, which would put a market square into
+                                            # combat. Validation rejects one that doesn't.
+display_name = "Fishmonger"                 # What the player actually SEES. Only meaningful on
+                                            # a background template: this table's own "name" is
+                                            # its key in self.entity_templates, so it can't also
+                                            # be the displayed name, and nothing is asking an
+                                            # LLM to invent one here. May be a varied value.
 cr_multiplier = 1.0                         # Flat multiplier on target_cr, applied before
                                             # variance (ex: 1.5 for a deliberately tougher
                                             # unique NPC). Defaults to 1.0. May be a varied

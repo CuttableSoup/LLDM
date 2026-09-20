@@ -60,8 +60,40 @@ Practical constraints when touching this file:
   docstring names the specific real-wiring risk it alone catches — a new one that can't name a
   comparably specific risk probably belongs in `test_unit.py` instead.
 
+`TestReferencedNpcLive` and `TestCrowdConversation` cover promotion on reference (see
+`docs/adam-improvisation.md`). The first asks the only question a fake cannot: does the loaded
+model actually *decline* when the addressed person is already in the roster, or when the phrase
+names a monster rather than a person — a model that says yes to everything would duplicate NPCs
+and turn "ask the dragon about its hoard" into a dragon. It asserts on the generator's own
+`reason` rather than just "nobody was created", because a timed-out call also creates nobody, and
+a test that accepted that would report a passing guardrail on a machine where the model never
+answered; an `"unavailable"` reason calls `skipTest` instead. `TestCrowdConversation`
+covers the other half: two of promotion's four gate layers are real embeddings whose thresholds
+decide whether the feature fires at all, and neither a `FakeMatcher` lookup nor a prompt-shape
+assertion can show whether they are tuned right in a real scene. Its own crowd-costs-no-network
+test counts calls through a delegating wrapper rather than timing the boot — an earlier draft
+asserted "finished inside 5s", which is true on a GPU host and false on a CPU-bound one whose
+cores are pegged by another test's inference.
+
 `python -m pytest -q` runs both files; `python -m pytest -q tests/test_unit.py` runs the fast,
 offline subset only.
+
+**If the whole file suddenly gets slow and starts failing on timeouts, check VRAM before
+concluding anything about the hardware.** `ollama.exe` runs the model in a separate
+`llama-server.exe` child, and terminating only the parent — which this file's `atexit` hook and
+`LLDM.py`'s own `_stop_ollama_if_started` both used to do — leaves that child alive holding
+multiple gigabytes, with no parent left to reap it. One stranded runner per run, until the card is
+full and every later run falls back to CPU, where the shipped model answers in ~50-60s instead of
+~8s: every ad hoc call blows its 8s timeout and every `_LivePipelineTestCase` fails its 30s
+narration wait. Measured here, a handful of runs left 11 orphaned runners holding 14.9 GB of a
+16 GB card, and the symptom is indistinguishable from "this machine has no usable GPU" —
+`/api/ps` reporting `size_vram` far below `size` is the tell either way. Both shutdown paths now
+go through `Ollama_Launcher.stop_ollama`, which kills the tree; to check for strays by hand, look
+for `llama-server.exe` processes whose parent PID no longer exists.
+
+A consequence of shutting down properly is that each run now cold-loads the model, where the old
+leak was incidentally keeping it warm between runs. `_warm_up_model()` runs once at import, after
+the bootstrap, to pay that cost somewhere other than out of the first test's own budget.
 
 **Speed.** `NLP_Core.py`'s `SentenceTransformerMatcher` loads two real models
 (`all-MiniLM-L6-v2` plus `NLI_MODEL_NAME`'s zero-shot pipeline) once per process, not once per

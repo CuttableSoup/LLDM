@@ -69,3 +69,23 @@ free text, same way.
 
 Slot names are run through `os.path.basename` before use, so a slot can't escape `Saves/`.
 
+
+## What background crowds and promoted NPCs need (nothing new)
+
+Neither feature adds a save key of its own, by design:
+
+- A **background crowd** member is tagged `generated = True` by `_apply_background_npc`, so the
+  existing generated-entity branch already round-trips its `skills`/`max_hp`/`name`/`description`/
+  `qualities`/`attitudes`. Its *identity* survives because the crowd's size is a fixed integer
+  `count` — see `docs/npc-generation.md` for why a varied one would shift occurrence suffixes and
+  silently orphan saved per-entity state at the overlay step.
+- A **promoted NPC** carries `ad_hoc: True` from the generator, so it's saved whole under
+  `ad_hoc_entities` and re-added to `scenario_entities` on load, exactly like a conjured creature.
+  The per-scene promotion budget is counted off live `ad_hoc` membership rather than a stored
+  counter, so it survives a reload for free.
+
+The one genuinely new key is `"recent_narration"` — the last few narration beats DMCore keeps as
+grounding for promotion (`docs/adam-improvisation.md`). It's restored *after* the instance overlay
+rather than in the prologue, since nothing during re-instancing reads it and the mid-load
+narration `load_game` itself triggers would otherwise be the first thing appended to it. Absent
+from an older save, which is harmless.

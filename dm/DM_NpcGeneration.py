@@ -131,6 +131,74 @@ class NpcGenerationMixin(DMCoreProtocol):
 
         self.event_bus.publish("log_info", f"Generated NPC '{instance_name}': {result['name']}.")
 
+    def _apply_background_npc(self, instance_name):
+        """!
+        @brief The no-network sibling of _apply_npc_generation, for a "background = true"
+            entity_template: an ambient crowd member (a market's fishmonger, a tavern's
+            regulars) who exists so the scene the narrator is handed is actually populated,
+            rather than so the player has someone specific to fight or quest with.
+
+            Deliberately its own method rather than a flag threaded through
+            _apply_npc_generation -- that one's whole contract is "ask the LLM for a name and
+            a backstory", and the entire point here is that nothing may touch the network.
+            generate_npc_stats runs *synchronously, in place*, with a 20s timeout, from inside
+            _instance_entities -> _enter_location: three ordinary generated NPCs in a town
+            square would be up to a minute of dead air on first entry, every entry. A crowd
+            has to cost nothing.
+
+            So this takes only skills/max_hp from generate_npc_stats' own offline fallback
+            path and throws the rest away -- _fallback_npc_stats (NPC_Generation.py) returns
+            "Unnamed Stranger"/"A figure whose story remains untold for now.", which is exactly
+            right as a placeholder about to be overwritten by a save overlay and useless as a
+            market crowd. The name and description come from the template instead, both
+            varied-capable (see resolve_varied_value): "display_name" rather than "name"
+            because a template's own "name" IS its key in self.entity_templates (see
+            load_rules), so it can't also be what the player sees.
+
+            Tagged generated = True for persistence -- that's the whole save story, since
+            DM_Persistence.py's _instance_state already round-trips skills/max_hp/name/
+            description/qualities/attitudes for a generated instance, and load_game's own
+            skip_llm_generation path re-instances through here just as cheaply. Also tagged
+            background = True, which is what the containment rules key off (see
+            DM_Core.py's _get_target_name/_choose_combat_target).
+
+            The attitudes setdefault is belt-and-braces behind DM_Validation.py's own rule
+            that a background template MUST author [entity_template.attitudes]: is_hostile
+            (DM_Social.py) treats an entity with no attitudes table at all as unconditionally
+            hostile, and "are we in combat" is derived purely from the current target's own
+            hostility -- so a crowd authored without attitudes would put a peaceful market
+            square into a fight.
+        @param instance_name The entity's own key in self.entities (already stored there by
+            the time this runs -- see _instance_entities).
+        """
+        entity = self.entities[instance_name]
+        npc_keywords = load_npc_keywords(os.path.join("Rules", self.setting))
+        target_cr = self._resolve_npc_target_cr(entity.get("target_cr", 0), [], [])
+        cr_multiplier = resolve_varied_value(entity.get("cr_multiplier", 1.0))
+        self._resolve_generated_qualities(entity)
+
+        result = generate_npc_stats(
+            npc_keywords, target_cr, self.skills,
+            qualities=entity.get("qualities"),
+            variance=entity.get("variance", 0.15),
+            cr_multiplier=cr_multiplier,
+            skip_llm_generation=True,
+        )
+
+        entity["name"] = resolve_varied_value(entity.get("display_name")) or instance_name
+        entity["description"] = resolve_varied_value(entity.get("description", ""))
+        entity["skills"] = result["skills"]
+        entity["max_hp"] = result["max_hp"]
+        entity["generated"] = True
+        entity["background"] = True
+        entity.setdefault("attitudes", {"default": [0, 0, 0]})
+
+        if "currency" in entity:
+            entity["currency"] = resolve_varied_value(entity["currency"])
+        self._resolve_generated_attitudes(entity)
+
+        self.event_bus.publish("log_info", f"Placed background NPC '{instance_name}': {entity['name']}.")
+
     def _resolve_generated_qualities(self, entity):
         """!
         @brief Resolves every [entity_template.qualities] field that may be varied (ex:

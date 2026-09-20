@@ -717,7 +717,7 @@ class RulesMixin(DMCoreProtocol):
         instance_names = []
         occurrence_counts = self.entity_occurrence_counts
 
-        for entry in entity_entries:
+        for entry in self._expand_entity_entries(entity_entries):
             is_generated_template = "template" in entry
             if is_generated_template:
                 template_name = entry.get("template")
@@ -782,11 +782,54 @@ class RulesMixin(DMCoreProtocol):
             # Defaults to band 1 for any entry that doesn't specify one.
             self._place_new_entity(instance_name, instance, entry.get("band", 1))
             if is_generated_template:
-                self._apply_npc_generation(instance_name, party_pool, instance_names, skip_llm_generation)
+                # A background template is the one generation path that never talks to the
+                # network -- see _apply_background_npc for why a crowd can't pay
+                # generate_npc_stats' synchronous per-NPC round trip.
+                if template.get("background"):
+                    self._apply_background_npc(instance_name)
+                else:
+                    self._apply_npc_generation(instance_name, party_pool, instance_names, skip_llm_generation)
             self._auto_roll_notice(instance_name)
             instance_names.append(instance_name)
 
         return instance_names
+
+    def _expand_entity_entries(self, entity_entries):
+        """!
+        @brief Flattens an "entities" list's own optional "count" field -- an entry carrying
+            count = 3 is processed three times, each pass an independent instance with its own
+            occurrence suffix (fishmonger, fishmonger_2, fishmonger_3). Pure authoring sugar
+            for a background crowd, where writing the same table out N times is the only
+            alternative; every other part of _instance_entities (occurrence counting,
+            removed_entities skipping, NPC generation, notice rolls) sees exactly what it would
+            have seen from N hand-written entries.
+
+            **count must be a plain positive integer, never a {min, max}/weighted-choice varied
+            value** -- the single hard determinism invariant here. load_game re-derives every
+            visited scope by re-instancing it from the static TOML and then overlaying saved
+            per-entity state by name; a crowd whose size was rolled fresh on reload would shift
+            every later occurrence suffix, and DM_Persistence.py's overlay silently skips a
+            saved name that no longer exists, so a reloaded save would quietly lose entities'
+            HP, inventory and conditions rather than failing loudly. Variety belongs in the
+            template's own varied fields (display_name/description/qualities), which already
+            round-trip through the "generated" save path. Anything other than a positive int is
+            rejected here (and, ahead of that, by DM_Validation.py) and treated as a single
+            entry rather than dropping the entry entirely.
+        @param entity_entries The raw list of {name|template, band, count?} tables.
+        @return A flat list of entries with "count" already expanded.
+        """
+        expanded = []
+        for entry in entity_entries:
+            count = entry.get("count", 1)
+            if not isinstance(count, int) or isinstance(count, bool) or count < 1:
+                self.event_bus.publish(
+                    "log_error",
+                    f"Entity entry {entry.get('template') or entry.get('name')!r} has an invalid "
+                    f"count {count!r} (must be a positive integer); treating it as 1.",
+                )
+                count = 1
+            expanded.extend([entry] * count)
+        return expanded
 
     def _place_new_entity(self, name, entity, band):
         """!
@@ -1049,6 +1092,7 @@ class RulesMixin(DMCoreProtocol):
         self._run_on_enter_programs()
         self._evaluate_arrival_statuses()
         self._publish_location_exits()
+        self._publish_scene_roster()
 
     def _publish_location_exits(self):
         """!
@@ -1085,6 +1129,58 @@ class RulesMixin(DMCoreProtocol):
                 "aliases": list(exit_def.get("aliases", [])),
             })
         self.event_bus.publish("location_exits_updated", {"destinations": destinations})
+
+    def _publish_scene_roster(self):
+        """!
+        @brief Publishes who is actually present right now -- the prose roster LLMCore injects
+            into every narration system message, plus the structured per-entity bank NLPCore
+            matches an addressed noun phrase against (see NLP_Core.py's set_present_entities/
+            map_to_present_entity).
+
+            Closes a real staleness bug: LLMCore.scenario_characters feeds
+            _build_system_message's own " Characters: ..." line on EVERY narration, but was
+            only ever assigned by generate_scene_intro (on scenario_loaded) and load_state --
+            so walking from the market into the tavern left every later narration still
+            claiming the market's roster was present. Deliberately its own event rather than
+            another key on each narration-triggering payload: there are ~10 such publish sites
+            sharing no helper, and they'd each recompute describe_character for the whole scene
+            every turn regardless of whether anything changed.
+
+            Same "publish from the mutation sites" argument _publish_location_exits makes, but
+            over a different axis -- scenario_entities changes in more places than
+            current_location_key does (room moves, ad hoc creation/removal, encounters,
+            summoning, load_game), so this is called from each of them plus a cheap backstop at
+            the top of DMCore's own turn/dialogue handlers. The dirty guard below is what makes
+            that affordable: a redundant call costs one describe_character pass and publishes
+            nothing, so a future mutation site that forgets to call this degrades to
+            "stale until the player's next turn" rather than breaking.
+
+            Keyed on the *prose* roster rather than the name list deliberately -- an entity
+            edit that only rewrites a description (DM_Improvisation.py's _attempt_entity_edit)
+            still has to reach the narrator.
+        """
+        characters = self._describe_scenario_characters()
+        if characters == self._last_scene_roster:
+            return
+        self._last_scene_roster = characters
+
+        entities = []
+        for entity_name in self.scenario_entities:
+            if entity_name == self.player_name or self.is_hidden(entity_name):
+                continue
+            entity = self.entities.get(entity_name, {})
+            entities.append({
+                "key": entity_name,
+                "name": entity.get("name", entity_name),
+                "subtype": entity.get("subtype", ""),
+                "aliases": list(entity.get("aliases", [])),
+            })
+
+        self.event_bus.publish("scene_roster_updated", {
+            "characters": characters,
+            "entities": entities,
+            "present_entities": list(self.scenario_entities),
+        })
 
     def _run_on_enter_programs(self):
         """!
@@ -1186,5 +1282,8 @@ class RulesMixin(DMCoreProtocol):
         self._evaluate_arrival_statuses()
 
         self.current_target = self._choose_combat_target()
+        # Room-to-room never goes through _enter_location, so this is its own roster hook --
+        # without it, a dungeon's second room narrates against the first room's cast.
+        self._publish_scene_roster()
         self.event_bus.publish("log_info", f"Entered room '{room_key}': {self.scenario_entities}")
         return True

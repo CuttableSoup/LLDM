@@ -33,10 +33,12 @@ from resolution.Character_Creation import (
     validate_allocation,
 )
 from resolution.AdHoc_Generation import (
+    NON_HOSTILE_DISPOSITIONS,
     decide_entity_edit,
     decide_entity_removal,
     generate_ad_hoc_creature,
     generate_ad_hoc_item,
+    generate_referenced_npc,
 )
 from gui.Character_Creation_GUI import CharacterCreationDialog
 from resolution.Challenge_Rating import calculate_challenge_rating, calculate_party_challenge_rating, skill_rating
@@ -47,7 +49,8 @@ from dm.DM_ActionOutcome import (
     MissingStationOutcome, MovementOutcome, NotCraftableOutcome, OutOfRangeOutcome, RevealEffect,
     RolledOutcome, SummonEffect, TeleportEffect, TransferOutcome,
 )
-from dm.DM_Core import DMCore
+from dm.DM_Core import DMCore, PERSON_TARGET_INTENTS, RECENT_NARRATION_CHARS, RECENT_NARRATION_TURNS
+from dm.DM_Improvisation import MAX_PROMOTED_PER_SCENE
 from dm.DM_Rules import list_available_scenarios
 from dm.DM_Travel import ROAD_ENCOUNTER_KEY
 from dm.DM_Social import TALK_ATTITUDE_DRIFT_CAP, ACTION_ATTITUDE_DRIFT_CAP
@@ -55,7 +58,11 @@ from Event_Bus import EventBus
 from gui.GUI_Core import GUICore
 from paths import PROJECT_ROOT
 from nlp.Intent_Classification import (
+    ADDRESS_ARTICLES,
+    ADDRESS_NON_ADDRESSEES,
+    ADDRESS_TERMINATORS,
     ADVANCE_KEYWORDS,
+    extract_address_phrase,
     CLOSE_KEYWORDS,
     CRAFT_KEYWORDS,
     DIALOGUE_KEYWORDS,
@@ -505,6 +512,16 @@ class TestNlpConfidenceThreshold(unittest.TestCase):
             self.nlp_core.matcher.item_indices = original_indices
 
 
+# Minimal keyword catalog/skills catalog for generate_referenced_npc, which is DMCore-
+# independent (same reasoning FAKE_SKILLS_CATALOG is declared separately for its siblings).
+REFERENCED_NPC_KEYWORDS = {"merchant": ["appraise", "charisma"], "warrior": ["blades"]}
+REFERENCED_NPC_SKILLS = {
+    "appraise": {"name": "appraise"},
+    "charisma": {"name": "charisma"},
+    "blades": {"name": "blades", "combat_role": "offense"},
+}
+
+
 class FakeMatcher:
     """!
     @brief Test-only IntentMatcher adapter -- returns pre-configured (name, score) tuples for
@@ -517,12 +534,15 @@ class FakeMatcher:
         one authored just in case.
     """
 
-    def __init__(self, actions=None, items=None, targets=None, sentiments=None, threats=None, familiarities=None, modifiers=None, intents=None, destinations=None, intent_override=0.65):
+    def __init__(self, actions=None, items=None, targets=None, sentiments=None, threats=None, familiarities=None, modifiers=None, intents=None, destinations=None, present_entities=None, intent_override=0.65):
         self._actions = actions or {}
         self._items = items or {}
         self._targets = targets or {}
         self._intents = intents or {}
         self._destinations = destinations or {}
+        # Address-phrase -> (present entity key, score), for the promotion gate's own
+        # "is someone here already called that?" check (see map_to_present_entity).
+        self._present_entities = present_entities or {}
         # Mirrors SentenceTransformerMatcher.intent_override_threshold, so the two-tier
         # strict= gate (IntentClassifier._route_intent) is exercisable with no model loaded.
         self._intent_override = intent_override
@@ -567,6 +587,12 @@ class FakeMatcher:
 
     def map_to_destination(self, processed_text):
         return self._destinations.get(processed_text, (None, 0.0))
+
+    def set_present_entities(self, entities):
+        pass
+
+    def map_to_present_entity(self, processed_text):
+        return self._present_entities.get(processed_text, (None, 0.0))
 
     def classify_sentiment(self, processed_text):
         return self._sentiments.get(processed_text, (None, 0.0))
@@ -757,6 +783,10 @@ class TestIntentClassification(unittest.TestCase):
                     "input": "talk to the wolf", "score": None, "sentiment": None, "sentiment_score": 0.0,
                     "threat_sentiment": None, "threat_score": 0.0,
                     "familiarity_sentiment": None, "familiarity_score": 0.0,
+                    # The promotion gate's own evidence pair (see extract_address_phrase /
+                    # map_to_present_entity) -- the phrase is extracted mechanically, the
+                    # match comes back empty because FakeMatcher knows about no one here.
+                    "address_phrase": "wolf", "address_match": None, "address_score": 0.0,
                 },
             }],
         )
@@ -1121,6 +1151,12 @@ class TestFreeformDialogueNarration(LLMTestCase):
         # Regression: this exact branch is what turned "ask the merchant" (no such entity ever
         # authored) into a fully invented scene of the merchant slipping into a doorway with a
         # "shadowy figure" -- the real fact (not present) has to be stated plainly, nothing more.
+        #
+        # Still fully reachable, and more load-bearing than before rather than less: DMCore now
+        # usually materializes an addressed-but-absent person instead of denying (see
+        # TestDialoguePromotion), but every one of that gate's vetoes lands here -- the model
+        # declining, a live hostile in the scene, the ad hoc budget spent, Ollama unreachable.
+        # This is the floor beneath promotion, not something promotion replaced.
         self.event_bus.publish("dialogue_resolved", {
             "target": "merchant", "input": "what are you selling", "found": False,
             "reason": "not_present", "present_entities": ["gladstone"],
@@ -9105,6 +9141,55 @@ class TestOllamaLauncher(unittest.TestCase):
         with zipfile.ZipFile(zip_path, "w") as zf:
             zf.writestr("ollama.exe", b"fake-binary-contents")
 
+    def test_stop_ollama_takes_the_model_runner_child_with_it(self):
+        # The whole point of stop_ollama over a bare terminate(): on Windows, ollama.exe's
+        # llama-server.exe child survives its parent and keeps the model resident in VRAM, one
+        # stranded runner per run, until the card is full and everything silently falls back to
+        # CPU. taskkill /T is what reaps the tree.
+        process = MagicMock()
+        process.poll.return_value = None
+        process.pid = 4321
+        calls = []
+
+        with patch.object(Ollama_Launcher.os, "name", "nt"):
+            stopped = Ollama_Launcher.stop_ollama(process, run=lambda *a, **k: calls.append(a[0]))
+
+        self.assertTrue(stopped)
+        self.assertEqual(calls, [["taskkill", "/T", "/F", "/PID", "4321"]])
+        process.wait.assert_called_once()
+        process.terminate.assert_not_called()
+
+    def test_stop_ollama_falls_back_to_terminate_when_taskkill_fails(self):
+        process = MagicMock()
+        process.poll.return_value = None
+        process.pid = 99
+
+        def exploding_run(*args, **kwargs):
+            raise OSError("taskkill missing")
+
+        with patch.object(Ollama_Launcher.os, "name", "nt"):
+            Ollama_Launcher.stop_ollama(process, run=exploding_run)
+
+        process.terminate.assert_called_once()
+
+    def test_stop_ollama_leaves_a_server_it_never_started_alone(self):
+        # ensure_ollama_running returns None when a server was already reachable -- that one
+        # belongs to whoever started it, and the "never touch a pre-existing instance" rule is
+        # the same one LLDM.py's own atexit hook has always kept.
+        run = MagicMock()
+
+        self.assertFalse(Ollama_Launcher.stop_ollama(None, run=run))
+        self.assertEqual(run.call_count, 0)
+
+    def test_stop_ollama_is_a_noop_for_an_already_exited_process(self):
+        process = MagicMock()
+        process.poll.return_value = 0
+        run = MagicMock()
+
+        self.assertFalse(Ollama_Launcher.stop_ollama(process, run=run))
+        self.assertEqual(run.call_count, 0)
+        process.terminate.assert_not_called()
+
     def test_already_running_is_a_noop(self):
         fake_which = MagicMock()
         fake_popen = MagicMock()
@@ -12537,6 +12622,628 @@ async def test_load_button_publishes_load_requested_with_slot_name():
         await pilot.pause()
 
         assert received == [{"slot": "myslot"}]
+
+
+class TestBackgroundCrowds(DMTestCase):
+    """!
+    @brief Ambient crowd NPCs -- "background = true" entity_templates (DM_NpcGeneration.py's
+        _apply_background_npc) and the "count" expansion that places several of one
+        (DM_Rules.py's _expand_entity_entries). debug.toml's own town_square is the shipped
+        fixture: a "market stall" object, a "town crier", and two "market_regular" extras.
+    """
+    start_location = "town_square"
+
+    def _crowd(self):
+        return [n for n in self.dm_core.scenario_entities if self.dm_core.entities[n].get("background")]
+
+    def test_a_background_crowd_is_placed_without_any_llm_call(self):
+        # The latency contract, and the whole reason background is a separate path from
+        # _apply_npc_generation: generate_npc_stats runs synchronously with a 20s timeout from
+        # inside _enter_location, so a crowd that paid for it would stall every first entry.
+        with patch("resolution.NPC_Generation._real_call_chat_completion") as never_called:
+            event_bus = EventBus()
+            dm_core = DMCore(event_bus, scenario_name="debug", start_location="town_square", setting="Fantasy")
+
+        self.assertEqual(never_called.call_count, 0)
+        self.assertTrue([n for n in dm_core.scenario_entities if dm_core.entities[n].get("background")])
+
+    def test_background_instance_keeps_its_authored_name_and_description(self):
+        # _fallback_npc_stats' own "Unnamed Stranger" is right for a save-overlay placeholder
+        # and useless for a market crowd -- background takes only skills/max_hp from it.
+        for name in self._crowd():
+            entity = self.dm_core.entities[name]
+            self.assertNotEqual(entity["name"], "Unnamed Stranger")
+            self.assertIn(entity["name"], ("Fishmonger", "Fruit Seller", "Cartwright", "Net-Mender"))
+            self.assertTrue(entity["description"])
+            self.assertNotIn("figure whose story remains untold", entity["description"])
+            self.assertTrue(entity["skills"])
+            self.assertGreater(entity["max_hp"], 0)
+
+    def test_count_expands_into_independent_instances(self):
+        crowd = self._crowd()
+
+        self.assertEqual(crowd, ["market_regular", "market_regular_2"])
+        self.dm_core.apply_damage("market_regular", 2)
+        self.assertNotEqual(
+            self.dm_core.get_current_hp("market_regular"), self.dm_core.get_current_hp("market_regular_2"),
+        )
+
+    def test_a_background_crowd_is_never_hostile(self):
+        # is_hostile treats an entity with NO attitudes table as unconditionally hostile, and
+        # "are we in combat" is derived from the current target's hostility -- a crowd that got
+        # this wrong would put the whole square into a fight.
+        for name in self._crowd():
+            self.assertFalse(self.dm_core.is_hostile(name, self.dm_core.player_name))
+
+    def test_a_background_template_without_attitudes_is_still_not_hostile(self):
+        # The setdefault belt-and-braces behind the validation rule below.
+        self.dm_core.entity_templates["attitudeless"] = {
+            "name": "attitudeless", "supertype": "creature", "subtype": "humanoid",
+            "background": True, "display_name": "Passer-by", "description": "Someone passing through.",
+            "target_cr": 1,
+        }
+        self.dm_core._instance_entities([{"template": "attitudeless"}])
+
+        self.assertFalse(self.dm_core.is_hostile("attitudeless", self.dm_core.player_name))
+
+    def test_a_background_template_without_attitudes_logs_a_validation_error(self):
+        errors = self._capture("log_error")
+        self.dm_core.entity_templates["attitudeless"] = {
+            "name": "attitudeless", "supertype": "creature", "background": True,
+        }
+        self.dm_core._validate_entity_template_shape()
+
+        self.assertTrue([e for e in errors if "attitudeless" in e and "attitudes" in e])
+
+    def test_a_varied_count_is_rejected_rather_than_rolled(self):
+        # The one hard determinism invariant: a crowd size rolled fresh on reload would shift
+        # every later occurrence suffix and silently orphan saved per-entity state.
+        errors = self._capture("log_error")
+        expanded = self.dm_core._expand_entity_entries([{"template": "market_regular", "count": {"min": 2, "max": 5}}])
+
+        self.assertEqual(len(expanded), 1)
+        self.assertTrue([e for e in errors if "count" in e])
+
+    def test_a_varied_count_is_rejected_at_load_time_too(self):
+        errors = self._capture("log_error")
+        self.dm_core._check_entity_entries("location 'x'", [{"template": "market_regular", "count": {"min": 2}}])
+
+        self.assertTrue([e for e in errors if "count" in e and "positive integer" in e])
+
+    def test_a_crowd_survives_save_and_reload_with_its_identity_intact(self):
+        crowd = self._crowd()
+        before = {n: dict(self.dm_core.entities[n]) for n in crowd}
+        self.dm_core.apply_damage(crowd[1], 2)
+        wounded_hp = self.dm_core.get_current_hp(crowd[1])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("dm.DM_Persistence.PROJECT_ROOT", tmp):
+                self.dm_core.save_game("crowd_slot")
+                event_bus = EventBus()
+                reloaded = DMCore(event_bus, scenario_name="debug", start_location="town_square", setting="Fantasy")
+                reloaded.load_game("crowd_slot")
+
+        after = [n for n in reloaded.scenario_entities if reloaded.entities[n].get("background")]
+        self.assertEqual(after, crowd)  # same keys, same order -- suffixes did not drift
+        for name in crowd:
+            self.assertEqual(reloaded.entities[name]["name"], before[name]["name"])
+            self.assertEqual(reloaded.entities[name]["description"], before[name]["description"])
+            self.assertEqual(reloaded.entities[name]["attitudes"], before[name]["attitudes"])
+        self.assertEqual(reloaded.get_current_hp(crowd[1]), wounded_hp)
+
+    def test_a_bystander_is_never_the_default_item_target(self):
+        # "open it" in a populated square must reach the market stall, not a fruit seller.
+        self.assertFalse(self.dm_core._is_background(self.dm_core._get_target_name()))
+        self.assertIn(self.dm_core._get_target_name(), self.dm_core.scenario_entities)
+
+    def test_buying_and_giving_still_work_in_a_crowd_only_scene(self):
+        # The other half of excluding bystanders from _get_target_name: a location whose entire
+        # non-party roster IS the crowd (Sandpoint's hub, every town square worth the name) has
+        # no other candidate, so a person-addressing intent that skipped them would find no
+        # target at all -- "buy some figs" would decline before the item was even generated,
+        # from the one merchant standing right there.
+        for name in list(self.dm_core.scenario_entities):
+            if name != self.dm_core.player_name and not self.dm_core._is_background(name):
+                self.dm_core.scenario_entities.remove(name)
+
+        for intent in PERSON_TARGET_INTENTS:
+            with self.subTest(intent=intent):
+                target = self.dm_core._get_target_name(include_background=True)
+                self.assertTrue(self.dm_core._is_background(target))
+        self.assertIsNone(self.dm_core._get_target_name(), "a thing-addressing intent still sees nobody")
+
+    def test_a_bystander_is_never_the_default_scene_test_target(self):
+        # _resolve_roll aims a scene-level [entity.test] at current_target specifically.
+        self.assertFalse(self.dm_core._is_background(self.dm_core._choose_combat_target()))
+
+    def test_a_bystander_is_chosen_only_once_nothing_else_qualifies(self):
+        for name in list(self.dm_core.scenario_entities):
+            if name != self.dm_core.player_name and not self.dm_core._is_background(name):
+                self.dm_core.scenario_entities.remove(name)
+
+        self.assertTrue(self.dm_core._is_background(self.dm_core._choose_combat_target()))
+
+    def test_the_dialogue_fallback_may_address_a_bystander(self):
+        # The one deliberate include_background=True call site: an unaddressed remark in a
+        # market square should land on whoever is standing there.
+        for name in list(self.dm_core.scenario_entities):
+            if name != self.dm_core.player_name and not self.dm_core._is_background(name):
+                self.dm_core.scenario_entities.remove(name)
+
+        self.assertTrue(self.dm_core._is_background(self.dm_core._resolve_dialogue_target("ask about the weather")))
+
+    def test_a_bystander_never_takes_a_combat_turn(self):
+        self.dm_core.entities["angry wolf"] = {
+            "name": "angry wolf", "supertype": "creature", "max_hp": 10, "hp": 10,
+            "skills": {"brawling": {"dice": 2, "pips": 0}},
+        }
+        self.dm_core._place_new_entity("angry wolf", self.dm_core.entities["angry wolf"], 1)
+        self.dm_core.scenario_entities.append("angry wolf")
+        result = {"round": 1}
+        self.dm_core._resolve_combat_round(result)
+
+        actors = [turn["actor"] for turn in result.get("turns", [])]
+        for name in self._crowd():
+            self.assertNotIn(name, actors)
+
+
+class TestSceneRoster(DMTestCase):
+    """!
+    @brief scene_roster_updated (DM_Rules.py's _publish_scene_roster) -- the event that keeps
+        LLMCore.scenario_characters describing the scene the player is actually in. Before it,
+        that attribute was written once at scenario load and fed every later narration's own
+        " Characters: " line forever, so walking into a tavern narrated the market's cast.
+    """
+    start_location = "debug_hub"
+
+    def test_entering_a_location_republishes_the_roster(self):
+        published = self._capture("scene_roster_updated")
+        self.dm_core._enter_location("town_square")
+
+        self.assertTrue(published)
+        self.assertTrue(any("crier" in line.lower() for line in published[-1]["characters"]))
+
+    def test_an_unchanged_roster_does_not_republish(self):
+        self.dm_core._enter_location("town_square")
+        published = self._capture("scene_roster_updated")
+        self.dm_core._publish_scene_roster()
+        self.dm_core._publish_scene_roster()
+
+        self.assertEqual(published, [])
+
+    def test_the_roster_payload_carries_matchable_entity_phrases(self):
+        published = self._capture("scene_roster_updated")
+        self.dm_core._enter_location("town_square")
+        entities = published[-1]["entities"]
+
+        self.assertNotIn(self.dm_core.player_name, [entry["key"] for entry in entities])
+        crowd = [entry for entry in entities if entry["key"].startswith("market_regular")]
+        self.assertTrue(crowd)
+        self.assertIn("merchant", crowd[0]["aliases"])
+        self.assertTrue(crowd[0]["name"])
+
+    def test_removing_an_entity_republishes_the_roster(self):
+        self.dm_core._enter_location("town_square")
+        published = self._capture("scene_roster_updated")
+        self.dm_core.remove_entity_from_scene("town crier")
+
+        self.assertTrue(published)
+        self.assertFalse(any("crier" in line.lower() for line in published[-1]["characters"]))
+
+    def test_a_turn_backstops_a_roster_nothing_else_published(self):
+        self.dm_core._enter_location("town_square")
+        self.dm_core.scenario_entities.remove("town crier")
+        published = self._capture("scene_roster_updated")
+        self.dm_core._on_turn_detected({"clauses": [], "input": "wait"})
+        self.dm_core._on_dialogue_detected({"input": "hello"})
+
+        self.assertTrue(published)
+        self.assertFalse(any("crier" in line.lower() for line in published[-1]["characters"]))
+
+
+class TestSceneRosterNarration(LLMTestCase):
+    """!
+    @brief The LLMCore half of scene_roster_updated -- the regression for narration prompts
+        still naming a scene the player left.
+    """
+
+    def test_the_roster_event_repoints_the_narration_characters_line(self):
+        self.event_bus.publish("scenario_loaded", {
+            "name": "Market", "description": "A square.", "characters": ["a fruit seller"],
+        })
+        self.event_bus.publish("scene_roster_updated", {
+            "characters": ["a gruff innkeeper"], "entities": [], "present_entities": [],
+        })
+
+        system_message = self.llm_core._build_system_message("")
+
+        self.assertIn("a gruff innkeeper", system_message)
+        self.assertNotIn("fruit seller", system_message)
+
+
+class TestAddressPhraseExtraction(unittest.TestCase):
+    """!
+    @brief Intent_Classification.py's extract_address_phrase -- the mechanical half of the
+        promotion trigger. It only ever extracts; every phrasing it doesn't recognize returns
+        None, which means no promotion, which means exactly today's behavior.
+    """
+
+    def test_it_finds_the_noun_after_a_dialogue_keyword(self):
+        cases = {
+            "ask the merchant what he is selling": "merchant",
+            "greet the innkeeper": "innkeeper",
+            "talk to garridan": "garridan",
+            "speak with the grizzled fisherman": "grizzled fisherman",
+            "chat with the old man by the fire": "old man",
+            "tell the barkeep about the goblins": "barkeep",
+            "say to the guard that i am leaving": "guard",
+        }
+        for text, expected in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(extract_address_phrase(text), expected)
+
+    def test_a_question_opener_addresses_no_one(self):
+        for text in ("ask about the weather", "ask whats for sale", "ask where the road goes"):
+            with self.subTest(text=text):
+                self.assertIsNone(extract_address_phrase(text))
+
+    def test_a_pronoun_addressee_is_not_a_name(self):
+        for text in ("tell them to back off", "ask her about it", "greet everyone"):
+            with self.subTest(text=text):
+                self.assertIsNone(extract_address_phrase(text))
+
+    def test_no_dialogue_keyword_and_nothing_after_one_both_yield_nothing(self):
+        self.assertIsNone(extract_address_phrase("i swing my sword"))
+        self.assertIsNone(extract_address_phrase("ask"))
+
+    def test_the_held_out_battery_is_not_itself_the_word_lists(self):
+        # Guards against the lists quietly growing to memorize these cases: none of the
+        # extracted nouns may appear in any of the three word lists.
+        for phrase in ("merchant", "innkeeper", "barkeep", "guard", "garridan"):
+            with self.subTest(phrase=phrase):
+                self.assertNotIn(phrase, ADDRESS_NON_ADDRESSEES)
+                self.assertNotIn(phrase, ADDRESS_TERMINATORS)
+                self.assertNotIn(phrase, ADDRESS_ARTICLES)
+
+
+class TestReferencedNpcGeneration(unittest.TestCase):
+    """!
+    @brief AdHoc_Generation.py's generate_referenced_npc -- the pure, DMCore-independent half
+        of promotion. Same injected-client stub pattern TestAdHocGeneration already uses.
+    """
+
+    def _fake_call(self, captured, **overrides):
+        arguments = {
+            "name": "Ferrin", "description": "A weathered trader behind a crate of silver fish.",
+            "keywords": ["merchant"], "disposition": "neutral", "power": "weak",
+        }
+        # An empty override drops the field entirely, which is what the real model does to
+        # "description" most of the time (see test_a_dropped_description_falls_back_to_the_
+        # players_own_words).
+        arguments.update(overrides)
+        arguments = {key: value for key, value in arguments.items() if value != ""}
+
+        def fake_call(api_url, messages, tools=None, tool_choice=None, timeout=None):
+            captured["tools"] = tools
+            captured["prompt"] = messages[1]["content"]
+            return {"choices": [{"message": {"tool_calls": [
+                {"function": {"name": "create_creature", "arguments": json.dumps(arguments)}},
+            ]}}]}
+        return fake_call
+
+    def _generate(self, fake_call, phrase="the merchant", present=(), narration=()):
+        return generate_referenced_npc(
+            phrase, "A busy market square.", list(present), list(narration), 4,
+            REFERENCED_NPC_KEYWORDS, REFERENCED_NPC_SKILLS, call_chat_completion=fake_call,
+        )
+
+    def test_it_fills_in_an_ordinary_bystander(self):
+        result = self._generate(self._fake_call({}))
+
+        self.assertTrue(result["created"])
+        self.assertEqual(result["entity"]["name"], "Ferrin")
+        self.assertTrue(result["entity"]["ad_hoc"])
+
+    def test_the_schema_offers_no_hostile_disposition(self):
+        captured = {}
+        self._generate(self._fake_call(captured))
+        disposition = captured["tools"][0]["function"]["parameters"]["properties"]["disposition"]
+
+        self.assertEqual(disposition["enum"], list(NON_HOSTILE_DISPOSITIONS))
+        self.assertNotIn("hostile", disposition["enum"])
+
+    def test_a_materialized_bystander_cannot_fight(self):
+        # Falls out of the narrowed enum: only "hostile" gets abilities/behavior, so this path
+        # structurally cannot produce something that takes a combat turn.
+        result = self._generate(self._fake_call({}))
+
+        self.assertNotIn("abilities", result["entity"])
+        self.assertNotIn("behavior", result["entity"])
+
+    def test_the_prompt_carries_the_present_roster_and_recent_narration(self):
+        captured = {}
+        self._generate(
+            self._fake_call(captured), present=["Garridan Viskalai"],
+            narration=["A merchant argues loudly outside the tavern."],
+        )
+
+        self.assertIn("Garridan Viskalai", captured["prompt"])
+        self.assertIn("argues loudly outside", captured["prompt"])
+        self.assertIn("the merchant", captured["prompt"])
+
+    def test_an_unreachable_model_declines_rather_than_raising(self):
+        def failing_call(*args, **kwargs):
+            raise ConnectionError("no Ollama")
+
+        result = self._generate(failing_call)
+
+        self.assertFalse(result["created"])
+        self.assertEqual(result["reason"], "unavailable")
+
+    def test_an_explicit_decline_is_reported_as_one(self):
+        def declining_call(api_url, messages, tools=None, tool_choice=None, timeout=None):
+            return {"choices": [{"message": {"tool_calls": [
+                {"function": {"name": "decline", "arguments": json.dumps({"reason": "already here"})}},
+            ]}}]}
+
+        result = self._generate(declining_call)
+
+        self.assertFalse(result["created"])
+        self.assertEqual(result["reason"], "already here")
+
+    def test_an_empty_address_phrase_never_reaches_the_network(self):
+        def exploding_call(*args, **kwargs):
+            raise AssertionError("should never be called with no address phrase")
+
+        result = self._generate(exploding_call, phrase="")
+
+        self.assertFalse(result["created"])
+        self.assertEqual(result["reason"], "no_phrase")
+
+
+    def test_a_dropped_description_falls_back_to_the_players_own_words(self):
+        # Measured against the shipped gemma4, the model returns a good name and keywords but
+        # omits "description" on roughly seven of every eight calls, despite the schema
+        # requiring it -- prompt wording, per-property documentation and a narrower tool arity
+        # were each tried and none of them moved it. So the field is recovered rather than
+        # required: "the blacksmith" becomes "A blacksmith.", which invents nothing the player
+        # did not already say. See test_integration.py's own TestReferencedNpcLive.
+        result = self._generate(self._fake_call({}, description=""), phrase="blacksmith")
+
+        self.assertTrue(result["created"])
+        self.assertEqual(result["entity"]["description"], "A blacksmith.")
+
+    def test_the_fallback_description_reads_as_plain_english(self):
+        # Article by leading vowel, and a stray leading article dropped rather than doubled --
+        # this string goes straight into describe_character's own persona line.
+        self.assertEqual(
+            self._generate(self._fake_call({}, description=""), phrase="old man")["entity"]["description"],
+            "An old man.",
+        )
+        self.assertEqual(
+            self._generate(self._fake_call({}, description=""), phrase="the merchant")["entity"]["description"],
+            "A merchant.",
+        )
+
+    def test_a_bystander_is_never_created_already_dead(self):
+        # fit_skills_to_cr returns 0 HP for a low enough target CR, and an entity with 0 HP
+        # fails _resolve_dialogue's own aliveness gate the instant it is placed -- so the
+        # player would materialize someone and be told in the same breath that nobody is
+        # there. Floored where the tool call becomes an entity, so every creation path gets it.
+        result = generate_referenced_npc(
+            "blacksmith", "A market square.", [], [], 1, REFERENCED_NPC_KEYWORDS,
+            REFERENCED_NPC_SKILLS, call_chat_completion=self._fake_call({}),
+        )
+
+        self.assertTrue(result["created"])
+        self.assertGreaterEqual(result["entity"]["max_hp"], 1)
+
+    def test_a_dropped_name_is_still_incomplete(self):
+        # The fallback covers exactly one field. A creation with no name at all has nothing
+        # honest to recover from -- inventing one is the thing this feature is built not to do.
+        result = self._generate(self._fake_call({}, name=""))
+
+        self.assertFalse(result["created"])
+        self.assertEqual(result["reason"], "incomplete")
+
+    def test_adam_conjuring_still_declines_on_a_dropped_description(self):
+        # The fallback is deliberately scoped to promotion, which has the player's own noun
+        # phrase to fall back on. ADaM's own conjuring has only a free-text request, so its
+        # behavior here is unchanged.
+        def fake_call(api_url, messages, tools=None, tool_choice=None, timeout=None):
+            return {"choices": [{"message": {"tool_calls": [
+                {"function": {"name": "create_creature", "arguments": json.dumps({
+                    "name": "Rat", "keywords": ["brute"], "disposition": "hostile", "power": "weak",
+                })}},
+            ]}}]}
+
+        result = generate_ad_hoc_creature(
+            "a rat", "A cellar.", 4, REFERENCED_NPC_KEYWORDS, REFERENCED_NPC_SKILLS,
+            call_chat_completion=fake_call,
+        )
+
+        self.assertFalse(result["created"])
+        self.assertEqual(result["reason"], "incomplete")
+
+
+class TestDialoguePromotion(DMTestCase):
+    """!
+    @brief Promotion on reference (DM_Core.py's _promote_addressed_npc /
+        DM_Improvisation.py's _attempt_dialogue_promotion) -- materializing someone the player
+        addressed who isn't in the scene, and, far more often, correctly declining to.
+    """
+    start_location = "tavern_floor"
+
+    def setUp(self):
+        super().setUp()
+        self.dialogue_events = self._capture("dialogue_resolved")
+
+    def _fake_npc(self):
+        return {"created": True, "entity": {
+            "name": "Ferrin", "description": "A soot-streaked smith wiping her hands on an apron.",
+            "supertype": "creature", "subtype": "npc", "max_hp": 8,
+            "skills": {"observation": {"dice": 2, "pips": 0}},
+            "attitudes": {"default": [10, 0, 0]}, "ad_hoc": True,
+        }}
+
+    def _talk(self, input_text, address_phrase=None, address_match=None):
+        self.dm_core._on_dialogue_detected({
+            "input": input_text, "address_phrase": address_phrase, "address_match": address_match,
+            "sentiment": None, "sentiment_score": 0.0,
+        })
+        return self.dialogue_events[-1]
+
+    def test_addressing_someone_absent_materializes_them_and_replies_in_character(self):
+        with patch("dm.DM_Improvisation.generate_referenced_npc", return_value=self._fake_npc()):
+            before = len(self.dialogue_events)
+            result = self._talk("ask the blacksmith about repairs", "blacksmith")
+
+        # Exactly one resolved event for the turn -- promotion feeds the ordinary found=True
+        # path rather than producing a denial plus a second narration.
+        self.assertEqual(len(self.dialogue_events) - before, 1)
+        self.assertTrue(result["found"])
+        self.assertEqual(result["target"], "Ferrin")
+        self.assertTrue(result["persona"])
+        self.assertIn("Ferrin", result["present_entities"])
+
+    def test_a_promoted_npc_is_placed_as_a_harmless_bystander(self):
+        with patch("dm.DM_Improvisation.generate_referenced_npc", return_value=self._fake_npc()):
+            self._talk("ask the blacksmith about repairs", "blacksmith")
+
+        entity = self.dm_core.entities["Ferrin"]
+        self.assertFalse(self.dm_core.is_hostile("Ferrin", self.dm_core.player_name))
+        self.assertNotIn("behavior", entity)
+        self.assertTrue(entity["ad_hoc"])
+        self.assertNotEqual(self.dm_core.current_target, "Ferrin")
+
+    def test_naming_someone_present_never_promotes(self):
+        with patch("dm.DM_Improvisation.generate_referenced_npc") as never_called:
+            result = self._talk("ask the innkeeper about the road", "innkeeper")
+
+        self.assertEqual(never_called.call_count, 0)
+        self.assertEqual(result["target"], "innkeeper")
+
+    def test_an_alias_match_never_promotes(self):
+        self.dm_core.entities["innkeeper"]["aliases"] = ["the barkeep"]
+        with patch("dm.DM_Improvisation.generate_referenced_npc") as never_called:
+            result = self._talk("greet the barkeep", "barkeep")
+
+        self.assertEqual(never_called.call_count, 0)
+        self.assertEqual(result["target"], "innkeeper")
+
+    def test_a_semantic_match_against_someone_present_never_promotes(self):
+        with patch("dm.DM_Improvisation.generate_referenced_npc") as never_called:
+            self._talk("greet the publican", "publican", address_match="innkeeper")
+
+        self.assertEqual(never_called.call_count, 0)
+
+    def test_addressing_no_one_in_particular_never_promotes(self):
+        with patch("dm.DM_Improvisation.generate_referenced_npc") as never_called:
+            self._talk("ask about the weather", None)
+
+        self.assertEqual(never_called.call_count, 0)
+
+    def test_promotion_is_refused_while_a_live_hostile_is_present(self):
+        # Nobody wanders into a knife fight to sell you fruit.
+        self.dm_core.entities["angry wolf"] = {
+            "name": "angry wolf", "supertype": "creature", "max_hp": 10, "hp": 10,
+        }
+        self.dm_core._place_new_entity("angry wolf", self.dm_core.entities["angry wolf"], 1)
+        self.dm_core.scenario_entities.append("angry wolf")
+
+        with patch("dm.DM_Improvisation.generate_referenced_npc") as never_called:
+            self.assertIsNone(self.dm_core._attempt_dialogue_promotion("blacksmith"))
+
+        self.assertEqual(never_called.call_count, 0)
+
+    def test_promotion_stops_once_the_scene_holds_its_budget_of_ad_hoc_entities(self):
+        for index in range(MAX_PROMOTED_PER_SCENE):
+            name = f"stranger_{index}"
+            self.dm_core.entities[name] = {
+                "name": name, "supertype": "creature", "max_hp": 5, "hp": 5,
+                "attitudes": {"default": [0, 0, 0]}, "ad_hoc": True,
+            }
+            self.dm_core._place_new_entity(name, self.dm_core.entities[name], 1)
+            self.dm_core.scenario_entities.append(name)
+
+        with patch("dm.DM_Improvisation.generate_referenced_npc") as never_called:
+            self.assertIsNone(self.dm_core._attempt_dialogue_promotion("blacksmith"))
+
+        self.assertEqual(never_called.call_count, 0)
+
+    def test_a_combat_capable_result_is_declined_rather_than_defanged(self):
+        hostile = self._fake_npc()
+        hostile["entity"]["behavior"] = [{"requirements": [], "action": "advance"}]
+        warnings = self._capture("log_warning")
+
+        with patch("dm.DM_Improvisation.generate_referenced_npc", return_value=hostile):
+            self.assertIsNone(self.dm_core._attempt_dialogue_promotion("blacksmith"))
+
+        self.assertNotIn("Ferrin", self.dm_core.entities)
+        self.assertTrue([w for w in warnings if "combat-capable" in w])
+
+    def test_a_declined_promotion_falls_through_to_the_grounded_denial(self):
+        # The floor this whole feature rests on: when nobody is materialized, the turn resolves
+        # exactly as it did before promotion existed.
+        self.dm_core.scenario_entities = [self.dm_core.player_name]
+        with patch("dm.DM_Improvisation.generate_referenced_npc", return_value={"created": False, "reason": "declined"}):
+            result = self._talk("ask the blacksmith about repairs", "blacksmith")
+
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "no_one_here")
+
+    def test_a_promoted_npc_survives_save_and_reload(self):
+        with patch("dm.DM_Improvisation.generate_referenced_npc", return_value=self._fake_npc()):
+            self._talk("ask the blacksmith about repairs", "blacksmith")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("dm.DM_Persistence.PROJECT_ROOT", tmp):
+                self.dm_core.save_game("promoted_slot")
+                event_bus = EventBus()
+                reloaded = DMCore(
+                    event_bus, scenario_name="debug", start_location="tavern_floor", setting="Fantasy",
+                )
+                reloaded.load_game("promoted_slot")
+
+        self.assertIn("Ferrin", reloaded.scenario_entities)
+        self.assertEqual(reloaded.entities["Ferrin"]["description"], self._fake_npc()["entity"]["description"])
+
+
+class TestRecentNarrationBuffer(DMTestCase):
+    """!
+    @brief DMCore.recent_narration -- grounding for a promoted NPC's flavor, and never a
+        trigger for one (see _on_llm_response_ready).
+    """
+
+    def test_narration_is_remembered_and_capped(self):
+        for index in range(RECENT_NARRATION_TURNS + 2):
+            self.event_bus.publish("llm_response_ready", f"beat {index}")
+
+        self.assertEqual(len(self.dm_core.recent_narration), RECENT_NARRATION_TURNS)
+        self.assertEqual(self.dm_core.recent_narration[-1], f"beat {RECENT_NARRATION_TURNS + 1}")
+
+    def test_engine_failure_notices_are_not_scene_narration(self):
+        self.event_bus.publish("llm_response_ready", "System: Could not connect to the local LLM.")
+        self.event_bus.publish("llm_response_ready", "   ")
+
+        self.assertEqual(list(self.dm_core.recent_narration), [])
+
+    def test_a_long_beat_is_truncated(self):
+        self.event_bus.publish("llm_response_ready", "x" * (RECENT_NARRATION_CHARS + 500))
+
+        self.assertEqual(len(self.dm_core.recent_narration[-1]), RECENT_NARRATION_CHARS)
+
+    def test_the_buffer_round_trips_through_save_and_load(self):
+        self.event_bus.publish("llm_response_ready", "A merchant argues outside the tavern.")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("dm.DM_Persistence.PROJECT_ROOT", tmp):
+                self.dm_core.save_game("narration_slot")
+                event_bus = EventBus()
+                reloaded = DMCore(event_bus, scenario_name="debug", setting="Fantasy")
+                reloaded.load_game("narration_slot")
+
+        self.assertEqual(list(reloaded.recent_narration), ["A merchant argues outside the tavern."])
 
 
 if __name__ == "__main__":

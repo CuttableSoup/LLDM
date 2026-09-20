@@ -192,3 +192,27 @@ yet); `generate_load_failed_response` falls back to its own full prompt.
 vectorize_pdf.py [pdf_or_dir] [--query "..."]`, defaulting to `Settings/Fantasy/`. Reuses
 `RagIndex` directly via `RagIndex.wait_until_ready()`.
 
+
+## The scene roster
+
+`_build_system_message` injects `" Characters: " + join(self.scenario_characters)` into **every**
+narration system message. That attribute used to be assigned only by `generate_scene_intro` (on
+`scenario_loaded`, once per playthrough) and `load_state` — so it described the scenario's
+*starting* scene forever: walk from Sandpoint's market into the tavern and every later narration
+was still told the market's cast was standing there.
+
+`DM_Rules.py`'s `_publish_scene_roster` fixes that with a `scene_roster_updated` event, published
+from every site that mutates `scenario_entities` — `_enter_location`, `enter_room`, ad hoc
+placement and removal, encounters, summoning, `load_game`, plus a cheap backstop at the top of
+DMCore's own turn and dialogue handlers. A dirty guard on the produced prose roster is what makes
+calling it freely affordable, and means a future mutation site that forgets its hook degrades to
+"stale until the player's next turn" rather than breaking. It's keyed on the prose rather than the
+name list deliberately, so an entity edit that only rewrites a description still reaches the
+narrator.
+
+The payload's `"characters"` half is LLMCore's (`_on_scene_roster_updated`, which does nothing
+but repoint `scenario_characters`); its `"entities"` half is NLPCore's, feeding
+`set_present_entities` (see `docs/adam-improvisation.md`'s "Promotion on reference"). Deliberately
+its own event rather than another key on each narration payload: there are ~10 such publish sites
+sharing no helper, and each would recompute `describe_character` for the whole scene every turn
+regardless of whether anything changed.

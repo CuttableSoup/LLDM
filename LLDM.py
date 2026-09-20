@@ -11,7 +11,7 @@ from llm.LLM_Core import LLMCore
 from dm.DM_Core import DMCore, scenario_exists
 from gui.GUI_Core import GUICore
 from nlp.NLP_Core import NLPCore
-from llm.Ollama_Launcher import ensure_ollama_running
+from llm.Ollama_Launcher import ensure_ollama_running, stop_ollama
 
 DEFAULT_SCENARIO = "debug"
 
@@ -127,10 +127,10 @@ def main():
         ollama_process = ensure_ollama_running(log=_report_ollama_status)
 
     def _stop_ollama_if_started():
-        # Only ever terminates a process this call itself started, never a pre-existing Ollama
-        # instance -- terminate(), not kill(), gives the server a chance to shut down cleanly.
-        if ollama_process is not None and ollama_process.poll() is None:
-            ollama_process.terminate()
+        # Only ever stops a process this call itself started, never a pre-existing Ollama
+        # instance. Goes through stop_ollama rather than terminate() directly so the model
+        # runner child goes with it -- see that function for what leaving it behind costs.
+        stop_ollama(ollama_process)
 
     atexit.register(_stop_ollama_if_started)
     threading.Thread(target=_bootstrap_ollama, daemon=True).start()

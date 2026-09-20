@@ -752,3 +752,30 @@ Both `_apply_damage_if_hit` and `_run_ability_outcome_program` (`DM_Core.py`) ca
 `target_name` alone — so a discriminating area effect's `on_pass` (ex: an `apply_condition`
 op) actually lands on every ally/enemy the blast caught.
 
+
+## Background entities in combat
+
+A `background = true` crowd member (see `docs/npc-generation.md`) is an ordinary scene
+participant, with two deliberate exclusions and several deliberate non-exclusions.
+
+**Excluded** from `_choose_combat_target`'s non-hostile fallback, so a market's fishmonger can't
+displace the room's own chest or trap as `current_target` — which matters because `_resolve_roll`
+aims a scene-level `[entity.test]` (picking a lock, disarming a trap) at `current_target`
+specifically. A crowd member is still eligible in a later pass, ahead of the ally-of-last-resort
+one, so `current_target` never goes stale in a scene with nothing else in it.
+
+**Not excluded**, each on purpose:
+
+- **A round's `turns`.** Nothing was needed: a crowd member authors no `[[entity.behavior]]`, so
+  `choose_behavior` returns `None`, `resolve_behavior_action` returns `None`, and the
+  `if turn_outcome:` gate drops it before it ever rolls initiative.
+- **`resolve_targets`' `"enemies"` side.** That reads `is_hostile`, and a crowd with authored
+  neutral attitudes is never an enemy. Only `side = "all"` reaches them — and a fireball in a
+  market crowd *should* catch bystanders. The mandatory-attitudes validation rule is what carries
+  this; a crowd authored without attitudes would be hostile by default.
+- **`run_round_upkeep` and `evaluate_proximity_statuses`.** A bystander standing next to a
+  burning stall should be scanned for proximity statuses like anyone else. These are linear per
+  round and only run once a fight is actually happening, which a peaceful market never is.
+- **`resolve_override_target`'s per-entity candidate scan**, which makes a round O(n²) in scene
+  size. Pure waste rather than wrong behavior, bounded by the same "only during a real fight"
+  argument, and invisible at the documented crowd size of 4 or fewer.

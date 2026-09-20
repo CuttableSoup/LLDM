@@ -1,3 +1,4 @@
+import collections
 import copy
 import os
 import re
@@ -47,6 +48,27 @@ TARGET_HEALTHY_KEYWORDS = ("healthy", "unhurt", "uninjured", "unharmed")
 # line before "wounded"/"healthy" is honored -- calling a room full of undamaged creatures
 # "wounded" shouldn't silently redirect to whichever one merely has the least HP among equals.
 TARGET_WOUNDED_HP_CUTOFF = 0.40
+
+# The intents whose default scene target is a PERSON rather than a thing, and which may
+# therefore fall back to an ambient crowd member (see _get_target_name's include_background).
+# Buying produce from whichever stallholder is standing there is exactly right; "open it"
+# resolving to that same stallholder is not. "take" stays out deliberately -- it reaches into
+# containers and corpses, and helping yourself to a bystander's belongings is a trade or a
+# theft check, not a default.
+PERSON_TARGET_INTENTS = frozenset({"trade", "give"})
+
+# How many narration beats self.recent_narration keeps, and how much of each. Enough to carry
+# "a merchant is arguing outside the tavern" forward a turn or two as grounding for NPC
+# promotion; small enough that it can never crowd the tool-call prompt it rides in (the
+# narration prompts themselves already live on a measured token budget -- see LLM_Core.py's
+# _fit_history/RESPONSE_TOKEN_RESERVE).
+RECENT_NARRATION_TURNS = 3
+RECENT_NARRATION_CHARS = 400
+# LLMCore publishes its own failure notices through the same llm_response_ready channel as
+# real narration (a dead Ollama, an empty completion). They describe the engine, not the
+# scene, so they're never grounding for anything.
+NARRATION_SYSTEM_PREFIX = "System: "
+
 
 class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixin, RulesMixin, PersistenceMixin, CharacterCreationMixin, NpcGenerationMixin, DialogueMixin, HelpMixin, ImprovisationMixin, EncounterMixin, SummoningMixin, CraftingMixin, ValidationMixin, TimeMixin, TravelMixin):
     """!
@@ -181,6 +203,26 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         # the dungeon's chest or the tavern's innkeeper). Set for real by load_scenario()
         # (via _choose_combat_target()) once entities/scenario are actually loaded below.
         self.current_target = None
+        # The last prose roster _publish_scene_roster actually published (DM_Rules.py) -- its
+        # dirty guard, so the roster hooks scattered across every scenario_entities mutation
+        # site can be called freely without republishing an unchanged scene. Must be set before
+        # load_scenario() below, which enters the starting location and publishes the first one.
+        self._last_scene_roster = None
+        # The last few narration beats, verbatim, as evidence for NPC promotion (see
+        # ImprovisationMixin._attempt_dialogue_promotion) -- what a materialized NPC's own
+        # flavor is grounded in, so a merchant the narration just described as arguing outside
+        # the tavern comes out as that merchant rather than a generic one.
+        #
+        # THE RULE, and it is the whole ethical shape of this feature: this buffer grounds
+        # flavor, never triggers creation. Nothing is ever materialized because the narrator
+        # mentioned it; materialization is triggered solely by the player's own literal
+        # address phrase. If the narrator invents a hooded figure, no hooded figure exists
+        # until the player reaches for one.
+        #
+        # Deliberately DMCore's own rather than a read of LLMCore.context_window: DMCore holds
+        # no reference to LLMCore (they only share an event bus) and needs this synchronously,
+        # mid-turn, inside the promotion decision.
+        self.recent_narration = collections.deque(maxlen=RECENT_NARRATION_TURNS)
         # The filename passed to load_scenario_definition -- distinct from self.scenario's
         # own "name" field (a display string, ex: "The Arena") -- kept so save_game/load_game
         # know which scenarios/*.toml file a saved slot belongs to.
@@ -237,6 +279,9 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         self.event_bus.subscribe("improvisation_requested", self._on_improvisation_requested)
         self.event_bus.subscribe("save_requested", self._on_save_requested)
         self.event_bus.subscribe("load_requested", self._on_load_requested)
+        # DMCore's one subscription to something LLMCore produces, and its only cross-thread
+        # one -- see _on_llm_response_ready.
+        self.event_bus.subscribe("llm_response_ready", self._on_llm_response_ready)
 
     def _on_turn_detected(self, data):
         """!
@@ -301,6 +346,10 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         clauses = data.get("clauses")
         if not clauses:
             return
+        # Roster backstop -- see DM_Rules.py's _publish_scene_roster. Nearly free thanks to its
+        # own dirty guard, and it bounds staleness to a single turn if a future
+        # scenario_entities mutation ever lands without its own hook.
+        self._publish_scene_roster()
         # Once per real player turn, regardless of whether it turns out to be item-only,
         # action-only, or mixed -- the current location/room's own "ambient" [[location.
         # encounter]] entries (DM_Encounters.py), if any, get their repeating per-turn roll
@@ -1365,7 +1414,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         intent = data.get("intent")
         item_name = data.get("item_name")
         input_text = data.get("input")
-        target_name = self._get_target_name()
+        target_name = self._get_target_name(include_background=intent in PERSON_TARGET_INTENTS)
         # "examine"/"take" against an item already sitting in the player's own inventory (ex:
         # DM_Improvisation.py placing an ad hoc item straight into inventory) resolve directly
         # against the player -- computed early, alongside the ground-item check below, so a
@@ -1472,6 +1521,30 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             self.entities, self.rules, self.event_bus,
         )
 
+    def _on_llm_response_ready(self, narration):
+        """!
+        @brief Keeps the last few narration beats in self.recent_narration, as grounding for
+            NPC promotion (see ImprovisationMixin._attempt_dialogue_promotion). Skips LLMCore's
+            own failure notices, which describe the engine rather than the scene.
+
+            **Threading:** LLMCore publishes this from _fetch_and_publish, which runs on a
+            daemon thread, so this is the one DMCore handler that does not run on the caller's
+            thread. deque.append under a maxlen is atomic in CPython, and nothing here reads
+            back what it just wrote, so no lock is needed -- but nothing heavier than an append
+            belongs in this handler for exactly that reason.
+
+            Storing narration does NOT make narration authoritative: see self.recent_narration's
+            own comment in __init__ for the rule this whole feature rests on -- the narrator's
+            prose can flavor a character the player reached for, and can never conjure one.
+        @param narration The "llm_response_ready" payload -- a bare narration string.
+        """
+        if not isinstance(narration, str):
+            return
+        text = narration.strip()
+        if not text or text.startswith(NARRATION_SYSTEM_PREFIX):
+            return
+        self.recent_narration.append(text[:RECENT_NARRATION_CHARS])
+
     def _on_dialogue_detected(self, data):
         """!
         @brief Event handler for a free-text dialogue match (see NLPCore.DIALOGUE_KEYWORDS/
@@ -1496,16 +1569,54 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             sentiment_score, threat_sentiment, threat_score, familiarity_sentiment,
             familiarity_score}).
         """
+        self._publish_scene_roster()
         input_text = data.get("input")
         sentiments = {
             "disposition": (data.get("sentiment"), data.get("sentiment_score")),
             "threat": (data.get("threat_sentiment"), data.get("threat_score")),
             "familiarity": (data.get("familiarity_sentiment"), data.get("familiarity_score")),
         }
-        result = self._resolve_dialogue(input_text, sentiments)
+        result = self._resolve_dialogue(
+            input_text, sentiments, forced_target=self._promote_addressed_npc(data, input_text),
+        )
         result["input"] = input_text
+        # Snapshotted AFTER any promotion, so the turn's own narration knows the person the
+        # player is talking to is standing there.
         result["present_entities"] = list(self.scenario_entities)
         self.event_bus.publish("dialogue_resolved", result)
+
+    def _promote_addressed_npc(self, data, input_text):
+        """!
+        @brief The gate in front of NPC promotion: decides whether the player just addressed
+            somebody who genuinely isn't here, and only then asks
+            ImprovisationMixin._attempt_dialogue_promotion to materialize them.
+
+            Four layers, cheapest and most literal first, each able to veto on its own -- the
+            same literal-before-semantic discipline the travel path follows, and for the same
+            reason: a player who named someone real must never be rerouted to an invention.
+            1. The player used an address phrase at all (NLPCore's own extract_address_phrase,
+               mechanical -- "ask about the weather" and "tell them to back off" stop here).
+            2. Nothing present matches it literally, by instance key, displayed name, or alias
+               (_literal_dialogue_target).
+            3. Nothing present matches it semantically either (NLPCore's map_to_present_entity,
+               deliberately permissive -- "someone here already answers to that" wins ties,
+               since suppressing a promotion is free and duplicating a present NPC is not).
+            4. _attempt_dialogue_promotion's own safety gates, and the model's own right to
+               decline.
+
+            Any veto returns None, and the turn resolves exactly as it always has -- including
+            landing on the grounded "there's no one like that here" narration, which stays the
+            floor beneath this whole feature rather than being replaced by it.
+        @param data The dialogue_detected payload.
+        @param input_text The player's raw input.
+        @return The promoted entity's name, or None.
+        """
+        address_phrase = data.get("address_phrase")
+        if not address_phrase or data.get("address_match"):
+            return None
+        if self._literal_dialogue_target(input_text):
+            return None
+        return self._attempt_dialogue_promotion(address_phrase)
 
     def _resolve_item_test_target(self, target_name, skill_name):
         """!
@@ -1588,14 +1699,36 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         entity = self.entities.get(entity_name, {})
         return bool(entity.get("is_player") or entity.get("is_party"))
 
-    def _get_target_name(self):
+    def _is_background(self, entity_name):
+        """!
+        @brief Whether entity_name is an ambient crowd member (a "background = true"
+            entity_template instance -- see DM_NpcGeneration.py's _apply_background_npc).
+            Background entities are real, addressable, fully targetable participants; they're
+            excluded only from the two places that pick someone *on the player's behalf*
+            without having been told who (_get_target_name/_choose_combat_target, below).
+        @param entity_name The instance name to check.
+        @return True if this instance was placed as scene population.
+        """
+        return bool(self.entities.get(entity_name, {}).get("background"))
+
+    def _get_target_name(self, include_background=False):
         """!
         @brief Picks the current opposed target from the instantiated scenario entities.
+        @param include_background Whether an ambient crowd member may be picked. False for
+            every caller resolving a *thing* the player didn't name -- "open it",
+            _resolve_item_test_target's own container fallback, ADaM's TARGET_CENTRIC_INTENTS
+            -- since a populated town square would otherwise make "open it" resolve to
+            whichever fishmonger happens to stand first in scenario_entities. True only for
+            DM_Dialogue.py's own addressee fallback, where a bare "ask about the weather"
+            landing on a nearby townsperson is exactly what should happen.
         @return The name of the first non-party entity instance in the scenario, or None if there isn't one.
         """
         for instance_name in self.scenario_entities:
-            if not self._is_party_member(instance_name):
-                return instance_name
+            if self._is_party_member(instance_name):
+                continue
+            if not include_background and self._is_background(instance_name):
+                continue
+            return instance_name
         return None
 
     def _choose_combat_target(self):
@@ -1603,10 +1736,11 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         @brief Picks self.current_target: the first living, hostile-toward-the-player entity
             in scenario_entities order. If none qualifies (ex: every wolf is dead, or nothing
             in the scene was ever hostile -- the dungeon's chest, the tavern's innkeeper),
-            falls back to the first living, non-party entity instead (ex: debug.toml's own
-            "dart trap"), so an ally (ex: "thane") is never mistaken for the scene's own
-            trap/chest/NPC just because it happens to sit earlier in scenario_entities than
-            the real one. Only once *no* such entity exists either does it fall back further,
+            falls back to the first living, non-party, non-background entity instead (ex:
+            debug.toml's own "dart trap"), so neither an ally (ex: "thane") nor an ambient
+            crowd member is mistaken for the scene's own trap/chest/NPC just because it
+            happens to sit earlier in scenario_entities than the real one -- a crowd member
+            gets its own pass after that, still ahead of the ally-of-last-resort one. Only once *no* such entity exists either does it fall back further,
             to the first living entity at all -- including an ally, so current_target still
             has somewhere to land (rather than going stale on a corpse) in a scene with
             nothing left but the player's own party. Unlike _get_target_name(), which returns
@@ -1622,6 +1756,15 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
                 continue
             if self.is_hostile(instance_name, self.player_name) and self.get_current_hp(instance_name) > 0:
                 return instance_name
+        for instance_name in self.scenario_entities:
+            if self._is_party_member(instance_name) or self._is_background(instance_name):
+                continue
+            if self.get_current_hp(instance_name) > 0:
+                return instance_name
+        # Only once nothing else non-party qualifies does an ambient crowd member get picked
+        # -- a market's fishmonger must never displace the room's own chest/trap here, since
+        # _resolve_roll aims a scene-level [entity.test] (picking a lock, disarming a trap) at
+        # self.current_target specifically.
         for instance_name in self.scenario_entities:
             if self._is_party_member(instance_name):
                 continue

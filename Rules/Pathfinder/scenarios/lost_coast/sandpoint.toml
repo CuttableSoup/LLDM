@@ -21,7 +21,9 @@ name = "Sandpoint"
 aliases = [ "the town of Sandpoint" ]
 description = "A small, rebuilt fishing town on the Lost Coast, its streets of shops, taverns, and noble manors overlooked by the glassworks and the ruined Old Light."
 grid = { x = 150, y = 0 }
-entities = []
+entities = [
+    { template = "sandpoint_townsfolk", count = 3 },
+]
 
 [[location.exit]]
 destination = "cathedral"
@@ -255,6 +257,7 @@ name = "The White Deer Tavern and Inn"
 description = "A grand three-story tavern and inn overlooking the gulf, rebuilt after the old fire, run by a gruff but generous Shoanti innkeeper."
 entities = [
     { name = "Garridan Viskalai" },
+    { template = "sandpoint_tavern_regular", count = 2 },
 ]
 return_to = "sandpoint"
 
@@ -520,6 +523,7 @@ name = "The Hagfish"
 description = "Sandpoint's most popular waterfront tavern, home to a foul-tempered pet hagfish and a leather pouch of prize coin for anyone brave enough to drink her tank water."
 entities = [
     { name = "Jargie Quinn" },
+    { template = "sandpoint_tavern_regular", count = 3 },
 ]
 return_to = "sandpoint"
 
@@ -721,6 +725,7 @@ stealth = { dice = 2, pips = 1 }
 name = "Garridan Viskalai"
 supertype = "creature"
 subtype = "humanoid"
+aliases = [ "garridan", "viskalai", "the barkeep", "the innkeeper", "the owner" ]
 description = "The White Deer's somber Shoanti owner, gruff company but scrupulously fair with his prices and his rooms."
 
 max_hp = 20
@@ -1140,6 +1145,7 @@ observation = { dice = 1, pips = 2 }
 name = "Jargie Quinn"
 supertype = "creature"
 subtype = "humanoid"
+aliases = [ "jargie", "quinn", "the barkeep", "the tavern keeper", "the owner" ]
 description = "A gregarious one-legged tavern keeper with an ever-changing story of how he lost the leg."
 
 max_hp = 30
@@ -1389,3 +1395,96 @@ default = [ 30, 25, 15 ]
 [entity.skills]
 charisma = { dice = 3, pips = 1 }
 appraise = { dice = 2, pips = 2 }
+
+# ---------------------------------------------------------------------------------------------
+# Background crowds. Sandpoint's own description promises a working town -- market vendors,
+# fishermen, dock workers -- but until these existed the hub's "entities" list was empty, so
+# the narrator was being asked to describe a populated street with nobody actually in it (and
+# obliged by inventing people the player then couldn't talk to). These are "background = true"
+# templates: resolved entirely locally, no Ollama round trip, no combat behavior, and excluded
+# from the "pick someone for the player" defaults (see DM_Core.py's _get_target_name).
+# Keep each location's crowd to 4 or fewer -- every scene entity is walked once per combat
+# round, and a crowd is meant to be scenery with a voice, not a cast.
+
+[[entity_template]]
+name = "sandpoint_townsfolk"
+supertype = "creature"
+subtype = "humanoid"
+background = true
+display_name = [
+    {"Fishmonger" = 20},
+    {"Fruit Seller" = 20},
+    {"Cartwright" = 15},
+    {"Net-Mender" = 15},
+    {"Dock Hand" = 15},
+    {"Cooper" = 15},
+]
+description = [
+    {"A weather-beaten trader working a slatted crate of the morning's catch, keeping one eye on the crowd." = 34},
+    {"A townsperson picking over a stall of dried fruit and half-listening to the street's gossip." = 33},
+    {"A broad-shouldered worker hauling crates up from the wharf, pausing to stretch a sore back." = 33},
+]
+aliases = [ "merchant", "vendor", "stallholder", "trader", "townsfolk", "townsperson" ]
+target_cr = "player"
+cr_multiplier = 0.25
+currency = {min = 1, max = 20}
+
+[entity_template.attitudes]
+default = [
+    {min = -10, max = 30},
+    0,
+    {min = -20, max = 10}
+]
+
+[entity_template.qualities]
+race = [
+    {"human" = 70},
+    {"halfling" = 12},
+    {"dwarf" = 10},
+    {"elf" = 8}
+]
+gender = [
+    {"male" = 50},
+    {"female" = 50}
+]
+age = { min = 17, max = 64 }
+
+[[entity_template]]
+name = "sandpoint_tavern_regular"
+supertype = "creature"
+subtype = "humanoid"
+background = true
+display_name = [
+    {"Grizzled Fisherman" = 30},
+    {"Off-Duty Dock Worker" = 30},
+    {"Quiet Regular" = 20},
+    {"Talkative Drinker" = 20},
+]
+description = [
+    {"A grizzled fisherman nursing a pint in the corner, in no hurry to be anywhere." = 34},
+    {"A dock worker laughing too loudly at a joke that was not that good." = 33},
+    {"A regular hunched over a tankard, following the room's conversations without joining any." = 33},
+]
+aliases = [ "patron", "drinker", "regular", "fisherman", "dock worker", "local" ]
+target_cr = "player"
+cr_multiplier = 0.25
+currency = {min = 1, max = 12}
+
+[entity_template.attitudes]
+default = [
+    {min = 0, max = 35},
+    0,
+    {min = -10, max = 20}
+]
+
+[entity_template.qualities]
+race = [
+    {"human" = 75},
+    {"halfling" = 10},
+    {"dwarf" = 15}
+]
+gender = [
+    {"male" = 55},
+    {"female" = 45}
+]
+age = { min = 20, max = 70 }

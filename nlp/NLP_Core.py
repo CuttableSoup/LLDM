@@ -170,6 +170,15 @@ class SentenceTransformerMatcher(IntentMatcher):
         # claim than filling a silent give-up, so it takes stronger evidence.
         self.intent_override_threshold = 0.65
         self.destination_confidence_threshold = 0.55
+        # Its own knob, and deliberately the most permissive one here, because this is the one
+        # matcher whose error costs run backwards from everywhere else. A false POSITIVE means
+        # "someone here already answers to that", which suppresses NPC promotion and leaves
+        # exactly today's behavior; a false NEGATIVE materializes a second barkeep standing
+        # next to the real one, which is a visible, persistent, saved mistake. When in doubt,
+        # decide that the person is already here.
+        self.present_entity_confidence_threshold = 0.45
+        self.present_entity_embeddings = None
+        self.present_entity_indices = []
 
         # Static and setting-independent (INTENT_PROTOTYPES is a module constant, not rules
         # data), so this is built once here rather than rebuilt on every on_rules_loaded call --
@@ -770,6 +779,75 @@ class SentenceTransformerMatcher(IntentMatcher):
         self.event_bus.publish("log_info", f"Mapped input to destination: {best_destination} (Score: {best_score:.4f})")
         return best_destination, best_score
 
+    def set_present_entities(self, entities):
+        """!
+        @brief Installs whoever is currently in the scene as the bank map_to_present_entity
+            scores against. REPLACES wholesale, for exactly the reason set_destinations does:
+            the present cast changes completely on every move, and last room's occupants must
+            not linger as matchable candidates. Embeds each entity's displayed name, its
+            instance key with underscores spaced out, its subtype, and its aliases --
+            deliberately NOT its description, same reasoning as set_destinations (entity prose
+            is long, dilutes the match, and would let unrelated input score against a person).
+        @param entities A list of {"key", "name", "subtype", "aliases"} dicts, possibly empty
+            (a scene with no one else in it, which must clear the bank rather than keep the
+            previous scene's).
+        """
+        phrases = []
+        indices = []
+        for entity in entities or []:
+            key = entity.get("key")
+            if not key:
+                continue
+            candidates = [entity.get("name", ""), key.replace("_", " "), entity.get("subtype", "")]
+            for phrase in candidates + list(entity.get("aliases", [])):
+                if phrase:
+                    phrases.append(phrase)
+                    indices.append(key)
+
+        if phrases:
+            self.present_entity_embeddings = self.model.encode(phrases, convert_to_tensor=True)
+            self.present_entity_indices = indices
+        else:
+            self.present_entity_embeddings = None
+            self.present_entity_indices = []
+
+        self.event_bus.publish(
+            "log_info",
+            f"NLPCore: {len(phrases)} present-entity phrases encoded for {len(set(indices))} entities.",
+        )
+
+    def map_to_present_entity(self, processed_text):
+        """!
+        @brief Maps an address phrase ("the barkeep", "that merchant") onto someone already in
+            the scene, so DMCore can tell "you're talking to a person who is standing right
+            there under a different name" apart from "you're talking to someone who doesn't
+            exist yet" (see DM_Core.py's _on_dialogue_detected and the promotion gate).
+
+            DMCore's own literal scan (_literal_dialogue_target) still runs FIRST and still
+            wins; this only rescues what it missed, the same literal-before-fuzzy discipline
+            map_to_destination and match_modifier already follow.
+        @param processed_text The address phrase to score.
+        @return (entity_key, score); entity_key is None below
+            present_entity_confidence_threshold or with no bank loaded.
+        """
+        if self.present_entity_embeddings is None or not processed_text:
+            return None, 0.0
+
+        input_embedding = self.model.encode(processed_text, convert_to_tensor=True)
+        cosine_scores = util.cos_sim(input_embedding, self.present_entity_embeddings)[0]
+
+        best_phrase_idx = np.argmax(cosine_scores.cpu().numpy())
+        best_score = cosine_scores[best_phrase_idx].item()
+        best_entity = self.present_entity_indices[best_phrase_idx]
+
+        if best_score < self.present_entity_confidence_threshold:
+            return None, best_score
+
+        self.event_bus.publish(
+            "log_info", f"Mapped address phrase to present entity: {best_entity} (Score: {best_score:.4f})"
+        )
+        return best_entity, best_score
+
 
 class NLPCore:
     """!
@@ -796,6 +874,10 @@ class NLPCore:
         # SentenceTransformerMatcher.set_destinations' own docstring. The other non-input-driven
         # catalog feed, alongside item_catalog_updated above.
         self.event_bus.subscribe("location_exits_updated", self._on_location_exits_updated)
+        # DM_Rules.py's _publish_scene_roster publishes this from every site that changes who
+        # is present -- see SentenceTransformerMatcher.set_present_entities. LLMCore consumes
+        # the same event's "characters" half for its narration prompts.
+        self.event_bus.subscribe("scene_roster_updated", self._on_scene_roster_updated)
 
         self.event_bus.publish("log_info", "NLPCore initialized with SentenceTransformer.")
 
@@ -837,3 +919,15 @@ class NLPCore:
             "aliases"}, ...]}) -- an empty list is legitimate and clears the bank.
         """
         self.classifier.set_destinations(data.get("destinations", []))
+
+    def _on_scene_roster_updated(self, data):
+        """!
+        @brief Forwards the current scene's own cast to the classifier's own
+            set_present_entities -- one whole-bank replace, same shape as
+            _on_location_exits_updated and for the same reason (the previous scene's occupants
+            must not survive as matchable candidates).
+        @param data The "scene_roster_updated" payload -- only "entities" ([{"key", "name",
+            "subtype", "aliases"}, ...]) is read here; an empty list is legitimate and clears
+            the bank.
+        """
+        self.classifier.set_present_entities(data.get("entities", []))

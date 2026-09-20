@@ -114,3 +114,55 @@ overlay applies the real saved values on top.
 `DM_Social.py`'s `describe_character` uses `entity.get("name", entity_name)`, not the raw dict
 key, so a generated NPC's LLM-invented name is what's actually narrated.
 
+
+## Background crowds
+
+`background = true` on an `[[entity_template]]` is a second, cheaper generation tier: ambient
+scene population (a market's stallholders, a tavern's regulars) that exists so the scene the
+narrator is handed is actually populated. `DM_NpcGeneration.py`'s `_apply_background_npc` is the
+sibling of `_apply_npc_generation` that handles it, and the whole difference is that **nothing
+on this path ever touches the network**. `generate_npc_stats` runs synchronously in place with a
+20s timeout from inside `_instance_entities` → `_enter_location`; three ordinary generated NPCs
+in a town square would be up to a minute of dead air on first entry, every entry. A crowd has to
+cost nothing.
+
+So `_apply_background_npc` calls `generate_npc_stats(..., skip_llm_generation=True)` and takes
+only `skills`/`max_hp` from it, discarding `_fallback_npc_stats`' own `"Unnamed Stranger"` /
+"A figure whose story remains untold for now." — exactly right as a placeholder about to be
+overwritten by a save overlay, useless as a market crowd. The visible name and description come
+from the template instead, both varied-capable: `display_name` rather than `name`, because a
+template's own `name` *is* its key in `self.entity_templates` (see `load_rules`), so it can't
+also be what the player sees.
+
+Still tagged `generated = True`, so the whole save story is the existing one — `skills`/`max_hp`/
+`name`/`description`/`qualities`/`attitudes` already round-trip for a generated instance, and
+reloading re-instances through the same offline path just as cheaply. Also tagged
+`background = True`, which is what the containment rules key off.
+
+**Authoring rules, both enforced by `DM_Validation.py`:**
+
+- **A background template MUST author `[entity_template.attitudes]`.** This is the single
+  highest-consequence mistake available here. `is_hostile` (`DM_Social.py`) treats an entity with
+  no attitudes table *at all* as unconditionally hostile, and whether the game is in combat is
+  derived purely from the current target's own hostility — so a crowd that forgot its attitudes
+  would quietly put a peaceful market square into a fight. A generating template gets no such
+  rule: a hostile generated NPC is a legitimate thing to author.
+- **`count` on a location/room `entities` entry must be a plain positive integer**, never a
+  `{min, max}` or weighted choice. `_expand_entity_entries` (`DM_Rules.py`) flattens it into that
+  many independent instances, which the existing occurrence counter names `fishmonger`,
+  `fishmonger_2`, `fishmonger_3`. A crowd size rolled fresh on reload would shift every later
+  suffix, and `load_game`'s overlay silently skips a saved name that no longer exists — so a
+  reloaded save would lose entities' HP, inventory and conditions with no error at all. Variety
+  belongs in the template's varied fields, which already round-trip.
+
+**Containment.** A background entity is a real, addressable, fully targetable participant. It is
+excluded only from the two places that pick someone *on the player's behalf* without being told
+who: `_get_target_name` (so `"open it"` in a populated square reaches the chest, not a fruit
+seller) and `_choose_combat_target`'s non-hostile fallback (so a scene-level `[entity.test]`
+isn't aimed at a bystander). `DM_Dialogue.py`'s addressee fallback is the one deliberate
+`include_background=True` call site — an unaddressed "ask about the weather" landing on a nearby
+townsperson is exactly right. See `docs/combat.md` for what is deliberately *not* excluded.
+
+Keep a location's crowd to **4 or fewer**. Every scene entity is walked once per combat round
+(`run_round_upkeep`, and `resolve_override_target`'s per-entity candidate scan), so a crowd is
+meant to be scenery with a voice, not a cast.

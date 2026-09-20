@@ -69,6 +69,11 @@ ITEM_SUBTYPES = ("weapon", "armor", "potion", "tool", "trinket", "misc", "contai
 # -100 -- the precise threshold DM_Social.py's is_hostile requires for real combat (a lesser
 # negative value, ex: -40, reads as merely wary -- dialogue, not combat).
 CREATURE_DISPOSITIONS = ("hostile", "wary", "neutral", "friendly")
+# What generate_referenced_npc allows. "hostile" is the only disposition that produces
+# abilities/behavior (see _build_creature_entity), so excluding it here is what makes an
+# automatically-materialized NPC structurally unable to affect combat -- a constraint in the
+# tool schema the model answers against, not a check applied to its answer afterwards.
+NON_HOSTILE_DISPOSITIONS = ("wary", "neutral", "friendly")
 DISPOSITION_VALUES = {"hostile": -100, "wary": -40, "neutral": 0, "friendly": 60}
 
 # A flat multiplier on the resolved target challenge rating, applied the same way
@@ -559,13 +564,19 @@ def decide_entity_removal(
     return {"removed": True, "name": name, "reason": arguments.get("reason", "")}
 
 
-def _build_creature_tool_schema(npc_keywords):
+def _build_creature_tool_schema(npc_keywords, allowed_dispositions=CREATURE_DISPOSITIONS,
+                                decline_hint="Use this instead if the requested creature doesn't make sense here."):
     """!
-    @brief The OpenAI-style "tools" payload for generate_ad_hoc_creature's own tool call:
-        create_creature (enum-constrained keywords/disposition/power, same reliability-over-
-        free-text reasoning NPC_Generation.py's own _build_tool_schema already documents) or
-        decline.
+    @brief The OpenAI-style "tools" payload for a creature tool call: create_creature
+        (enum-constrained keywords/disposition/power, same reliability-over-free-text
+        reasoning NPC_Generation.py's own _build_tool_schema already documents) or decline.
     @param npc_keywords {keyword_name: [skill_name, ...]}, from NPC_Generation.load_npc_keywords.
+    @param allowed_dispositions Which of CREATURE_DISPOSITIONS the model may choose from.
+        Narrowing this is a *schema-level* constraint, not a post-filter, which is the whole
+        reliability argument this module already makes for enums over free text -- see
+        generate_referenced_npc, which excludes "hostile" so a materialized bystander is
+        structurally incapable of coming back able to fight.
+    @param decline_hint The decline tool's own "use this instead if..." line.
     @return The "tools" list for call_chat_completion.
     """
     return [
@@ -590,7 +601,7 @@ def _build_creature_tool_schema(npc_keywords):
                             "description": "1-2 archetype keywords that best capture what it's skilled at.",
                         },
                         "disposition": {
-                            "type": "string", "enum": list(CREATURE_DISPOSITIONS),
+                            "type": "string", "enum": list(allowed_dispositions),
                             "description": "How it regards the player -- 'hostile' is the only disposition that will actually fight.",
                         },
                         "power": {"type": "string", "enum": list(CREATURE_POWERS)},
@@ -599,7 +610,7 @@ def _build_creature_tool_schema(npc_keywords):
                 },
             },
         },
-        _decline_tool_schema("Use this instead if the requested creature doesn't make sense here."),
+        _decline_tool_schema(decline_hint),
     ]
 
 
@@ -664,8 +675,41 @@ def generate_ad_hoc_creature(
         return {"created": False, "reason": payload}
     arguments = payload
 
+    return _build_creature_entity(
+        arguments, npc_keywords, target_cr, skills_catalog, hp_divisor, offense_share,
+    )
+
+
+def _build_creature_entity(arguments, npc_keywords, target_cr, skills_catalog, hp_divisor, offense_share,
+                           fallback_description=None):
+    """!
+    @brief Turns one accepted create_creature tool call into a live entity dict -- shared by
+        generate_ad_hoc_creature (ADaM's own conjuring) and generate_referenced_npc (an NPC the
+        player addressed into existence). The two differ entirely in framing and in which
+        dispositions they allow; what a returned tool call means is identical, so it lives here
+        once rather than being copied with one enum changed.
+
+        Note what falls out of the disposition split below: only a "hostile" creature is given
+        abilities/behavior at all. A wary/neutral/friendly one is dialogue-only -- it cannot
+        attack, never produces a turn in a combat round (DM_Combat.py's choose_behavior returns
+        None with no behavior list), and is never an AoE "enemy". That is exactly why
+        generate_referenced_npc's narrowed enum is sufficient on its own to keep automatic
+        promotion out of combat balance.
+    @param fallback_description Used when the model omits "description" despite the schema
+        requiring it -- measured against the shipped model, gemma4 drops exactly that field on
+        roughly seven of every eight create_creature calls, while returning a perfectly good
+        name and keywords. (It is not a prompt problem: enumerating the fields in the
+        function description, documenting each property, and narrowing the tool to
+        describe_npc's own proven three-field arity were each measured and none of them
+        helped.) A caller that can state plainly what the thing is, without inventing
+        anything, passes that here rather than throwing away an otherwise-valid creation --
+        see generate_referenced_npc, which has the player's own words for it. A caller with
+        nothing honest to fall back on passes None and gets the "incomplete" decline.
+    @return {"created": False, "reason": "incomplete"} if the call is missing required content,
+            else {"created": True, "entity": {...}}.
+    """
     name = arguments.get("name")
-    description = arguments.get("description")
+    description = arguments.get("description") or fallback_description
     chosen_keywords = [k for k in arguments.get("keywords", []) if k in npc_keywords]
     if not name or not description or not chosen_keywords:
         return {"created": False, "reason": "incomplete"}
@@ -682,7 +726,14 @@ def generate_ad_hoc_creature(
         "description": description,
         "supertype": "creature",
         "subtype": "npc",
-        "max_hp": max_hp,
+        # Floored at 1: fit_skills_to_cr legitimately returns 0 HP for a low enough target
+        # (any CR of roughly 3 or under, with the default hp_divisor), and an entity created
+        # with 0 HP is dead the moment it exists -- get_current_hp initializes hp from max_hp,
+        # and every path that matters then treats it as a corpse. A promoted bystander would
+        # be placed into the scene and immediately fail _resolve_dialogue's own aliveness gate
+        # as "not_present", which is precisely the outcome this whole feature exists to stop.
+        # No creation path has any use for a creature that arrives dead.
+        "max_hp": max(1, max_hp),
         "skills": skills,
         "attitudes": {"default": [DISPOSITION_VALUES[disposition], 0, 0]},
         # Tags this as having no static TOML template to re-derive from on a reload -- see
@@ -726,6 +777,127 @@ def generate_ad_hoc_creature(
             ]
 
     return {"created": True, "entity": entity}
+
+
+def generate_referenced_npc(
+    address_phrase, scene_description, present_names, recent_narration, target_cr, npc_keywords,
+    skills_catalog, call_chat_completion=None, api_url=DEFAULT_API_URL, timeout=DEFAULT_TIMEOUT,
+    hp_divisor=DEFAULT_HP_DIVISOR, offense_share=0.5,
+):
+    """!
+    @brief Materializes an ordinary person the player addressed as though they were already
+        standing there -- "ask the merchant what he is selling" in a market square that
+        describes a crowd but instances nobody. The sibling of generate_ad_hoc_creature, and
+        deliberately a separate function rather than a parameter on it: the framing is
+        genuinely different (nobody is being conjured; the scene is being asked whether it
+        already contains this person), and so are the rules about what may come back.
+
+        Three things keep this safe enough to run automatically, without ADaM's explicit
+        invocation (see DM_Improvisation.py's own risk-tier docstring):
+        - The disposition enum excludes "hostile" at the SCHEMA level, so the returned entity
+          structurally cannot carry abilities or behavior (see _build_creature_entity) and
+          therefore cannot fight, act in a round, or count as an AoE enemy. Combat balance is
+          untouchable by this path.
+        - The model is told who is already present and told to decline if the phrase refers to
+          one of them -- the third backstop behind DMCore's literal scan and the semantic
+          present-entity match, both of which run first.
+        - It may always decline, and a decline costs nothing: the grounded "there's no one like
+          that here" narration is still sitting right behind this as the floor.
+
+        recent_narration grounds the NPC's *flavor* only. It is never why this function is
+        called -- that is always the player's own address phrase. A merchant the narrator
+        mentioned last turn comes out as that merchant rather than a generic one, but a
+        merchant the narrator mentioned and the player ignored is never created at all.
+    @param address_phrase The noun phrase the player used (see Intent_Classification.py's
+        extract_address_phrase) -- "the merchant", "the barkeep".
+    @param scene_description The current room/location's own description.
+    @param present_names Display names of everyone already in the scene.
+    @param recent_narration The last few narration beats, oldest first.
+    @param target_cr The challenge rating to fit toward -- a bystander's, not the player's.
+    @param npc_keywords {keyword_name: [skill_name, ...]}, from NPC_Generation.load_npc_keywords.
+    @param skills_catalog The setting's own {skill_name: skill} dict, for fit_skills_to_cr.
+    @param call_chat_completion Injectable for tests; defaults to the module's real client.
+    @param api_url/timeout/hp_divisor/offense_share As generate_ad_hoc_creature.
+    @return {"created": False, "reason": ...} on decline/failure/incomplete data -- never
+            raises. On success: {"created": True, "entity": {..., "ad_hoc": True}}.
+    """
+    if not npc_keywords or not address_phrase:
+        return {"created": False, "reason": "no_keywords" if not npc_keywords else "no_phrase"}
+
+    call_chat_completion = call_chat_completion or _real_call_chat_completion
+    present_text = ", ".join(name for name in present_names if name) or "no one else"
+    narration_text = " ".join(recent_narration or []) or "nothing yet"
+    prompt = (
+        f"In a live tabletop RPG scene, the player has just spoken to someone they clearly "
+        f"expect to already be here, referring to them as: \"{address_phrase}\".\n"
+        f"Current scene: {scene_description or 'unknown'}.\n"
+        f"Already present: {present_text}.\n"
+        f"Recently narrated: {narration_text}\n"
+        "If an ordinary person matching that description would plausibly be here, call "
+        "create_creature to fill them in -- an ordinary bystander, a shopkeeper, a passer-by. "
+        "Call decline instead if the phrase refers to someone already listed as present, if no "
+        "such person would plausibly be in this place, or if it describes a threat or a monster "
+        "rather than a person to talk to."
+    )
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You decide whether a person the player just addressed is someone the scene "
+                "already contains. You are filling in a background character the scene implies, "
+                "never inventing a plot twist, a threat, or anyone important."
+            ),
+        },
+        {"role": "user", "content": prompt},
+    ]
+
+    function_name, payload = _call_tool_or_decline(
+        messages,
+        _build_creature_tool_schema(
+            npc_keywords,
+            allowed_dispositions=NON_HOSTILE_DISPOSITIONS,
+            decline_hint=(
+                "Use this instead if that person is already present, wouldn't be here at all, "
+                "or isn't an ordinary person."
+            ),
+        ),
+        {"create_creature"},
+        call_chat_completion, api_url, timeout,
+    )
+    if function_name is None:
+        return {"created": False, "reason": payload}
+
+    # The fallback is the player's own noun phrase and nothing else -- "the blacksmith"
+    # becomes "A blacksmith.", never a detail nobody established. Without it this path would
+    # decline most of the time on the shipped model (see _build_creature_entity), which reads
+    # to a player as the feature simply not working.
+    return _build_creature_entity(
+        payload, npc_keywords, target_cr, skills_catalog, hp_divisor, offense_share,
+        fallback_description=_indefinite(address_phrase),
+    )
+
+
+def _indefinite(phrase):
+    """!
+    @brief "blacksmith" -> "A blacksmith.", "old man" -> "An old man." -- the plainest possible
+        statement of what the player said was there, for when the model gives us a name but no
+        description. Article by leading vowel; deliberately not a real English article
+        algorithm, since the alternative to being occasionally wrong about "an hour" is
+        inventing detail, which is the thing this whole feature is built not to do.
+    @param phrase The player's own address phrase. extract_address_phrase already strips a
+        leading article, but this is a public entry point and nothing structurally guarantees
+        a caller went through it -- so a stray one is dropped here too rather than rendering
+        as "A the merchant." in front of a player.
+    @return A one-sentence description, or "" for an empty phrase.
+    """
+    cleaned = (phrase or "").strip()
+    for article in ("the ", "a ", "an "):
+        if cleaned.lower().startswith(article):
+            cleaned = cleaned[len(article):].strip()
+            break
+    if not cleaned:
+        return ""
+    return f"{'An' if cleaned[0].lower() in 'aeiou' else 'A'} {cleaned}."
 
 
 def _build_edit_tool_schema(editable_entities):

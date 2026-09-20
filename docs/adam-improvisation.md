@@ -283,3 +283,98 @@ summon, or any non-damaging spell) never rolls through `calculate_damage`'s own
 `{"dice": 0, "pips": 0, "bonus": 0}` default and picks up a spurious zero-damage `DamageEffect`
 just because it resolved against a target that was present.
 
+
+## Promotion on reference
+
+The problem this closes: a location can describe a populated street while instancing nobody, so
+the narrator is asked to describe a crowd that doesn't exist — and obliges, inventing people the
+player then can't talk to. `Rules/Pathfinder/`'s own `sandpoint` hub was exactly this, an
+`entities = []` beneath a description promising market vendors. Background crowds (see
+`docs/npc-generation.md`) are the primary fix; promotion is what covers the rest, when the player
+reaches for someone the authored crowd doesn't include.
+
+**The rule the whole feature rests on: the narrator never writes to the world.** Narration is
+downstream of state and stays there. What triggers promotion is always the player's own literal
+words. If the narrator invents a hooded figure, no hooded figure exists until the *player* says
+"talk to the hooded figure."
+
+Four layers decide, cheapest and most literal first, each able to veto alone
+(`DM_Core.py`'s `_promote_addressed_npc`):
+
+1. **Did the player address anyone at all?** `Intent_Classification.py`'s
+   `extract_address_phrase` takes the remainder after whichever `DIALOGUE_KEYWORDS` phrase
+   matched earliest (they're all prefixes), declines on a question opener or a pronoun, strips
+   articles, and takes up to 3 words. Published as `address_phrase` on `dialogue_detected`,
+   which carried no notion of *who* before. This is keyword-shaped machinery in a file that
+   moved away from keyword tables, and it's acceptable only because it **fails closed**: an
+   unrecognized shape returns `None`, which means no promotion, which means today's behavior.
+   Nothing is created because it guessed well; things are only not created because it guessed
+   badly. Known limitation: an addressee named *before* the keyword ("walk up to the merchant
+   and ask what he is selling") isn't found — recovering it would mean guessing which earlier
+   noun was some other verb's object, which fails open.
+2. **Does anyone present match it literally?** `DM_Dialogue.py`'s `_literal_dialogue_target`,
+   now scanning three phrases per entity — the instance key, the displayed `name`, and an
+   optional `aliases` list. The key alone was a real gap once crowds existed: an instance keyed
+   `sandpoint_townsfolk_2` but displayed as "Fishmonger" was unaddressable by the only name the
+   player ever sees. `aliases` is the same mechanism `[[location.exit]]` uses for "the tavern"
+   reaching "The White Deer Tavern and Inn", applied to people.
+3. **Does anyone present match it semantically?** `NLP_Core.py`'s `map_to_present_entity`,
+   against a scene-scoped bank `set_present_entities` replaces wholesale on every
+   `scene_roster_updated` — mirroring `set_destinations`/`map_to_destination` exactly. Its
+   threshold is deliberately the most permissive in the file (~0.45) because its error costs run
+   backwards from everywhere else: a false positive merely suppresses promotion (today's
+   behavior), while a false negative materializes a second barkeep beside the real one. When in
+   doubt, decide the person is already here. The *global* `map_to_target` bank is the wrong tool
+   — never scene-filtered, so "the merchant" would match a merchant three towns away.
+4. **Safety gates, then the model's own right to decline** —
+   `ImprovisationMixin._attempt_dialogue_promotion`. All checked before any network call:
+   dialogue channel only; refused while any live hostile is anywhere in the scene (stricter than
+   `_target_is_engaged`, which only inspects `current_target` — nobody wanders into a knife
+   fight to sell you fruit); at most one per turn (structural — `classify` returns immediately
+   after appending `dialogue_detected`); refused once the scene already holds
+   `MAX_PROMOTED_PER_SCENE` ad hoc entities, a ceiling derived from live state so it needs no
+   persistence and survives reload for free; and a result carrying `abilities`/`behavior` is
+   **declined, not defanged** — a hostile result means the model misread the request, and
+   stripping its teeth would leave an NPC whose description doesn't match what it is.
+
+`resolution/AdHoc_Generation.py`'s `generate_referenced_npc` is the generator, a sibling of
+`generate_ad_hoc_creature` reusing `_build_creature_tool_schema`, `_call_tool_or_decline`,
+`_decline_tool_schema` and the shared `_build_creature_entity` unchanged. Only the framing and
+the disposition enum differ: it's passed `NON_HOSTILE_DISPOSITIONS`, a **schema-level**
+constraint rather than a post-filter, and since only a `hostile` creature is ever given
+abilities/behavior, that single narrowing is what makes an automatically-materialized NPC
+structurally incapable of affecting combat. The prompt carries the address phrase, the scene
+description, the present roster, and `DMCore.recent_narration` — and is told to decline if the
+phrase refers to someone already listed present, the third backstop behind layers 2 and 3.
+
+**One field the model will not reliably give you.** Measured live against the shipped gemma4,
+`create_creature` comes back with a good `name` and valid `keywords` but **no `description`** on
+roughly seven of every eight calls, despite the schema marking it required. That is not a prompt
+problem — enumerating the fields in the function description, documenting each property, and
+narrowing the tool to `describe_npc`'s own proven three-field arity were each measured, and none
+of them moved it; the difference appears to be field count, and `create_creature` asks for five.
+Left alone it meant promotion declining as `"incomplete"` almost every time, for a reason having
+nothing to do with whether the person belonged in the scene. So `_build_creature_entity` takes a
+`fallback_description`, and `generate_referenced_npc` supplies one built from the player's own
+noun phrase: "the blacksmith" becomes "A blacksmith." Nothing is invented — it is a restatement
+of what the player already said was there. The fallback is scoped to this path deliberately;
+`generate_ad_hoc_creature` has only a free-text request to work from, so it still declines on a
+dropped description exactly as before. `test_integration.py`'s own `TestReferencedNpcLive` is what
+holds this, since only a real model exhibits the behavior at all.
+
+`DMCore.recent_narration` is a `deque(maxlen=RECENT_NARRATION_TURNS)` fed by subscribing to
+`llm_response_ready` (DMCore's only cross-thread subscription — LLMCore publishes from a daemon
+thread; `deque.append` under `maxlen` is atomic in CPython, so no lock, but nothing heavier than
+an append belongs in that handler). It lives on DMCore rather than reading `LLMCore.context_window`
+because DMCore holds no reference to LLMCore and needs the text synchronously, mid-decision. It
+persists as its own `dm_state.json` key. **It grounds a promoted NPC's flavor and never triggers
+one** — see the rule above.
+
+**One narration, not two.** A promoted entity is already in `self.entities`/`scenario_entities`
+by the time `_resolve_dialogue(..., forced_target=...)` runs, and passes every existing gate
+(present, alive, not hidden, not an `"object"`) on its own merits — so the turn flows into
+`generate_npc_dialogue`'s ordinary `found: True` branch with a real persona and attitude. No
+second event fires. When promotion declines, the turn resolves exactly as it did before this
+existed, landing on the grounded "there's no one like that here" narration that
+`docs/narration-llm.md`'s "Denial-path grounding" describes — that denial is the floor beneath
+this feature, not something it replaces.

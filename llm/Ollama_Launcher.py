@@ -418,3 +418,57 @@ def ensure_ollama_running(
     log(f"Starting Ollama (pid={process.pid}).")
     _ensure_model_pulled(host, model, log, is_reachable, list_models, pull_model, ready_timeout)
     return process
+
+
+def stop_ollama(process, log=None, run=None):
+    """!
+    @brief Shuts down an Ollama server this process started, **including its model runner
+        child**, and waits for it to actually go.
+
+        process.terminate() alone is not enough, and the shortfall is invisible until it isn't:
+        ollama.exe spawns a separate llama-server.exe to hold the model, and on Windows
+        terminating the parent leaves that child running with the model still resident in VRAM.
+        Nothing reaps it, because its parent is gone. Each run of anything that starts an Ollama
+        this way therefore strands another multi-gigabyte runner, and once they have eaten the
+        card the next run silently falls back to CPU -- where the shipped model answers in
+        ~50-60s instead of ~8s, every ad hoc call blows its 8s timeout, and every
+        _LivePipelineTestCase in test_integration.py fails on a 30s narration wait. That looks
+        exactly like "this machine has no usable GPU", which is the wrong conclusion and an
+        expensive one: measured here, a handful of integration runs left 11 orphaned runners
+        holding 14.9 GB of a 16 GB card.
+
+        On Windows the whole tree goes through taskkill /T; elsewhere terminate() already
+        signals the group as intended, so it stays the plain path.
+    @param process The subprocess.Popen handle ensure_ollama_running returned, or None (a
+        server this process never started -- never touched, same rule as always).
+    @param log Optional callable(message).
+    @param run Injectable subprocess.run, for tests.
+    @return True if a shutdown was actually attempted.
+    """
+    log = log or (lambda message: None)
+    run = run or subprocess.run
+    if process is None or process.poll() is not None:
+        return False
+
+    if os.name == "nt":
+        try:
+            run(
+                ["taskkill", "/T", "/F", "/PID", str(process.pid)],
+                capture_output=True, check=False, timeout=30,
+            )
+        except Exception as error:
+            log(f"taskkill failed ({error}); falling back to terminate().")
+            process.terminate()
+    else:
+        process.terminate()
+
+    try:
+        process.wait(timeout=15)
+    except Exception:
+        log("Ollama did not exit in time; killing.")
+        try:
+            process.kill()
+        except Exception:
+            pass
+    log("Stopped Ollama.")
+    return True

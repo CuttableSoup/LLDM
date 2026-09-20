@@ -118,6 +118,7 @@ class EncounterMixin(DMCoreProtocol):
                 if self.is_hostile(name, self.player_name):
                     self._claim_current_target_if_free(name)
                     hostile = True
+            self._publish_scene_roster()
             self.event_bus.publish("encounter_triggered", {
                 "description": None,
                 "entity_name": instanced[0] if instanced else None,
