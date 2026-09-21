@@ -743,15 +743,18 @@ class LLMCore:
             )
             return
 
+        # The DM's own display label ("the Fishmonger") rather than the raw entity key
+        # ("sandpoint_townsfolk_3"), which the model otherwise parrots back as a name.
+        speaker = data.get("target_label") or target
         if data.get("language_barrier"):
             prompt = self._build_language_barrier_prompt(
-                data.get("input", ""), target, data.get("target_language"), data.get("nonsense_phrase"),
+                data.get("input", ""), speaker, data.get("target_language"), data.get("nonsense_phrase"),
             )
         else:
             prompt = f"The player says: \"{data.get('input', '')}\""
 
         self._queue_dialogue(
-            target, data.get("persona", ""), data.get("attitude", ""), prompt,
+            speaker, data.get("persona", ""), data.get("attitude", ""), prompt,
             rag_query=data.get("input"), present_entities=data.get("present_entities"),
             label=f"dialogue:{target}",
         )
@@ -1416,4 +1419,4 @@ class LLMCore:
             f"Respond in-character as the Game Master in 1-2 sentences, acknowledging the "
             f"failed attempt without inventing what the save might have contained."
         )
-        self._queue_narration(prompt, label="load_failed")
+        self._queue_narration(prompt, label="load_failed")

@@ -116,6 +116,12 @@ aborting the other. The default player templates now start at `exp = 10` (a smal
 or two real abilities, or a few pips). The player's `abilities` list round-trips through
 save/load alongside `skills`.
 
+**Buying languages.** The same `exp` balance buys additional languages at `[character_creation]`'s
+`language_cost` (default 1 XP each — `language_cost(...)`, `spend_exp_on_languages`). "common" and the
+chosen race's own tongue are free; everything else a race or polity in the setting authors
+(`load_learnable_languages`, ex: an elf can buy "varisian") is buyable, appended onto the player's
+`languages` via `apply_character_creation`'s `"languages"` key, replayed all-or-nothing like abilities.
+
 `Character_Creation_GUI.py`'s `CharacterCreationDialog` (a modal `Toplevel`) is the interactive
 front end: an optional name field, a race dropdown, a per-skill allocation row (baseline,
 point-buy spend, running total, and a "Train" button spending from `player_exp`), a "dice

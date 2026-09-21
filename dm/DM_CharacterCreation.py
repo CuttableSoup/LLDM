@@ -1,7 +1,9 @@
+import os
+
 from dm.DM_Types import DMCoreProtocol
 from resolution.Character_Creation import (
-    LEARNABLE_ABILITY_SUPERTYPES, build_character_skills, get_race, spend_exp_on_abilities,
-    spend_exp_on_skills, validate_allocation,
+    LEARNABLE_ABILITY_SUPERTYPES, build_character_skills, get_race, load_learnable_languages,
+    spend_exp_on_abilities, spend_exp_on_languages, spend_exp_on_skills, validate_allocation,
 )
 
 
@@ -75,8 +77,15 @@ class CharacterCreationMixin(DMCoreProtocol):
             the template's own hand-authored list is cleared -- so buying is the only way to get
             any; a bare "abilities" with no "allocation" adds to whatever the template already
             has. Rejected (logged, unapplied) on an unknown/duplicate name or too little XP.
+
+            A non-empty "languages" then buys each additional tongue (beyond "common" and the
+            race's own, both free) out of the remaining "exp" at [character_creation]'s
+            "language_cost" (default 1 XP each), replayed all-or-nothing the same way and
+            appended onto the player's "languages" list. The buyable set is whatever
+            load_learnable_languages finds in this setting's races/polities.
         @param character {"race": race_name, "allocation": {skill_name: dice_int}, "pip_spend":
-            [skill_name, ...], "abilities": [ability_name, ...], "name": new_name}, or None.
+            [skill_name, ...], "abilities": [ability_name, ...], "languages": [language, ...],
+            "name": new_name}, or None.
             "allocation"/"race", "pip_spend", "abilities", and "name" are independent of each
             other -- any can be given without the others. "name" absent/blank/unchanged leaves
             self.player_name exactly as _resolve_player_name found it.
@@ -156,6 +165,20 @@ class CharacterCreationMixin(DMCoreProtocol):
             else:
                 known = list(player.get("abilities") or [])
                 player["abilities"] = known + [name for name in abilities if name not in known]
+                player["exp"] = remaining_exp
+
+        languages = character.get("languages") or []
+        if languages:
+            known = list(player.get("languages") or ["common"])
+            remaining_exp, reason = spend_exp_on_languages(
+                player.get("exp", 0), languages,
+                load_learnable_languages(os.path.join("Rules", self.setting)), known,
+                self.rules.get("character_creation", {}),
+            )
+            if reason:
+                self.event_bus.publish("log_error", f"Character creation language purchase rejected: {reason}")
+            else:
+                player["languages"] = known + languages
                 player["exp"] = remaining_exp
 
         new_name = (character.get("name") or "").strip()

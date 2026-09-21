@@ -171,6 +171,10 @@ DIALOGUE_KEYWORDS = (
     "talk to ", "speak to ", "speak with ", "ask ", "tell ", "say to ", "greet ", "chat with ",
 )
 
+# A double-quoted span of at least a few characters -- see detect_dialogue_intent. Double quotes
+# only: an apostrophe is a contraction far more often than a quotation mark.
+QUOTED_SPEECH_PATTERN = re.compile(r'"[^"]{2,}"')
+
 # extract_address_phrase's own three word lists (see that function for why a keyword-shaped
 # mechanism is acceptable here and nowhere else in this file).
 # A remainder OPENING with one of these means the player addressed no one nameable -- either
@@ -675,8 +679,14 @@ def _keyword_gate(processed_text, keywords):
 
 
 def detect_dialogue_intent(processed_text):
-    """!@brief True if processed_text contains any DIALOGUE_KEYWORDS phrase."""
-    return _keyword_gate(processed_text, DIALOGUE_KEYWORDS)
+    """!
+    @brief True if processed_text contains any DIALOGUE_KEYWORDS phrase, or a quoted span of
+        speech ("I approach the fishmonger. \\"Is something going on?\\"") -- a player who
+        writes their own line of dialogue in quotation marks is talking to whoever they just
+        named, whether or not they also spelled out "speak to". DMCore's literal addressee scan
+        (DM_Dialogue.py's _literal_dialogue_target) still decides who, from the whole input.
+    """
+    return _keyword_gate(processed_text, DIALOGUE_KEYWORDS) or bool(QUOTED_SPEECH_PATTERN.search(processed_text or ""))
 
 
 def extract_address_phrase(processed_text):

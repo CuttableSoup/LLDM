@@ -12,7 +12,7 @@ import tkinter as tk
 from tkinter import ttk
 
 from resolution.Character_Creation import (
-    ability_cost, get_race, race_baseline_skills, spend_exp_on_skills, validate_allocation,
+    ability_cost, get_race, language_cost, race_baseline_skills, spend_exp_on_skills, validate_allocation,
 )
 
 
@@ -33,7 +33,7 @@ class CharacterCreationDialog(tk.Toplevel):
         than renaming anything.
     """
 
-    def __init__(self, parent, skills, races, character_creation, player_exp=0, abilities=None):
+    def __init__(self, parent, skills, races, character_creation, player_exp=0, abilities=None, languages=None):
         """!
         @param parent The Tk root/Toplevel this dialog is transient to and modal over.
         @param skills {name: skill_table}, from Character_Creation.load_character_creation_data.
@@ -47,6 +47,9 @@ class CharacterCreationDialog(tk.Toplevel):
         @param abilities {name: entity_table} of buyable spells/techniques (ex:
             Character_Creation.load_learnable_abilities), each priced by ability_cost out of the
             same XP balance training draws from. Defaults to none (no ability section at all).
+        @param languages Buyable language names (Character_Creation.load_learnable_languages),
+            each language_cost XP out of the same balance. The chosen race's own language is
+            free and can't be ticked. Defaults to none (no language section at all).
         """
         super().__init__(parent)
         self.title("Create Your Character")
@@ -66,6 +69,9 @@ class CharacterCreationDialog(tk.Toplevel):
         )
         self.ability_vars = {}
         self.ability_checks = {}
+        self.language_names = list(languages or [])
+        self.language_vars = {}
+        self.language_checks = {}
         self.name_var = tk.StringVar(value="")
         self.result = None
 
@@ -184,6 +190,20 @@ class CharacterCreationDialog(tk.Toplevel):
                 self.ability_vars[name] = var
                 self.ability_checks[name] = check
 
+        if self.language_names:
+            tk.Label(
+                rows_frame, text="Languages (bought with XP)",
+                font=("TkDefaultFont", 10, "bold"), anchor=tk.W,
+            ).pack(fill=tk.X, pady=(10, 0))
+            for name in self.language_names:
+                var = tk.BooleanVar(value=False)
+                check = tk.Checkbutton(
+                    rows_frame, variable=var, anchor=tk.W, command=self._recompute_training,
+                )
+                check.pack(fill=tk.X)
+                self.language_vars[name] = var
+                self.language_checks[name] = check
+
         button_row = tk.Frame(self)
         button_row.pack(fill=tk.X, padx=10, pady=10)
         self.create_button = tk.Button(button_row, text="Create", command=self._on_create)
@@ -276,6 +296,22 @@ class CharacterCreationDialog(tk.Toplevel):
         """
         return ability_cost(self.abilities[name], self.character_creation)
 
+    def _racial_language(self):
+        """!
+        @return The currently-selected race's own (free) language, or None.
+        """
+        return (self._current_race() or {}).get("language")
+
+    def _chosen_languages(self):
+        """!
+        @return The currently ticked language names, in display order (never the race's own).
+        """
+        racial = self._racial_language()
+        return [
+            name for name in self.language_names
+            if self.language_vars[name].get() and name != racial
+        ]
+
     def _chosen_abilities(self):
         """!
         @return The currently ticked ability names, in display order.
@@ -303,6 +339,7 @@ class CharacterCreationDialog(tk.Toplevel):
         """
         chosen = self._chosen_abilities()
         ability_total = sum(self._ability_cost(name) for name in chosen)
+        ability_total += language_cost(self.character_creation) * len(self._chosen_languages())
         base_skills = self._current_base_skills()
         while True:
             trained, remaining, reason = spend_exp_on_skills(
@@ -331,6 +368,23 @@ class CharacterCreationDialog(tk.Toplevel):
                 text=f"{name} ({cost} xp) -- {self.abilities[name].get('description', '')}",
                 state=(
                     tk.NORMAL if self.ability_vars[name].get() or self.remaining_exp >= cost
+                    else tk.DISABLED
+                ),
+            )
+
+        racial = self._racial_language()
+        price = language_cost(self.character_creation)
+        for name in self.language_names:
+            if name == racial:
+                self.language_vars[name].set(False)
+                self.language_checks[name].config(
+                    text=f"{name} (known -- your race's own tongue)", state=tk.DISABLED,
+                )
+                continue
+            self.language_checks[name].config(
+                text=f"{name} ({price} xp)",
+                state=(
+                    tk.NORMAL if self.language_vars[name].get() or self.remaining_exp >= price
                     else tk.DISABLED
                 ),
             )
@@ -367,7 +421,8 @@ class CharacterCreationDialog(tk.Toplevel):
             return
         self.result = {
             "race": race_name, "allocation": allocation, "pip_spend": list(self.pip_spend),
-            "abilities": self._chosen_abilities(), "name": self.name_var.get().strip(),
+            "abilities": self._chosen_abilities(),
+            "languages": self._chosen_languages(), "name": self.name_var.get().strip(),
         }
         self.destroy()
 
@@ -381,7 +436,7 @@ class CharacterCreationDialog(tk.Toplevel):
 
 
 def run_character_creation_dialog(
-    parent, skills, races, character_creation, player_exp=0, abilities=None,
+    parent, skills, races, character_creation, player_exp=0, abilities=None, languages=None,
 ):
     """!
     @brief Constructs and blocks on a CharacterCreationDialog until it's closed.
@@ -390,12 +445,13 @@ def run_character_creation_dialog(
     @param player_exp The is_player template's own starting "exp" (ex:
         Character_Creation.load_player_starting_exp) -- forwarded to CharacterCreationDialog.
     @param abilities {name: entity_table} of buyable spells/techniques, forwarded likewise.
+    @param languages Buyable language names, forwarded likewise.
     @return {"race": ..., "allocation": {...}, "pip_spend": [...], "abilities": [...],
             "name": ...}, or None if
             cancelled -- ready to pass straight into DMCore's own "character" constructor param.
     """
     dialog = CharacterCreationDialog(
-        parent, skills, races, character_creation, player_exp, abilities,
+        parent, skills, races, character_creation, player_exp, abilities, languages,
     )
     parent.wait_window(dialog)
     return dialog.result

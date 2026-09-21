@@ -1604,6 +1604,10 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             input_text, sentiments, forced_target=self._promote_addressed_npc(data, input_text),
         )
         result["input"] = input_text
+        # How the prompt should refer to the addressee -- a crowd member's "name" is a job
+        # title, not a name (see SocialMixin.display_label).
+        if result.get("target"):
+            result["target_label"] = self.display_label(result["target"])
         # Snapshotted AFTER any promotion, so the turn's own narration knows the person the
         # player is talking to is standing there.
         result["present_entities"] = list(self.scenario_entities)

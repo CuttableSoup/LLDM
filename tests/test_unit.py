@@ -660,6 +660,11 @@ class TestIntentClassification(unittest.TestCase):
             "input": "what do you know about the troll", "score": None,
         }}])
 
+    def test_quoted_speech_counts_as_dialogue_without_a_dialogue_verb(self):
+        self.assertTrue(detect_dialogue_intent('i approach the fishmonger. "is something going on?"'))
+        self.assertFalse(detect_dialogue_intent("i approach the fishmonger"))
+        self.assertFalse(detect_dialogue_intent("i don't know"))
+
     def test_detect_dialogue_intent_vs_item_and_skill_phrasing(self):
         self.assertTrue(detect_dialogue_intent("talk to the innkeeper"))
         self.assertTrue(detect_dialogue_intent("ask the guard about the road"))
@@ -3567,6 +3572,35 @@ class TestWorldMapExpansion(DMTestCase):
         })
 
         self.assertEqual(resolved_events[-1]["polity"], "Varisia")
+
+    def test_background_npc_is_labelled_by_role_not_as_a_name(self):
+        self.dm_core.entities["crowd_1"] = {
+            "name": "Fishmonger", "background": True, "description": "A trader.", "supertype": "creature",
+        }
+        self.assertEqual(self.dm_core.display_label("crowd_1"), "the Fishmonger")
+        self.assertIn("refer to them only by role", self.dm_core.describe_character("crowd_1"))
+
+    def test_elf_can_buy_varisian_for_one_xp_at_character_creation(self):
+        from resolution.Character_Creation import load_learnable_languages
+        self.assertIn("varisian", load_learnable_languages("Rules/Pathfinder"))
+        self.assertNotIn("common", load_learnable_languages("Rules/Pathfinder"))
+        player = self.dm_core.entities[self.dm_core.player_name]
+        player["languages"] = ["common", "elvish"]
+        player["exp"] = 5
+        self.dm_core.setting = "Pathfinder"
+
+        self.dm_core.apply_character_creation({"languages": ["varisian"]})
+
+        self.assertEqual(player["languages"], ["common", "elvish", "varisian"])
+        self.assertEqual(player["exp"], 4)
+
+    def test_language_purchase_rejects_known_or_unaffordable(self):
+        from resolution.Character_Creation import spend_exp_on_languages
+        catalog = ["elvish", "varisian"]
+        self.assertEqual(spend_exp_on_languages(5, ["elvish"], catalog, ["common", "elvish"], {})[0], 5)
+        self.assertIsNotNone(spend_exp_on_languages(5, ["elvish"], catalog, ["common", "elvish"], {})[1])
+        self.assertIsNotNone(spend_exp_on_languages(1, ["elvish", "varisian"], catalog, ["common"], {})[1])
+        self.assertEqual(spend_exp_on_languages(3, ["elvish", "varisian"], catalog, ["common"], {}), (1, None))
 
     def test_instanced_entity_with_no_authored_languages_inherits_the_polity_default(self):
         self.dm_core.entities["test_no_lang"] = {
@@ -9160,7 +9194,7 @@ class TestZombieArchetypeCharacterCreation(unittest.TestCase):
         # own [character_creation] table, not a hardcoded Fantasy-only default.
         self.assertEqual(
             character_creation,
-            {"pool_dice": 15, "max_allocation_per_skill": 5, "ability_cost_divisor": 10},
+            {"pool_dice": 15, "max_allocation_per_skill": 5, "ability_cost_divisor": 10, "language_cost": 1},
         )
 
     def test_every_archetype_lists_every_skill_at_a_balanced_baseline(self):
@@ -12397,7 +12431,7 @@ class TestCharacterCreationDialog(unittest.TestCase):
 
         self.assertEqual(
             dialog.result,
-            {"race": "human", "allocation": {"alpha": 2, "gamma": 1}, "pip_spend": [], "abilities": [], "name": ""},
+            {"race": "human", "allocation": {"alpha": 2, "gamma": 1}, "pip_spend": [], "abilities": [], "languages": [], "name": ""},
         )
         self.assertEqual(dialog.winfo_exists(), 0)
 
@@ -12740,11 +12774,12 @@ class TestGUICore(unittest.TestCase):
         self.assertFalse(picker.winfo_exists())
 
     @patch("gui.GUI_Core.run_character_creation_dialog")
+    @patch("gui.GUI_Core.load_learnable_languages", return_value=["varisian"])
     @patch("gui.GUI_Core.load_learnable_abilities", return_value={"spark": {}})
     @patch("gui.GUI_Core.load_player_starting_exp", return_value=100)
     @patch("gui.GUI_Core.load_character_creation_data", return_value=({}, [], {}))
     def test_request_character_creation_publishes_character_created_with_the_dialogs_result(
-        self, mock_load, mock_exp, mock_abilities, mock_dialog,
+        self, mock_load, mock_exp, mock_abilities, mock_languages, mock_dialog,
     ):
         mock_dialog.return_value = {"race": "elf", "allocation": {"arcane": 5}, "name": "Aria"}
         events = []
@@ -12754,7 +12789,7 @@ class TestGUICore(unittest.TestCase):
 
         mock_load.assert_called_once()
         mock_exp.assert_called_once()
-        mock_dialog.assert_called_once_with(self.gui.root, {}, [], {}, 100, {"spark": {}})
+        mock_dialog.assert_called_once_with(self.gui.root, {}, [], {}, 100, {"spark": {}}, ["varisian"])
         self.assertEqual(
             events, [{"character": {"race": "elf", "allocation": {"arcane": 5}, "name": "Aria"}}],
         )

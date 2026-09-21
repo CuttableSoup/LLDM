@@ -16,7 +16,10 @@ from paths import PROJECT_ROOT
 
 DEFAULT_CHARACTER_CREATION = {
     "pool_dice": 15, "max_allocation_per_skill": 5, "ability_cost_divisor": 10,
+    "language_cost": 1,
 }
+# The language every entity already knows (entity_schema.toml's default) -- never for sale.
+BASE_LANGUAGE = "common"
 # The [[entity]] supertypes a character can buy at creation (spend_exp_on_abilities) -- every
 # other ability shape (a weapon's own attack, an inline innate ability) is either gear or
 # authored directly on a creature, not something a player picks from a catalog.
@@ -202,6 +205,71 @@ def load_learnable_abilities(rules_dir=os.path.join("Rules", "Fantasy")):
             if entity.get("supertype") in LEARNABLE_ABILITY_SUPERTYPES and entity.get("name"):
                 abilities[entity["name"]] = entity
     return {name: entity for name, entity in abilities.items() if name not in universal}
+
+
+def load_learnable_languages(rules_dir=os.path.join("Rules", "Fantasy")):
+    """!
+    @brief The languages a character can buy at creation: every "language" a race in
+        rules_dir authors (races.toml) plus every polity's own "language"/"languages"
+        (polities.toml -- ex: Pathfinder's "varisian"), minus BASE_LANGUAGE. Scanned straight
+        off the TOML for the same reason load_learnable_abilities is (no DMCore yet).
+    @param rules_dir Path to the rules directory, relative to the project root.
+    @return A sorted list of language names.
+    """
+    full_dir = os.path.join(PROJECT_ROOT, rules_dir)
+    languages = set()
+    if not os.path.exists(full_dir):
+        return []
+
+    for filename in os.listdir(full_dir):
+        if not filename.endswith(".toml"):
+            continue
+        try:
+            with open(os.path.join(full_dir, filename), "rb") as f:
+                data = tomllib.load(f)
+        except Exception:
+            continue
+        for race in data.get("race", []):
+            languages.add(race.get("language"))
+        for polity in data.get("polity", []):
+            languages.add(polity.get("language"))
+            languages.update(polity.get("languages", []))
+    return sorted(language for language in languages if language and language != BASE_LANGUAGE)
+
+
+def language_cost(character_creation):
+    """!
+    @return The XP price of one additional language ("language_cost", default 1).
+    """
+    return character_creation.get("language_cost", DEFAULT_CHARACTER_CREATION["language_cost"])
+
+
+def spend_exp_on_languages(exp, languages, catalog, known, character_creation):
+    """!
+    @brief Prices a list of chosen languages against exp, all-or-nothing -- the language
+        counterpart to spend_exp_on_abilities. Each costs character_creation's "language_cost"
+        XP (default 1). Rejects a language not in catalog, one already in known (ex: the
+        chosen race's own tongue, which is free), a duplicate, or a total above exp.
+    @param exp The XP balance to spend from.
+    @param languages A list of language names.
+    @param catalog The buyable language names, ex: load_learnable_languages' return.
+    @param known Languages the character already understands.
+    @param character_creation The [character_creation] constants table.
+    @return (remaining_exp, error_reason_or_None) -- exp unchanged if rejected.
+    """
+    cost = language_cost(character_creation)
+    remaining = exp
+    seen = set()
+    for name in languages:
+        if name not in catalog:
+            return exp, f"Unknown language: {name}"
+        if name in known or name in seen:
+            return exp, f"Language already known: {name}"
+        seen.add(name)
+        if cost > remaining:
+            return exp, f"Not enough XP to learn \"{name}\" (needs {cost}, have {remaining})"
+        remaining -= cost
+    return remaining, None
 
 
 def ability_cost(ability, character_creation):

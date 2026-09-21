@@ -8,7 +8,7 @@ from collections import Counter
 
 import resolution.Combat_Resolution as Combat_Resolution
 from resolution.Character_Creation import (
-    load_character_creation_data, load_learnable_abilities, load_player_starting_exp,
+    load_character_creation_data, load_learnable_abilities, load_learnable_languages, load_player_starting_exp,
 )
 from gui.Character_Creation_GUI import run_character_creation_dialog
 from dm.DM_Rules import list_available_characters, list_available_scenarios, list_available_settings
@@ -351,7 +351,7 @@ class GUICore:
         player_exp = load_player_starting_exp(rules_dir)
         character = run_character_creation_dialog(
             self.root, skills, races, character_creation, player_exp,
-            load_learnable_abilities(rules_dir),
+            load_learnable_abilities(rules_dir), load_learnable_languages(rules_dir),
         )
         if character is None:
             return
