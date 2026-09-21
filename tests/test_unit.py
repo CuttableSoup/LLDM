@@ -3810,6 +3810,10 @@ class TestFreeStandingIntentHandlers(unittest.TestCase):
         scenario_description = ""
         scenario_characters = []
 
+        @staticmethod
+        def scene_length_instruction(kind):
+            return f"Narrate {kind} in 2-3 sentences as the Game Master."
+
     def _narrate(self, intent, data, llm_core=None):
         _resolve, narrate = FREE_STANDING_INTENT_HANDLERS[intent]
         return narrate(llm_core, data)
@@ -12855,139 +12859,214 @@ async def test_load_button_publishes_load_requested_with_slot_name():
         assert received == [{"slot": "myslot"}]
 
 
-class TestBackgroundCrowds(DMTestCase):
+class TestNarratedPopulation(DMTestCase):
     """!
-    @brief Ambient crowd NPCs -- "background = true" entity_templates (DM_NpcGeneration.py's
-        _apply_background_npc) and the "count" expansion that places several of one
-        (DM_Rules.py's _expand_entity_entries). debug.toml's own town_square is the shipped
-        fixture: a "market stall" object, a "town crier", and two "market_regular" extras.
+    @brief Narration-driven population -- the narrator populates a scene and the engine makes the
+        people it mentions real (DM_Improvisation.py's _extract_scene_population/
+        _apply_pending_population, AdHoc_Generation.py's extract_narrated_people). debug.toml's
+        own town_square is the fixture: it opts in with population = "narrated".
     """
     start_location = "town_square"
 
-    def _crowd(self):
-        return [n for n in self.dm_core.scenario_entities if self.dm_core.entities[n].get("background")]
+    def _keyword(self):
+        return next(iter(load_npc_keywords("Rules/Fantasy")))
 
-    def test_a_background_crowd_is_placed_without_any_llm_call(self):
-        # The latency contract, and the whole reason background is a separate path from
-        # _apply_npc_generation: generate_npc_stats runs synchronously with a 20s timeout from
-        # inside _enter_location, so a crowd that paid for it would stall every first entry.
-        with patch("resolution.NPC_Generation._real_call_chat_completion") as never_called:
-            event_bus = EventBus()
-            dm_core = DMCore(event_bus, scenario_name="debug", start_location="town_square", setting="Fantasy")
+    def _person(self, **overrides):
+        person = {
+            "name": "Marla Venn", "occupation": "fishmonger",
+            "description": "A weather-beaten woman gutting the morning's catch.",
+            "race": "human", "gender": "female", "age": 44,
+            "memories": ["The catch has been poor this week."],
+            "keywords": [self._keyword()], "disposition": "friendly", "power": "weak",
+        }
+        person.update(overrides)
+        return person
+
+    def _reply(self, people):
+        return {"choices": [{"message": {"tool_calls": [{"function": {
+            "name": "report_people", "arguments": json.dumps({"people": people}),
+        }}]}}]}
+
+    def _populate(self, people, text="Marla Venn gutting fish beside the crier."):
+        with patch("resolution.AdHoc_Generation._real_call_chat_completion", return_value=self._reply(people)):
+            queued = self.dm_core._extract_scene_population(text)
+        self.dm_core._apply_pending_population()
+        return queued
+
+    def _crowd(self):
+        return [n for n in self.dm_core.scenario_entities if self.dm_core.entities[n].get("source") == "narration"]
+
+    def test_a_narrated_person_becomes_a_real_scene_entity(self):
+        self.assertEqual(self._populate([self._person()]), 1)
+
+        [name] = self._crowd()
+        entity = self.dm_core.entities[name]
+        self.assertEqual(entity["name"], "Marla Venn")
+        self.assertEqual(entity["qualities"]["occupation"], "fishmonger")
+        self.assertEqual(entity["memories"], ["The catch has been poor this week."])
+        self.assertTrue(entity["background"] and entity["ad_hoc"])
+        self.assertGreaterEqual(entity["max_hp"], 1)
+
+    def test_a_narrated_person_is_never_able_to_fight(self):
+        self._populate([self._person()])
+
+        [name] = self._crowd()
+        entity = self.dm_core.entities[name]
+        self.assertFalse(entity.get("abilities") or entity.get("behavior"))
+        self.assertFalse(self.dm_core.is_hostile(name, self.dm_core.player_name))
+
+    def test_a_hostile_disposition_is_dropped_rather_than_defanged(self):
+        self.assertEqual(self._populate([self._person(name="Bandit Kell", disposition="hostile")]), 0)
+        self.assertEqual(self._crowd(), [])
+
+    def test_the_occupation_addresses_a_person_who_has_their_own_name(self):
+        self._populate([self._person()])
+
+        [name] = self._crowd()
+        self.assertEqual(self.dm_core._literal_dialogue_target('i approach the fishmonger. "any news?"'), name)
+        self.assertEqual(self.dm_core._literal_dialogue_target("ask marla venn about the catch"), name)
+
+    def test_the_engine_owns_the_mechanics_whatever_the_narrator_claims(self):
+        # Fields outside the setting's freeform list are ignored, so "skills"/"max_hp" from the
+        # model can never reach the entity.
+        self._populate([self._person(skills={"brawling": {"dice": 9, "pips": 0}}, max_hp=999)])
+
+        [name] = self._crowd()
+        entity = self.dm_core.entities[name]
+        self.assertNotEqual(entity["max_hp"], 999)
+        self.assertNotIn("brawling", {k for k, v in entity["skills"].items() if v["dice"] == 9})
+
+    def test_someone_the_game_already_knows_is_never_duplicated(self):
+        self.assertEqual(self._populate([self._person(name="Town Crier")]), 1)
+
+        self.assertEqual(self._crowd(), [])
+
+    def test_the_scene_budget_caps_how_many_people_are_made(self):
+        limit = self.dm_core._population_settings()["max"]
+        people = [self._person(name=f"Person Number{i}", occupation=f"trade{i}") for i in range(limit + 3)]
+
+        self._populate(people)
+
+        self.assertLessEqual(len(self._crowd()), limit)
+
+    def test_a_batch_is_dropped_if_the_player_left_the_scene(self):
+        with patch("resolution.AdHoc_Generation._real_call_chat_completion", return_value=self._reply([self._person()])):
+            self.dm_core._extract_scene_population("Marla Venn gutting fish.")
+        self.dm_core.current_location_key = "debug_hub"
+        self.dm_core._apply_pending_population()
+
+        self.assertEqual(self._crowd(), [])
+
+    def test_a_location_that_did_not_opt_in_is_never_read(self):
+        self.dm_core._current_location()["population"] = "none"
+        with patch("resolution.AdHoc_Generation._real_call_chat_completion") as never_called:
+            self.dm_core._on_scene_narration_ready({"text": "A crowd mills about.", "label": "scenario_intro"})
 
         self.assertEqual(never_called.call_count, 0)
-        self.assertTrue([n for n in dm_core.scenario_entities if dm_core.entities[n].get("background")])
 
-    def test_background_instance_keeps_its_authored_name_and_description(self):
-        # _fallback_npc_stats' own "Unnamed Stranger" is right for a save-overlay placeholder
-        # and useless for a market crowd -- background takes only skills/max_hp from it.
-        for name in self._crowd():
-            entity = self.dm_core.entities[name]
-            self.assertNotEqual(entity["name"], "Unnamed Stranger")
-            self.assertIn(entity["name"], ("Fishmonger", "Fruit Seller", "Cartwright", "Net-Mender"))
-            self.assertTrue(entity["description"])
-            self.assertNotIn("figure whose story remains untold", entity["description"])
-            self.assertTrue(entity["skills"])
-            self.assertGreater(entity["max_hp"], 0)
+    def test_only_scene_setting_narrations_are_read(self):
+        with patch("resolution.AdHoc_Generation._real_call_chat_completion") as never_called:
+            self.dm_core._on_scene_narration_ready({"text": "A crowd mills about.", "label": "skill_response"})
 
-    def test_count_expands_into_independent_instances(self):
-        crowd = self._crowd()
+        self.assertEqual(never_called.call_count, 0)
 
-        self.assertEqual(crowd, ["market_regular", "market_regular_2"])
-        self.dm_core.apply_damage("market_regular", 2)
-        self.assertNotEqual(
-            self.dm_core.get_current_hp("market_regular"), self.dm_core.get_current_hp("market_regular_2"),
-        )
+    def test_extraction_runs_on_a_scene_setting_narration(self):
+        with patch("resolution.AdHoc_Generation._real_call_chat_completion", return_value=self._reply([self._person()])):
+            self.dm_core._on_scene_narration_ready({"text": "Marla gutting fish.", "label": "item_interaction:move"})
+        self.dm_core._apply_pending_population()
 
-    def test_a_background_crowd_is_never_hostile(self):
-        # is_hostile treats an entity with NO attitudes table as unconditionally hostile, and
-        # "are we in combat" is derived from the current target's hostility -- a crowd that got
-        # this wrong would put the whole square into a fight.
-        for name in self._crowd():
-            self.assertFalse(self.dm_core.is_hostile(name, self.dm_core.player_name))
+        self.assertEqual(len(self._crowd()), 1)
 
-    def test_a_background_template_without_attitudes_is_still_not_hostile(self):
-        # The setdefault belt-and-braces behind the validation rule below.
-        self.dm_core.entity_templates["attitudeless"] = {
-            "name": "attitudeless", "supertype": "creature", "subtype": "humanoid",
-            "background": True, "display_name": "Passer-by", "description": "Someone passing through.",
-            "target_cr": 1,
+    def test_no_one_is_made_while_a_hostile_is_present(self):
+        self.dm_core.entities["angry wolf"] = {
+            "name": "angry wolf", "supertype": "creature", "max_hp": 10, "hp": 10,
+            "attitudes": {"default": [-100, 0, 0]}, "skills": {"brawling": {"dice": 2, "pips": 0}},
         }
-        self.dm_core._instance_entities([{"template": "attitudeless"}])
+        self.dm_core._place_new_entity("angry wolf", self.dm_core.entities["angry wolf"], 1)
+        self.dm_core.scenario_entities.append("angry wolf")
 
-        self.assertFalse(self.dm_core.is_hostile("attitudeless", self.dm_core.player_name))
+        self.assertEqual(self._populate([self._person()]), 0)
 
-    def test_a_background_template_without_attitudes_logs_a_validation_error(self):
-        errors = self._capture("log_error")
-        self.dm_core.entity_templates["attitudeless"] = {
-            "name": "attitudeless", "supertype": "creature", "background": True,
-        }
-        self.dm_core._validate_entity_template_shape()
-
-        self.assertTrue([e for e in errors if "attitudeless" in e and "attitudes" in e])
-
-    def test_a_varied_count_is_rejected_rather_than_rolled(self):
-        # The one hard determinism invariant: a crowd size rolled fresh on reload would shift
-        # every later occurrence suffix and silently orphan saved per-entity state.
-        errors = self._capture("log_error")
-        expanded = self.dm_core._expand_entity_entries([{"template": "market_regular", "count": {"min": 2, "max": 5}}])
-
-        self.assertEqual(len(expanded), 1)
-        self.assertTrue([e for e in errors if "count" in e])
-
-    def test_a_varied_count_is_rejected_at_load_time_too(self):
-        errors = self._capture("log_error")
-        self.dm_core._check_entity_entries("location 'x'", [{"template": "market_regular", "count": {"min": 2}}])
-
-        self.assertTrue([e for e in errors if "count" in e and "positive integer" in e])
-
-    def test_a_crowd_survives_save_and_reload_with_its_identity_intact(self):
-        crowd = self._crowd()
-        before = {n: dict(self.dm_core.entities[n]) for n in crowd}
-        self.dm_core.apply_damage(crowd[1], 2)
-        wounded_hp = self.dm_core.get_current_hp(crowd[1])
+    def test_a_populated_scene_survives_save_and_reload(self):
+        self._populate([self._person()])
+        [name] = self._crowd()
+        before = dict(self.dm_core.entities[name])
 
         with tempfile.TemporaryDirectory() as tmp:
             with patch("dm.DM_Persistence.PROJECT_ROOT", tmp):
                 self.dm_core.save_game("crowd_slot")
-                event_bus = EventBus()
-                reloaded = DMCore(event_bus, scenario_name="debug", start_location="town_square", setting="Fantasy")
+                reloaded = DMCore(EventBus(), scenario_name="debug", start_location="town_square", setting="Fantasy")
                 reloaded.load_game("crowd_slot")
 
-        after = [n for n in reloaded.scenario_entities if reloaded.entities[n].get("background")]
-        self.assertEqual(after, crowd)  # same keys, same order -- suffixes did not drift
-        for name in crowd:
-            self.assertEqual(reloaded.entities[name]["name"], before[name]["name"])
-            self.assertEqual(reloaded.entities[name]["description"], before[name]["description"])
-            self.assertEqual(reloaded.entities[name]["attitudes"], before[name]["attitudes"])
-        self.assertEqual(reloaded.get_current_hp(crowd[1]), wounded_hp)
+        self.assertIn(name, reloaded.scenario_entities)
+        self.assertEqual(reloaded.entities[name]["name"], before["name"])
+        self.assertEqual(reloaded.entities[name]["qualities"], before["qualities"])
+        self.assertEqual(reloaded.entities[name]["attitudes"], before["attitudes"])
+
+    def test_scene_setting_prose_is_longer_and_asks_for_people_only_where_opted_in(self):
+        from types import SimpleNamespace
+        core = SimpleNamespace(population=self.dm_core._population_prompt_settings())
+        text = LLMCore.scene_length_instruction(core, "the opening scene")
+
+        self.assertIn("5-6 sentences", text)
+        self.assertIn("market stallholders", text)
+        core = SimpleNamespace(population={"sentences": "2-3", "hint": ""})
+        self.assertEqual(
+            LLMCore.scene_length_instruction(core, "the opening scene"),
+            "Narrate the opening scene in 2-3 sentences as the Game Master.",
+        )
+
+    def test_the_extraction_schema_excludes_hostility_and_engine_owned_fields(self):
+        from resolution.AdHoc_Generation import build_people_tool_schema
+        item = build_people_tool_schema({"trade": ["haggling"]})[0]["function"]["parameters"]["properties"]["people"]["items"]
+
+        self.assertNotIn("hostile", item["properties"]["disposition"]["enum"])
+        for engine_owned in ("skills", "max_hp", "abilities", "behavior"):
+            self.assertNotIn(engine_owned, item["properties"])
+
+    def test_a_setting_can_narrow_what_the_narrator_may_write(self):
+        from resolution.AdHoc_Generation import build_people_tool_schema
+        item = build_people_tool_schema({"trade": ["haggling"]}, ("name", "description"))[0]["function"]["parameters"]["properties"]["people"]["items"]
+
+        self.assertNotIn("memories", item["properties"])
+        self.assertIn("description", item["properties"])
+
+    def test_validation_flags_a_narrated_location_in_a_setting_that_never_enabled_it(self):
+        errors = self._capture("log_error")
+        self.dm_core.rules["narration_population"] = {"enabled": False}
+        self.dm_core._validate_location_shapes()
+
+        self.assertTrue([e for e in errors if "town_square" in e and "no effect" in e])
+
+    def test_validation_flags_a_bad_population_value(self):
+        errors = self._capture("log_error")
+        self.dm_core._current_location()["population"] = "crowded"
+        self.dm_core._validate_location_shapes()
+
+        self.assertTrue([e for e in errors if "population should be" in e])
+
+    # -- containment: a narrated person is real but never picked on the player's behalf ----------
 
     def test_a_bystander_is_never_the_default_item_target(self):
-        # "open it" in a populated square must reach the market stall, not a fruit seller.
+        self._populate([self._person()])
+
         self.assertFalse(self.dm_core._is_background(self.dm_core._get_target_name()))
-        self.assertIn(self.dm_core._get_target_name(), self.dm_core.scenario_entities)
 
     def test_buying_and_giving_still_work_in_a_crowd_only_scene(self):
-        # The other half of excluding bystanders from _get_target_name: a location whose entire
-        # non-party roster IS the crowd (Sandpoint's hub, every town square worth the name) has
-        # no other candidate, so a person-addressing intent that skipped them would find no
-        # target at all -- "buy some figs" would decline before the item was even generated,
-        # from the one merchant standing right there.
+        self._populate([self._person()])
         for name in list(self.dm_core.scenario_entities):
             if name != self.dm_core.player_name and not self.dm_core._is_background(name):
                 self.dm_core.scenario_entities.remove(name)
 
         for intent in PERSON_TARGET_INTENTS:
             with self.subTest(intent=intent):
-                target = self.dm_core._get_target_name(include_background=True)
-                self.assertTrue(self.dm_core._is_background(target))
+                self.assertTrue(self.dm_core._is_background(self.dm_core._get_target_name(include_background=True)))
         self.assertIsNone(self.dm_core._get_target_name(), "a thing-addressing intent still sees nobody")
 
-    def test_a_bystander_is_never_the_default_scene_test_target(self):
-        # _resolve_roll aims a scene-level [entity.test] at current_target specifically.
+    def test_a_bystander_is_chosen_as_a_combat_target_only_once_nothing_else_qualifies(self):
+        self._populate([self._person()])
         self.assertFalse(self.dm_core._is_background(self.dm_core._choose_combat_target()))
 
-    def test_a_bystander_is_chosen_only_once_nothing_else_qualifies(self):
         for name in list(self.dm_core.scenario_entities):
             if name != self.dm_core.player_name and not self.dm_core._is_background(name):
                 self.dm_core.scenario_entities.remove(name)
@@ -12995,8 +13074,7 @@ class TestBackgroundCrowds(DMTestCase):
         self.assertTrue(self.dm_core._is_background(self.dm_core._choose_combat_target()))
 
     def test_the_dialogue_fallback_may_address_a_bystander(self):
-        # The one deliberate include_background=True call site: an unaddressed remark in a
-        # market square should land on whoever is standing there.
+        self._populate([self._person()])
         for name in list(self.dm_core.scenario_entities):
             if name != self.dm_core.player_name and not self.dm_core._is_background(name):
                 self.dm_core.scenario_entities.remove(name)
@@ -13004,6 +13082,7 @@ class TestBackgroundCrowds(DMTestCase):
         self.assertTrue(self.dm_core._is_background(self.dm_core._resolve_dialogue_target("ask about the weather")))
 
     def test_a_bystander_never_takes_a_combat_turn(self):
+        self._populate([self._person()])
         self.dm_core.entities["angry wolf"] = {
             "name": "angry wolf", "supertype": "creature", "max_hp": 10, "hp": 10,
             "skills": {"brawling": {"dice": 2, "pips": 0}},
@@ -13048,10 +13127,8 @@ class TestSceneRoster(DMTestCase):
         entities = published[-1]["entities"]
 
         self.assertNotIn(self.dm_core.player_name, [entry["key"] for entry in entities])
-        crowd = [entry for entry in entities if entry["key"].startswith("market_regular")]
-        self.assertTrue(crowd)
-        self.assertIn("merchant", crowd[0]["aliases"])
-        self.assertTrue(crowd[0]["name"])
+        self.assertTrue(all(entry["name"] for entry in entities))
+        self.assertIn("town crier", [entry["key"] for entry in entities])
 
     def test_removing_an_entity_republishes_the_roster(self):
         self.dm_core._enter_location("town_square")

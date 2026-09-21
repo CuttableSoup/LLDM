@@ -756,7 +756,7 @@ class RulesMixin(DMCoreProtocol):
         instance_names = []
         occurrence_counts = self.entity_occurrence_counts
 
-        for entry in self._expand_entity_entries(entity_entries):
+        for entry in entity_entries:
             is_generated_template = "template" in entry
             if is_generated_template:
                 template_name = entry.get("template")
@@ -821,54 +821,11 @@ class RulesMixin(DMCoreProtocol):
             # Defaults to band 1 for any entry that doesn't specify one.
             self._place_new_entity(instance_name, instance, entry.get("band", 1))
             if is_generated_template:
-                # A background template is the one generation path that never talks to the
-                # network -- see _apply_background_npc for why a crowd can't pay
-                # generate_npc_stats' synchronous per-NPC round trip.
-                if template.get("background"):
-                    self._apply_background_npc(instance_name)
-                else:
-                    self._apply_npc_generation(instance_name, party_pool, instance_names, skip_llm_generation)
+                self._apply_npc_generation(instance_name, party_pool, instance_names, skip_llm_generation)
             self._auto_roll_notice(instance_name)
             instance_names.append(instance_name)
 
         return instance_names
-
-    def _expand_entity_entries(self, entity_entries):
-        """!
-        @brief Flattens an "entities" list's own optional "count" field -- an entry carrying
-            count = 3 is processed three times, each pass an independent instance with its own
-            occurrence suffix (fishmonger, fishmonger_2, fishmonger_3). Pure authoring sugar
-            for a background crowd, where writing the same table out N times is the only
-            alternative; every other part of _instance_entities (occurrence counting,
-            removed_entities skipping, NPC generation, notice rolls) sees exactly what it would
-            have seen from N hand-written entries.
-
-            **count must be a plain positive integer, never a {min, max}/weighted-choice varied
-            value** -- the single hard determinism invariant here. load_game re-derives every
-            visited scope by re-instancing it from the static TOML and then overlaying saved
-            per-entity state by name; a crowd whose size was rolled fresh on reload would shift
-            every later occurrence suffix, and DM_Persistence.py's overlay silently skips a
-            saved name that no longer exists, so a reloaded save would quietly lose entities'
-            HP, inventory and conditions rather than failing loudly. Variety belongs in the
-            template's own varied fields (display_name/description/qualities), which already
-            round-trip through the "generated" save path. Anything other than a positive int is
-            rejected here (and, ahead of that, by DM_Validation.py) and treated as a single
-            entry rather than dropping the entry entirely.
-        @param entity_entries The raw list of {name|template, band, count?} tables.
-        @return A flat list of entries with "count" already expanded.
-        """
-        expanded = []
-        for entry in entity_entries:
-            count = entry.get("count", 1)
-            if not isinstance(count, int) or isinstance(count, bool) or count < 1:
-                self.event_bus.publish(
-                    "log_error",
-                    f"Entity entry {entry.get('template') or entry.get('name')!r} has an invalid "
-                    f"count {count!r} (must be a positive integer); treating it as 1.",
-                )
-                count = 1
-            expanded.extend([entry] * count)
-        return expanded
 
     def _place_new_entity(self, name, entity, band):
         """!
@@ -1199,9 +1156,10 @@ class RulesMixin(DMCoreProtocol):
             still has to reach the narrator.
         """
         characters = self._describe_scenario_characters()
-        if characters == self._last_scene_roster:
+        population = self._population_prompt_settings()
+        if (characters, population) == self._last_scene_roster:
             return
-        self._last_scene_roster = characters
+        self._last_scene_roster = (characters, population)
 
         entities = []
         for entity_name in self.scenario_entities:
@@ -1219,6 +1177,7 @@ class RulesMixin(DMCoreProtocol):
             "characters": characters,
             "entities": entities,
             "present_entities": list(self.scenario_entities),
+            "population": population,
         })
 
     def _run_on_enter_programs(self):

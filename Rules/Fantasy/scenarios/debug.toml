@@ -466,12 +466,11 @@ key = "town_square"
 name = "The Market Square"
 description = "A wide cobbled square ringed with stalls, the smell of woodsmoke and bread drifting from every corner."
 kind = "district"
+population = "narrated"
+population_hint = "market stallholders, shoppers, and passers-by"
 entities = [
     { name = "town crier" },
     { name = "market stall" },
-    # Scene population -- see _expand_entity_entries (DM_Rules.py); count must be a plain
-    # integer, never a varied range, or a reload would re-roll the crowd's size.
-    { template = "market_regular", count = 2 },
 ]
 return_to = "debug_hub"
 
@@ -1143,53 +1142,6 @@ brawling = { dice = 2, pips = 0 }
 # Entity templates -- NPC-generation stubs. "generated_stranger" is shared, byte-for-byte
 # identical, between what used to be npc_generation_test.toml and tavern_random.toml's own
 # copies -- now just defined once.
-
-[[entity_template]]
-# The shipped example of a "background = true" crowd template (see docs/npc-generation.md).
-# Everything here is resolved locally at instancing time -- nothing in this path ever talks to
-# Ollama, which is the whole point: a town square has to cost nothing to walk into.
-name = "market_regular"
-supertype = "creature"
-subtype = "humanoid"
-background = true
-# What the player actually sees; a template's own "name" is its key in self.entity_templates,
-# so the displayed one needs its own field.
-display_name = [
-    {"Fishmonger" = 25},
-    {"Fruit Seller" = 25},
-    {"Cartwright" = 25},
-    {"Net-Mender" = 25},
-]
-description = [
-    {"A weather-beaten trader hawking the morning's catch from a slatted crate." = 50},
-    {"A townsperson picking over a stall of dried fruit, half-listening to the gossip around them." = 50},
-]
-aliases = [ "merchant", "vendor", "stallholder", "trader", "townsfolk" ]
-target_cr = "player"
-cr_multiplier = 0.25 # a bystander, never a threat
-currency = {min = 1, max = 15}
-
-# MANDATORY on a background template (DM_Validation.py enforces it): an entity with no
-# attitudes table at all is treated as unconditionally hostile (DM_Social.py's is_hostile),
-# which would put the whole square into combat.
-[entity_template.attitudes]
-default = [
-    {min = -10, max = 30}, # mildly wary to mildly warm
-    0,
-    {min = -20, max = 10}
-]
-
-[entity_template.qualities]
-race = [
-    {"human" = 70},
-    {"halfling" = 15},
-    {"dwarf" = 15}
-]
-gender = [
-    {"male" = 50},
-    {"female" = 50}
-]
-age = { min = 18, max = 60 }
 
 [[entity_template]]
 name = "generated_stranger"

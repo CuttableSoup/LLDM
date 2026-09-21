@@ -29,12 +29,6 @@ SCALAR_FIELD_TYPES = {
     "speed": (int, float), "travel_speed": (int, float), "follow_offset": (int, float),
     "usable": bool, "charges": (int, float), "replace_with": str,
     "current_language": str, "provides_station": str, "mount": (str, list),
-    # Background-crowd authoring (see DM_NpcGeneration.py's _apply_background_npc).
-    # Listed here rather than left freeform precisely because this table is a type spec,
-    # not a whitelist: an unlisted field is silently never checked at all, so a typo'd
-    # "backround = true" would fail *open* -- the template would look like an ordinary
-    # generated one and pay a blocking 20s network call on every location entry.
-    "background": bool, "display_name": (str, list),
     # "range"/"difficulty"/"language_dependent"/"equip_slot" are ability-shaped fields --
     # checked once by _check_ability_shape instead, called against both an entity's own
     # top-level fields (in case it's itself a weapon/spell/technique) and every resolved
@@ -365,20 +359,6 @@ class ValidationMixin(DMCoreProtocol):
                         f"entity_template '{name}' authors '{field}', which generation always "
                         f"overwrites at instancing time -- remove it.",
                     )
-            # The single highest-consequence authoring mistake a background crowd can make.
-            # is_hostile (DM_Social.py) treats an entity with NO attitudes table at all as
-            # unconditionally hostile, and whether the game is in combat at all is derived
-            # purely from the current target's own hostility (DM_Core.py's _on_turn_detected)
-            # -- so a market crowd that forgot its attitudes would put the whole square into a
-            # fight the moment one of them became the default target. A generating template
-            # gets no such rule: _apply_npc_generation resolves whatever attitudes it has and
-            # a hostile generated NPC is a legitimate thing to author.
-            if template.get("background") and "attitudes" not in template:
-                self.event_bus.publish(
-                    "log_error",
-                    f"background entity_template '{name}' authors no [entity_template.attitudes] "
-                    f"-- an entity with no attitudes table at all is treated as hostile.",
-                )
 
     # -----------------------------------------------------------------------------------------
     # Location/room references
@@ -394,17 +374,6 @@ class ValidationMixin(DMCoreProtocol):
             test run.
         """
         for entry in entries or []:
-            # See _expand_entity_entries (DM_Rules.py) for why this may never be a varied
-            # {min, max}/weighted-choice value: a crowd size rolled fresh on every reload
-            # shifts occurrence suffixes and silently drops saved per-entity state.
-            if "count" in entry:
-                count = entry["count"]
-                if not isinstance(count, int) or isinstance(count, bool) or count < 1:
-                    self.event_bus.publish(
-                        "log_error",
-                        f"{owner_label} entities entry has count {count!r}; it must be a plain "
-                        f"positive integer (never a varied range or weighted choice).",
-                    )
             if "template" in entry:
                 template_name = entry.get("template")
                 if template_name not in self.entity_templates:
@@ -903,7 +872,9 @@ class ValidationMixin(DMCoreProtocol):
     # -----------------------------------------------------------------------------------------
     # Field shape/type -- locations/rooms
 
-    LOCATION_STRING_FIELDS = ("key", "name", "description", "kind", "start_room", "return_to")
+    LOCATION_STRING_FIELDS = (
+        "key", "name", "description", "kind", "start_room", "return_to", "population", "population_hint",
+    )
     ROOM_STRING_FIELDS = ("key", "name", "description")
 
     def _check_grid(self, owner_label, grid):
@@ -929,6 +900,18 @@ class ValidationMixin(DMCoreProtocol):
             for field_name in self.LOCATION_STRING_FIELDS:
                 self._check_field_type(label, field_name, location.get(field_name), str)
             self._check_grid(label, location.get("grid"))
+            # "narrated" opts a location in to narration-driven population (see
+            # DM_Improvisation.py's _population_settings); anything else is a typo that would
+            # silently leave the place empty.
+            if location.get("population") not in (None, "narrated", "none"):
+                self._log(label, f"population should be \"narrated\" or \"none\", not {location.get('population')!r}.")
+            if "population_max" in location and (
+                not isinstance(location["population_max"], int) or isinstance(location["population_max"], bool)
+                or location["population_max"] < 1
+            ):
+                self._log(label, "population_max should be a positive integer.")
+            if location.get("population") == "narrated" and not (self.rules.get("narration_population") or {}).get("enabled"):
+                self._log(label, "population = \"narrated\" has no effect: this setting's [narration_population] is absent or disabled.")
 
             for exit_entry in location.get("exit", []):
                 if "destination" in exit_entry and not isinstance(exit_entry["destination"], str):

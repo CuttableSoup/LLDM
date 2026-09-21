@@ -755,7 +755,7 @@ op) actually lands on every ally/enemy the blast caught.
 
 ## Background entities in combat
 
-A `background = true` crowd member (see `docs/npc-generation.md`) is an ordinary scene
+A `background` entity — a narrated bystander (see `docs/npc-generation.md`) — is an ordinary scene
 participant, with two deliberate exclusions and several deliberate non-exclusions.
 
 **Excluded** from `_choose_combat_target`'s non-hostile fallback, so a market's fishmonger can't

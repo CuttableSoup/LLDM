@@ -271,20 +271,3 @@ entirely for a `"nothing"` result), narrated by `LLMCore.generate_encounter_resp
 narration trigger that's never a direct response to something the player *typed*; an
 `"on_enter"` roll fires as a side effect of simply arriving somewhere, an `"ambient"` one as a
 side effect of simply taking a turn while already there.
-
-
-## `count` on an entities entry
-
-A location's or room's `entities` entry may carry `count = N` (a plain positive integer),
-processed as N independent instances by `_expand_entity_entries` (`DM_Rules.py`) before
-`_instance_entities`' own loop ever sees it — so occurrence counting, `removed_entities` skipping,
-generation and notice rolls all behave exactly as they would for N hand-written entries. It's
-authoring sugar for background crowds (see `docs/npc-generation.md`), where the alternative is
-repeating the same table.
-
-**Never a varied `{min, max}` or weighted choice.** `load_game` re-derives every visited scope by
-re-instancing from the static TOML and then overlaying saved per-entity state *by name*; a crowd
-size rolled fresh on reload would shift every later occurrence suffix, and the overlay silently
-skips a saved name that no longer exists — so the reload would quietly lose HP, inventory and
-conditions rather than failing loudly. `DM_Validation.py` rejects a non-integer `count` at load
-time, and `_expand_entity_entries` logs and falls back to 1 if one reaches it anyway.

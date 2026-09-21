@@ -1,11 +1,13 @@
 import os
+import re
 
 from resolution.AdHoc_Generation import (
-    GROUND_AWARE_INTENTS, TARGET_CENTRIC_INTENTS, decide_entity_edit,
+    DEFAULT_NARRATED_FREEFORM, GROUND_AWARE_INTENTS, extract_narrated_people, TARGET_CENTRIC_INTENTS, decide_entity_edit,
     decide_entity_removal, generate_ad_hoc_creature, generate_ad_hoc_item,
     generate_referenced_npc,
 )
 from dm.DM_Types import DMCoreProtocol
+from resolution.Character_Creation import BASE_LANGUAGE, load_learnable_languages
 from resolution.NPC_Generation import load_npc_keywords
 
 # subtype values generate_ad_hoc_item may return that are placed as live, targetable scene
@@ -64,7 +66,8 @@ class ImprovisationMixin(DMCoreProtocol):
           mechanically (Intent_Classification.py's extract_address_phrase) after DMCore's own
           literal and semantic scans both found nobody present who answers to it. Never the
           narrator's prose: DMCore.recent_narration flavors what gets created and never causes
-          it.
+          it. (Scene-setting narration populating a scene is a separate, bounded, opt-in path --
+          see _extract_scene_population.)
         - **ADaM-gated**, behind explicitly addressing ADaM by name (highest risk -- can affect
           combat balance or mutate any existing entity, hand-authored included): entity removal
           (remove_entity_from_scene/_attempt_entity_removal), unrestricted creature/NPC
@@ -412,6 +415,144 @@ class ImprovisationMixin(DMCoreProtocol):
         })
 
         return {"created_creature": True, "name": name}
+
+    # ------------------------------------------------------------------------------------
+    # Narration-driven population -- the narrator populates a scene, the engine makes it real.
+
+    def _population_settings(self):
+        """!
+        @brief The narration-population configuration for the *current* location, read from the
+            setting's own [narration_population] table (rules.toml) and the location's own
+            "population"/"population_hint"/"population_max" fields. Inactive (the default) unless
+            the table enables it AND the location opts in with population = "narrated" -- a
+            dungeon or an empty road stays exactly as authored. Rooms inherit their location's.
+        @return {"active", "hint", "sentences", "max", "triggers", "freeform", "cr_share"}.
+        """
+        config = self.rules.get("narration_population") or {}
+        location = self._current_location()
+        active = bool(config.get("enabled")) and location.get("population") == "narrated"
+        limits = config.get("limits") or {}
+        return {
+            "active": active,
+            "hint": location.get("population_hint", "") if active else "",
+            "sentences": str(config.get("prose_sentences", "2-3")) if active else "2-3",
+            "max": int(location.get("population_max", config.get("max_per_scene", 4))),
+            "triggers": tuple(config.get("triggers", ("scenario_intro", "move", "travel"))),
+            "freeform": tuple(limits.get("freeform", DEFAULT_NARRATED_FREEFORM)),
+            "cr_share": float(limits.get("max_cr_share", BYSTANDER_CR_SHARE)),
+        }
+
+    def _on_scene_narration_ready(self, data):
+        """!
+        @brief Reads a scene-setting narration (scenario intro, arrival, move) for the ordinary
+            people it puts in the scene, and queues them to become real. **Runs on LLMCore's
+            fetch thread** (it is published straight after llm_response_ready), which is the
+            point: extraction is a slow local model call, and running it here overlaps it with
+            the player reading the prose they just got. It therefore only *reads* game state and
+            appends to self._pending_population -- nothing is mutated until
+            _apply_pending_population runs on the game's own thread at the start of the next turn.
+        @param data The "scene_narration_ready" payload ({text, label, present_entities}).
+        """
+        settings = self._population_settings()
+        trigger = (data.get("label") or "").split(":")[-1]
+        if not settings["active"] or trigger not in settings["triggers"]:
+            return
+        self._extract_scene_population(data.get("text", ""), settings)
+
+    def _extract_scene_population(self, text, settings=None):
+        """!
+        @brief The extraction half of the above, split out so it can be driven synchronously.
+            Refuses while a live hostile is present (nobody wanders into a fight), and stops at
+            the scene's budget of narrated people (present plus already queued).
+        @param text The narration to read.
+        @param settings _population_settings' result; recomputed if None.
+        @return The number of people queued.
+        """
+        settings = settings or self._population_settings()
+        if any(
+            self.is_hostile(name, self.player_name) and self.get_current_hp(name) > 0
+            for name in list(self.scenario_entities)
+        ):
+            return 0
+        scene = (self.current_location_key, self.current_room_key)
+        queued = sum(len(batch["people"]) for batch in list(self._pending_population) if batch["scene"] == scene)
+        present_narrated = sum(
+            1 for name in list(self.scenario_entities) if self.entities.get(name, {}).get("source") == "narration"
+        )
+        room = settings["max"] - present_narrated - queued
+        if room < 1:
+            return 0
+
+        npc_keywords = load_npc_keywords(os.path.join("Rules", self.setting))
+        people = extract_narrated_people(
+            text, self._current_scene_description(), settings["hint"],
+            [self.entities.get(name, {}).get("name", name) for name in list(self.scenario_entities)],
+            room, self.get_challenge_rating(self.player_name) * settings["cr_share"],
+            npc_keywords, self.skills, settings["freeform"],
+        )
+        if people:
+            self._pending_population.append({"scene": scene, "people": people})
+        return len(people)
+
+    def _apply_pending_population(self):
+        """!
+        @brief Makes queued narrated people real -- called on the game's own thread at the top of
+            every player-input handler, so a person the narration just introduced is addressable
+            by the very next thing the player types. A batch is dropped if the player has since
+            left the scene it was narrated in. Each person is dropped rather than duplicated if
+            they match anyone the game already knows (see _matches_existing_person), and their
+            languages are clipped to ones the setting actually has.
+        """
+        while self._pending_population:
+            batch = self._pending_population.pop(0)
+            if batch["scene"] != (self.current_location_key, self.current_room_key):
+                continue
+            known_languages = {BASE_LANGUAGE, *load_learnable_languages(os.path.join("Rules", self.setting))}
+            budget = self._population_settings()["max"]
+            for entity in batch["people"]:
+                present_narrated = sum(
+                    1 for name in self.scenario_entities if self.entities.get(name, {}).get("source") == "narration"
+                )
+                if present_narrated >= budget or self._matches_existing_person(entity["name"]):
+                    continue
+                languages = [language for language in entity.get("languages", []) if language in known_languages]
+                if languages:
+                    entity["languages"] = languages
+                else:
+                    entity.pop("languages", None)
+                    polity_language = self._current_polity_language()
+                    if polity_language:
+                        entity["languages"] = [polity_language]
+                name = self._unique_entity_key(entity["name"])
+                self._place_and_register_scene_entity(name, entity, insert_front=False, claim_target=False)
+                self.event_bus.publish("item_catalog_updated", {
+                    "entities": [{"name": name, "description": entity.get("description", "")}],
+                })
+                self.event_bus.publish("log_info", f"Narration populated the scene: '{name}' ({entity.get('name')}).")
+
+    @staticmethod
+    def _name_tokens(name):
+        return {token for token in re.findall(r"[a-z']+", (name or "").lower()) if len(token) > 2} - {"the", "and"}
+
+    def _matches_existing_person(self, name):
+        """!
+        @brief Whether a narrated name refers to someone the game already has -- an authored
+            character (present or elsewhere in the scenario) or anyone in the scene. A narrated
+            "Turch" is Turch Sterglus, not a second person. Every word of the narrated name must
+            appear in the existing one; the reverse never matches, so a narrated "Wolf Trader"
+            isn't swallowed by a creature called "wolf".
+        @param name The narrated person's name.
+        @return True if it should not be created.
+        """
+        wanted = self._name_tokens(name)
+        if not wanted:
+            return True
+        for key, entity in self.entities.items():
+            if entity.get("supertype") != "creature":
+                continue
+            if wanted <= (self._name_tokens(entity.get("name", key)) | self._name_tokens(key)):
+                return True
+        return False
 
     def _attempt_dialogue_promotion(self, address_phrase):
         """!

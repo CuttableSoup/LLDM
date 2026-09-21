@@ -60,5 +60,5 @@ def narrate_move(llm_core, data):
         f"The player heads {data.get('direction', 'onward')}, arriving at: "
         f"\"{data.get('room_name', '')}\".\n"
         f"{llm_core.scenario_description}{characters_text}\n"
-        f"Narrate arriving in this new area in 2-3 sentences as the Game Master."
+        f"{llm_core.scene_length_instruction('arriving in this new area')}"
     )

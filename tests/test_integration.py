@@ -1293,30 +1293,6 @@ class TestReferencedNpcLive(unittest.TestCase):
         self.assertNotEqual(self.dm_core.current_target, name)
         self.assertEqual(self.dm_core.get_band(name), self.dm_core.get_band(self.dm_core.player_name))
 
-    def test_a_background_crowd_still_costs_no_generation_call_with_ollama_up(self):
-        # test_unit.py proves this with a patched client standing in for the network; this
-        # proves it in an environment where a network call would really have succeeded, by
-        # counting calls through a wrapper that still delegates. Deliberately a call count and
-        # not a stopwatch: an earlier draft asserted the boot finished inside 5s, which is true
-        # on a GPU host and false on a CPU-bound one whose cores are already pegged by another
-        # test's inference -- a flake that says nothing about whether the crowd path is
-        # offline.
-        calls = []
-        real = NPC_Generation._real_call_chat_completion
-
-        def counting_call(*args, **kwargs):
-            calls.append(args)
-            return real(*args, **kwargs)
-
-        with patch.object(NPC_Generation, "_real_call_chat_completion", counting_call):
-            dm_core = DMCore(EventBus(), scenario_name="debug", start_location="town_square")
-
-        crowd = [n for n in dm_core.scenario_entities if dm_core.entities[n].get("background")]
-        self.assertTrue(crowd, "town_square's own background crowd never instanced")
-        self.assertEqual(calls, [], "a background crowd called the network")
-        for name in crowd:
-            self.assertNotEqual(dm_core.entities[name]["name"], "Unnamed Stranger")
-
 
 @unittest.skipUnless(_ollama_reachable(), "Ollama not reachable at http://127.0.0.1:11434")
 class TestCrowdConversation(_LivePipelineTestCase):
@@ -1334,10 +1310,10 @@ class TestCrowdConversation(_LivePipelineTestCase):
         an entity and then immediately narrates it, which has to come back as ONE coherent
         in-character reply rather than a denial followed by a second narration.
 
-        "town_square" (debug.toml) is the shipped Fantasy crowd fixture: two background
-        "market_regular" extras, a named town crier, a market stall, and no hostiles (so
-        _attempt_dialogue_promotion's own "never while a live hostile is present" gate isn't
-        what's being measured).
+        "town_square" (debug.toml) is the shipped Fantasy crowd fixture: a named town crier, a
+        market stall, no hostiles (so _attempt_dialogue_promotion's own "never while a live
+        hostile is present" gate isn't what's being measured), and population = "narrated" --
+        the narrator populates it, and the engine makes those people real.
     """
     scenario_name = "debug"
     start_location = "town_square"
@@ -1374,25 +1350,56 @@ class TestCrowdConversation(_LivePipelineTestCase):
                 quiet_for += 0.5
         self.responses.clear()
 
-    def test_a_background_crowd_is_real_enough_to_talk_to(self):
-        # The tier-1 half, and the original Sandpoint failure inverted: "the merchant" used to
-        # have nothing behind it, so the narrator invented one and the player could never
-        # reach him again. Now it resolves against an actual market_regular (whose template
-        # carries "merchant" among its aliases), the semantic layer scores that ~1.0, and
-        # promotion correctly stands down -- nobody new is created at all.
-        before = list(self.dm_core.scenario_entities)
-        response = self._say("I ask the merchant what he is selling.")
-        print(f"\n=== crowd conversation ===\n> I ask the merchant what he is selling.\n{response}\n")
+    def _wait_for_narrated_people(self, timeout=150):
+        """!
+        @brief Waits for the extraction pass that runs *after* the scene intro narration
+            (DMCore._on_scene_narration_ready, on LLMCore's own fetch thread) to queue someone.
+            _settle only watches responses, and extraction publishes none.
+        @return The queued entity dicts, or [] if the model produced nobody in time.
+        """
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            queued = [person for batch in list(self.dm_core._pending_population) for person in batch["people"]]
+            if queued:
+                return queued
+            time.sleep(0.5)
+        return []
 
-        self.assertTrue(response.strip())
+    def test_a_person_the_narrator_introduced_is_real_and_can_be_spoken_to(self):
+        # The narration-population feature end to end, with the real model on both ends: the
+        # scene intro is written longer and asked to show the square populated, a second call
+        # reads that prose and extracts the people in it, and the next thing the player types --
+        # addressing one of them by the name the narrator gave -- reaches a real entity and gets
+        # ONE in-character reply. Skips (rather than fails) if the model wrote or extracted no
+        # one, since that is model variance rather than a wiring fault; the offline suite covers
+        # the wiring against a scripted model.
+        queued = self._wait_for_narrated_people()
+        if not queued:
+            self.skipTest("model narrated or extracted no bystanders in time")
+        person = queued[0]
+        print(f"\n=== extracted from the scene intro: {[(p['name'], p['qualities'].get('occupation')) for p in queued]} ===\n")
+
+        before = list(self.dm_core.scenario_entities)
+        player_input = f'I greet {person["name"]}. "Good day! Is anything going on in the square?"'
+        response = self._say(player_input)
+        print(f"> {player_input}\n{response}\n")
+
         self.assertNotIn("Could not connect to the local LLM", response)
-        self.assertEqual(self.dm_core.scenario_entities, before, "a real crowd member got duplicated")
+        added = [name for name in self.dm_core.scenario_entities if name not in before]
+        self.assertTrue(added, "the queued person never became a scene entity")
+        made = [name for name in added if self.dm_core.entities[name].get("name") == person["name"]]
+        self.assertEqual(len(made), 1, f"expected {person['name']} exactly once, got {added}")
+
+        entity = self.dm_core.entities[made[0]]
+        self.assertEqual(entity["source"], "narration")
+        self.assertFalse(entity.get("abilities") or entity.get("behavior"))
+        self.assertFalse(self.dm_core.is_hostile(made[0], self.dm_core.player_name))
+
         resolved = self.dialogue_events[-1]
         self.assertTrue(resolved["found"])
-        self.assertTrue(
-            self.dm_core._is_background(resolved["target"]),
-            f"expected a crowd member, got {resolved['target']}",
-        )
+        self.assertEqual(resolved["target"], made[0])
+        self.assertEqual(len(self.dialogue_events), 1, "one turn should produce one reply")
+        self.assertTrue(response.strip())
 
     def test_addressing_someone_absent_materializes_them_and_answers_in_character(self):
         # The tier-2 half. "blacksmith" scores ~0.41 against this square's own present-entity

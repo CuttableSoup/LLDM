@@ -73,6 +73,9 @@ CONTEXT_TOKEN_BUDGET = 4096
 # completion tokens, and capping at 512 visibly truncated one mid-sentence, so this is that plus
 # real headroom.
 RESPONSE_TOKEN_RESERVE = 900
+# The narration labels DMCore may extract scene population from -- see _fetch_and_publish. Which of
+# these actually fire is a per-setting choice ([narration_population].triggers).
+SCENE_SETTING_LABELS = ("scenario_intro", "item_interaction:move", "item_interaction:travel")
 # Deliberately a crude chars-per-token estimate rather than a real tokenizer -- the exact count
 # doesn't matter when the whole point is to stay well clear of a hard ceiling, and importing a
 # tokenizer here would pull a model load into a module that otherwise needs none.
@@ -218,6 +221,8 @@ class LLMCore:
         self.scenario_name = ""
         self.scenario_description = ""
         self.scenario_characters = []
+        # Read by scene_length_instruction; refreshed from DMCore on scenario_loaded/scene_roster_updated.
+        self.population = {"sentences": "2-3", "hint": ""}
         self.event_bus.subscribe("scenario_loaded", self.generate_scene_intro)
         self.event_bus.subscribe("scene_roster_updated", self._on_scene_roster_updated)
         self.event_bus.subscribe("round_resolved", self.generate_round_response)
@@ -249,6 +254,27 @@ class LLMCore:
             ("entities" is NLPCore's half of the same event).
         """
         self.scenario_characters = list(data.get("characters", []))
+        self.population = dict(data.get("population") or self.population)
+
+    def scene_length_instruction(self, kind):
+        """!
+        @brief The closing instruction of a scene-setting narration prompt (scenario intro,
+            arrival, move): how many sentences to write and, where the location opts in to
+            narration-driven population, a request to show the place populated. Longer prose for
+            those locations is deliberate -- it gives DMCore's extraction pass (see
+            DM_Improvisation.py's _on_scene_narration_ready) time to run while the player reads.
+        @param kind What is being narrated, ex: "the opening scene", "arriving in this new area".
+        @return The instruction text.
+        """
+        sentences = self.population.get("sentences") or "2-3"
+        text = f"Narrate {kind} in {sentences} sentences as the Game Master."
+        hint = self.population.get("hint")
+        if hint:
+            text += (
+                f" Show the place populated ({hint}): name a few of the people, say what each "
+                f"does, and give each something specific they are doing right now."
+            )
+        return text
 
     def set_setting(self, setting):
         """!
@@ -380,6 +406,7 @@ class LLMCore:
         self.scenario_name = scenario_data.get("name", "")
         self.scenario_description = scenario_data.get("description", "")
         self.scenario_characters = scenario_data.get("characters", [])
+        self.population = dict(scenario_data.get("population") or self.population)
 
         if scenario_data.get("skip_intro"):
             # Set by DMCore's own throwaway pre-load construction (see DMCore.__init__'s own
@@ -402,7 +429,7 @@ class LLMCore:
         prompt = (
             f"The players are entering a new scenario: \"{self.scenario_name}\".\n"
             f"{self.scenario_description}{characters_text}\n"
-            f"Narrate the opening scene in 2-3 sentences as the Game Master."
+            f"{self.scene_length_instruction('the opening scene')}"
         )
         # No player input exists yet for this one -- the scenario's own name/description is
         # already a clean, undiluted query (see _queue_narration's rag_query docstring).
@@ -744,7 +771,7 @@ class LLMCore:
             return
 
         # The DM's own display label ("the Fishmonger") rather than the raw entity key
-        # ("sandpoint_townsfolk_3"), which the model otherwise parrots back as a name.
+        # ("market_person_3"), which the model otherwise parrots back as a name.
         speaker = data.get("target_label") or target
         if data.get("language_barrier"):
             prompt = self._build_language_barrier_prompt(
@@ -966,6 +993,12 @@ class LLMCore:
                 self.context_window.append({"role": "assistant", "content": llm_text, "present": present_entities})
             self.event_bus.publish("llm_response_ready", llm_text)
             self.event_bus.publish("llm_debug_updated", {"query": query_text, "response": llm_text, "label": label})
+            if label in SCENE_SETTING_LABELS:
+                # After the narration is already on screen, so extraction (a second, slower model
+                # call) overlaps with the player reading it -- see scene_length_instruction.
+                self.event_bus.publish("scene_narration_ready", {
+                    "text": llm_text, "label": label, "present_entities": present_entities,
+                })
         except Exception as e:
             self.event_bus.publish("log_error", f"LLM connection failed: {e}")
             self.event_bus.publish("llm_response_ready", "System: Could not connect to the local LLM.")

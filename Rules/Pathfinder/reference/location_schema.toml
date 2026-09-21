@@ -26,15 +26,22 @@ description = "A wide cobbled square ringed with stalls, the smell of woodsmoke 
 kind = "district"                           # Freeform, purely descriptive (like an entity's own
                                              # supertype/subtype) -- narration flavor only,
                                              # nothing branches on it.
+population = "narrated"                     # Optional. "narrated" opts this location in to
+                                             # narration-driven population: its scene-setting
+                                             # narration runs longer and shows the place
+                                             # populated, and the ordinary people it mentions
+                                             # become real, addressable characters (see
+                                             # docs/npc-generation.md). Default: nothing. Needs
+                                             # the setting's [narration_population] enabled.
+population_hint = "market stallholders, shoppers, and passers-by"
+                                             # Optional. Who belongs here -- fed to both the
+                                             # narration prompt and the extraction prompt.
+population_max = 4                          # Optional positive integer. Overrides the setting's
+                                             # max_per_scene for this location.
 
 entities = [
     { name = "town crier" },
     { name = "market stall" },
-    # count = N places N independent instances of one entry (town crier, town crier_2, ...).
-    # MUST be a plain positive integer, never a varied {min, max}/weighted choice: a crowd size
-    # rolled fresh on reload would shift every later occurrence suffix and silently orphan the
-    # saved state of anything past it (see docs/movement-scenarios.md).
-    { template = "market_regular", count = 2 },
 ]
 
 # Random encounters -- layered on top of hand-placed entities, re-rolled fresh every time

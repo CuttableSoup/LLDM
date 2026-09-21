@@ -105,5 +105,5 @@ def narrate_travel(llm_core, data):
     return (
         f"The player travels to: \"{scene_name}\".{journey_text}{polity_text}\n"
         f"{llm_core.scenario_description}{characters_text}\n"
-        f"Narrate arriving in this new place in 2-3 sentences as the Game Master."
+        f"{llm_core.scene_length_instruction('arriving in this new place')}"
     )

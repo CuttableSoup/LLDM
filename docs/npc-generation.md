@@ -115,54 +115,56 @@ overlay applies the real saved values on top.
 key, so a generated NPC's LLM-invented name is what's actually narrated.
 
 
-## Background crowds
+## Narration-driven population
 
-`background = true` on an `[[entity_template]]` is a second, cheaper generation tier: ambient
-scene population (a market's stallholders, a tavern's regulars) that exists so the scene the
-narrator is handed is actually populated. `DM_NpcGeneration.py`'s `_apply_background_npc` is the
-sibling of `_apply_npc_generation` that handles it, and the whole difference is that **nothing
-on this path ever touches the network**. `generate_npc_stats` runs synchronously in place with a
-20s timeout from inside `_instance_entities` → `_enter_location`; three ordinary generated NPCs
-in a town square would be up to a minute of dead air on first entry, every entry. A crowd has to
-cost nothing.
+The narrator populates a scene; the engine makes the people it mentions real. This replaced an
+earlier templated-crowd tier (`background = true` templates with `display_name`/`description`
+lists and a `count` field): a fixed pool of a few job titles and blurbs capped how many different
+people a town could hold and how they could differ, and a job title is not a name. Nothing
+templated remains — no `count`, no `display_name`, no crowd template — and Sandpoint's hub
+authors only a hint about who belongs there.
 
-So `_apply_background_npc` calls `generate_npc_stats(..., skip_llm_generation=True)` and takes
-only `skills`/`max_hp` from it, discarding `_fallback_npc_stats`' own `"Unnamed Stranger"` /
-"A figure whose story remains untold for now." — exactly right as a placeholder about to be
-overwritten by a save overlay, useless as a market crowd. The visible name and description come
-from the template instead, both varied-capable: `display_name` rather than `name`, because a
-template's own `name` *is* its key in `self.entity_templates` (see `load_rules`), so it can't
-also be what the player sees.
+**Data.** Three pieces, all authored, none in Python:
 
-Still tagged `generated = True`, so the whole save story is the existing one — `skills`/`max_hp`/
-`name`/`description`/`qualities`/`attitudes` already round-trip for a generated instance, and
-reloading re-instances through the same offline path just as cheaply. Also tagged
-`background = True`, which is what the containment rules key off.
+- A setting-wide `[narration_population]` table in `rules.toml` — `enabled`, `triggers` (which
+  narrations are read: `scenario_intro`, `move`, `travel`), `max_per_scene`, `prose_sentences`
+  (how long those narrations run, ex: `"5-6"`) — plus `[narration_population.limits]`:
+  `freeform` (the fields the narrator may fill in) and `max_cr_share`. Absent or `enabled =
+  false` turns the whole thing off for a setting (`Rules/Zombie/` authors none).
+- A location's `population = "narrated"` (default: nothing — a dungeon stays as authored),
+  `population_hint` (prose: who belongs here — it goes into both the narration prompt and the
+  extraction prompt), and optionally `population_max`. Rooms inherit their location's.
+- Nothing else. There is no template to author: the narrator writes the person.
 
-**Authoring rules, both enforced by `DM_Validation.py`:**
+**Flow.** `LLMCore` writes a scene-setting narration longer than usual and asks it to show the
+place populated (`scene_length_instruction`), then publishes `scene_narration_ready` after the
+prose is already on screen. `DM_Improvisation.py`'s `_on_scene_narration_ready` — on LLMCore's own
+fetch thread — makes a second model call (`AdHoc_Generation.py`'s `extract_narrated_people`) that
+reads the prose and reports the individual people in it. That call overlaps the player reading;
+it only appends to `_pending_population`. `_apply_pending_population` then runs on the game
+thread at the top of the next player-input handler, so anyone the narration introduced is
+addressable by the very next thing typed. A batch is dropped if the player left the scene first.
 
-- **A background template MUST author `[entity_template.attitudes]`.** This is the single
-  highest-consequence mistake available here. `is_hostile` (`DM_Social.py`) treats an entity with
-  no attitudes table *at all* as unconditionally hostile, and whether the game is in combat is
-  derived purely from the current target's own hostility — so a crowd that forgot its attitudes
-  would quietly put a peaceful market square into a fight. A generating template gets no such
-  rule: a hostile generated NPC is a legitimate thing to author.
-- **`count` on a location/room `entities` entry must be a plain positive integer**, never a
-  `{min, max}` or weighted choice. `_expand_entity_entries` (`DM_Rules.py`) flattens it into that
-  many independent instances, which the existing occurrence counter names `fishmonger`,
-  `fishmonger_2`, `fishmonger_3`. A crowd size rolled fresh on reload would shift every later
-  suffix, and `load_game`'s overlay silently skips a saved name that no longer exists — so a
-  reloaded save would lose entities' HP, inventory and conditions with no error at all. Variety
-  belongs in the template's varied fields, which already round-trip.
+**What the narrator controls, and what it can't.** `freeform` fields — name, occupation,
+description, race, gender, age, languages, memories — come from the narrator, so the cast is as
+varied as its prose. Skills and HP are fit to a bystander's share of the player's challenge
+rating by the same deterministic `fit_skills_to_cr` every generated creature uses. Abilities,
+behavior and hostility are never given: the tool schema's disposition enum excludes `"hostile"`
+(a model that returns one anyway is dropped, not defanged), so a narrated person structurally
+cannot fight — a narrated threat extracts to nothing. Languages are clipped to ones the setting
+has, defaulting to the polity's. Nobody is created while a live hostile is present, and nobody is
+duplicated: a narrated name whose every word appears in any existing creature's name (authored
+characters included, wherever they are) is skipped, so a narrated "Turch" is never a second Turch
+Sterglus.
 
-**Containment.** A background entity is a real, addressable, fully targetable participant. It is
-excluded only from the two places that pick someone *on the player's behalf* without being told
-who: `_get_target_name` (so `"open it"` in a populated square reaches the chest, not a fruit
-seller) and `_choose_combat_target`'s non-hostile fallback (so a scene-level `[entity.test]`
-isn't aimed at a bystander). `DM_Dialogue.py`'s addressee fallback is the one deliberate
-`include_background=True` call site — an unaddressed "ask about the weather" landing on a nearby
-townsperson is exactly right. See `docs/combat.md` for what is deliberately *not* excluded.
+The occupation doubles as an alias, so "the fishmonger" resolves to a person with their own name
+(`DM_Dialogue.py`'s literal scan), and `describe_character`/`display_label` refer to a `background`
+entity by role rather than as a name where the entity's own name is a job title.
 
-Keep a location's crowd to **4 or fewer**. Every scene entity is walked once per combat round
-(`run_round_upkeep`, and `resolve_override_target`'s per-entity candidate scan), so a crowd is
-meant to be scenery with a voice, not a cast.
+**Containment.** A narrated person carries `background = True` (plus `ad_hoc` and `source =
+"narration"`), and is a real, addressable participant, excluded only from the two places that pick
+someone *on the player's behalf* without being told who: `_get_target_name` (so `"open it"` in a
+populated square reaches the chest, not a fruit seller) and `_choose_combat_target`'s non-hostile
+fallback (so a scene-level `[entity.test]` isn't aimed at a bystander). `DM_Dialogue.py`'s addressee
+fallback and `PERSON_TARGET_INTENTS` (trade/give) are the deliberate `include_background=True`
+call sites. See `docs/combat.md` for what is deliberately *not* excluded.

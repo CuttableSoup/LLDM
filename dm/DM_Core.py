@@ -222,16 +222,21 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         # site can be called freely without republishing an unchanged scene. Must be set before
         # load_scenario() below, which enters the starting location and publishes the first one.
         self._last_scene_roster = None
+        # People the narrator put in the scene, extracted on the LLM thread and waiting to be
+        # made real on the game thread -- see ImprovisationMixin._apply_pending_population.
+        self._pending_population = []
         # The last few narration beats, verbatim, as evidence for NPC promotion (see
         # ImprovisationMixin._attempt_dialogue_promotion) -- what a materialized NPC's own
         # flavor is grounded in, so a merchant the narration just described as arguing outside
         # the tavern comes out as that merchant rather than a generic one.
         #
-        # THE RULE, and it is the whole ethical shape of this feature: this buffer grounds
-        # flavor, never triggers creation. Nothing is ever materialized because the narrator
-        # mentioned it; materialization is triggered solely by the player's own literal
-        # address phrase. If the narrator invents a hooded figure, no hooded figure exists
-        # until the player reaches for one.
+        # THE RULE, revised: this buffer still only grounds *promotion* flavor -- a person the
+        # player addresses is triggered solely by the player's own literal address phrase. But
+        # the narrator can now populate a scene it just described, for locations that opt in
+        # (population = "narrated"; see ImprovisationMixin._population_settings). That path is
+        # bounded rather than trusted: what it makes is identity only (name, look, languages,
+        # memories); skills/HP come from the engine, hostility is excluded by the tool schema,
+        # and anyone already known to the game is never duplicated.
         #
         # Deliberately DMCore's own rather than a read of LLMCore.context_window: DMCore holds
         # no reference to LLMCore (they only share an event bus) and needs this synchronously,
@@ -281,6 +286,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             "name": self._current_scene_name(),
             "description": self._current_scene_description(),
             "characters": self._describe_scenario_characters(),
+            "population": self._population_prompt_settings(),
             # Room-level presence snapshot (see DM_Dialogue.py's own module docstring and
             # LLMCore._filter_present_history) -- who was actually here to witness this
             # narration, tagged onto every DM-published narration-triggering event the same
@@ -301,6 +307,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         # DMCore's one subscription to something LLMCore produces, and its only cross-thread
         # one -- see _on_llm_response_ready.
         self.event_bus.subscribe("llm_response_ready", self._on_llm_response_ready)
+        self.event_bus.subscribe("scene_narration_ready", self._on_scene_narration_ready)
 
     def _on_turn_detected(self, data):
         """!
@@ -368,6 +375,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         # Roster backstop -- see DM_Rules.py's _publish_scene_roster. Nearly free thanks to its
         # own dirty guard, and it bounds staleness to a single turn if a future
         # scenario_entities mutation ever lands without its own hook.
+        self._apply_pending_population()
         self._publish_scene_roster()
         # Once per real player turn, regardless of whether it turns out to be item-only,
         # action-only, or mixed -- the current location/room's own "ambient" [[location.
@@ -1430,6 +1438,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             match against, so intents/travel.py resolves the destination itself from the raw
             input.
         """
+        self._apply_pending_population()
         intent = data.get("intent")
         item_name = data.get("item_name")
         input_text = data.get("input")
@@ -1545,6 +1554,16 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             self.entities, self.rules, self.event_bus,
         )
 
+    def _population_prompt_settings(self):
+        """!
+        @brief The two knobs the narration prompts read -- how long a scene-setting narration
+            should run, and what kind of people belong in this place -- as published to LLMCore
+            on scenario_loaded/scene_roster_updated. Inactive locations get the old 2-3 sentences.
+        @return {"sentences": str, "hint": str}.
+        """
+        settings = self._population_settings()
+        return {"sentences": settings["sentences"], "hint": settings["hint"]}
+
     def _on_llm_response_ready(self, narration):
         """!
         @brief Keeps the last few narration beats in self.recent_narration, as grounding for
@@ -1557,9 +1576,9 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             back what it just wrote, so no lock is needed -- but nothing heavier than an append
             belongs in this handler for exactly that reason.
 
-            Storing narration does NOT make narration authoritative: see self.recent_narration's
-            own comment in __init__ for the rule this whole feature rests on -- the narrator's
-            prose can flavor a character the player reached for, and can never conjure one.
+            Storing it here only grounds promotion flavor; whether a narration can populate a
+            scene is decided separately, by _on_scene_narration_ready -- see self.recent_narration's
+            own comment in __init__ for the rule.
         @param narration The "llm_response_ready" payload -- a bare narration string.
         """
         if not isinstance(narration, str):
@@ -1593,6 +1612,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             sentiment_score, threat_sentiment, threat_score, familiarity_sentiment,
             familiarity_score}).
         """
+        self._apply_pending_population()
         self._publish_scene_roster()
         input_text = data.get("input")
         sentiments = {
@@ -1729,8 +1749,8 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
 
     def _is_background(self, entity_name):
         """!
-        @brief Whether entity_name is an ambient crowd member (a "background = true"
-            entity_template instance -- see DM_NpcGeneration.py's _apply_background_npc).
+        @brief Whether entity_name is an ambient bystander (a narrated person, tagged
+            "background" by AdHoc_Generation.py's _apply_narrated_flavor).
             Background entities are real, addressable, fully targetable participants; they're
             excluded only from the two places that pick someone *on the player's behalf*
             without having been told who (_get_target_name/_choose_combat_target, below).

@@ -273,7 +273,8 @@ def _extract_tool_call(response):
     return tool_call["function"]["name"], arguments
 
 
-def _call_tool_or_decline(messages, tools, accepted_function_names, call_chat_completion, api_url, timeout):
+def _call_tool_or_decline(messages, tools, accepted_function_names, call_chat_completion, api_url, timeout,
+                          max_tokens=None):
     """!
     @brief Shared LLM-calling boilerplate for every function below -- calls
         call_chat_completion, extracts the tool call, and resolves whether the model picked one
@@ -294,13 +295,18 @@ def _call_tool_or_decline(messages, tools, accepted_function_names, call_chat_co
         here, preserving the existing patch("resolution.AdHoc_Generation._real_call_chat_completion", ...)
         seam.
     @param api_url/timeout Forwarded to call_chat_completion.
+    @param max_tokens Optional completion budget, forwarded only when given -- the reasoning model
+        can spend the client's 1024 default on thinking before it ever reaches the tool call
+        (finish_reason "length", no tool_calls), which reads as "unavailable". Omitted by every
+        caller whose call is small enough not to need it.
     @return (function_name, arguments) when function_name is in accepted_function_names.
             (None, reason) otherwise -- reason is "unavailable" if call_chat_completion or
             _extract_tool_call raised, else arguments.get("reason", "declined") (guarded for a
             non-dict arguments) for an explicit decline or any unrecognized function name.
     """
+    extra = {"max_tokens": max_tokens} if max_tokens else {}
     try:
-        response = call_chat_completion(api_url, messages, tools=tools, tool_choice="auto", timeout=timeout)
+        response = call_chat_completion(api_url, messages, tools=tools, tool_choice="auto", timeout=timeout, **extra)
         function_name, arguments = _extract_tool_call(response)
     except Exception:
         return None, "unavailable"
@@ -875,6 +881,203 @@ def generate_referenced_npc(
         payload, npc_keywords, target_cr, skills_catalog, hp_divisor, offense_share,
         fallback_description=_indefinite(address_phrase),
     )
+
+
+# The identity fields the narrator may fill in freely for a narrated bystander, and the schema
+# each one contributes to the extraction tool call -- see build_people_tool_schema. Skills, HP,
+# abilities, behavior and hostility are deliberately NOT here: the engine sets those (see
+# _build_creature_entity), so nothing the narrator writes can move combat balance.
+NARRATED_FREEFORM_FIELDS = {
+    "name": {"type": "string", "description": "The person's own name. If the narration gave none, invent a fitting one."},
+    "occupation": {"type": "string", "description": "What they do, one or two words (ex: fishmonger, net-mender)."},
+    "description": {"type": "string", "description": "One sentence: how they look and what they are doing right now."},
+    "race": {"type": "string"},
+    "gender": {"type": "string"},
+    "age": {"type": "integer"},
+    "languages": {"type": "array", "items": {"type": "string"}, "description": "Languages they speak."},
+    "memories": {"type": "array", "items": {"type": "string"}, "maxItems": 3,
+                 "description": "Up to three things they know or care about."},
+}
+DEFAULT_NARRATED_FREEFORM = tuple(NARRATED_FREEFORM_FIELDS)
+NARRATED_EXTRACTION_TIMEOUT = 120
+# Room for the model to reason about who is in the passage before it emits the tool call.
+NARRATED_EXTRACTION_MAX_TOKENS = 6144
+
+
+def build_people_tool_schema(npc_keywords, freeform_fields=DEFAULT_NARRATED_FREEFORM):
+    """!
+    @brief The tool payload for extract_narrated_people: report_people (an array of people, each
+        carrying whichever NARRATED_FREEFORM_FIELDS the setting allows, plus the two
+        engine-facing enum fields the engine turns into skills/HP) or decline.
+        Disposition is enum-constrained to NON_HOSTILE_DISPOSITIONS at the SCHEMA level, the same
+        structural guarantee generate_referenced_npc relies on: nothing this returns can fight.
+    @param npc_keywords {keyword_name: [skill_name, ...]}, from NPC_Generation.load_npc_keywords.
+    @param freeform_fields Which NARRATED_FREEFORM_FIELDS the narrator may fill in.
+    @return The "tools" list for call_chat_completion.
+    """
+    properties = {
+        field: NARRATED_FREEFORM_FIELDS[field]
+        for field in freeform_fields if field in NARRATED_FREEFORM_FIELDS
+    }
+    properties["name"] = NARRATED_FREEFORM_FIELDS["name"]
+    properties["keywords"] = {
+        "type": "array",
+        "items": {"type": "string", "enum": list(npc_keywords)},
+        "minItems": 1, "maxItems": 2,
+        "description": "1-2 archetype keywords that best capture what they are skilled at.",
+    }
+    properties["disposition"] = {"type": "string", "enum": list(NON_HOSTILE_DISPOSITIONS)}
+    properties["power"] = {"type": "string", "enum": list(CREATURE_POWERS)}
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "report_people",
+                "description": "Report the ordinary bystanders the narration mentions or clearly implies are present.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "people": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": properties,
+                                "required": ["name", "keywords", "disposition", "power"],
+                            },
+                        },
+                    },
+                    "required": ["people"],
+                },
+            },
+        },
+        _decline_tool_schema("Use this instead if the narration mentions no ordinary bystanders."),
+    ]
+
+
+def extract_narrated_people(
+    narration, scene_description, population_hint, present_names, max_people, target_cr,
+    npc_keywords, skills_catalog, freeform_fields=DEFAULT_NARRATED_FREEFORM,
+    call_chat_completion=None, api_url=DEFAULT_API_URL, timeout=NARRATED_EXTRACTION_TIMEOUT,
+    hp_divisor=DEFAULT_HP_DIVISOR, offense_share=0.5,
+):
+    """!
+    @brief Reads a passage of the narrator's own prose and turns the ordinary people it puts in
+        the scene into entity dicts -- the inverse of generate_referenced_npc, whose trigger is a
+        noun the player typed. Here the narrator populates the scene freely and the engine makes
+        those people real, so the cast is as varied as the prose rather than as long as a
+        template list.
+
+        What the narrator controls: whichever freeform_fields the setting allows (identity,
+        personality, languages). What it can't: skills/HP (fit to target_cr by the same
+        deterministic math every other generated creature uses), abilities/behavior (never
+        given -- the disposition enum excludes "hostile"), and anyone already present. A
+        narrated threat therefore extracts to nothing rather than to a monster.
+    @param narration The narration text to read.
+    @param scene_description The current room/location's own description.
+    @param population_hint The location's own authored "population_hint" (what kind of people
+        belong here), or "".
+    @param present_names Display names of everyone already in the scene, for dedupe.
+    @param max_people How many people to take at most.
+    @param target_cr A bystander's challenge rating -- see DM_Improvisation.py's BYSTANDER_CR_SHARE.
+    @param npc_keywords/skills_catalog See generate_referenced_npc.
+    @param freeform_fields Which NARRATED_FREEFORM_FIELDS to ask for and accept.
+    @param call_chat_completion Injectable for tests; defaults to the module's real client.
+    @return A list of entity dicts (each "ad_hoc", "background", "source" = "narration"), possibly
+            empty -- never raises.
+    """
+    if not npc_keywords or not narration or max_people < 1:
+        return []
+
+    call_chat_completion = call_chat_completion or _real_call_chat_completion
+    present_text = ", ".join(name for name in present_names if name) or "no one else"
+    hint_line = f"People who belong here: {population_hint}.\n" if population_hint else ""
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You read a passage of narration from a tabletop RPG and list the ordinary "
+                "people it puts in the scene -- shopkeepers, workers, passers-by. Never list the "
+                "player, anyone already present, a monster, or a threat. Never invent anyone "
+                "the passage does not mention or clearly imply. Each entry is ONE individual "
+                "with a personal name -- never a group, a crowd, or a pair."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Scene: {scene_description or 'unknown'}.\n"
+                f"{hint_line}"
+                f"Already present: {present_text}.\n"
+                f"Narration:\n{narration}\n"
+                f"Call report_people with at most {max_people} people the narration puts here. "
+                "Call decline if it mentions no ordinary bystanders."
+            ),
+        },
+    ]
+
+    function_name, payload = _call_tool_or_decline(
+        messages, build_people_tool_schema(npc_keywords, freeform_fields), {"report_people"},
+        call_chat_completion, api_url, timeout, max_tokens=NARRATED_EXTRACTION_MAX_TOKENS,
+    )
+    if function_name is None:
+        return []
+
+    allowed = set(freeform_fields) | {"name"}
+    people = []
+    for raw in (payload.get("people") or [])[:max_people]:
+        if not isinstance(raw, dict):
+            continue
+        occupation = (raw.get("occupation") or "").strip() if "occupation" in allowed else ""
+        fallback = _indefinite(occupation) if occupation else None
+        if not fallback and raw.get("name"):
+            fallback = f"A local named {raw.get('name')}."
+        if raw.get("disposition") == "hostile":
+            continue
+        if raw.get("disposition") not in NON_HOSTILE_DISPOSITIONS:
+            raw = {**raw, "disposition": "neutral"}
+        built = _build_creature_entity(
+            raw, npc_keywords, target_cr, skills_catalog, hp_divisor, offense_share,
+            fallback_description=fallback,
+        )
+        if not built.get("created"):
+            continue
+        entity = built["entity"]
+        if entity.get("abilities") or entity.get("behavior"):
+            continue
+        _apply_narrated_flavor(entity, raw, occupation, allowed)
+        people.append(entity)
+    return people
+
+
+def _apply_narrated_flavor(entity, raw, occupation, allowed):
+    """!
+    @brief Copies the narrator's freeform identity fields onto a mechanically-built entity,
+        keeping only the ones the setting allows. Marks it as a narrated bystander: "background"
+        (containment rules -- see DM_Core.py's _is_background) and "source" = "narration".
+        The occupation doubles as an alias so "the fishmonger" resolves to a person with their
+        own name.
+    """
+    entity["background"] = True
+    entity["source"] = "narration"
+
+    qualities = {}
+    for key in ("race", "gender", "age"):
+        if key in allowed and raw.get(key) not in (None, ""):
+            qualities[key] = raw[key]
+    if occupation:
+        qualities["occupation"] = occupation
+        entity["aliases"] = sorted({occupation.lower(), *occupation.lower().split()} - {"the", "a", "an"})
+    if qualities:
+        entity["qualities"] = qualities
+
+    if "languages" in allowed:
+        languages = [str(language).strip().lower() for language in raw.get("languages") or [] if str(language).strip()]
+        if languages:
+            entity["languages"] = languages
+    if "memories" in allowed:
+        memories = [str(memory).strip() for memory in raw.get("memories") or [] if str(memory).strip()]
+        if memories:
+            entity["memories"] = memories[:3]
 
 
 def _indefinite(phrase):

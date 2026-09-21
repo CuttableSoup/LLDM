@@ -215,6 +215,12 @@ calling it freely affordable, and means a future mutation site that forgets its 
 name list deliberately, so an entity edit that only rewrites a description still reaches the
 narrator.
 
+The payload also carries `"population"` (`{sentences, hint}`), which LLMCore reads in
+`scene_length_instruction` to write scene-setting narrations longer, and to ask for a populated
+scene, in locations that opt in to narration-driven population (`docs/npc-generation.md`); it is
+part of the dirty key, so moving between an opted-in and an ordinary location republishes even if
+the cast is unchanged.
+
 The payload's `"characters"` half is LLMCore's (`_on_scene_roster_updated`, which does nothing
 but repoint `scenario_characters`); its `"entities"` half is NLPCore's, feeding
 `set_present_entities` (see `docs/adam-improvisation.md`'s "Promotion on reference"). Deliberately

@@ -186,6 +186,25 @@ default_speed = 24
 # the initial 7D/2D pass fell short of. See scripts/calibrate_challenge_rating.py's own sibling
 # investigation for the simulator evidence that gladstone's own tier (the OLD 15D/5D numbers)
 # badly mismatches what Pathfinder's own low-CR content is actually balanced to threaten.
+# Narration-driven population. A location that opts in (population = "narrated") gets its
+# scene-setting narration (scenario intro, arrival, move) written longer and asked to show the
+# place populated; a second, slower model call then reads that prose and turns the ordinary
+# people it mentions into real, addressable characters while the player is still reading (see
+# DM_Improvisation.py's _on_scene_narration_ready). Absent or enabled = false turns the whole
+# thing off for a setting.
+[narration_population]
+enabled         = true
+triggers        = [ "scenario_intro", "move", "travel" ]   # which narrations are read
+max_per_scene   = 4                                        # narrated people alive in one scene
+prose_sentences = "5-6"                                    # how long those narrations run
+
+# What the narrator may write freely, and how strong it may make them. Skills, HP, abilities,
+# behavior and hostility are never in this list: the engine sets them, so nothing the narrator
+# writes can move combat balance. A narrated person is always a non-hostile bystander.
+[narration_population.limits]
+freeform     = [ "name", "occupation", "description", "race", "gender", "age", "languages", "memories" ]
+max_cr_share = 0.25                                        # of the player's challenge rating
+
 [character_creation]
 pool_dice = 10
 max_allocation_per_skill = 3

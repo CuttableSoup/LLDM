@@ -289,14 +289,15 @@ just because it resolved against a target that was present.
 The problem this closes: a location can describe a populated street while instancing nobody, so
 the narrator is asked to describe a crowd that doesn't exist — and obliges, inventing people the
 player then can't talk to. `Rules/Pathfinder/`'s own `sandpoint` hub was exactly this, an
-`entities = []` beneath a description promising market vendors. Background crowds (see
-`docs/npc-generation.md`) are the primary fix; promotion is what covers the rest, when the player
-reaches for someone the authored crowd doesn't include.
+`entities = []` beneath a description promising market vendors. Narration-driven population (see
+`docs/npc-generation.md`) is the primary fix; promotion is what covers the rest, when the player
+reaches for someone the narrator didn't introduce.
 
-**The rule the whole feature rests on: the narrator never writes to the world.** Narration is
-downstream of state and stays there. What triggers promotion is always the player's own literal
-words. If the narrator invents a hooded figure, no hooded figure exists until the *player* says
-"talk to the hooded figure."
+**The rule promotion rests on: its trigger is always the player's own literal words.** If the
+narrator invents a hooded figure, promotion never creates one until the *player* says "talk to
+the hooded figure." (A separate, opt-in path lets the narrator populate a scene it just
+described — see "Narration-driven population" in `docs/npc-generation.md` — but that is bounded
+to identity fields and non-hostile bystanders, and never reads dialogue or combat narration.)
 
 Four layers decide, cheapest and most literal first, each able to veto alone
 (`DM_Core.py`'s `_promote_addressed_npc`):

@@ -77,18 +77,11 @@ Entirely setting-agnostic (no `Rules/Fantasy`-specific assumption anywhere), so 
 unchanged to `Rules/Zombie/`.
 
 
-## Fields added for background crowds
+## Fields for narration-driven population
 
-`background` (bool) and `display_name` (str, or a varied weighted choice) on an
-`[[entity_template]]`; `aliases` (list of strings) on any `[[entity]]`/`[[entity_template]]`;
-`count` (positive int) on a location/room `entities` entry. See `docs/npc-generation.md` for what
-each does.
-
-All four are listed in `DM_Validation.py`'s own spec tables, and that matters more than it looks:
-`SCALAR_FIELD_TYPES` is a **type spec, not a whitelist** — a field absent from it entirely is
-silently never type-checked. Leaving `background` out would mean a typo'd `backround = true`
-failed *open*: the template would read as an ordinary generating one and pay a blocking 20s
-network call on every location entry, with nothing anywhere saying why. Two further rules are
-enforced beyond types: a `background` template must author `[entity_template.attitudes]`
-(`_validate_entity_template_shape`), and `count` must be a plain positive integer
-(`_check_entity_entries`).
+`aliases` (list of strings) on any `[[entity]]`; `population` (`"narrated"`/`"none"`),
+`population_hint` (string) and `population_max` (positive int) on a `[[location]]`; and a
+setting-wide `[narration_population]` table in `rules.toml`. See `docs/npc-generation.md` for what
+each does. `DM_Validation.py`'s `_validate_location_shapes` type-checks the location fields and
+flags `population = "narrated"` in a setting whose `[narration_population]` is absent or disabled,
+since that would silently do nothing.
