@@ -1,0 +1,603 @@
+# Status/condition definitions for the Pathfinder setting -- split out of rules.toml so
+# the (large) [[condition]] catalog lives on its own. load_rules merges every *.toml in a
+# setting directory by top-level key, so nothing else changes: a [[condition]] table
+# must simply appear in exactly one file here (a second file authoring "condition" would
+# overwrite this one, not extend it).
+
+[[condition]]
+name = "stunned"
+modifier = { dice = -1, pips = 0, bonus = 0 }
+
+# Applied by DM_Travel.py's own _roll_night_watch (docs/downtime.md's "Night watch and
+# surprise") to every is_party member when a night block's own hostile encounter catches a
+# failed (or unattempted, for a solo traveler) watch -- a heavier penalty than "stunned" since
+# it represents being caught asleep/unprepared, not just dazed mid-fight. Applied with
+# duration = "rounds", length = 1, so run_round_upkeep's own generic condition tick
+# (Combat_Resolution.tick_condition_durations) clears it the first round it's carried into.
+[[condition]]
+name = "surprised"
+modifier = { dice = -2, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "wounded"
+modifier = { dice = -1, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "severe"
+modifier = { dice = -2, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "incapacitated"
+modifier = { dice = -3, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "mortal"
+modifier = { dice = -3, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "dead"
+modifier = { dice = 0, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "locked"
+modifier = { dice = 0, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "jammed"
+modifier = { dice = 0, pips = 0, bonus = 0 }
+
+# A per-round upkeep effect, not a roll modifier -- run_round_upkeep (DM_Status.py) rolls
+# upkeep_heal once per combat round for every entity carrying this condition and heals it,
+# unless upkeep_blocked_by_tags overlaps whatever damage tags it was hit with this same round
+# (recorded by calculate_damage, DM_Combat.py -- see creatures.toml's "troll", which seeds this
+# permanently via its own [entity.conditions.regenerating]). Real Pathfinder Trolls have
+# Regeneration 5 (fire and acid), not fire alone -- corrected from an earlier "fire only, 10"
+# version of this entry that predates the Pathfinder split and was never actually checked
+# against the Bestiary.
+[[condition]]
+name = "regenerating"
+upkeep_heal = { dice = 2, pips = 0, bonus = 0 }
+upkeep_blocked_by_tags = [ "fire", "acid" ]
+
+# The conditions maneuvers.toml's universal abilities apply via their own on_pass programs --
+# what gives "shaken"/"prone"/"sundered_weapon" real mechanical teeth rather than
+# narrated-only flavor, the same way "stunned"/"wounded" already work.
+[[condition]]
+name = "shaken"
+modifier = { dice = -1, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "prone"
+modifier = { dice = -1, pips = 0, bonus = 0 }
+
+# "disarmed" is deliberately NOT a [[condition]] -- being disarmed is dropping your weapon, an
+# instantaneous equipment change (unequip + place in the room), not a lasting debuff to model as
+# a condition. maneuvers.toml's own "disarm" maneuver is commented out until that unequip/drop
+# program op actually exists; no [[condition]] entry is needed until it applies one again.
+
+[[condition]]
+name = "sundered_weapon"
+modifier = { dice = -1, pips = 0, bonus = 0 }
+
+# maneuvers.toml's own "bull rush"/"grapple"/"dirty trick"/"feint" -- Pathfinder's own CMB
+# maneuvers, each applying its own real dice penalty via its on_pass program the same way
+# trip/disarm/sunder already do.
+[[condition]]
+name = "staggered"
+modifier = { dice = -1, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "grappled"
+modifier = { dice = -2, pips = 0, bonus = 0 }
+
+# "applies_to" (a list of skill names) scopes this condition's own modifier to only those
+# skills' rolls -- get_condition_modifier (Combat_Resolution.py) skips it entirely for any
+# other skill. Pathfinder's Dazzled is sight-only; without "applies_to" this would otherwise
+# be an ordinary global Pattern C penalty (see pathfinder_mapping.toml's condition_pattern "C").
+[[condition]]
+name = "dazzled"
+modifier = { dice = -1, pips = 0, bonus = 0 }
+applies_to = [ "observation" ]
+
+[[condition]]
+name = "flat_footed"
+modifier = { dice = -1, pips = 0, bonus = 0 }
+
+# maneuvers.toml's own "pin" -- only ever applied to an already-"grappled" target. Pathfinder's
+# real "pinned" condition doesn't just penalize a roll, it stops the target from acting at all
+# (beyond trying to escape) -- prevents_action = true is the generic mechanism for that
+# (is_action_prevented, DM_Status.py), checked by DM_Core.py's _resolve_roll (the player's own
+# turn -- ActionPreventedOutcome, no roll) and DM_Combat.py's resolve_behavior_action (a
+# creature/ally's own turn -- treated exactly like "no behavior currently matches"). "pinned"
+# is the first (and, today, only) [[condition]] to author this; the modifier stays too, in
+# case a future mechanism (ex: an opposed escape attempt) ever rolls against a pinned target
+# directly rather than just skipping their turn outright.
+[[condition]]
+name = "pinned"
+modifier = { dice = -4, pips = 0, bonus = 0 }
+prevents_action = true
+
+# A presence flag only, same "no modifier at all" shape "locked"/"jammed" already use -- being
+# cursed (equipment.toml's cursed dagger, via its own on_interact.equip) is a narrative/mechanical
+# fact read elsewhere (a future curse-specific check), not itself a dice penalty.
+[[condition]]
+name = "cursed"
+subtype = "curse"
+modifier = { dice = 0, pips = 0, bonus = 0 }
+
+# creatures.toml's troll applies this to itself via its own on_damage program once it drops
+# below half HP without having been burned first -- see creatures.toml's own "A troll's temper".
+[[condition]]
+name = "enraged"
+modifier = { dice = 1, pips = 0, bonus = 0 }
+
+# A per-round upkeep effect (Pattern E, same shape "regenerating" already uses), applied by
+# "flame wall zone" below to whoever currently shares spells.toml's "flame wall" own band --
+# duration = "rounds"/length = 1 there is what makes this a zone rather than a one-time hit: it
+# lapses the instant an entity is no longer co-band, reapplied fresh each round they stay put.
+[[condition]]
+name = "burning"
+upkeep_damage = { dice = 2, pips = 0, bonus = 0 }
+
+# Pathfinder's Filth Fever (Core Rulebook) -- the "periodic_test" shipped worked example
+# (reference/pathfinder_mapping.toml's Poison/Dying-Stable-Disabled rows), applied
+# by creatures.toml's "giant rat" bite. Real Filth Fever: Fortitude DC 12; onset 1d3 days;
+# frequency 1/day; 1d3 Dex/1d3 Con damage on a failed save; cured by 2 CONSECUTIVE successes.
+# "onset" is flattened from "1d3 days" to a fixed 2 -- the same "flatten a die roll into one
+# authored number" precedent get_concealment's own miss_chance already sets; the engine also
+# doesn't separately model Pathfinder's own "initial exposure save" (whether you catch it at
+# all on the bite that exposes you) -- on_hit_condition's exposure is unconditional, and the
+# onset-then-first-save flow below is the first real chance to shake it off, an honest
+# simplification of the same shape rather than a second, redundant roll. Dex/Con ability damage
+# is mapped onto "finesse"/"fortitude" -- literal skills, not a whole [[skill_group]] drained at
+# once, the same precedent the shipped "energy drained" condition already sets (a [[skill_group]]
+# is for a roll-time modifier scoped across a cluster of rolls, not a permanent stat loss).
+# supertype/subtype classify this as an "affliction"/"disease" -- matches_supertype_or_subtype
+# (reused unchanged against the condition catalog, not just the entity one) is what lets
+# spells.toml's "cure disease" remove whichever disease is active without naming it.
+[[condition]]
+name = "filth fever"
+supertype = "affliction"
+subtype = "disease"
+
+[condition.periodic_test]
+skill = "fortitude"
+difficulty = 12
+cure_after_successes = 2
+
+[condition.periodic_test.onset]
+unit = "days"
+length = 2
+
+[condition.periodic_test.interval]
+unit = "days"
+length = 1
+
+[condition.periodic_test.on_fail]
+drain = [
+    { skill = "finesse", dice = 1, pips = 0 },
+    { skill = "fortitude", dice = 1, pips = 0 },
+]
+
+# reference/pathfinder_mapping.toml's condition_pattern "A" recipe, verbatim -- prevents_action
+# stops the entity acting on its own turn at all (ActionPreventedOutcome for the player,
+# "no behavior matched" for a creature/ally); the modifier stays alongside it in case a future
+# mechanism ever rolls AGAINST a paralyzed target directly (ex: a coup de grace check) rather
+# than just skipping its turn. Applied by creatures.toml's "ghoul" via on_hit_condition -- the
+# engine has no mechanism for a target's own save to negate an on-hit condition the way
+# Pathfinder's real DC 13 Fortitude negates does, so that save is approximated as a flat chance
+# on the ability itself instead (see that entity's own comment).
+[[condition]]
+name = "paralyzed"
+prevents_action = true
+modifier = { dice = -99, pips = 0, bonus = 0 }
+
+# A combat poison (Pathfinder's own "frequency 1/round for 4 rounds"), distinct from filth
+# fever's disease shape only in cadence -- periodic_test's onset/interval both take "rounds" as
+# a unit just as well as "days" (ticked from run_round_upkeep instead of the block clock; see
+# reference/pathfinder_mapping.toml's own Poison/Disease row). onset length 0 means the first
+# save happens the same round it's applied, matching a real injury poison's lack of any delay.
+# No explicit modeling of the real "for 4 rounds" hard cap -- cure_after_successes = 1 (a single
+# passed save cures it outright) is already more lenient than that cap, an honest
+# simplification rather than tracking a separate tick counter. Applied by creatures.toml's
+# "giant spider" bite.
+[[condition]]
+name = "giant spider venom"
+supertype = "affliction"
+subtype = "poison"
+
+[condition.periodic_test]
+skill = "fortitude"
+difficulty = 14
+cure_after_successes = 1
+
+[condition.periodic_test.onset]
+unit = "rounds"
+length = 0
+
+[condition.periodic_test.interval]
+unit = "rounds"
+length = 1
+
+[condition.periodic_test.on_fail]
+drain = [ { skill = "strength", dice = 1, pips = 0 } ]
+
+# Same periodic_test shape as "giant spider venom" above, just draining "finesse" (Dexterity
+# damage) instead of "strength" -- creatures.toml's "monitor lizard" bite.
+[[condition]]
+name = "monitor lizard venom"
+supertype = "affliction"
+subtype = "poison"
+
+[condition.periodic_test]
+skill = "fortitude"
+difficulty = 14
+cure_after_successes = 1
+
+[condition.periodic_test.onset]
+unit = "rounds"
+length = 0
+
+[condition.periodic_test.interval]
+unit = "rounds"
+length = 1
+
+[condition.periodic_test.on_fail]
+drain = [ { skill = "finesse", dice = 1, pips = 0 } ]
+
+# Imp/quasit poison -- same periodic_test shape again, Fortitude DC 13, draining "finesse".
+# Kept as two separate entries even though they're numerically close (an imp's own cure is 1
+# save, a quasit's is 2) rather than collapsing them into one shared condition -- the same "a
+# held creature narrates differently from an asleep one" precedent conditions.toml's own miss_chance
+# conditions above already established for otherwise-similar effects. Applied by creatures.toml's
+# "imp"/"quasit".
+[[condition]]
+name = "imp poison"
+supertype = "affliction"
+subtype = "poison"
+
+[condition.periodic_test]
+skill = "fortitude"
+difficulty = 13
+cure_after_successes = 1
+
+[condition.periodic_test.onset]
+unit = "rounds"
+length = 0
+
+[condition.periodic_test.interval]
+unit = "rounds"
+length = 1
+
+[condition.periodic_test.on_fail]
+drain = [ { skill = "finesse", dice = 1, pips = 0 } ]
+
+[[condition]]
+name = "quasit poison"
+supertype = "affliction"
+subtype = "poison"
+
+[condition.periodic_test]
+skill = "fortitude"
+difficulty = 13
+cure_after_successes = 2
+
+[condition.periodic_test.onset]
+unit = "rounds"
+length = 0
+
+[condition.periodic_test.interval]
+unit = "rounds"
+length = 1
+
+[condition.periodic_test.on_fail]
+drain = [ { skill = "finesse", dice = 1, pips = 0 } ]
+
+# Same periodic_test shape again, Fortitude DC 15, draining "finesse" -- creatures.toml's
+# "ettercap" bite.
+[[condition]]
+name = "ettercap venom"
+supertype = "affliction"
+subtype = "poison"
+
+[condition.periodic_test]
+skill = "fortitude"
+difficulty = 15
+cure_after_successes = 2
+
+[condition.periodic_test.onset]
+unit = "rounds"
+length = 0
+
+[condition.periodic_test.interval]
+unit = "rounds"
+length = 1
+
+[condition.periodic_test.on_fail]
+drain = [ { skill = "finesse", dice = 1, pips = 0 } ]
+
+# Pathfinder's Energy Drain (a shadow's own Strength-damage touch) -- the Pattern F "drain"
+# recipe reference/pathfinder_mapping.toml's own row documents verbatim, permanently subtracting
+# from the target's base skill dice/pips the first time it's gained (Combat_Resolution.py's own
+# _apply_drain_if_gained, restored in full by dismiss_condition). A shadow's real Strength damage
+# has no listed saving throw at all -- unlike "level drained" below, its own on_hit_condition
+# chance is 100, not an approximated save.
+[[condition]]
+name = "energy drained"
+drain = { skill = "strength", dice = 1, pips = 0 }
+
+# Pathfinder's own generic negative-level energy drain (a wight's slam) -- distinct from
+# "energy drained" above (a shadow's own Strength-specific drain) since a negative level saps a
+# creature's overall vitality rather than one specific ability score; "fortitude" stands in for
+# that broader vitality hit. Real negative-level drain allows a DC 14 Fortitude save to resist,
+# approximated the same way "ghoul"'s own paralysis chance is -- on_hit_condition has no
+# mechanism to roll a target's own save before applying.
+[[condition]]
+name = "level drained"
+drain = { skill = "fortitude", dice = 1, pips = 0 }
+
+# Pathfinder's mind-affecting Charm/Sleep line -- a shared subtype = "mind-affecting" is what
+# lets a single immune_conditions = { subtypes = ["mind-affecting"] } (see creatures.toml's
+# "doppelganger") resist the whole family at once, rather than naming "charm"/"asleep"
+# individually. "charmed" carries no modifier of its own -- a real Charm Person's actual effect
+# is an attitude shift, not a dice penalty, so this is a presence flag only, same shape "cursed"
+# above already uses. "asleep" is the Pattern A full-incapacitation recipe (reference/pathfinder_
+# mapping.toml's own condition_pattern "A"), identical in shape to "paralyzed" above.
+[[condition]]
+name = "charmed"
+supertype = "affliction"
+subtype = "mind-affecting"
+modifier = { dice = 0, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "asleep"
+supertype = "affliction"
+subtype = "mind-affecting"
+prevents_action = true
+modifier = { dice = -99, pips = 0, bonus = 0 }
+
+# Fast Healing N -- distinct from "regenerating" above in exactly the one way that matters:
+# real Pathfinder fast healing (unlike regeneration) isn't suppressed by any particular damage
+# type, so this carries no upkeep_blocked_by_tags at all. Seeded permanently the same way
+# "regenerating" is, via [entity.conditions."fast healing"] -- creatures.toml's "imp"/"quasit"
+# (both "fast healing 2").
+[[condition]]
+name = "fast healing"
+upkeep_heal = { dice = 1, pips = 1, bonus = 0 }
+
+# Pathfinder's Polymorph/Baleful Polymorph line -- the "form" field (Combat_Resolution.py's own
+# _apply_form_override) is the "form override" mechanism reference/
+# pathfinder_mapping.toml's own Polymorph row used to flag as having no engine equivalent: on
+# first gain it snapshots FORM_OVERRIDE_FIELDS (name/description/supertype/subtype/skills/
+# abilities/max_hp/medium/damage_value/damage_tags/tags/resistance_*/immunity_tags/
+# vulnerability_*) off the target, overwrites them with the named entity's own values, and
+# dismiss_condition restores the exact snapshot the moment this condition ends -- gear,
+# inventory, currency, attitudes, and current hp all stay with the person, not the form (see
+# FORM_OVERRIDE_FIELDS' own comment). subtype = "transmutation" classifies this by KIND, the
+# same way "filth fever" above classifies itself as a "disease" -- spells.toml's own "break
+# enchantment" targets {subtypes = ["transmutation"]} without ever naming either condition
+# below directly, the same trick "cure disease" already uses against filth fever.
+[[condition]]
+name = "polymorphed"
+subtype = "transmutation"
+form = "coyote"
+
+# A beneficial counterpart sharing the exact same mechanism, authored as its own condition (a
+# fixed "form" per condition rather than a caster's free choice of any creature -- the engine
+# has no per-cast form-picking UI, the same static-TOML-spell simplification already accepted
+# elsewhere) so the same primitive covers both directions of a Polymorph line, not just the
+# hostile one.
+[[condition]]
+name = "wild shape"
+subtype = "transmutation"
+form = "wild boar"
+
+# Pathfinder's six ability-score buffs (Bull's Strength etc., all a flat +4), converted for
+# spells_pathfinder.toml's own attribute-buff spells: applies_to a rules.toml [[skill_group]]
+# rather than one named skill, the same "buff every skill an ability score governs at once"
+# trick the module note above [[skill_group]] "strength"/"dexterity" already documents. +4 PF ->
+# 2D here follows the same "~1 D6 die per 2 PF points" scale spells_pathfinder.toml's own header
+# documents for its buff-spell conversions generally.
+[[condition]]
+name = "bull's strength"
+modifier = { dice = 2, pips = 0, bonus = 0 }
+applies_to = [ "strength" ]
+
+[[condition]]
+name = "cat's grace"
+modifier = { dice = 2, pips = 0, bonus = 0 }
+applies_to = [ "dexterity" ]
+
+[[condition]]
+name = "bear's endurance"
+modifier = { dice = 2, pips = 0, bonus = 0 }
+applies_to = [ "constitution" ]
+
+[[condition]]
+name = "eagle's splendor"
+modifier = { dice = 2, pips = 0, bonus = 0 }
+applies_to = [ "charisma" ]
+
+[[condition]]
+name = "fox's cunning"
+modifier = { dice = 2, pips = 0, bonus = 0 }
+applies_to = [ "intelligence" ]
+
+[[condition]]
+name = "owl's wisdom"
+modifier = { dice = 2, pips = 0, bonus = 0 }
+applies_to = [ "wisdom" ]
+
+# Global (no applies_to) since Pathfinder's own +2/+4 morale bonus applies to "attack rolls,
+# saves, and skill checks" -- essentially everything, not one skill_group's worth.
+[[condition]]
+name = "heroism"
+modifier = { dice = 1, pips = 0, bonus = 0 }
+
+# Drops Heroism, Greater's own fear-immunity/temporary-hp half -- the flat morale bonus is the
+# one piece a condition.modifier can honestly capture; the rest would need its own
+# immunity_tags/max_hp-bonus mechanism this simplification pass isn't building per-spell.
+[[condition]]
+name = "greater heroism"
+modifier = { dice = 2, pips = 0, bonus = 0 }
+
+# Drops Haste's own extra-attack/speed-increase half (Pattern B, no action-economy hook per
+# pathfinder_mapping.toml's own condition_pattern "B") -- the +1 attack/AC/Reflex portion is what
+# survives as a flat global modifier.
+[[condition]]
+name = "hasted"
+modifier = { dice = 0, pips = 2, bonus = 0 }
+
+# Drops Rage's own Constitution/Will-save/AC-penalty clauses -- the Strength half (scoped via
+# applies_to, not global) is the one piece this simplification pass keeps.
+[[condition]]
+name = "raging"
+modifier = { dice = 1, pips = 0, bonus = 0 }
+applies_to = [ "strength" ]
+
+[[condition]]
+name = "resistant"
+modifier = { dice = 0, pips = 2, bonus = 0 }
+
+# True Strike's own +20 attack-roll bonus, folded to this engine's scale -- deliberately huge and
+# deliberately short (a 1-round duration on the spells_pathfinder.toml entry itself), matching
+# the real spell's own "guaranteed hit on your very next swing" shape rather than a lingering buff.
+[[condition]]
+name = "true strike"
+modifier = { dice = 5, pips = 0, bonus = 0 }
+
+# Mind-affecting control (Phase 1 of the non-damage conversion pass, second batch). Five
+# distinct Pattern A (docs/combat.md's "Status and conditions" -- prevents_action = true stops
+# the entity acting on its own turn entirely) conditions, kept separately named per source effect
+# (matching "pinned"/"prone"/"flat_footed" above staying distinct despite similar shapes) even
+# though they're mechanically identical -- a held creature narrates differently from an asleep
+# or dazed one. modifier stays alongside prevents_action on each, same "in case a future
+# mechanism ever rolls against this entity directly" reasoning "pinned" already documents.
+[[condition]]
+name = "asleep"
+modifier = { dice = -4, pips = 0, bonus = 0 }
+prevents_action = true
+
+[[condition]]
+name = "held"
+modifier = { dice = -4, pips = 0, bonus = 0 }
+prevents_action = true
+
+[[condition]]
+name = "laughing"
+modifier = { dice = -4, pips = 0, bonus = 0 }
+prevents_action = true
+
+[[condition]]
+name = "dazed"
+modifier = { dice = -4, pips = 0, bonus = 0 }
+prevents_action = true
+
+[[condition]]
+name = "dancing"
+modifier = { dice = -4, pips = 0, bonus = 0 }
+prevents_action = true
+
+# Hypnotism's own "fascinated" -- Pathfinder's real Fascinate is a behavior-requirement shape
+# ("stops acting unless threatened," per pathfinder_mapping.toml's own condition_pattern "C" row
+# for it) rather than a flat penalty, but this engine has no per-condition behavior-gate hook to
+# attach that to for the player's own turn -- prevents_action is the honest stand-in already used
+# for every other "loses their turn" effect in this batch.
+[[condition]]
+name = "fascinated"
+modifier = { dice = -4, pips = 0, bonus = 0 }
+prevents_action = true
+
+# override_target = "random" hijacks WHO an NPC's turn is aimed at (resolve_override_target,
+# folded into resolve_behavior_action) -- NPC-only, per pathfinder_mapping.toml's own "Confused"
+# row; a Confused player would need the player's own free-text input scrambled, out of scope.
+[[condition]]
+name = "confused"
+override_target = "random"
+
+# A second Fear-ladder tier alongside the existing "shaken" (-1D) -- Pathfinder's own Frightened
+# is one step worse than Shaken, same escalation pathfinder_mapping.toml's own condition_pattern
+# "C" row describes ("three severities of the same Pattern C condition").
+[[condition]]
+name = "frightened"
+modifier = { dice = -2, pips = 0, bonus = 0 }
+
+# Ray of Enfeeblement/Touch of Idiocy -- a temporary ability-score penalty, scoped via applies_to
+# to the one rules.toml [[skill_group]] each Pathfinder ability score maps onto (the same
+# skill_group trick the positive attribute buffs above use, just negative). Touch of Idiocy's
+# real Int/Wis/Cha triple penalty is narrowed to intelligence alone -- an honest simplification
+# rather than enumerating three skill_groups for one spell.
+[[condition]]
+name = "enfeebled"
+modifier = { dice = -1, pips = 0, bonus = 0 }
+applies_to = [ "strength" ]
+
+[[condition]]
+name = "idiotic"
+modifier = { dice = -1, pips = 0, bonus = 0 }
+applies_to = [ "intelligence" ]
+
+# Feeblemind's own permanent Int/Cha collapse -- drain = {skill, dice, pips} (Combat_Resolution.py)
+# is the permanent-base-stat-mutation primitive pathfinder_mapping.toml's own "Energy Drained"
+# row already established, reused here instead of an ordinary duration-limited modifier. Targets
+# "arcane" as the one literal skill standing in for Intelligence (this engine has no separate
+# attribute layer to drain directly), the same single-skill-proxy simplification "idiotic" above
+# uses for Touch of Idiocy.
+[[condition]]
+name = "feebleminded"
+drain = { skill = "arcane", dice = 3, pips = 0 }
+
+# Two more triggered-symbol effects (Symbol of Pain/Weakness) alongside the reused "frightened"/
+# "asleep"/"dazed"/"confused" conditions above -- global for "in_pain" (Pathfinder's own -4 to
+# checks/attacks/saves has no single skill_group to scope to), scoped for "weakened" (a harsher
+# tier than "enfeebled" above, matching Symbol of Weakness's own stronger Str penalty).
+[[condition]]
+name = "in_pain"
+modifier = { dice = -2, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "weakened"
+modifier = { dice = -2, pips = 0, bonus = 0 }
+applies_to = [ "strength" ]
+
+# Symbol of Death's own killing blast -- a dedicated upkeep_damage condition rather than reusing
+# the much weaker "burning" (2D/round): duration = "rounds"/length = 1 on the matching [[status]]
+# still makes this an instant one-time blast, same "warding glyph blast" trick, just sized to
+# match a real 8th-level spell instead of trivializing it into a minor burn.
+[[condition]]
+name = "death rune blast"
+upkeep_damage = { dice = 10, pips = 0, bonus = 0 }
+
+# Illusions-with-a-real-combat-effect (Phase 2 of the non-damage conversion pass, first batch) --
+# each a Pattern F miss_chance condition (reference/pathfinder_mapping.toml's own "Invisible" row:
+# get_concealment/resolve_opposed_action let an otherwise-successful attack still whiff outright),
+# applied by spells_pathfinder.toml's matching self-buff spell the same way "bull's strength"/
+# "heroism" already apply their own condition via on_hit_condition. Kept as five separate names
+# despite three of them sharing the identical 50 value -- the same "a held creature narrates
+# differently from an asleep one" reasoning "asleep"/"held"/"laughing"/"dazed"/"dancing" above
+# already established for otherwise-identical conditions.
+[[condition]]
+name = "invisible"
+miss_chance = 50
+
+[[condition]]
+name = "blurred"
+miss_chance = 20
+
+[[condition]]
+name = "displaced"
+miss_chance = 50
+
+# 50 here isn't a re-use of "invisible"'s own number so much as the same number arrived at from a
+# different real-spell mechanic -- see spells_pathfinder.toml's own "mirror image" spell comment
+# for the one-image-at-CL3 derivation.
+[[condition]]
+name = "mirror image"
+miss_chance = 50
+
+# Flattens Blink's whole "half-shifted onto the Ethereal Plane" shape down to the one number that
+# actually maps onto an existing field -- see spells_pathfinder.toml's own "blink" spell comment
+# for what got dropped along the way.
+[[condition]]
+name = "blinking"
+miss_chance = 50

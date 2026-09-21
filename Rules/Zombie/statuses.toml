@@ -1,0 +1,73 @@
+# Status (wound-ladder/trigger) definitions for the Zombie setting -- split out of rules.toml so
+# the [[status]] table lives on its own. load_rules merges every *.toml in a
+# setting directory by top-level key, so nothing else changes: a [[status]] table
+# must simply appear in exactly one file here (a second file authoring "status" would
+# overwrite this one, not extend it).
+
+[[status]]
+name = "bruised"
+trigger = "on_damage"
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.81 },
+    { field = "hp_per_remain", operator = "<=", value = 0.99 },
+]
+description = "Took a glancing hit -- a scratch, a bruise, nothing that slows you down."
+
+[[status]]
+name = "stunned"
+trigger = "on_damage"
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.60 },
+    { field = "hp_per_remain", operator = "<=", value = 0.80 },
+]
+apply = { condition = "stunned", duration = "rounds", length = 1, dismiss = "" }
+description = "A real hit -- a raked claw, a solid bite. It stings, and it's bleeding."
+
+[[status]]
+name = "wounded"
+trigger = "on_damage"
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.40 },
+    { field = "hp_per_remain", operator = "<=", value = 0.59 },
+]
+apply = { condition = "wounded", duration = "permanent", dismiss = "" }
+description = "A deep bite or a torn-open gash. This needs a medkit, not a bandage."
+
+[[status]]
+name = "severe"
+trigger = "on_damage"
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.20 },
+    { field = "hp_per_remain", operator = "<=", value = 0.39 },
+]
+apply = { condition = "severe", duration = "permanent", dismiss = "" }
+description = "Mauled badly -- torn muscle, maybe a cracked rib. Every movement hurts."
+
+[[status]]
+name = "incapacitated"
+trigger = "on_damage"
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.10 },
+    { field = "hp_per_remain", operator = "<=", value = 0.19 },
+]
+apply = { condition = "incapacitated", duration = "permanent", dismiss = "" }
+description = "Barely standing -- blood loss and shock are setting in fast."
+
+[[status]]
+name = "mortal"
+trigger = "on_damage"
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+    { field = "hp_per_remain", operator = "<=", value = 0.09 },
+]
+apply = { condition = "unconscious", duration = "permanent", dismiss = "" }
+description = "Down and not getting back up without help -- someone needs to pull you out."
+
+[[status]]
+name = "dead"
+trigger = "on_damage"
+requirements = [
+    { field = "hp_per_remain", operator = "==", value = 0 },
+]
+apply = { condition = "dead", duration = "permanent", dismiss = "resurrection" }
+description = "Torn apart. There's no coming back from this."

@@ -478,7 +478,7 @@ class TravelMixin(DMCoreProtocol):
             make traveling alone strictly safer than with company, inverting the usual "safety
             in numbers" logic this design deliberately keeps).
 
-            A failed (or skipped) watch applies "surprised" (rules.toml's own [[condition]]) to
+            A failed (or skipped) watch applies "surprised" (conditions.toml's own [[condition]]) to
             every present is_party member -- the whole party was caught off guard, not just
             whoever stood watch -- cleared after that fight's own first round of upkeep
             (Combat_Resolution.tick_condition_durations, called from run_round_upkeep,

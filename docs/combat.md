@@ -46,14 +46,14 @@ literally types the suffixed key. `_apply_target_redirect`'s own
 `_resolve_named_instance_ambiguity` (`DM_Core.py`) corrects for this when the matched name has
 living same-family siblings in the scene: it re-checks the turn's raw input for an ordinal
 (`"the second wolf"`), `"other"`/`"another"`, or a wounded/healthy word (via `hp_per_remain`,
-gated at the same `0.40` cutoff `rules.toml`'s `"wounded"` tier uses), falling back to the naive
+gated at the same `0.40` cutoff `statuses.toml`'s `"wounded"` tier uses), falling back to the naive
 match otherwise. A name with no live duplicates short-circuits immediately.
 
 A behavior entry's `action` is either an ability name or one of two reserved movement words,
 `"advance"`/`"retreat"` (`MOVEMENT_ACTIONS`, `DM_Combat.py`), routed to `move_toward_or_away`
 instead of an ability lookup. An explicit `"retreat"` entry is how a creature values its own
 life — checked ahead of its attack entry, ex: `debug.toml`'s wolf flees once `hp_per_remain`
-drops under 0.40 (the same cutoff `rules.toml`'s `"wounded"` tier bottoms out at); an
+drops under 0.40 (the same cutoff `statuses.toml`'s `"wounded"` tier bottoms out at); an
 undead/construct entity has no such entry and fights on regardless. Separately,
 `resolve_behavior_action` falls back to `"advance"` on its own whenever its chosen action can't
 currently reach its target (`is_in_range`) — closing distance instead of standing idle.
@@ -183,7 +183,7 @@ interaction_response` path every other free-standing intent already uses.
 
 ## Status and conditions
 
-`rules.toml`'s `[[status]]` table drives derived conditions. Each entry has:
+`statuses.toml`'s `[[status]]` table drives derived conditions. Each entry has:
 - `trigger` — when to evaluate it; only `"on_damage"` is wired today, called from both
   `apply_damage` and `apply_healing` (see "Damage and healing").
 - `requirements` — a list of entries, ALL of which must hold. Each entry is either a plain
@@ -267,7 +267,7 @@ opposed roll, this applies independently to each side — the defender's own `ac
 reduce *their* roll the same way, even though `dice_penalty` itself (the multi-action cost)
 never touches the defender's side (see "Multiple actions"). This is what makes the wound
 track's own conditions (`stunned`/`wounded`/`severe`/`incapacitated`/`mortal`, each with a
-`[[condition]]` entry already authored in `rules.toml`) mechanically real rather than narration
+`[[condition]]` entry already authored in `conditions.toml`) mechanically real rather than narration
 flavor — a wounded character is measurably worse at everything, not just described as hurt.
 
 **A `[[condition]]` entry's own `modifier` can be scoped to specific skills via `applies_to`**
@@ -289,7 +289,7 @@ of a literal skill**, expanded by `get_skill_group_members` (`Combat_Resolution.
 toml`'s own `[[skill_group]]` table (`{name, skills}`) lets a cluster of skills be addressed by
 one shared name, standing in for the attribute layer this engine deliberately doesn't have.
 Pathfinder's Bull's Strength buffs every Strength-based skill/check at once, not one named
-skill; authoring a condition's own `applies_to = ["strength"]` against `rules.toml`'s shipped
+skill; authoring a condition's own `applies_to = ["strength"]` against `conditions.toml`'s shipped
 `"strength"` group (`["strength", "athletics", "blades", "axes", "brawling"]`) gets the same
 shape without this engine needing a real ability score. A name matching no defined group is
 still just a literal skill name, unchanged — this is purely additive over every existing
@@ -448,7 +448,7 @@ absent/inert unless a piece of content actually authors it.
   mechanism -- `_summon_creature` never cared what kind of entity it was placing), the real
   effect is an ordinary `[[condition]]`'s own `upkeep_damage`/`upkeep_heal`/`modifier`, and the
   only "connection" between the two is the same trigger/requirements matching every other
-  status already uses. `rules.toml`'s own `"flame wall zone"` (matched to `spells.toml`'s
+  status already uses. `statuses.toml`'s own `"flame wall zone"` (matched to `spells.toml`'s
   `"flame wall"`, conjured by its own `"wall of fire"` spell via `summon`) is the shipped
   example.
 - **`dispel`** (an ability field, `{supertypes, subtypes}`) -- `_apply_dispel_if_hit`
@@ -545,7 +545,7 @@ absent/inert unless a piece of content actually authors it.
   leaves it genuinely active afterward. A condition with no upkeep fields at all (ex:
   `"shaken"`) is unaffected -- `get_condition_upkeep` totals to zero for it, so this step is a
   harmless no-op. `items.toml`'s own `"warding glyph"` (the hazard, seeded with
-  `[entity.conditions.armed]`) + `rules.toml`'s own `"warding glyph shock"`/`"warding glyph
+  `[entity.conditions.armed]`) + `statuses.toml`'s own `"warding glyph shock"`/`"warding glyph
   blast"` (`self_dismiss = "armed"` on both, applying `"shaken"` and `"burning"` respectively)
   is the shipped example -- one hazard demonstrating both the debuff and the blast shape.
 - **`form`** (a `[[condition]]` field, an entity name) -- the Pathfinder Polymorph/Baleful

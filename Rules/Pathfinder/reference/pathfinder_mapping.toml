@@ -625,7 +625,7 @@ immunity_tags = [ "any" ]
 [entity.conditions.armed]
 duration = "permanent"
 '''
-shipped_example = "equipment.toml's \"warding glyph\", rules.toml's \"warding glyph shock\"/\"warding glyph blast\""
+shipped_example = "equipment.toml's \"warding glyph\", statuses.toml's \"warding glyph shock\"/\"warding glyph blast\""
 
 [[spell_mechanic]]
 pf_concept = "Mind-affecting control (Charm Person, Dominate Person)"
@@ -723,7 +723,7 @@ difficulty = 10
 range = 10
 summon = { name = "flame wall", duration = 5 }
 '''
-shipped_example = "rules.toml's \"flame wall zone\"/\"burning\", spells.toml's \"flame wall\"/\"wall of fire\""
+shipped_example = "statuses.toml's \"flame wall zone\", conditions.toml's \"burning\", spells.toml's \"flame wall\"/\"wall of fire\""
 
 # ============================================================================================
 # 5. Creature special abilities

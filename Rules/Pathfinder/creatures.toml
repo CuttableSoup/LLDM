@@ -144,7 +144,7 @@ max_hp = 40
 # Seeded permanently, not gained mid-fight -- a troll simply *is* a regenerator, the same way
 # [entity.conditions.locked]/.closed seed a chest's starting state (see DM_Rules.py's
 # _instance_entities: active_conditions is copied fresh from this per instance). See
-# rules.toml's own "regenerating" [[condition]] entry (upkeep_heal = 2D per round, suppressed
+# conditions.toml's own "regenerating" [[condition]] entry (upkeep_heal = 2D per round, suppressed
 # any round it's tagged "fire" -- the shipped generic-per-round-upkeep-hook example; run_round_
 # upkeep, DM_Status.py) and TestRoundUpkeep in test_unit.py for the fire-suppression case.
 [entity.conditions.regenerating]
@@ -288,7 +288,7 @@ brawling = { dice = 3, pips = 0 }
 
 # Pathfinder Bestiary's giant rat -- the shipped disease-vector worked example
 # (reference/pathfinder_mapping.toml's Poison/Dying-Stable-Disabled rows):
-# on_hit_condition applies rules.toml's own "filth fever" unconditionally on a landed bite (see
+# on_hit_condition applies conditions.toml's own "filth fever" unconditionally on a landed bite (see
 # that condition's own comment for why exposure itself is unconditional, with onset/frequency
 # doing the real work of "did it actually take hold").
 [[entity]]
@@ -691,7 +691,7 @@ willpower = { dice = 1, pips = 0 }
 # left out of resistance_tags this time. Special Quality "staggered" (can only take a single
 # move OR standard action each round) is Pattern B -- reference/pathfinder_mapping.toml's own
 # guidance is to flatten a pure action-economy effect down to its Pattern C dice-penalty half,
-# which rules.toml's own already-shipped "staggered" condition already is -- seeded permanently
+# which conditions.toml's own already-shipped "staggered" condition already is -- seeded permanently
 # the same way "troll" seeds its own "regenerating" above, rather than needing a new condition.
 # No armor -- a zombie's rags carry no real AC contribution, its whole non-touch AC is the "+2
 # natural" the real stat block lists.
@@ -729,7 +729,7 @@ reflexes = { dice = 0, pips = 1 }
 willpower = { dice = 1, pips = 1 }
 
 # Bestiary 1 (3rd printing) p.232, "Rat, Dire" (Dire Rat), CR 1/3, XP 135. Same disease vector
-# as "giant rat" above -- reuses rules.toml's already-shipped "filth fever" condition unchanged
+# as "giant rat" above -- reuses conditions.toml's already-shipped "filth fever" condition unchanged
 # rather than authoring a second, near-identical disease entry (both creatures' own real DCs
 # differ slightly in Pathfinder; not worth splitting the condition catalog over).
 [[entity]]
@@ -857,7 +857,7 @@ willpower = { dice = 0, pips = 1 }
 # Bestiary 1 (3rd printing) p.146, "Ghoul", CR 1, XP 400. The real stat block's own bite (disease
 # + paralysis) and 2 claws (paralysis only) collapse onto one "claws" ability carrying paralysis
 # alone -- ghoul fever is dropped as the secondary rider, paralysis is the trait that actually
-# defines a ghoul encounter. rules.toml's own "paralyzed" condition (added alongside this entity)
+# defines a ghoul encounter. conditions.toml's own "paralyzed" condition (added alongside this entity)
 # is the shipped Pattern A recipe; chance = 50 approximates the real DC 13 Fortitude negate as a
 # flat coin-flip, since on_hit_condition has no mechanism for rolling a save of its own to resist
 # it (see that condition's own comment). "Defensive Ability channel resistance +2" isn't modeled
@@ -891,7 +891,7 @@ reflexes = { dice = 1, pips = 0 }
 willpower = { dice = 2, pips = 0 }
 
 # Bestiary 1 (3rd printing) p.258, "Spider, Giant" (Giant Spider), CR 1, XP 400. Poison uses
-# rules.toml's new "giant spider venom" condition (a periodic_test ticking in rounds rather than
+# conditions.toml's new "giant spider venom" condition (a periodic_test ticking in rounds rather than
 # days -- see that condition's own comment). The real stat block's own "web" special attack
 # (a ranged entangle effect) isn't modeled -- no terrain/restraint mechanism fits it any better
 # than reference/pathfinder_mapping.toml's own "Trample"/"Swallow Whole" rows already found for
@@ -1122,7 +1122,7 @@ stealth = { dice = 5, pips = 2 }
 
 # Bestiary 1 (3rd printing) p.45, "Choker", CR 2, XP 600. "Grab"/"constrict"/"strangle" (seize a
 # victim by the throat, crush it, and stop it speaking or casting while grappled) collapses onto
-# rules.toml's already-shipped "grappled" condition applied directly on a landed hit -- the same
+# conditions.toml's already-shipped "grappled" condition applied directly on a landed hit -- the same
 # on_hit_condition-applies-the-restraining-condition-directly shape reference/pathfinder_
 # mapping.toml's own "Swallow Whole / Constrict" row describes, with the crush's own damage
 # folded into the tentacle attack's flat damage_value rather than a second, separate hit.
@@ -1572,7 +1572,7 @@ stealth = { dice = 2, pips = 2 }
 # "no per-cast picking UI for an arbitrary target" gap reference/pathfinder_mapping.toml's own
 # Teleport row already accepts for a different ability shape; a doppelganger's own combat stats
 # (its natural claws) are what's actually converted here. "Immune charm, sleep" now uses the new
-# immune_conditions field (rules.toml's own "charmed"/"asleep", both subtype = "mind-affecting")
+# immune_conditions field (conditions.toml's own "charmed"/"asleep", both subtype = "mind-affecting")
 # -- see that field's own entity_schema.toml comment.
 [[entity]]
 name = "doppelganger"

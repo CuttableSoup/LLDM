@@ -98,10 +98,29 @@ well as a freshly-built point-buy result — replays this fresh against `player[
 the client" way `"allocation"` is validated; a rejected spend is logged and left entirely
 unapplied, without aborting the rest of the method (training and renaming are unrelated).
 
+**Buying abilities (spells/techniques).** The same `exp` balance also buys abilities, and a
+from-scratch character (`"allocation"` given) starts with none — `apply_character_creation` clears
+the template's own `abilities` list, so buying is the only way to get any (a bare `"abilities"`
+with no `"allocation"`, ex: a default character, adds to what the template already has). Every
+`supertype = "spell"`/`"technique"` entity is buyable (`load_learnable_abilities`) except ones a
+`[[skill]]` lists in its own `abilities` field (maneuvers like trip/disarm — usable by everyone
+already, `universal_abilities`). `ability_cost(ability, character_creation)` prices one at its own
+authored `difficulty` divided by `[character_creation]`'s `ability_cost_divisor` (default 10, D6
+Magic's own "one point per 10 of difficulty" learning-cost suggestion), rounded to the nearest XP,
+minimum 1 — so it sits on the same scale as skill training, and every shipped setting inherits the
+default. That is also why a technique needs a *derived* difficulty (see `techniques.toml`'s `cleave`
+comment, worked through the same spell-design formula `spells_pathfinder.toml` documents), not a
+hand-picked one. `spend_exp_on_abilities` is all-or-nothing like `spend_exp_on_skills`; training
+replays first, abilities buy from what's left, and either being rejected is logged without
+aborting the other. The default player templates now start at `exp = 10` (a small budget: one
+or two real abilities, or a few pips). The player's `abilities` list round-trips through
+save/load alongside `skills`.
+
 `Character_Creation_GUI.py`'s `CharacterCreationDialog` (a modal `Toplevel`) is the interactive
 front end: an optional name field, a race dropdown, a per-skill allocation row (baseline,
 point-buy spend, running total, and a "Train" button spending from `player_exp`), a "dice
-remaining"/"XP remaining" counter pair (only the dice counter gates Create — leftover XP just
+remaining"/"XP remaining" counter pair (plus a checkbox list of buyable abilities with their
+XP cost — ticked abilities are paid first and training is re-priced against what's left) (only the dice counter gates Create — leftover XP just
 carries over unspent), and Create/Cancel. `self.pip_spend` is the literal, ordered click log —
 `_recompute_training` is the single source of truth, replaying it via `spend_exp_on_skills`
 against whatever the current baseline+allocation is (never hand-tracked incrementally), so

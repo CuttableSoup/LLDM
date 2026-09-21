@@ -237,6 +237,9 @@ class PersistenceMixin(DMCoreProtocol):
                 state["skills"] = entity.get("skills", {})
                 state["qualities"] = entity.get("qualities", {})
                 state["languages"] = entity.get("languages", [])
+                # Abilities bought at character creation (spend_exp_on_abilities) -- same
+                # "chargen diverges from the template" reasoning as skills above.
+                state["abilities"] = entity.get("abilities", [])
             # A live polymorph/shapeshift (Combat_Resolution.py's "form" condition field) has
             # already overwritten FORM_OVERRIDE_FIELDS on this instance; "active_conditions"
             # above saves the _form snapshot needed to revert it, but load_scenario/_enter_
@@ -633,6 +636,8 @@ class PersistenceMixin(DMCoreProtocol):
                 entity["skills"] = state.get("skills", entity.get("skills", {}))
                 entity["qualities"] = state.get("qualities", entity.get("qualities", {}))
                 entity["languages"] = state.get("languages", entity.get("languages", []))
+                if "abilities" in state:
+                    entity["abilities"] = state["abilities"]
             # Mirrors the corresponding save-side form_override comment -- entity has just
             # been re-instanced fresh from its own static template (base form), so a saved
             # form_override has to be reapplied on top the same way active_conditions was, or

@@ -23,11 +23,14 @@ import resolution.Combat_Resolution as Combat_Resolution
 import resolution.Social_Resolution as Social_Resolution
 from resolution.Program_Interpreter import evaluate_condition, run_program
 from resolution.Character_Creation import (
+    ability_cost,
     build_character_skills,
     get_race,
     load_character_creation_data,
+    load_learnable_abilities,
     load_player_starting_exp,
     race_baseline_skills,
+    spend_exp_on_abilities,
     spend_exp_on_skills,
     spend_pip,
     validate_allocation,
@@ -7007,7 +7010,7 @@ class TestCharacterCreation(unittest.TestCase):
 
 
     def test_load_player_starting_exp_reads_gladstones_own_authored_exp(self):
-        self.assertEqual(load_player_starting_exp(), 100)  # characters.toml's own gladstone
+        self.assertEqual(load_player_starting_exp(), 10)  # characters.toml's own gladstone
 
 
 class TestSpendPip(unittest.TestCase):
@@ -7268,7 +7271,7 @@ class TestXpAward(DMTestCase):
         self._deal_five_damage()
 
         self.assertEqual(self.dm_core.get_current_hp("wolf"), 0)
-        self.assertEqual(self.dm_core.entities["gladstone"]["exp"], 100 + 46)
+        self.assertEqual(self.dm_core.entities["gladstone"]["exp"], 10 + 46)
         self.assertEqual(self.dm_core.entities["thane"]["exp"], 46)
 
     def test_custom_exp_field_overrides_the_challenge_rating_default(self):
@@ -7276,7 +7279,7 @@ class TestXpAward(DMTestCase):
         self._drop_the_wolf_to_one_hp()
         self._deal_five_damage()
 
-        self.assertEqual(self.dm_core.entities["gladstone"]["exp"], 100 + 5)
+        self.assertEqual(self.dm_core.entities["gladstone"]["exp"], 10 + 5)
 
     def test_an_authored_exp_of_zero_grants_no_xp_at_all(self):
         # Presence, not truthiness -- an authored 0 is a deliberate "worth nothing" override,
@@ -7285,7 +7288,7 @@ class TestXpAward(DMTestCase):
         self._drop_the_wolf_to_one_hp()
         self._deal_five_damage()
 
-        self.assertEqual(self.dm_core.entities["gladstone"]["exp"], 100)
+        self.assertEqual(self.dm_core.entities["gladstone"]["exp"], 10)
         self.assertEqual(self.dm_core.entities["thane"].get("exp", 0), 0)
 
     def test_xp_multiplier_scales_the_award(self):
@@ -7293,7 +7296,7 @@ class TestXpAward(DMTestCase):
         self._drop_the_wolf_to_one_hp()
         self._deal_five_damage()
 
-        self.assertEqual(self.dm_core.entities["gladstone"]["exp"], 100 + 46 * 3)
+        self.assertEqual(self.dm_core.entities["gladstone"]["exp"], 10 + 46 * 3)
 
     def test_divide_between_party_splits_the_award_evenly_by_floor_division(self):
         self.dm_core.rules["xp"]["divide_between_party"] = True
@@ -7301,7 +7304,7 @@ class TestXpAward(DMTestCase):
         self._deal_five_damage()
 
         # 46 // 2 party members (gladstone, thane) = 23 each, not 46 each.
-        self.assertEqual(self.dm_core.entities["gladstone"]["exp"], 100 + 23)
+        self.assertEqual(self.dm_core.entities["gladstone"]["exp"], 10 + 23)
         self.assertEqual(self.dm_core.entities["thane"]["exp"], 23)
 
     def test_a_second_hit_against_an_already_dead_entity_awards_no_further_xp(self):
@@ -7319,7 +7322,7 @@ class TestXpAward(DMTestCase):
         self.dm_core.entities["thane"]["hp"] = 1
         self._deal_five_damage(attacker="wolf", defender="thane")
 
-        self.assertEqual(self.dm_core.entities["gladstone"]["exp"], 100)
+        self.assertEqual(self.dm_core.entities["gladstone"]["exp"], 10)
         self.assertEqual(self.dm_core.entities["thane"].get("exp", 0), 0)
 
     def test_a_passed_entity_test_with_no_xp_key_awards_nothing(self):
@@ -7329,7 +7332,7 @@ class TestXpAward(DMTestCase):
         # TestMultiRoomDungeon's own dart trap, which does author xp = true).
         self.dm_core.apply_test_outcome("chest", {"dismiss_condition": "locked"})
 
-        self.assertEqual(self.dm_core.entities["gladstone"]["exp"], 100)
+        self.assertEqual(self.dm_core.entities["gladstone"]["exp"], 10)
         self.assertEqual(self.dm_core.entities["thane"].get("exp", 0), 0)
 
 
@@ -8820,9 +8823,9 @@ class TestCharacterCreationDMCoreIntegration(DMTestCase):
         }
         dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds", character=character)
         # arcane: 3 baseline + 5 allocated = 8D -- one more pip costs 8 XP, gladstone starts
-        # at exp = 100 (characters.toml).
+        # at exp = 10 (characters.toml).
         self.assertEqual(dm.entities["gladstone"]["skills"]["arcane"], {"dice": 8, "pips": 1})
-        self.assertEqual(dm.entities["gladstone"]["exp"], 100 - 8)
+        self.assertEqual(dm.entities["gladstone"]["exp"], 10 - 8)
 
     def test_pip_spend_works_with_no_allocation_at_all(self):
         # "allocation" absent entirely -- pip_spend still trains gladstone's own hand-authored
@@ -8830,10 +8833,10 @@ class TestCharacterCreationDMCoreIntegration(DMTestCase):
         character = {"pip_spend": ["blades"]}
         dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds", character=character)
         self.assertEqual(dm.entities["gladstone"]["skills"]["blades"], {"dice": 5, "pips": 1})
-        self.assertEqual(dm.entities["gladstone"]["exp"], 100 - 5)
+        self.assertEqual(dm.entities["gladstone"]["exp"], 10 - 5)
 
     def test_pip_spend_rejected_on_insufficient_exp_leaves_skills_and_exp_untouched(self):
-        # Far more pips than gladstone's own 100 starting exp can ever cover.
+        # Far more pips than gladstone's own 10 starting exp can ever cover.
         character = {"pip_spend": ["blades"] * 30}
         event_bus = EventBus()
         errors = []
@@ -8842,8 +8845,97 @@ class TestCharacterCreationDMCoreIntegration(DMTestCase):
         dm = DMCore(event_bus, scenario_name="debug", start_location="arena_grounds", character=character)
 
         self.assertEqual(dm.entities["gladstone"]["skills"]["blades"], {"dice": 5, "pips": 0})
-        self.assertEqual(dm.entities["gladstone"]["exp"], 100)
+        self.assertEqual(dm.entities["gladstone"]["exp"], 10)
         self.assertTrue(any("XP spend rejected" in e for e in errors))
+
+
+class TestAbilityPurchase(unittest.TestCase):
+    """!
+    @brief Buying spells/techniques at character creation out of the player's starting exp
+        (Character_Creation.py's ability_cost/spend_exp_on_abilities, DM_CharacterCreation.py's
+        "abilities" key) -- priced difficulty / ability_cost_divisor, minimum 1.
+    """
+
+    CC = {"ability_cost_divisor": 10}
+    ELF = {"race": "elf", "allocation": {"arcane": 5, "stealth": 5, "observation": 5}}
+
+    def _boot(self, character, event_bus=None):
+        return DMCore(
+            event_bus or EventBus(), scenario_name="debug", start_location="arena_grounds",
+            character=character,
+        )
+
+    def test_ability_cost_is_difficulty_over_divisor_rounded_with_a_minimum_of_one(self):
+        for difficulty, cost in ((0, 1), (5, 1), (10, 1), (15, 2), (24, 2), (25, 3), (33, 3), (79, 8)):
+            self.assertEqual(ability_cost({"difficulty": difficulty}, self.CC), cost, difficulty)
+        self.assertEqual(ability_cost({}, self.CC), 1)
+        self.assertEqual(ability_cost({"difficulty": 10}, {"ability_cost_divisor": 5}), 2)
+
+    def test_load_learnable_abilities_finds_spells_and_techniques_only(self):
+        catalog = load_learnable_abilities("Rules/Pathfinder")
+        self.assertEqual(catalog["cleave"]["supertype"], "technique")
+        self.assertEqual(catalog["fireball"]["supertype"], "spell")
+        self.assertNotIn("gladstone", catalog)
+        self.assertNotIn("flame wall", catalog)  # supertype = "object" -- a conjured effect
+
+    def test_spend_exp_on_abilities_rejects_unknown_duplicate_and_unaffordable_all_or_nothing(self):
+        catalog = {"a": {"difficulty": 10}, "b": {"difficulty": 30}}
+        self.assertEqual(spend_exp_on_abilities(5, ["a", "b"], catalog, self.CC), (1, None))
+        self.assertIn("Unknown", spend_exp_on_abilities(5, ["a", "nope"], catalog, self.CC)[1])
+        self.assertIn("twice", spend_exp_on_abilities(5, ["a", "a"], catalog, self.CC)[1])
+        remaining, reason = spend_exp_on_abilities(3, ["a", "b"], catalog, self.CC)
+        self.assertEqual(remaining, 3)  # "a" was affordable but the whole purchase is rejected
+        self.assertIn("Not enough XP", reason)
+
+    def test_a_from_scratch_character_starts_with_no_abilities(self):
+        dm = self._boot(self.ELF)
+        self.assertEqual(dm.entities["gladstone"]["abilities"], [])
+        self.assertEqual(dm.entities["gladstone"]["exp"], 10)
+
+    def test_chosen_abilities_are_bought_out_of_exp(self):
+        dm = self._boot({**self.ELF, "abilities": ["fireball", "cure disease"]})
+        self.assertEqual(dm.entities["gladstone"]["abilities"], ["fireball", "cure disease"])
+        self.assertEqual(dm.entities["gladstone"]["exp"], 8)  # 1 xp each (difficulty 10 and 8)
+
+    def test_training_and_abilities_share_one_balance(self):
+        # arcane is 8D, so one pip costs 8; three 1-xp abilities would need 11 of the 10 xp.
+        errors = []
+        event_bus = EventBus()
+        event_bus.subscribe("log_error", errors.append)
+        dm = self._boot(
+            {**self.ELF, "pip_spend": ["arcane"], "abilities": ["fireball", "splash flow", "arc lance"]},
+            event_bus,
+        )
+        self.assertEqual(dm.entities["gladstone"]["skills"]["arcane"], {"dice": 8, "pips": 1})
+        self.assertEqual(dm.entities["gladstone"]["abilities"], [])
+        self.assertEqual(dm.entities["gladstone"]["exp"], 2)
+        self.assertTrue(any("ability purchase rejected" in e for e in errors))
+
+    def test_an_unknown_ability_is_rejected_and_costs_nothing(self):
+        errors = []
+        event_bus = EventBus()
+        event_bus.subscribe("log_error", errors.append)
+        dm = self._boot({**self.ELF, "abilities": ["fireball", "not a spell"]}, event_bus)
+        self.assertEqual(dm.entities["gladstone"]["abilities"], [])
+        self.assertEqual(dm.entities["gladstone"]["exp"], 10)
+        self.assertTrue(any("ability purchase rejected" in e for e in errors))
+
+    def test_abilities_without_an_allocation_add_to_the_templates_own(self):
+        dm = self._boot({"abilities": ["cure disease"]})
+        abilities = dm.entities["gladstone"]["abilities"]
+        self.assertIn("fireball", abilities)  # gladstone's own hand-authored list survives
+        self.assertIn("cure disease", abilities)
+
+    def test_bought_abilities_survive_save_and_load(self):
+        dm = self._boot({**self.ELF, "abilities": ["fireball"], "name": "Aria"})
+        slot_name = "test_bought_abilities_round_trip_slot"
+        self.addCleanup(shutil.rmtree, dm._save_slot_dir(slot_name), ignore_errors=True)
+
+        dm.save_game(slot_name)
+        dm.load_game(slot_name)
+
+        self.assertEqual(dm.entities["Aria"]["abilities"], ["fireball"])
+        self.assertEqual(dm.entities["Aria"]["exp"], 9)
 
 
 class TestDefaultPlayerCharacters(unittest.TestCase):
@@ -9066,7 +9158,10 @@ class TestZombieArchetypeCharacterCreation(unittest.TestCase):
         )
         # Same shared point-buy constants convention as Fantasy -- Rules/Zombie/rules.toml's
         # own [character_creation] table, not a hardcoded Fantasy-only default.
-        self.assertEqual(character_creation, {"pool_dice": 15, "max_allocation_per_skill": 5})
+        self.assertEqual(
+            character_creation,
+            {"pool_dice": 15, "max_allocation_per_skill": 5, "ability_cost_divisor": 10},
+        )
 
     def test_every_archetype_lists_every_skill_at_a_balanced_baseline(self):
         skills, races, _character_creation = load_character_creation_data("Rules/Zombie")
@@ -11262,7 +11357,7 @@ class TestSaveLoad(DMTestCase):
             {
                 "hp", "active_conditions", "currency", "exp", "inventory", "equipped", "band",
                 "attitude_deltas", "action_attitude_deltas", "current_language", "prompt_directive",
-                "mount", "skills", "qualities", "languages",
+                "mount", "skills", "qualities", "languages", "abilities",
             },
         )
 
@@ -11307,7 +11402,7 @@ class TestSaveLoad(DMTestCase):
 
 
     def test_accumulated_exp_round_trips_through_save_load(self):
-        # gladstone starts at exp = 100 (characters.toml) -- without saving "exp" as its own
+        # gladstone starts at exp = 10 (characters.toml) -- without saving "exp" as its own
         # per-instance field, a reload would silently reset any XP _award_xp_for_defeat
         # (DM_Combat.py) accumulated back down to that static template value.
         slot = self._track("test_exp_round_trip")
@@ -11315,10 +11410,10 @@ class TestSaveLoad(DMTestCase):
         self.dm_core.save_game(slot)
 
         fresh_dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds")  # boots with the template default
-        self.assertEqual(fresh_dm.entities["gladstone"]["exp"], 100)
+        self.assertEqual(fresh_dm.entities["gladstone"]["exp"], 10)
         fresh_dm.load_game(slot)
 
-        self.assertEqual(fresh_dm.entities["gladstone"]["exp"], 121)
+        self.assertEqual(fresh_dm.entities["gladstone"]["exp"], 31)
 
 
     def test_current_block_round_trips_through_save_and_load(self):
@@ -11517,7 +11612,7 @@ class TestMultiRoomDungeon(DMTestCase):
 
         self.assertTrue(self.action_events[-1]["actions"][0].success)
         self.assertNotIn("armed", self.dm_core.entities["dart trap"]["active_conditions"])
-        self.assertEqual(self.dm_core.entities["gladstone"]["exp"], 100 + 9)
+        self.assertEqual(self.dm_core.entities["gladstone"]["exp"], 10 + 9)
         self.assertEqual(self.dm_core.entities["thane"]["exp"], 9)
         self.assertEqual(self.dm_core.entities["anne"]["exp"], 9)
 
@@ -12302,7 +12397,7 @@ class TestCharacterCreationDialog(unittest.TestCase):
 
         self.assertEqual(
             dialog.result,
-            {"race": "human", "allocation": {"alpha": 2, "gamma": 1}, "pip_spend": [], "name": ""},
+            {"race": "human", "allocation": {"alpha": 2, "gamma": 1}, "pip_spend": [], "abilities": [], "name": ""},
         )
         self.assertEqual(dialog.winfo_exists(), 0)
 
@@ -12387,6 +12482,48 @@ class TestCharacterCreationDialog(unittest.TestCase):
 
         self.assertEqual(dialog.pip_spend, [])
         self.assertEqual(dialog.remaining_exp, 10)
+
+    def _make_ability_dialog(self, player_exp):
+        abilities = {
+            "spark": {"supertype": "spell", "difficulty": 10, "description": "A flicker."},
+            "bolt": {"supertype": "spell", "difficulty": 25, "description": "A heavy bolt."},
+        }
+        return CharacterCreationDialog(
+            self.root, self.skills, self.races, self.character_creation, player_exp, abilities,
+        )
+
+    def test_ticking_an_ability_spends_xp_and_locks_what_is_no_longer_affordable(self):
+        dialog = self._make_ability_dialog(player_exp=3)
+        dialog.ability_checks["bolt"].invoke()  # 25 / 10 rounds to 3 xp
+
+        self.assertEqual(dialog.remaining_exp, 0)
+        self.assertEqual(str(dialog.ability_checks["spark"]["state"]), "disabled")
+        self.assertEqual(str(dialog.ability_checks["bolt"]["state"]), "normal")  # still untickable
+        self.assertEqual(str(dialog.train_buttons["alpha"]["state"]), "disabled")
+
+        dialog.ability_checks["bolt"].invoke()  # untick refunds
+        self.assertEqual(dialog.remaining_exp, 3)
+        self.assertEqual(str(dialog.ability_checks["spark"]["state"]), "normal")
+        dialog.destroy()
+
+    def test_training_is_repriced_against_what_abilities_leave(self):
+        dialog = self._make_ability_dialog(player_exp=3)
+        dialog.ability_checks["spark"].invoke()  # 1 xp; a pip on a 2D skill costs 2
+        self.assertEqual(dialog.remaining_exp, 2)
+        dialog.train_buttons["alpha"].invoke()
+        self.assertEqual(dialog.remaining_exp, 0)
+        self.assertEqual(dialog.pip_spend, ["alpha"])
+        dialog.destroy()
+
+    def test_chosen_abilities_are_included_in_the_create_result(self):
+        dialog = self._make_ability_dialog(player_exp=3)
+        dialog.allocation_vars["alpha"].set(2)
+        dialog.allocation_vars["gamma"].set(1)
+        dialog.ability_checks["spark"].invoke()
+
+        dialog.create_button.invoke()
+
+        self.assertEqual(dialog.result["abilities"], ["spark"])
 
     def test_pip_spend_is_included_in_the_create_result(self):
         dialog = self._make_dialog(player_exp=10)
@@ -12603,10 +12740,11 @@ class TestGUICore(unittest.TestCase):
         self.assertFalse(picker.winfo_exists())
 
     @patch("gui.GUI_Core.run_character_creation_dialog")
+    @patch("gui.GUI_Core.load_learnable_abilities", return_value={"spark": {}})
     @patch("gui.GUI_Core.load_player_starting_exp", return_value=100)
     @patch("gui.GUI_Core.load_character_creation_data", return_value=({}, [], {}))
     def test_request_character_creation_publishes_character_created_with_the_dialogs_result(
-        self, mock_load, mock_exp, mock_dialog,
+        self, mock_load, mock_exp, mock_abilities, mock_dialog,
     ):
         mock_dialog.return_value = {"race": "elf", "allocation": {"arcane": 5}, "name": "Aria"}
         events = []
@@ -12616,7 +12754,7 @@ class TestGUICore(unittest.TestCase):
 
         mock_load.assert_called_once()
         mock_exp.assert_called_once()
-        mock_dialog.assert_called_once_with(self.gui.root, {}, [], {}, 100)
+        mock_dialog.assert_called_once_with(self.gui.root, {}, [], {}, 100, {"spark": {}})
         self.assertEqual(
             events, [{"character": {"race": "elf", "allocation": {"arcane": 5}, "name": "Aria"}}],
         )

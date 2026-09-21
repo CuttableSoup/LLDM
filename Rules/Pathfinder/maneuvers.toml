@@ -72,7 +72,7 @@ range = 0
 on_pass = { do = "condition", entity = "target", name = "prone", duration = "permanent" }
 
 # Was commented out until there was a real "unequip target's weapon" program op -- being
-# disarmed is an instantaneous equipment change, not a lasting condition (see rules.toml's own
+# disarmed is an instantaneous equipment change, not a lasting condition (see conditions.toml's own
 # note where the "disarmed" [[condition]] used to live), and this maneuver had no other effect to
 # fall back on in the meantime. Now uses the "destroy_equipped" op (Program_Interpreter.py ->
 # Inventory_Resolution.destroy_equipped_item) -- a known simplification, not a perfect fit: real

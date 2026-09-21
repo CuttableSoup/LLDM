@@ -176,7 +176,7 @@ class StatusMixin(DMCoreProtocol):
     def get_condition_modifier(self, entity_name, skill_name=None):
         """!
         @brief Sums the {dice, pips, bonus} roll modifier of every one of entity_name's own
-            active_conditions that has a matching entry in rules.toml's own [[condition]] table
+            active_conditions that has a matching entry in conditions.toml's own [[condition]] table
             (ex: "stunned"'s modifier = {dice = -1, pips = 0, bonus = 0}). An active condition
             with no matching [[condition]] entry (ex: "locked"/"closed"/"hidden" -- presence
             flags authored on non-creature entities, never meant to affect a roll) contributes
@@ -221,9 +221,9 @@ class StatusMixin(DMCoreProtocol):
     def is_action_prevented(self, entity_name):
         """!
         @brief Whether entity_name is currently unable to act on its own turn at all -- true
-            if any of its own active_conditions has a matching rules.toml [[condition]] entry
+            if any of its own active_conditions has a matching conditions.toml [[condition]] entry
             authoring prevents_action = true. Distinct from get_condition_modifier's own flat
-            dice penalty: rules.toml's own "pinned" (maneuvers.toml's "pin", only ever applied
+            dice penalty: conditions.toml's own "pinned" (maneuvers.toml's "pin", only ever applied
             to an already-grappled target) carries both a modifier -4 *and*
             prevents_action = true, matching Pathfinder's real "pinned" condition -- a pinned
             character can take essentially no physical action beyond trying to escape, not
@@ -387,7 +387,7 @@ class StatusMixin(DMCoreProtocol):
             uses for a Frightful-Presence-style aura, just checked once a round for every living
             entity instead of only the one that just landed a hit. This is the whole mechanism
             behind a persistent terrain hazard (Rules/Fantasy/reference/pathfinder_mapping.toml's
-            "Persistent terrain/obstacle spells" row, ex: rules.toml's own "flame wall zone",
+            "Persistent terrain/obstacle spells" row, ex: statuses.toml's own "flame wall zone",
             matched by a status requirement naming spells.toml's "flame wall" entity): a status
             entry names a real entity (by "name", or any other stable field), and while that
             entity is alive in the scene, whoever shares its band each round gets the status's
@@ -584,7 +584,7 @@ class StatusMixin(DMCoreProtocol):
             hazard: its own [[status]] entry's requirements match the hazard entity itself (by
             "name", same as any other field), and "apply" lands on whoever currently shares its
             band. Authoring the applied condition with a short duration/length (ex:
-            rules.toml's own "flame wall zone", duration = "rounds"/length = 1) is what makes it
+            statuses.toml's own "flame wall zone", duration = "rounds"/length = 1) is what makes it
             a *zone* rather than a one-time blast -- it lapses on its own the moment an entity is
             no longer co-band, and is simply reapplied fresh each round for as long as they stay.
 

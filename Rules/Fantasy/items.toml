@@ -562,7 +562,7 @@ inventory = [ "fireball" ]
 # The "on_arrival" shipped worked example (Rules/Pathfinder/reference/pathfinder_mapping.toml's
 # "Delayed/triggered magic" row -- Glyph of Warding/Magic Mouth): an ordinary hazard, placed
 # permanently like any other room prop (or conjured via "summon", same as spells.toml's "flame
-# wall"), with no mechanism of its own beyond the [[status]] entry (rules.toml's own "warding
+# wall"), with no mechanism of its own beyond the [[status]] entry (statuses.toml's own "warding
 # glyph shock") that matches it by name. subtype = "spell" (not "trap") marks it as a standing
 # magical effect the same way "flame wall" does -- "dispel magic" already banishes any entity
 # sharing that subtype, so no separate dispel wiring is needed here. immunity_tags = ["any"]

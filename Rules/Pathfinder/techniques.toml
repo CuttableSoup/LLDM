@@ -4,6 +4,15 @@ supertype = "technique"
 subtype = "martial"
 description = "A wide, sweeping strike that can cut through multiple enemies at once."
 skill = [ "blades", "axes" ]
+# Derived with the same D6 Fantasy spell-design formula spells_pathfinder.toml documents
+# (difficulty = ceil(max(20, Spell Total + negative modifiers) / 2)), so its character-creation XP
+# cost (Character_Creation.py's ability_cost) sits on the same scale as every spell's:
+#   Effect: weapon damage, ~1D+1 for a typical blade/axe = value 4 (x1.0, stand-alone damage)
+#   Range/Speed/Duration: 0 (same-band melee, instantaneous)
+#   Extra targets: two more enemies in the same band, priced like the Area Effect line at +5
+#     each = +10
+#   Casting time: 1 round = -4 (no incantation, gesture or components -- it's a swing)
+#   Spell Total 4 + 10 - 4 = 10, under the formula's floor of 20 -> difficulty 10.
 difficulty = 10
 # Melee, same band as the target only -- cleave shares blades/axes' own reach, not a
 # separate weapon range (see DM_Movement.py's "Movement and range").

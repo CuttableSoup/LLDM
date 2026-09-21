@@ -127,7 +127,7 @@ max_hp = 40
 # Seeded permanently, not gained mid-fight -- a troll simply *is* a regenerator, the same way
 # [entity.conditions.locked]/.closed seed a chest's starting state (see DM_Rules.py's
 # _instance_entities: active_conditions is copied fresh from this per instance). See
-# rules.toml's own "regenerating" [[condition]] entry (upkeep_heal = 2D per round, suppressed
+# conditions.toml's own "regenerating" [[condition]] entry (upkeep_heal = 2D per round, suppressed
 # any round it's tagged "fire" -- the shipped generic-per-round-upkeep-hook example; run_round_
 # upkeep, DM_Status.py) and TestRoundUpkeep in test_unit.py for the fire-suppression case.
 [entity.conditions.regenerating]
@@ -271,7 +271,7 @@ brawling = { dice = 3, pips = 0 }
 
 # Pathfinder Bestiary's giant rat -- the shipped disease-vector worked example
 # (Rules/Pathfinder/reference/pathfinder_mapping.toml's Poison/Dying-Stable-Disabled rows):
-# on_hit_condition applies rules.toml's own "filth fever" unconditionally on a landed bite (see
+# on_hit_condition applies conditions.toml's own "filth fever" unconditionally on a landed bite (see
 # that condition's own comment for why exposure itself is unconditional, with onset/frequency
 # doing the real work of "did it actually take hold").
 [[entity]]

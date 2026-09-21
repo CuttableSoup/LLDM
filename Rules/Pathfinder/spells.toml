@@ -108,7 +108,7 @@ summon = { name = "spectral wolf", duration = 4 }
 # reserved wildcard, is_immune_to/Combat_Resolution.py) makes it immune to every damage_tags
 # value that exists today or gets invented later, matching the real Pathfinder Wall of Fire
 # (can't be harmed by mundane means at all) without hand-listing every physical/energy type.
-# rules.toml's own "flame wall zone" ([[status]], trigger = "on_round") is what actually makes
+# statuses.toml's own "flame wall zone" ([[status]], trigger = "on_round") is what actually makes
 # standing here dangerous: matched by this entity's own "name", it applies "burning" to whoever
 # shares its band, freshly every round they stay (see docs/combat.md's "Pathfinder-mapping
 # engine extensions"). subtype = "spell" (not a physical-object subtype like "trap"/"prop") is
@@ -185,7 +185,7 @@ range = 5
 cure = { subtypes = [ "disease" ] }
 
 # Pathfinder's Baleful Polymorph -- a hostile, permanent transformation into a harmless animal
-# (rules.toml's own "polymorphed" condition, form = "coyote"). on_hit_condition applies it
+# (conditions.toml's own "polymorphed" condition, form = "coyote"). on_hit_condition applies it
 # directly on a successful cast, no [entity.test] detour needed (the same shape "filth fever"'s
 # own exposure vector already uses). duration = "permanent" since nothing about the spell
 # itself reverses it -- see "break enchantment" below for the one authored way back.

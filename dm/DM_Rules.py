@@ -1254,7 +1254,7 @@ class RulesMixin(DMCoreProtocol):
             Whoever a status just applied a condition to (evaluate_proximity_statuses's own
             return value) also gets one implicit round of upkeep resolved immediately
             (apply_round_upkeep + tick_condition_durations("rounds")) -- without this, a
-            freshly-applied upkeep_damage-bearing condition (ex: rules.toml's "burning", the
+            freshly-applied upkeep_damage-bearing condition (ex: conditions.toml's "burning", the
             same one "flame wall zone" uses) would just sit there inert: apply_round_upkeep is
             normally only ever called from an actual combat round (run_round_upkeep) or a
             completed rest (apply_downtime_upkeep), neither of which is guaranteed to happen

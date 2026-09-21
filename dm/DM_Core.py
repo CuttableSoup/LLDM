@@ -42,7 +42,7 @@ TARGET_ORDINAL_KEYWORDS = {"first": 1, "second": 2, "third": 3, "fourth": 4}
 TARGET_OTHER_KEYWORDS = ("other", "another")
 TARGET_WOUNDED_KEYWORDS = ("wounded", "hurt", "injured")
 TARGET_HEALTHY_KEYWORDS = ("healthy", "unhurt", "uninjured", "unharmed")
-# The same 0.40 hp_per_remain cutoff rules.toml's own "wounded" status tier -- and debug.toml's
+# The same 0.40 hp_per_remain cutoff statuses.toml's own "wounded" status tier -- and debug.toml's
 # wolf retreat behavior -- already use elsewhere in this codebase (see CLAUDE.md's "Combat"),
 # reused here rather than inventing a second threshold. A candidate has to actually cross this
 # line before "wounded"/"healthy" is honored -- calling a room full of undamaged creatures

@@ -760,7 +760,7 @@ def _build_creature_entity(arguments, npc_keywords, target_cr, skills_catalog, h
                 "damage_tags": ["physical"],
             }]
             # Mirrors debug.toml's own wolf/bandit shape exactly -- flee once
-            # genuinely hurt (hp_per_remain under 0.40, the same cutoff rules.toml's "wounded"
+            # genuinely hurt (hp_per_remain under 0.40, the same cutoff statuses.toml's "wounded"
             # tier bottoms out at), otherwise keep attacking until effectively dead.
             entity["behavior"] = [
                 {

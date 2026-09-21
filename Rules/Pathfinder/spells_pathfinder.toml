@@ -373,7 +373,7 @@ damage_tags = [ "radiant" ]
 # with an already-built, already-documented engine primitive and no new-creature-content
 # dependency; illusions/teleportation/polymorph/summon are separate follow-on batches).
 #
-# Each casts a rules.toml [[condition]] onto the target via on_hit_condition -- the same
+# Each casts a conditions.toml [[condition]] onto the target via on_hit_condition -- the same
 # self-buff shape this file's own sibling spells.toml already ships ("wild shape": a flat,
 # unopposed `difficulty` check, no damage_value at all, on_hit_condition firing on any successful
 # cast regardless of whether anything was actually "hit"). Difficulty uses the D6 Magic formula's
@@ -571,7 +571,7 @@ targets = { number = 1, aoe = 0 }
 on_hit_condition = { condition = "resistant", chance = 100, duration = "rounds", length = 12 }
 
 # A 1-round duration on purpose -- True Strike's real effect is "guaranteed hit on your very
-# next swing," not a lingering buff; see rules.toml's own "true strike" condition comment.
+# next swing," not a lingering buff; see conditions.toml's own "true strike" condition comment.
 [[entity]]
 name = "true strike"
 supertype = "spell"
@@ -1089,7 +1089,7 @@ requirements = [
 apply = { condition = "death rune blast", duration = "rounds", length = 1, radius = 0, side = "all" }
 self_dismiss = "armed"
 
-# "death rune blast" (rules.toml) is a dedicated 10D upkeep_damage condition, not a reuse of the
+# "death rune blast" (conditions.toml) is a dedicated 10D upkeep_damage condition, not a reuse of the
 # much weaker "burning" -- duration = "rounds"/length = 1 on the [[status]] above still makes
 # this an instant one-time blast, same "warding glyph blast" trick, just sized to actually match
 # what an 8th-level spell's difficulty below was computed from.

@@ -15,7 +15,7 @@ is_player = true
 max_hp = 36
 
 currency = 100
-exp = 100
+exp = 10
 # No explicit "speed" -- defaults to 1 band per "advance"/"retreat" action (see
 # DM_Movement.py), same as every other entity "unless otherwise specified". Only the player
 # actually moves today (creature/ally behavior doesn't choose to close distance -- see
@@ -190,7 +190,7 @@ is_player = true
 max_hp = 14
 
 currency = 50
-exp = 100
+exp = 10
 
 inventory = [
     "rapier",
@@ -248,7 +248,7 @@ is_player = true
 max_hp = 16
 
 currency = 30
-exp = 100
+exp = 10
 
 inventory = [
     "light mace",

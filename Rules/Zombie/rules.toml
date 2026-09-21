@@ -1,116 +1,8 @@
-# Same shape as Rules/Fantasy/rules.toml -- [[status]]/[[condition]] wound ladder,
+# Same shape as Rules/Fantasy/rules.toml (with [[condition]] and [[status]] split out into conditions.toml/statuses.toml) -- [[status]] wound ladder,
 # [strength_damage], [character_creation], [[initiative]], [[attitude_tier]], [[equip_slot]]
 # are all generic engine mechanisms (DM_Status.py/DM_Combat.py/Character_Creation.py read
 # these fields the same way regardless of setting); only the flavor text and which skills/
 # subtypes get named actually differ from the Fantasy version.
-
-[[status]]
-name = "bruised"
-trigger = "on_damage"
-requirements = [
-    { field = "hp_per_remain", operator = ">=", value = 0.81 },
-    { field = "hp_per_remain", operator = "<=", value = 0.99 },
-]
-description = "Took a glancing hit -- a scratch, a bruise, nothing that slows you down."
-
-[[status]]
-name = "stunned"
-trigger = "on_damage"
-requirements = [
-    { field = "hp_per_remain", operator = ">=", value = 0.60 },
-    { field = "hp_per_remain", operator = "<=", value = 0.80 },
-]
-apply = { condition = "stunned", duration = "rounds", length = 1, dismiss = "" }
-description = "A real hit -- a raked claw, a solid bite. It stings, and it's bleeding."
-
-[[status]]
-name = "wounded"
-trigger = "on_damage"
-requirements = [
-    { field = "hp_per_remain", operator = ">=", value = 0.40 },
-    { field = "hp_per_remain", operator = "<=", value = 0.59 },
-]
-apply = { condition = "wounded", duration = "permanent", dismiss = "" }
-description = "A deep bite or a torn-open gash. This needs a medkit, not a bandage."
-
-[[status]]
-name = "severe"
-trigger = "on_damage"
-requirements = [
-    { field = "hp_per_remain", operator = ">=", value = 0.20 },
-    { field = "hp_per_remain", operator = "<=", value = 0.39 },
-]
-apply = { condition = "severe", duration = "permanent", dismiss = "" }
-description = "Mauled badly -- torn muscle, maybe a cracked rib. Every movement hurts."
-
-[[status]]
-name = "incapacitated"
-trigger = "on_damage"
-requirements = [
-    { field = "hp_per_remain", operator = ">=", value = 0.10 },
-    { field = "hp_per_remain", operator = "<=", value = 0.19 },
-]
-apply = { condition = "incapacitated", duration = "permanent", dismiss = "" }
-description = "Barely standing -- blood loss and shock are setting in fast."
-
-[[status]]
-name = "mortal"
-trigger = "on_damage"
-requirements = [
-    { field = "hp_per_remain", operator = ">=", value = 0.01 },
-    { field = "hp_per_remain", operator = "<=", value = 0.09 },
-]
-apply = { condition = "unconscious", duration = "permanent", dismiss = "" }
-description = "Down and not getting back up without help -- someone needs to pull you out."
-
-[[status]]
-name = "dead"
-trigger = "on_damage"
-requirements = [
-    { field = "hp_per_remain", operator = "==", value = 0 },
-]
-apply = { condition = "dead", duration = "permanent", dismiss = "resurrection" }
-description = "Torn apart. There's no coming back from this."
-
-[[condition]]
-name = "stunned"
-modifier = { dice = -1, pips = 0, bonus = 0 }
-
-[[condition]]
-name = "wounded"
-modifier = { dice = -1, pips = 0, bonus = 0 }
-
-[[condition]]
-name = "severe"
-modifier = { dice = -2, pips = 0, bonus = 0 }
-
-[[condition]]
-name = "incapacitated"
-modifier = { dice = -3, pips = 0, bonus = 0 }
-
-[[condition]]
-name = "mortal"
-modifier = { dice = -3, pips = 0, bonus = 0 }
-
-[[condition]]
-name = "dead"
-modifier = { dice = 0, pips = 0, bonus = 0 }
-
-[[condition]]
-name = "locked"
-modifier = { dice = 0, pips = 0, bonus = 0 }
-
-[[condition]]
-name = "jammed"
-modifier = { dice = 0, pips = 0, bonus = 0 }
-
-[[condition]]
-name = "no_keys"
-modifier = { dice = 0, pips = 0, bonus = 0 }
-
-[[condition]]
-name = "flooded"
-modifier = { dice = 0, pips = 0, bonus = 0 }
 
 [strength_damage]
 skill = "strength"
@@ -161,9 +53,6 @@ familiarity = "feels a mild aversion to them"
 name = "neutral"
 minimum = -20
 maximum = 20
-disposition = "feels nothing in particular toward them"
-threat = "feels neither confident nor afraid around them"
-familiarity = "feels no particular closeness or distance"
 
 [[attitude_tier]]
 name = "warm"

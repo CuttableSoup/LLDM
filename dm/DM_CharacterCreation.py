@@ -1,6 +1,7 @@
 from dm.DM_Types import DMCoreProtocol
 from resolution.Character_Creation import (
-    build_character_skills, get_race, spend_exp_on_skills, validate_allocation,
+    LEARNABLE_ABILITY_SUPERTYPES, build_character_skills, get_race, spend_exp_on_abilities,
+    spend_exp_on_skills, validate_allocation,
 )
 
 
@@ -66,11 +67,19 @@ class CharacterCreationMixin(DMCoreProtocol):
             out of XP partway through) is logged and left entirely unapplied -- unlike a
             rejected "allocation", this doesn't abort the rest of the method, since training and
             renaming are unrelated.
+
+            A non-empty "abilities" (a list of spell/technique names) then buys each one out of
+            whatever "exp" is left after training, priced by Character_Creation.py's
+            ability_cost (difficulty / ability_cost_divisor) and replayed all-or-nothing the same
+            way. A from-scratch character ("allocation" given) starts with no abilities at all --
+            the template's own hand-authored list is cleared -- so buying is the only way to get
+            any; a bare "abilities" with no "allocation" adds to whatever the template already
+            has. Rejected (logged, unapplied) on an unknown/duplicate name or too little XP.
         @param character {"race": race_name, "allocation": {skill_name: dice_int}, "pip_spend":
-            [skill_name, ...], "name": new_name}, or None. "allocation"/"race", "pip_spend", and
-            "name" are independent of each other -- any can be given without the others. "name"
-            absent/blank/unchanged leaves self.player_name exactly as _resolve_player_name found
-            it.
+            [skill_name, ...], "abilities": [ability_name, ...], "name": new_name}, or None.
+            "allocation"/"race", "pip_spend", "abilities", and "name" are independent of each
+            other -- any can be given without the others. "name" absent/blank/unchanged leaves
+            self.player_name exactly as _resolve_player_name found it.
         """
         if not character:
             return
@@ -93,6 +102,7 @@ class CharacterCreationMixin(DMCoreProtocol):
                 return
 
             player["skills"] = build_character_skills(self.skills, race, allocation)
+            player["abilities"] = []
             if race_name and "qualities" in player:
                 player["qualities"]["race"] = race_name
 
@@ -128,6 +138,24 @@ class CharacterCreationMixin(DMCoreProtocol):
                 self.event_bus.publish("log_error", f"Character creation XP spend rejected: {reason}")
             else:
                 player["skills"] = new_skills
+                player["exp"] = remaining_exp
+
+        abilities = character.get("abilities") or []
+        if abilities:
+            catalog = {
+                name: entity for name, entity in self.entities.items()
+                if entity.get("supertype") in LEARNABLE_ABILITY_SUPERTYPES
+                and name not in self.universal_abilities
+            }
+            remaining_exp, reason = spend_exp_on_abilities(
+                player.get("exp", 0), abilities, catalog,
+                self.rules.get("character_creation", {}),
+            )
+            if reason:
+                self.event_bus.publish("log_error", f"Character creation ability purchase rejected: {reason}")
+            else:
+                known = list(player.get("abilities") or [])
+                player["abilities"] = known + [name for name in abilities if name not in known]
                 player["exp"] = remaining_exp
 
         new_name = (character.get("name") or "").strip()

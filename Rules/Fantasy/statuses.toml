@@ -1,0 +1,128 @@
+# Status (wound-ladder/trigger) definitions for the Fantasy setting -- split out of rules.toml so
+# the [[status]] table lives on its own. load_rules merges every *.toml in a
+# setting directory by top-level key, so nothing else changes: a [[status]] table
+# must simply appear in exactly one file here (a second file authoring "status" would
+# overwrite this one, not extend it).
+
+[[status]]
+name = "bruised"
+trigger = "on_damage"
+requirements = [
+    { field = "hp_per_remain", operator = "between", value = [0.81, 0.99] },
+]
+description = "Absorbed most or all of the attack"
+
+[[status]]
+name = "stunned"
+trigger = "on_damage"
+requirements = [
+    { field = "hp_per_remain", operator = "between", value = [0.60, 0.80] },
+]
+apply = { condition = "stunned", duration = "rounds", length = 1, dismiss = "" }
+description = "Moderate bruise or minor sprain; laceration; muscle tear; minor dislocation of joint."
+
+[[status]]
+name = "wounded"
+trigger = "on_damage"
+requirements = [
+    { field = "hp_per_remain", operator = "between", value = [0.40, 0.59] },
+]
+apply = { condition = "wounded", duration = "permanent", dismiss = "" }
+description = "Severe abrasion or sprain; deep laceration; torn ligaments; major dislocation or minor break."
+
+[[status]]
+name = "severe"
+trigger = "on_damage"
+requirements = [
+    { field = "hp_per_remain", operator = "between", value = [0.20, 0.39] },
+]
+apply = { condition = "severe", duration = "permanent", dismiss = "" }
+description = "Broken bone; gaping wound; ripped cartilage and muscle; concussion."
+
+[[status]]
+name = "incapacitated"
+trigger = "on_damage"
+requirements = [
+    { field = "hp_per_remain", operator = "between", value = [0.10, 0.19] },
+]
+apply = { condition = "incapacitated", duration = "permanent", dismiss = "" }
+description = "Multiple fracture; laceration in vital area; heavy concussion."
+
+[[status]]
+name = "mortal"
+trigger = "on_damage"
+requirements = [
+    { field = "hp_per_remain", operator = "between", value = [0.01, 0.09] },
+]
+apply = { condition = "unconscious", duration = "permanent", dismiss = "" }
+description = "Multiple internal injuries."
+
+[[status]]
+name = "dead"
+trigger = "on_damage"
+requirements = [
+    { field = "hp_per_remain", operator = "==", value = 0 },
+]
+apply = { condition = "dead", duration = "permanent", dismiss = "resurrection" }
+description = "Broken neck; punctured lung; eviscerated."
+
+# The [[status]] "on_round" trigger (evaluate_proximity_statuses, called once a round per living
+# scene entity from run_round_upkeep -- DM_Status.py) is what turns a stationary object into a
+# persistent terrain hazard (Rules/Pathfinder/reference/pathfinder_mapping.toml's "Persistent
+# terrain/obstacle spells" row): requirements match the hazard entity itself (here, by "name"),
+# and "apply" (the same {condition, duration, length, radius, side} shape "on_action" already
+# uses for a Frightful-Presence-style aura) lands on every other living entity sharing its band.
+# side = "all" since fire doesn't care who it burns. spells.toml's "wall of fire" spell conjures
+# the actual "flame wall" entity this matches, via the ordinary "summon" mechanism (same
+# placement/expiry "summon spectral wolf" already uses) -- a permanent, scenario-placed hazard
+# would work identically with no "summon" involved at all.
+[[status]]
+name = "flame wall zone"
+trigger = "on_round"
+requirements = [ { field = "name", operator = "==", value = "flame wall" } ]
+apply = { condition = "burning", duration = "rounds", length = 1, radius = 0, side = "all" }
+
+# The [[status]] "on_arrival" trigger (evaluate_proximity_statuses, called once per scene entry
+# -- DM_Rules.py's _evaluate_arrival_statuses, from both _enter_location and enter_room) is what
+# turns a stationary hazard into a delayed/triggered ward instead of a persistent zone (contrast
+# "flame wall zone" above, which re-checks every combat round): fires once, the moment someone
+# arrives, matching Rules/Pathfinder/reference/pathfinder_mapping.toml's "Delayed/triggered magic"
+# row (Glyph of Warding). Both entries below match items.toml's "warding glyph" by name AND
+# require its own seeded "armed" flag ([entity.conditions.armed]) still active; side = "all"
+# since a glyph doesn't discriminate between party and any other creature that stumbles onto
+# it. Real Glyph of Warding is a one-time discharge, not a lingering hazard like flame wall --
+# "self_dismiss = 'armed'" on both entries is what makes the glyph spend itself the first time
+# it actually catches someone (only one dismiss call is needed; the second is a harmless no-op,
+# dismiss_condition already tolerates dismissing an already-gone condition), re-entering this
+# same room afterward no longer triggering it -- the same "seed a flag, dismiss it once solved"
+# shape items.toml's dart trap already uses via [entity.test], just spent automatically here
+# instead of by a deliberate disarm attempt.
+#
+# "warding glyph shock" is the lingering-debuff half -- "shaken", duration = "rounds"/length =
+# 3, the DEBUFF's own lifespan on whoever it hits.
+[[status]]
+name = "warding glyph shock"
+trigger = "on_arrival"
+requirements = [
+    { field = "name", operator = "==", value = "warding glyph" },
+    { field = "has_condition:armed", operator = "==", value = true },
+]
+apply = { condition = "shaken", duration = "rounds", length = 3, radius = 0, side = "all" }
+self_dismiss = "armed"
+
+# "warding glyph blast" is the instant-damage half (the real Pathfinder "Blast" glyph shape) --
+# reuses "burning" (upkeep_damage = 2D per round, the exact same condition "flame wall zone"
+# already applies) directly, no new condition needed at all: duration = "rounds"/length = 1
+# means _evaluate_arrival_statuses's own immediate upkeep resolution (DM_Rules.py -- otherwise
+# nothing would ever roll "burning"'s own upkeep_damage outside an actual combat round) deals
+# its damage and dismisses it in that same call, a real one-time blast rather than a lingering
+# fire.
+[[status]]
+name = "warding glyph blast"
+trigger = "on_arrival"
+requirements = [
+    { field = "name", operator = "==", value = "warding glyph" },
+    { field = "has_condition:armed", operator = "==", value = true },
+]
+apply = { condition = "burning", duration = "rounds", length = 1, radius = 0, side = "all" }
+self_dismiss = "armed"

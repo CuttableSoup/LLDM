@@ -14,7 +14,13 @@ import tomllib
 
 from paths import PROJECT_ROOT
 
-DEFAULT_CHARACTER_CREATION = {"pool_dice": 15, "max_allocation_per_skill": 5}
+DEFAULT_CHARACTER_CREATION = {
+    "pool_dice": 15, "max_allocation_per_skill": 5, "ability_cost_divisor": 10,
+}
+# The [[entity]] supertypes a character can buy at creation (spend_exp_on_abilities) -- every
+# other ability shape (a weapon's own attack, an inline innate ability) is either gear or
+# authored directly on a creature, not something a player picks from a catalog.
+LEARNABLE_ABILITY_SUPERTYPES = ("spell", "technique")
 # What race_baseline_skills falls back to for a skill a race's own [race.skill_dice] table
 # doesn't cover (every shipped race in races.toml lists all of them; this only matters for a
 # malformed/incomplete race, or race=None -- ex: an unrecognized race name) -- 0D, the same
@@ -163,6 +169,85 @@ def load_player_starting_exp(rules_dir=os.path.join("Rules", "Fantasy")):
             if entity.get("is_player"):
                 return entity.get("exp", 0)
     return 0
+
+
+def load_learnable_abilities(rules_dir=os.path.join("Rules", "Fantasy")):
+    """!
+    @brief Scans every *.toml directly under rules_dir for [[entity]] tables of a
+        LEARNABLE_ABILITY_SUPERTYPES supertype -- the catalog of spells/techniques a
+        character-creation dialog can offer for purchase, readable before any DMCore exists
+        (same reasoning as load_character_creation_data's own re-scan). Skips any ability a
+        [[skill]] lists in its own "abilities" field (ex: maneuvers.toml's trip/disarm) --
+        those are usable by everyone already (DMCore's universal_abilities), nothing to buy.
+    @param rules_dir Path to the rules directory, relative to the project root.
+    @return {ability_name: entity_table}, in file/declaration order.
+    """
+    full_dir = os.path.join(PROJECT_ROOT, rules_dir)
+    abilities = {}
+    universal = set()
+    if not os.path.exists(full_dir):
+        return abilities
+
+    for filename in sorted(os.listdir(full_dir)):
+        if not filename.endswith(".toml"):
+            continue
+        try:
+            with open(os.path.join(full_dir, filename), "rb") as f:
+                data = tomllib.load(f)
+        except Exception:
+            continue
+        for skill in data.get("skill", []):
+            universal.update(skill.get("abilities", []))
+        for entity in data.get("entity", []):
+            if entity.get("supertype") in LEARNABLE_ABILITY_SUPERTYPES and entity.get("name"):
+                abilities[entity["name"]] = entity
+    return {name: entity for name, entity in abilities.items() if name not in universal}
+
+
+def ability_cost(ability, character_creation):
+    """!
+    @brief The XP price of learning one ability at creation: its own authored `difficulty`
+        divided by character_creation's "ability_cost_divisor" (default 10 -- D6 Magic's own
+        "one point for every 10 in the difficulty" learning-cost suggestion), rounded to the
+        nearest whole XP (halves up), minimum 1 so nothing is free. A missing difficulty counts
+        as 0 and so costs the minimum. Difficulty is used rather than the effect's own value
+        because it is what every ability here actually stores -- see spells_pathfinder.toml's
+        header for how it is derived from the spell-design formula.
+    @param ability An ability's [[entity]] table.
+    @param character_creation The [character_creation] constants table.
+    @return The XP cost, an int >= 1.
+    """
+    divisor = character_creation.get(
+        "ability_cost_divisor", DEFAULT_CHARACTER_CREATION["ability_cost_divisor"]
+    ) or DEFAULT_CHARACTER_CREATION["ability_cost_divisor"]
+    return max(1, int(ability.get("difficulty", 0) / divisor + 0.5))
+
+
+def spend_exp_on_abilities(exp, abilities, catalog, character_creation):
+    """!
+    @brief Prices a list of chosen ability names against exp, all-or-nothing -- the ability
+        counterpart to spend_exp_on_skills, replayed server-side rather than trusting a
+        client-submitted total. Rejects an unknown (not in catalog) or duplicated name, or a
+        total cost above exp.
+    @param exp The XP balance to spend from.
+    @param abilities A list of ability names.
+    @param catalog {name: entity_table}, ex: load_learnable_abilities' return.
+    @param character_creation The [character_creation] constants table.
+    @return (remaining_exp, error_reason_or_None) -- exp unchanged if rejected.
+    """
+    remaining = exp
+    seen = set()
+    for name in abilities:
+        if name not in catalog:
+            return exp, f"Unknown ability: {name}"
+        if name in seen:
+            return exp, f"Ability chosen twice: {name}"
+        seen.add(name)
+        cost = ability_cost(catalog[name], character_creation)
+        if cost > remaining:
+            return exp, f"Not enough XP to learn \"{name}\" (needs {cost}, have {remaining})"
+        remaining -= cost
+    return remaining, None
 
 
 def spend_pip(dice, pips, exp):

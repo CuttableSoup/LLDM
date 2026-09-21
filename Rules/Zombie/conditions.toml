@@ -1,0 +1,45 @@
+# Status/condition definitions for the Zombie setting -- split out of rules.toml so
+# the (large) [[condition]] catalog lives on its own. load_rules merges every *.toml in a
+# setting directory by top-level key, so nothing else changes: a [[condition]] table
+# must simply appear in exactly one file here (a second file authoring "condition" would
+# overwrite this one, not extend it).
+
+[[condition]]
+name = "stunned"
+modifier = { dice = -1, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "wounded"
+modifier = { dice = -1, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "severe"
+modifier = { dice = -2, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "incapacitated"
+modifier = { dice = -3, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "mortal"
+modifier = { dice = -3, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "dead"
+modifier = { dice = 0, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "locked"
+modifier = { dice = 0, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "jammed"
+modifier = { dice = 0, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "no_keys"
+modifier = { dice = 0, pips = 0, bonus = 0 }
+
+[[condition]]
+name = "flooded"
+modifier = { dice = 0, pips = 0, bonus = 0 }

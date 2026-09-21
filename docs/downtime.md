@@ -350,7 +350,7 @@ occur rather than every elapsed night. A party of one skips the roll and is alwa
 nobody to rotate a watch to while the sole traveler sleeps, and treating solo rest as automatically
 safe would invert the usual "safety in numbers" logic.
 
-A failed (or skipped) watch applies `rules.toml`'s new `[[condition]]` `"surprised"` (a heavier
+A failed (or skipped) watch applies `conditions.toml`'s new `[[condition]]` `"surprised"` (a heavier
 `-2` dice penalty than `"stunned"`'s `-1`) to every present `is_party` member — the whole party was
 caught off guard, not just whoever stood watch. Applied with `duration = "rounds", length = 1`
 (see `docs/combat.md`'s "Status and conditions" for the full duration/length mechanism), so

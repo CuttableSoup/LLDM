@@ -7,7 +7,9 @@ from tkinter import ttk, simpledialog
 from collections import Counter
 
 import resolution.Combat_Resolution as Combat_Resolution
-from resolution.Character_Creation import load_character_creation_data, load_player_starting_exp
+from resolution.Character_Creation import (
+    load_character_creation_data, load_learnable_abilities, load_player_starting_exp,
+)
 from gui.Character_Creation_GUI import run_character_creation_dialog
 from dm.DM_Rules import list_available_characters, list_available_scenarios, list_available_settings
 from paths import PROJECT_ROOT
@@ -329,7 +331,7 @@ class GUICore:
             blocking modally the same way request_load's own picker does -- moved here from
             LLDM.py's main(), which used to run this unconditionally, before DMCore even
             existed, on every single boot. Publishes "character_created" with the dialog's own
-            result ({"race", "allocation", "pip_spend", "name"}) only if "Create" was actually
+            result ({"race", "allocation", "pip_spend", "abilities", "name"}) only if "Create" was actually
             pressed; cancelling leaves self.result None and nothing is published at all, so a
             cancelled dialog can't be mistaken for "create a character with no race/allocation"
             by whatever's listening. load_character_creation_data()/load_player_starting_exp()
@@ -349,6 +351,7 @@ class GUICore:
         player_exp = load_player_starting_exp(rules_dir)
         character = run_character_creation_dialog(
             self.root, skills, races, character_creation, player_exp,
+            load_learnable_abilities(rules_dir),
         )
         if character is None:
             return

@@ -1,17 +1,18 @@
 """!
 @file Character_Creation_GUI.py
 @brief The interactive character-creation dialog: pick a race, spend a fixed pool of skill dice
-    across every skill, then optionally spend the character's own starting XP training
-    individual skills further, one pip at a time (see Character_Creation.py for the underlying
-    race/point-buy/training math -- this file is pure Tkinter UI on top of it, no game rules of
-    its own).
+    across every skill, then optionally spend the character's own starting XP -- training
+    individual skills further, one pip at a time, and/or buying spells/techniques (a
+    character built from scratch starts with none) -- see Character_Creation.py for the
+    underlying race/point-buy/training/ability-cost math; this file is pure Tkinter UI on top of
+    it, no game rules of its own).
 """
 
 import tkinter as tk
 from tkinter import ttk
 
 from resolution.Character_Creation import (
-    get_race, race_baseline_skills, spend_exp_on_skills, validate_allocation,
+    ability_cost, get_race, race_baseline_skills, spend_exp_on_skills, validate_allocation,
 )
 
 
@@ -24,14 +25,15 @@ class CharacterCreationDialog(tk.Toplevel):
         the caller via wait_window() -- LLDM.py's main() constructs this with GUICore's own
         root as parent, before DMCore exists, the same way GUICore.request_load already blocks
         on a Toplevel/Listbox selection (see GUI_Core.py). self.result is {"race": ...,
-        "allocation": {...}, "pip_spend": [...], "name": ...} once "Create" is pressed, or None
+        "allocation": {...}, "pip_spend": [...], "abilities": [...], "name": ...} once "Create"
+        is pressed, or None
         if cancelled/closed -- the exact shape DMCore.__init__'s own "character" param expects
         (see DM_CharacterCreation.py). "name" is always present but may be "" (left blank),
         which apply_character_creation treats as "keep the player template's own name" rather
         than renaming anything.
     """
 
-    def __init__(self, parent, skills, races, character_creation, player_exp=0):
+    def __init__(self, parent, skills, races, character_creation, player_exp=0, abilities=None):
         """!
         @param parent The Tk root/Toplevel this dialog is transient to and modal over.
         @param skills {name: skill_table}, from Character_Creation.load_character_creation_data.
@@ -42,6 +44,9 @@ class CharacterCreationDialog(tk.Toplevel):
             from. Defaults to 0 (no XP to train with, every "Train" button starts disabled)
             rather than raising, so a caller with no player template resolvable yet still gets
             a usable dialog.
+        @param abilities {name: entity_table} of buyable spells/techniques (ex:
+            Character_Creation.load_learnable_abilities), each priced by ability_cost out of the
+            same XP balance training draws from. Defaults to none (no ability section at all).
         """
         super().__init__(parent)
         self.title("Create Your Character")
@@ -55,6 +60,12 @@ class CharacterCreationDialog(tk.Toplevel):
         self.pool_dice = character_creation.get("pool_dice", 15)
         self.max_per_skill = character_creation.get("max_allocation_per_skill", 5)
         self.player_exp = player_exp
+        self.abilities = abilities or {}
+        self.ability_names = sorted(
+            self.abilities, key=lambda n: (self.abilities[n].get("supertype", ""), n)
+        )
+        self.ability_vars = {}
+        self.ability_checks = {}
         self.name_var = tk.StringVar(value="")
         self.result = None
 
@@ -159,6 +170,20 @@ class CharacterCreationDialog(tk.Toplevel):
             train_button.pack(side=tk.LEFT)
             self.train_buttons[name] = train_button
 
+        if self.ability_names:
+            tk.Label(
+                rows_frame, text="Spells & techniques (bought with XP)",
+                font=("TkDefaultFont", 10, "bold"), anchor=tk.W,
+            ).pack(fill=tk.X, pady=(10, 0))
+            for name in self.ability_names:
+                var = tk.BooleanVar(value=False)
+                check = tk.Checkbutton(
+                    rows_frame, variable=var, anchor=tk.W, command=self._recompute_training,
+                )
+                check.pack(fill=tk.X)
+                self.ability_vars[name] = var
+                self.ability_checks[name] = check
+
         button_row = tk.Frame(self)
         button_row.pack(fill=tk.X, padx=10, pady=10)
         self.create_button = tk.Button(button_row, text="Create", command=self._on_create)
@@ -245,6 +270,18 @@ class CharacterCreationDialog(tk.Toplevel):
             for name in self.skill_names
         }
 
+    def _ability_cost(self, name):
+        """!
+        @return The XP price of buying name (Character_Creation.ability_cost).
+        """
+        return ability_cost(self.abilities[name], self.character_creation)
+
+    def _chosen_abilities(self):
+        """!
+        @return The currently ticked ability names, in display order.
+        """
+        return [name for name in self.ability_names if self.ability_vars[name].get()]
+
     def _recompute_training(self):
         """!
         @brief The single source of truth for everything training-related on screen --
@@ -258,10 +295,19 @@ class CharacterCreationDialog(tk.Toplevel):
             method has already confirmed the click is affordable, so it can never itself be the
             entry that gets trimmed. Refreshes every row's own "Total" label/"Train" button text
             and enabled state, plus the "XP remaining" counter, to match.
+
+            Ticked abilities are paid for first, and training replays against whatever XP that
+            leaves -- both draw on the one balance, and the server-side replay (apply_character_
+            creation) only checks the combined total fits, so this order can never accept
+            something the server would reject. Ability rows stay tickable only while affordable.
         """
+        chosen = self._chosen_abilities()
+        ability_total = sum(self._ability_cost(name) for name in chosen)
         base_skills = self._current_base_skills()
         while True:
-            trained, remaining, reason = spend_exp_on_skills(base_skills, self.player_exp, self.pip_spend)
+            trained, remaining, reason = spend_exp_on_skills(
+                base_skills, self.player_exp - ability_total, self.pip_spend
+            )
             if reason is None:
                 break
             self.pip_spend.pop()
@@ -277,6 +323,16 @@ class CharacterCreationDialog(tk.Toplevel):
             self.train_buttons[name].config(text=f"Train ({cost} xp)")
             self.train_buttons[name].config(
                 state=tk.NORMAL if self.remaining_exp >= cost else tk.DISABLED
+            )
+
+        for name in self.ability_names:
+            cost = self._ability_cost(name)
+            self.ability_checks[name].config(
+                text=f"{name} ({cost} xp) -- {self.abilities[name].get('description', '')}",
+                state=(
+                    tk.NORMAL if self.ability_vars[name].get() or self.remaining_exp >= cost
+                    else tk.DISABLED
+                ),
             )
 
         self.exp_remaining_label.config(text=f"XP remaining: {self.remaining_exp} / {self.player_exp}")
@@ -311,7 +367,7 @@ class CharacterCreationDialog(tk.Toplevel):
             return
         self.result = {
             "race": race_name, "allocation": allocation, "pip_spend": list(self.pip_spend),
-            "name": self.name_var.get().strip(),
+            "abilities": self._chosen_abilities(), "name": self.name_var.get().strip(),
         }
         self.destroy()
 
@@ -324,16 +380,22 @@ class CharacterCreationDialog(tk.Toplevel):
         self.destroy()
 
 
-def run_character_creation_dialog(parent, skills, races, character_creation, player_exp=0):
+def run_character_creation_dialog(
+    parent, skills, races, character_creation, player_exp=0, abilities=None,
+):
     """!
     @brief Constructs and blocks on a CharacterCreationDialog until it's closed.
     @param parent The Tk root/Toplevel to parent the dialog to.
     @param skills, races, character_creation See Character_Creation.load_character_creation_data.
     @param player_exp The is_player template's own starting "exp" (ex:
         Character_Creation.load_player_starting_exp) -- forwarded to CharacterCreationDialog.
-    @return {"race": ..., "allocation": {...}, "pip_spend": [...], "name": ...}, or None if
+    @param abilities {name: entity_table} of buyable spells/techniques, forwarded likewise.
+    @return {"race": ..., "allocation": {...}, "pip_spend": [...], "abilities": [...],
+            "name": ...}, or None if
             cancelled -- ready to pass straight into DMCore's own "character" constructor param.
     """
-    dialog = CharacterCreationDialog(parent, skills, races, character_creation, player_exp)
+    dialog = CharacterCreationDialog(
+        parent, skills, races, character_creation, player_exp, abilities,
+    )
     parent.wait_window(dialog)
     return dialog.result

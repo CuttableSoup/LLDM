@@ -654,7 +654,7 @@ def get_skill_group_members(rules, name_or_names):
 def get_condition_modifier(entities, rules, entity_name, skill_name=None):
     """!
     @brief Sums the {dice, pips, bonus} roll modifier of every one of entity_name's own
-        active_conditions that has a matching entry in rules.toml's own [[condition]] table.
+        active_conditions that has a matching entry in conditions.toml's own [[condition]] table.
     @param entities The live entities dict.
     @param rules The loaded rules dict.
     @param entity_name The name of the entity to sum modifiers for.
