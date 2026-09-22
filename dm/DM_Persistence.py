@@ -288,8 +288,16 @@ class PersistenceMixin(DMCoreProtocol):
             "ground": ground_state,
             "instances": {name: _instance_state(name) for name in instance_names},
             "ad_hoc_entities": self._collect_ad_hoc_entities(),
-            "removed_entities": list(self.removed_entities),
-            "known_locations": list(self.known_locations),
+            # sorted(), not list() -- both are plain sets, and Python's set iteration order
+            # depends on insertion history, not just final contents (a set grown one .add() at
+            # a time over a real playthrough can iterate in a different order than
+            # set(same_elements) built in one shot, exactly what load_game does on the way back
+            # in). Nothing reads either list positionally (membership checks only), so a save's
+            # own JSON is otherwise byte-for-byte non-deterministic across a save/load/save
+            # round trip -- harmless to actual play, but noise for diffing saves or writing a
+            # round-trip test that compares raw dm_state.json instead of the reloaded set.
+            "removed_entities": sorted(self.removed_entities),
+            "known_locations": sorted(self.known_locations),
             "entity_instancing_order": [list(entry) for entry in self.entity_instancing_order],
             # Grounding for NPC promotion, not game state -- see DM_Core.py's
             # recent_narration. Losing it would only cost a resumed save the last beat or

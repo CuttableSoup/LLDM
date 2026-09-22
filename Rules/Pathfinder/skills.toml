@@ -151,7 +151,7 @@ combat_role = "defense"
 [[skill]]
 name = "reflexes"
 description = "Quick physical reactions to sudden events."
-keywords = ["defense", "reaction", "speed", "quick", "fast", "react", "catch"]
+keywords = ["defense", "reaction", "speed", "fast", "react", "catch"]
 opposes = ["stealth", "acrobatics", "finesse", "trickery"]
 # See athletics' own combat_role comment.
 combat_role = "resistive"
@@ -220,7 +220,7 @@ lore_types = { subtypes = ["animal", "giant"] }
 [[skill]]
 name = "willpower"
 description = "Resisting mental influence, fear, or coercion."
-keywords = ["defense", "resistance", "mental", "focus", "concentration", "resolve", "determination"]
+keywords = ["defense", "resistance", "mental", "concentration", "resolve", "determination"]
 opposes = ["arcane", "miracles", "psionics", "charisma", "intimidation"]
 # See athletics' own combat_role comment.
 combat_role = "resistive"
@@ -262,7 +262,7 @@ opposes = ["streetwise"]
 [[skill]]
 name = "observation"
 description = "Spotting hidden things or noticing fine details."
-keywords = ["perception", "investigation", "awareness", "search", "spot", "look", "notice", "see", "hear", "listen", "find"]
+keywords = ["perception", "investigation", "awareness", "search", "spot", "look", "notice", "see", "hear", "listen", "find", "study", "scan", "watch", "observe", "glance", "gaze", "peer", "survey", "scrutinize"]
 opposes = ["stealth", "disguise", "trickery", "finesse", "forgery"]
 
 [[skill]]

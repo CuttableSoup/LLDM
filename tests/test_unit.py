@@ -1202,6 +1202,54 @@ class TestFreeformDialogueNarration(LLMTestCase):
         self.assertIn("goblin tongue", prompt)
         self.assertNotIn("For phonetic flavor", prompt)
 
+    def _fake_response(self, content):
+        response = MagicMock()
+        response.read.return_value = json.dumps(
+            {"choices": [{"message": {"content": content}}]}
+        ).encode("utf-8")
+        return response
+
+    def test_dialogue_sends_the_players_actual_question_when_the_label_differs_from_the_key(self):
+        # Regression: _queue_dialogue used to filter history by whichever string phrases the
+        # prompt (data["target_label"], ex: "the Fishmonger") instead of the raw entity key
+        # present_entities/_filter_present_history actually tag entries with -- a display
+        # label never literally matches a raw key, so fetch_from_llm's own
+        # self._filter_present_history(target) call (inside the closure, not reachable by
+        # calling _filter_present_history directly from outside) came back empty on every
+        # dialogue turn: only the system message reached the model, no player question at
+        # all. Every other test in this class happens to omit "target_label", so speaker ==
+        # target by coincidence and masks the bug -- this one deliberately gives a different
+        # label, the way narration-driven population always does in practice, and actually
+        # runs the queued closure (mock_thread.call_args.kwargs["target"]()) rather than just
+        # re-checking context_window, which was never broken.
+        with patch("threading.Thread") as mock_thread, \
+             patch("urllib.request.urlopen", return_value=self._fake_response("Aye, I know a bit.")):
+            self.event_bus.publish("dialogue_resolved", {
+                "target": "market_person_3", "target_label": "the Fishmonger",
+                "input": "tell me what you know", "found": True,
+                "persona": "A fishmonger.", "attitude": "neutral",
+                "present_entities": ["gladstone", "market_person_3"],
+            })
+            mock_thread.call_args.kwargs["target"]()
+
+        debug_events = []
+        self.event_bus.subscribe("llm_debug_updated", debug_events.append)
+        with patch("threading.Thread") as mock_thread, \
+             patch("urllib.request.urlopen", return_value=self._fake_response("The kelp beds? Out past the pier.")):
+            self.event_bus.publish("dialogue_resolved", {
+                "target": "market_person_3", "target_label": "the Fishmonger",
+                "input": "ask about the kelp beds", "found": True,
+                "persona": "A fishmonger.", "attitude": "neutral",
+                "present_entities": ["gladstone", "market_person_3"],
+            })
+            mock_thread.call_args.kwargs["target"]()
+
+        self.assertIn('The player says: "ask about the kelp beds"', debug_events[0]["query"])
+        # The prior turn's own exchange is still there too -- presence-filtered history, not
+        # just the triggering turn alone.
+        self.assertIn('The player says: "tell me what you know"', debug_events[0]["query"])
+        self.assertIn("Aye, I know a bit.", debug_events[0]["query"])
+
     def test_filter_present_history_excludes_entries_the_entity_never_witnessed(self):
         self.llm_core.context_window = [
             {"role": "user", "content": "entrance room narration", "present": ["gladstone", "dart trap"]},
@@ -1579,12 +1627,16 @@ class TestSaveForHalf(DMTestCase):
         shape. Only ever checked for a target resolve_targets widened onto, never target_name
         itself (which already resolved through the ordinary opposed roll). Arena's default
         layout puts gladstone/thane/wolf/wolf_2 all at band 1 (see TestResolveTargets) -- "wolf"
-        is target_name (primary), "wolf_2" the AoE-widened secondary target; neither trains
-        "reflexes" at all, so an untrained defender's own flat save roll is a deterministic 0, no
-        random mocking needed -- difficulty = 0 forces a pass, any positive difficulty forces a
-        fail. negates_save_for_half is checked by literal skill match against the save's own
-        "skill" (the Pathfinder Evasion trait is exactly ["reflexes"]), not a bare boolean, so a
-        save_for_half effect keyed to a different skill is unaffected by it.
+        is target_name (primary), "wolf_2" the AoE-widened secondary target. difficulty = 0
+        forces a pass regardless of the roll (a 2d6 total can't go below 2). wolf_2 actually
+        trains reflexes at 2D (debug.toml), not untrained -- a difficulty = 10 save is *usually*
+        a fail but passes on a 2d6 of 10+ (1-in-6), so the two tests below that need a forced
+        fail go through _stub_roll_dice(0) rather than relying on difficulty alone; an earlier
+        version of this class assumed an untrained (0-dice, deterministic-0) defender and
+        flaked at exactly that ~17% rate. negates_save_for_half is checked by literal skill
+        match against the save's own "skill" (the Pathfinder Evasion trait is exactly
+        ["reflexes"]), not a bare boolean, so a save_for_half effect keyed to a different skill
+        is unaffected by it.
     """
 
     def _blast(self, difficulty):
@@ -1605,6 +1657,7 @@ class TestSaveForHalf(DMTestCase):
         self.assertEqual(self._effect_for(result, "wolf").net_damage, 10)
 
     def test_secondary_target_takes_full_damage_on_a_failed_save(self):
+        self._stub_roll_dice(0)  # forces wolf_2's own 2d6 reflexes save below difficulty 10
         result = RolledOutcome(entity="gladstone", skill="melee", roll=0, difficulty=0, success=True)
         self.dm_core._apply_damage_if_hit(result, "melee", None, self._blast(10), "wolf", via_test=False)
         self.assertEqual(self._effect_for(result, "wolf_2").net_damage, 10)
@@ -1621,6 +1674,7 @@ class TestSaveForHalf(DMTestCase):
         self.assertNotIn("wolf_2", [e.defender for e in result.effects])
 
     def test_evasion_does_nothing_on_a_failed_save(self):
+        self._stub_roll_dice(0)  # forces wolf_2's own 2d6 reflexes save below difficulty 10
         self.dm_core.entities["wolf_2"]["negates_save_for_half"] = ["reflexes"]
         result = RolledOutcome(entity="gladstone", skill="melee", roll=0, difficulty=0, success=True)
         self.dm_core._apply_damage_if_hit(result, "melee", None, self._blast(10), "wolf", via_test=False)

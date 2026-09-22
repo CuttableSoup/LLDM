@@ -781,7 +781,7 @@ class LLMCore:
             prompt = f"The player says: \"{data.get('input', '')}\""
 
         self._queue_dialogue(
-            speaker, data.get("persona", ""), data.get("attitude", ""), prompt,
+            target, speaker, data.get("persona", ""), data.get("attitude", ""), prompt,
             rag_query=data.get("input"), present_entities=data.get("present_entities"),
             label=f"dialogue:{target}",
         )
@@ -1087,23 +1087,33 @@ class LLMCore:
             )
         return system_message
 
-    def _queue_dialogue(self, target, persona, attitude, prompt, rag_query=None, present_entities=None, label=None):
+    def _queue_dialogue(self, target_key, speaker, persona, attitude, prompt, rag_query=None, present_entities=None, label=None):
         """!
         @brief The dialogue counterpart to _queue_narration -- same rolling-window/background-
-            fetch machinery, except the request sent to the model is built from target's own
+            fetch machinery, except the request sent to the model is built from target_key's own
             presence-filtered view of context_window (_filter_present_history), not the full
-            window, under a system message grounded only in target's own persona/attitude
+            window, under a system message grounded only in speaker's own persona/attitude
             rather than the standing GM framing/full scenario roster (_build_dialogue_system_
-            message) -- still the third-person Game Master narrating target's reply, same as
+            message) -- still the third-person Game Master narrating speaker's reply, same as
             every other trigger here, just narrower context. The exchange itself (the player's
-            question, target's own reply) is still appended to the *shared* context_window,
+            question, speaker's own reply) is still appended to the *shared* context_window,
             tagged with present_entities the same way any other narration is -- so it becomes
             part of what everyone in the room (including the omniscient narrator, and any
             other NPC present) has now witnessed, letting a second NPC in the same room later
             recall what was just said to the first one.
-        @param target The entity being addressed, in-character.
-        @param persona describe_character(target)'s own flavor text.
-        @param attitude describe_attitude(target, player)'s own prose.
+        @param target_key The addressed entity's own raw instance key (ex: "market_person_3"),
+            matching what present_entities/_filter_present_history's own "present" tags actually
+            carry -- never the display label. Conflating the two here used to mean
+            _filter_present_history(speaker) was checking a display string ("the Fishmonger")
+            against a list of raw keys, which can never match: history came back empty on every
+            single dialogue turn, and the only thing ever sent to the model was the system
+            message -- no player question at all, just usually masked by the model improvising
+            around the gap rather than visibly failing.
+        @param speaker The DM's own display label for the addressed entity (ex: "the
+            Fishmonger"), used only for prompt phrasing (_build_dialogue_system_message) -- the
+            model otherwise parrots a raw internal key back as if it were a name.
+        @param persona describe_character(target_key)'s own flavor text.
+        @param attitude describe_attitude(target_key, player)'s own prose.
         @param prompt The user-role prompt: the player's own words.
         @param rag_query What to retrieve sourcebook lore against -- the player's own raw
             input, same convention every other narration trigger follows.
@@ -1117,7 +1127,7 @@ class LLMCore:
             self.context_window = self.context_window[-100:]
 
         system_message = self._build_dialogue_system_message(
-            target, persona, attitude, rag_query if rag_query else prompt,
+            speaker, persona, attitude, rag_query if rag_query else prompt,
         )
 
         def fetch_from_llm():
@@ -1125,7 +1135,7 @@ class LLMCore:
             # _queue_narration's own fetch_from_llm already follows for self.context_window:
             # another narration/dialogue call could append to the shared window between
             # queueing and actually fetching.
-            history = self._filter_present_history(target)
+            history = self._filter_present_history(target_key)
             messages = [{"role": "system", "content": system_message}] + self._api_messages(
                 self._fit_history(system_message, history))
             self._fetch_and_publish(messages, present_entities, label=label)
