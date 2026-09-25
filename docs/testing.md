@@ -30,6 +30,14 @@ Practical constraints when touching this file:
   already-covered code path. `TestGameBoot` and `TestNlpConfidenceThreshold` load the real
   `sentence-transformers` model via `setUpClass`, narrowed to what actually needs it
   (confidence-threshold/keyword-fallback scoring, real embedding registration).
+  `TestPlayerInputCorpus` also loads it, to run the whole classifier over
+  `tests/player_input_corpus.toml` (hand-labeled, setting-neutral inputs, many adapted from
+  `Logs/`) against every setting under `Rules/`, each loaded rules-only with no scenario. It
+  ratchets three rates, with one bound shared by every setting: conversation lines that still
+  roll a skill, genuine actions answered with "I don't understand", and social-skill attempts
+  that roll. Lower a bound whenever the worst setting improves on it. When a matching change
+  moves a phrasing, add that line to the corpus (kept free of any one setting's nouns) instead
+  of writing a one-off test for it.
   `TestIntentClassification` covers `Intent_Classification.py`'s gate/precedence order instead
   — `IntentClassifier` exercised directly against `FakeMatcher` (a canned `IntentMatcher`
   double defined alongside it), no model load, EventBus, or DMCore needed. Most other classes

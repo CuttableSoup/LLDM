@@ -11,6 +11,7 @@ import tkinter as tk
 import tomllib
 import unittest
 import zipfile
+from types import SimpleNamespace
 from typing import get_args
 from unittest.mock import MagicMock, patch
 
@@ -54,7 +55,7 @@ from dm.DM_ActionOutcome import (
 )
 from dm.DM_Core import DMCore, PERSON_TARGET_INTENTS, RECENT_NARRATION_CHARS, RECENT_NARRATION_TURNS
 from dm.DM_Improvisation import MAX_PROMOTED_PER_SCENE
-from dm.DM_Rules import list_available_scenarios
+from dm.DM_Rules import RulesMixin, list_available_scenarios, list_available_settings
 from dm.DM_Travel import ROAD_ENCOUNTER_KEY
 from dm.DM_Social import TALK_ATTITUDE_DRIFT_CAP, ACTION_ATTITUDE_DRIFT_CAP
 from Event_Bus import EventBus
@@ -513,6 +514,106 @@ class TestNlpConfidenceThreshold(unittest.TestCase):
         finally:
             self.nlp_core.matcher.item_embeddings = original_embeddings
             self.nlp_core.matcher.item_indices = original_indices
+
+    def test_keyword_fallback_ignores_a_keyword_inside_a_remark_rather_than_an_action(self):
+        # Both observation's own keyword "find" -- the first leads a declared action, the
+        # second is just a word in a suggestion (see NLP_Core.py's NON_ACTION_OPENERS). Scores
+        # alone can't tell these apart: across the real logs, the keyword fallback's
+        # conversation hits and genuine hits scored in the same 0.2-0.5 band.
+        skill, _score = self.nlp_core.matcher.map_to_action("find the dockmaster")
+        self.assertEqual(skill, "observation")
+
+        skill, score = self.nlp_core.matcher.map_to_action("forget the lumber. let's find a private place.")
+        self.assertIsNone(skill, f"remark wrongly rolled at {score:.3f}")
+
+    def test_alternate_phrasing_never_scores_a_fragment_that_opens_like_a_question(self):
+        # The original misfire: truncating at TOPIC_CLAUSE_MARKERS' " that " turned this into
+        # "is your forge really", which scored as forgery once the banter around it was gone.
+        skill, score = self.nlp_core.matcher.map_to_action(
+            "gareth, is your forge really that hot? maybe we could cool off together.",
+        )
+        self.assertIsNone(skill, f"banter wrongly rolled {skill} at {score:.3f}")
+
+
+class TestPlayerInputCorpus(unittest.TestCase):
+    """!
+    @brief A ratchet over tests/player_input_corpus.toml -- hand-labeled, setting-neutral
+        inputs, run against EVERY setting under Rules/ (list_available_settings), so a setting
+        added later is covered with no change here. Each setting is loaded rules-only -- the
+        same skills/entities DMCore would publish in "rules_loaded", but no scenario, so no
+        one scenario's items, exits, or cast can move these numbers.
+
+        Individual phrasings are too noisy a target for the embedding matcher to pin one by
+        one, so this asserts aggregate rates instead: how often conversation still rolls a
+        skill, how often a genuine action is met with "I don't understand", and how often a
+        social-skill attempt rolls. The same bounds apply to every setting, so each is set by
+        whichever setting is currently worst -- lower one whenever the worst case improves; a
+        change that has to raise one is a regression that has to justify itself. On failure,
+        the message names the setting and lists every offending input.
+    """
+
+    # Measured once the fallback paths learned NON_ACTION_OPENERS, which took conversation
+    # rolls from 26/52 to 14/52 (Fantasy), 26 to 13 (Pathfinder), and 11 to 9 (Zombie) without
+    # costing a single genuine action anywhere. Current worst cases: conversation 14/52 in
+    # Fantasy; actions and social skills 22/49 and 2/12 in Zombie, whose deliberately bare
+    # skills.toml has no keywords for most investigation verbs and no bargaining/deception
+    # skill at all -- richer Zombie skill data is what would let those two bounds tighten.
+    MAX_CONVERSATION_ROLL_RATE = 0.27
+    MAX_ACTION_NOT_UNDERSTOOD_RATE = 0.45
+    MIN_SOCIAL_SKILL_ROLL_RATE = 0.16
+
+    @classmethod
+    def setUpClass(cls):
+        cls.event_bus = EventBus()
+        cls.nlp_core = NLPCore(cls.event_bus)
+        with open(os.path.join(os.path.dirname(__file__), "player_input_corpus.toml"), "rb") as corpus_file:
+            cls.corpus = tomllib.load(corpus_file)["input"]
+
+    def _load_setting_rules(self, setting):
+        # RulesMixin.load_rules itself, run against a bare stand-in for DMCore -- the production
+        # TOML scan, without booting a scenario that would drag its own scene into the matcher.
+        rules = SimpleNamespace(event_bus=self.event_bus, skills={}, entities={}, entity_templates={}, rules={})
+        RulesMixin.load_rules(rules, os.path.join("Rules", setting))
+        self.nlp_core.classifier.on_rules_loaded({"skills": rules.skills, "entities": rules.entities})
+
+    def test_corpus_outcomes_stay_within_their_measured_bounds_in_every_setting(self):
+        settings = list_available_settings()
+        self.assertTrue(settings, "no settings found under Rules/")
+        totals = {label: sum(1 for entry in self.corpus if entry["label"] == label) for label in "ANS"}
+
+        for setting in settings:
+            with self.subTest(setting=setting):
+                self._load_setting_rules(setting)
+                conversation_rolls, actions_not_understood, social_skill_rolls = [], [], []
+                for entry in self.corpus:
+                    _processed, events = self.nlp_core.classifier.classify(entry["text"])
+                    skills = [
+                        clause.get("skill") for event in events if event["event"] == "turn_detected"
+                        for clause in event["payload"]["clauses"] if clause.get("skill")
+                    ]
+                    names = [event["event"] for event in events]
+                    if entry["label"] == "N" and skills:
+                        conversation_rolls.append(f"{entry['text']!r} -> {skills}")
+                    elif entry["label"] == "A" and "action_not_understood" in names:
+                        actions_not_understood.append(repr(entry["text"]))
+                    elif entry["label"] == "S" and skills:
+                        social_skill_rolls.append(entry["text"])
+
+                print(
+                    f"\n[player input corpus] {setting}: conversation rolls "
+                    f"{len(conversation_rolls)}/{totals['N']}, actions not understood "
+                    f"{len(actions_not_understood)}/{totals['A']}, social-skill rolls "
+                    f"{len(social_skill_rolls)}/{totals['S']}"
+                )
+                self.assertLessEqual(
+                    len(conversation_rolls) / totals["N"], self.MAX_CONVERSATION_ROLL_RATE,
+                    f"{setting}:\n" + "\n".join(conversation_rolls),
+                )
+                self.assertLessEqual(
+                    len(actions_not_understood) / totals["A"], self.MAX_ACTION_NOT_UNDERSTOOD_RATE,
+                    f"{setting}:\n" + "\n".join(actions_not_understood),
+                )
+                self.assertGreaterEqual(len(social_skill_rolls) / totals["S"], self.MIN_SOCIAL_SKILL_ROLL_RATE, setting)
 
 
 # Minimal keyword catalog/skills catalog for generate_referenced_npc, which is DMCore-

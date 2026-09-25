@@ -1,0 +1,594 @@
+# Labeled player-input corpus -- the ground truth behind test_unit.py's TestPlayerInputCorpus,
+# which runs every entry against every setting under Rules/. So nothing here may lean on one
+# setting: no proper nouns, no genre props (swords, spells, guns), no scenario locations -- only
+# what a player could plausibly type in any of them.
+#
+# source says where a line came from:
+#   log     adapted from a real play log (tools/playtest.py personas and human play), with
+#           setting-specific nouns swapped for generic ones ("the dockmaster" -> "the foreman")
+#   action / social / speech+action / banter / ooc
+#           written to probe one failure mode
+# No single source or persona should dominate -- the test's rates are only as general as the
+# mix behind them. Add a new family rather than more of an existing one.
+#
+# label is the IDEAL outcome, independent of which pipeline stage produces it:
+#   A  a genuine in-world action -- must never be answered with action_not_understood
+#   S  a social-skill attempt phrased as an action (bargain, persuade, threaten) -- should roll
+#   N  must NOT roll a skill: banter, flirtation, in-character talk, out-of-character questions
+
+# --- A: in-world actions --------------------------------------------------------------------
+
+[[input]]
+text = "Check the debris"
+label = "A"
+source = "log"
+
+[[input]]
+text = "Compare the symbols"
+label = "A"
+source = "log"
+
+[[input]]
+text = "Examine the markings"
+label = "A"
+source = "log"
+
+[[input]]
+text = "Analyze the pattern"
+label = "A"
+source = "log"
+
+[[input]]
+text = "Find the foreman"
+label = "A"
+source = "log"
+
+[[input]]
+text = "Follow the path"
+label = "A"
+source = "log"
+
+[[input]]
+text = "Head toward the river"
+label = "A"
+source = "log"
+
+[[input]]
+text = "Keep going"
+label = "A"
+source = "log"
+
+[[input]]
+text = "Look for a weakness"
+label = "A"
+source = "log"
+
+[[input]]
+text = "Look for signs of life"
+label = "A"
+source = "log"
+
+[[input]]
+text = "Look inside the crate"
+label = "A"
+source = "log"
+
+[[input]]
+text = "Observe the support beams"
+label = "A"
+source = "log"
+
+[[input]]
+text = "Pocket the coin"
+label = "A"
+source = "log"
+
+[[input]]
+text = "Pry along the seams"
+label = "A"
+source = "log"
+
+[[input]]
+text = "Push through the crowd"
+label = "A"
+source = "log"
+
+[[input]]
+text = "Read the note"
+label = "A"
+source = "log"
+
+[[input]]
+text = "Stand back from the counter"
+label = "A"
+source = "log"
+
+[[input]]
+text = "Take the metal plate"
+label = "A"
+source = "log"
+
+[[input]]
+text = "Trace the lines on the map"
+label = "A"
+source = "log"
+
+[[input]]
+text = "Try to pick the lock"
+label = "A"
+source = "log"
+
+[[input]]
+text = "Use force on the seams"
+label = "A"
+source = "log"
+
+[[input]]
+text = "Wait for a better chance"
+label = "A"
+source = "log"
+
+[[input]]
+text = "Walk away slowly"
+label = "A"
+source = "log"
+
+[[input]]
+text = "Watch the street"
+label = "A"
+source = "log"
+
+[[input]]
+text = "I carefully examine a small metal shard, hoping for any familiar symbols."
+label = "A"
+source = "log"
+
+[[input]]
+text = "I pause and discreetly study the entrance to the alley for any signs of recent activity."
+label = "A"
+source = "log"
+
+[[input]]
+text = "I study the stranger's face and body language, trying to gauge their intent."
+label = "A"
+source = "log"
+
+[[input]]
+text = "I watch the boy juggling stones, then scan the crowd for anything unusual."
+label = "A"
+source = "log"
+
+[[input]]
+text = "I slowly approach the entrance, keeping my eyes trained on the figure."
+label = "A"
+source = "log"
+
+[[input]]
+text = "Who is that figure near the doorway? I slowly angle my view toward the shadowed entrance."
+label = "A"
+source = "log"
+
+[[input]]
+text = "i search the room for anything hidden"
+label = "A"
+source = "action"
+
+[[input]]
+text = "i sneak past the guards"
+label = "A"
+source = "action"
+
+[[input]]
+text = "i climb the wall"
+label = "A"
+source = "action"
+
+[[input]]
+text = "i swim across the river"
+label = "A"
+source = "action"
+
+[[input]]
+text = "i hide behind the barrel"
+label = "A"
+source = "action"
+
+[[input]]
+text = "jump over the gap"
+label = "A"
+source = "action"
+
+[[input]]
+text = "grab the rope and swing across"
+label = "A"
+source = "action"
+
+[[input]]
+text = "i listen at the door"
+label = "A"
+source = "action"
+
+[[input]]
+text = "smash the door down"
+label = "A"
+source = "action"
+
+[[input]]
+text = "dodge"
+label = "A"
+source = "action"
+
+[[input]]
+text = "i barricade the door with the table"
+label = "A"
+source = "action"
+
+[[input]]
+text = "bandage my friend's wound"
+label = "A"
+source = "action"
+
+[[input]]
+text = "follow the tracks into the woods"
+label = "A"
+source = "action"
+
+[[input]]
+text = "i throw a rock at the window"
+label = "A"
+source = "action"
+
+[[input]]
+text = "run for the exit"
+label = "A"
+source = "action"
+
+[[input]]
+text = "I shout 'Get down!' and tackle the stranger"
+label = "A"
+source = "speech+action"
+
+[[input]]
+text = "Nice hat. I pick his pocket while he's distracted."
+label = "A"
+source = "speech+action"
+
+[[input]]
+text = "Sorry about this, friend. I punch him in the jaw."
+label = "A"
+source = "speech+action"
+
+[[input]]
+text = "'Stay back!' I shove him against the wall"
+label = "A"
+source = "speech+action"
+
+# --- S: social-skill attempts ---------------------------------------------------------------
+
+[[input]]
+text = "Demand an audience"
+label = "S"
+source = "log"
+
+[[input]]
+text = "Threaten to report him"
+label = "S"
+source = "log"
+
+[[input]]
+text = "Insist on a meeting"
+label = "S"
+source = "log"
+
+[[input]]
+text = "I'll bargain with her over the cost of supper"
+label = "S"
+source = "social"
+
+[[input]]
+text = "I try to convince the guard to let us through"
+label = "S"
+source = "social"
+
+[[input]]
+text = "I haggle the price down"
+label = "S"
+source = "social"
+
+[[input]]
+text = "I intimidate the prisoner into talking"
+label = "S"
+source = "social"
+
+[[input]]
+text = "I lie and tell him I'm a messenger from the mayor"
+label = "S"
+source = "social"
+
+[[input]]
+text = "Persuade the captain to lend us his boat"
+label = "S"
+source = "social"
+
+[[input]]
+text = "I bluff that we have twenty friends waiting outside"
+label = "S"
+source = "social"
+
+[[input]]
+text = "I charm the bartender to get information"
+label = "S"
+source = "social"
+
+[[input]]
+text = "Tell him that if he doesn't open the gate, I'll burn his house down"
+label = "S"
+source = "social"
+
+# --- N: flirtation (one persona, capped) ----------------------------------------------------
+
+[[input]]
+text = "Is your forge really that hot? Maybe we could cool off together."
+label = "N"
+source = "log"
+
+[[input]]
+text = "This heat and all this watching is making me feel dizzy. Let's find a room."
+label = "N"
+source = "log"
+
+[[input]]
+text = "Maybe a little break? I bet your muscles ache for some company."
+label = "N"
+source = "log"
+
+[[input]]
+text = "There is a lovely inn just over that way. Shall we slip away and get cozy?"
+label = "N"
+source = "log"
+
+[[input]]
+text = "Forget the lumber. Let's find a private place."
+label = "N"
+source = "log"
+
+[[input]]
+text = "Come help me relax. We can talk about this later."
+label = "N"
+source = "log"
+
+[[input]]
+text = "We could find a corner where nobody sees us, and... just feel a little less hot?"
+label = "N"
+source = "log"
+
+[[input]]
+text = "It's stifling in here. Does your jacket have extra pockets? Maybe we could find a less crowded place."
+label = "N"
+source = "log"
+
+# --- N: out-of-character rules questions (one persona, capped) -------------------------------
+
+[[input]]
+text = "Am i allowed to just declare that i already found a clue, even if it isn't a real thing?"
+label = "N"
+source = "log"
+
+[[input]]
+text = "Are there any rules about watching someone through the haze, and can i write it down somewhere?"
+label = "N"
+source = "log"
+
+[[input]]
+text = "Can i also just wave my other hand to distract them and make the whole thing a multi-action turn?"
+label = "N"
+source = "log"
+
+[[input]]
+text = "Does this strange energy mean i can just scoop some into my pocket, or is that against the rules?"
+label = "N"
+source = "log"
+
+[[input]]
+text = "If i fail this check can i at least force the next person to have contradictory motives?"
+label = "N"
+source = "log"
+
+[[input]]
+text = "If the emotional instability is a skill check can i use my two bonus dice from the backstory i never played?"
+label = "N"
+source = "log"
+
+[[input]]
+text = "Is this map piece a limited resource or can i simply redraw the borders?"
+label = "N"
+source = "log"
+
+[[input]]
+text = "So if i can see the pipes does that mean i also get the blueprints for the whole sewer system?"
+label = "N"
+source = "log"
+
+[[input]]
+text = "Wait, was my reading of the crowd based on a specific roll or is it just inherent ability?"
+label = "N"
+source = "log"
+
+[[input]]
+text = "If i know the shortcuts can i also fast-forward the entire journey because walking is boring?"
+label = "N"
+source = "log"
+
+[[input]]
+text = "and since i can sense the stresses does that also mean i know whether the guy has paid his taxes?"
+label = "N"
+source = "log"
+
+[[input]]
+text = "If i'm so athletic can i also skip the whole gravity part of the physics rules?"
+label = "N"
+source = "log"
+
+[[input]]
+text = "how many actions do i get per round?"
+label = "N"
+source = "ooc"
+
+[[input]]
+text = "do i need to roll for that?"
+label = "N"
+source = "ooc"
+
+# --- N: in-character talk -------------------------------------------------------------------
+
+[[input]]
+text = "Ask about the coin"
+label = "N"
+source = "log"
+
+[[input]]
+text = "Ask what they mean"
+label = "N"
+source = "log"
+
+[[input]]
+text = "Talk to the foreman"
+label = "N"
+source = "log"
+
+[[input]]
+text = "Tell me what you know"
+label = "N"
+source = "log"
+
+[[input]]
+text = "Suggest reinforcing the fence"
+label = "N"
+source = "log"
+
+[[input]]
+text = "Where should i put it"
+label = "N"
+source = "log"
+
+[[input]]
+text = "I ask the vendor how such a strange piece might have been used long ago."
+label = "N"
+source = "log"
+
+[[input]]
+text = "I approach the merchant. \"It seems quite lively today. Is something going on?\""
+label = "N"
+source = "log"
+
+[[input]]
+text = "Are the rumors always tied to specific places, or just people's imaginations?"
+label = "N"
+source = "log"
+
+[[input]]
+text = "Do you ever get tired of all this hard work?"
+label = "N"
+source = "log"
+
+# --- N: banter containing skill-ish words ----------------------------------------------------
+
+[[input]]
+text = "nice weather today, isn't it"
+label = "N"
+source = "banter"
+
+[[input]]
+text = "what's your name?"
+label = "N"
+source = "banter"
+
+[[input]]
+text = "haha, that's hilarious"
+label = "N"
+source = "banter"
+
+[[input]]
+text = "I bet you've seen a lot of fights in your day"
+label = "N"
+source = "banter"
+
+[[input]]
+text = "your forge must keep this place warm"
+label = "N"
+source = "banter"
+
+[[input]]
+text = "I'm exhausted, it's been a long day"
+label = "N"
+source = "banter"
+
+[[input]]
+text = "thanks for the help back there"
+label = "N"
+source = "banter"
+
+[[input]]
+text = "you look like you could use a drink"
+label = "N"
+source = "banter"
+
+[[input]]
+text = "my father was a carpenter too"
+label = "N"
+source = "banter"
+
+[[input]]
+text = "do you like dancing?"
+label = "N"
+source = "banter"
+
+[[input]]
+text = "break a leg tonight!"
+label = "N"
+source = "banter"
+
+[[input]]
+text = "that fire is really hot, huh"
+label = "N"
+source = "banter"
+
+[[input]]
+text = "I could climb that wall in my sleep"
+label = "N"
+source = "banter"
+
+[[input]]
+text = "I'd never attack a friend"
+label = "N"
+source = "banter"
+
+[[input]]
+text = "we should find somewhere to eat later"
+label = "N"
+source = "banter"
+
+[[input]]
+text = "honestly, lockpicking was never my strong suit"
+label = "N"
+source = "banter"
+
+[[input]]
+text = "i hate swimming, the water here is freezing"
+label = "N"
+source = "banter"
+
+[[input]]
+text = "the stars are beautiful tonight"
+label = "N"
+source = "banter"
+
+[[input]]
+text = "hmm"
+label = "N"
+source = "banter"
+
+[[input]]
+text = "ok"
+label = "N"
+source = "banter"

@@ -115,6 +115,52 @@ DIALOGUE_HYPOTHESIS_TEMPLATE = "This statement leaves the listener feeling {}."
 TOPIC_CLAUSE_MARKERS = (" about ", " regarding ", " concerning ", " if ", " whether ", " that ")
 CLAUSE_SEPARATORS = ("--", "?", ",", ";", ":")
 
+# Opening words that mark text as something other than a declared action -- a question ("can",
+# "does", "why"), a hypothetical ("if", "maybe", "wait"), a suggestion ("let's", "we"), or a
+# remark about someone/something else ("you", "it's", "this"). Consulted only by map_to_action's
+# two FALLBACK paths (see _opens_like_an_action), never its direct semantic match: both
+# fallbacks work from a fragment of the input rather than the input as a whole, so they're the
+# ones that turn an ordinary word into a bogus skill roll -- "let's find a room" (observation,
+# keyword "find"), "shall we slip away" (escape, "slip"), "is your forge really" (forgery, an
+# alternate phrasing truncated at " that "). A player declaring an action leads with the action
+# ("find the dockmaster", "try to convince the guard", "i'll bargain with her over the cost"),
+# which is why this is a list of what disqualifies rather than of what qualifies: an open-ended
+# verb vocabulary is exactly what skills.toml's own data-driven keywords already are.
+#
+# Measured against 219 real logged inputs plus 66 targeted ones (plain actions, social-skill
+# attempts, banter containing skill keywords): the keyword-fallback path alone produced 39
+# conversation rolls against 22 genuine action rolls, with fully overlapping scores (0.22-0.48
+# vs 0.21-0.47) -- so no keyword_fallback_floor could separate them, while this opening-word
+# test kept every genuine one.
+NON_ACTION_OPENERS = frozenset({
+    "am", "is", "are", "was", "were", "do", "does", "did", "can", "could", "should", "would",
+    "will", "shall", "may", "might", "must", "have", "has", "had",
+    "why", "how", "what", "where", "who", "whom", "whose", "when", "which", "whether",
+    "if", "so", "but", "or", "since", "because", "though", "although", "unless", "wait",
+    "maybe", "perhaps", "like", "well", "honestly",
+    "let's", "lets", "we", "we're", "we'll", "we've", "you", "you're", "you've", "your",
+    "he", "she", "they", "it", "it's", "its", "this", "that", "these", "those", "there", "here",
+    "i'd", "i'm", "im", "i've",
+})
+# Stripped before the opener is read, so "i'll bargain with her" and a mid-clause sentence
+# starting "i study the pattern" both open on their real verb. Intent_Classification's own
+# process_input only strips a leading "i " from the very start of the whole input.
+FIRST_PERSON_OPENERS = frozenset({"i", "i'll", "ill"})
+SENTENCE_BOUNDARY_PATTERN = re.compile(r"[.!?]+\s*")
+
+
+def _opens_like_an_action(text):
+    """!
+    @brief Whether text opens the way a declared action does -- see NON_ACTION_OPENERS.
+    @param text A processed (lowercased) sentence or fragment.
+    @return False if its first word, after any FIRST_PERSON_OPENERS, is a NON_ACTION_OPENERS
+        word; True otherwise (including empty text, which no fallback can match anyway).
+    """
+    words = re.findall(r"[a-z']+", text)
+    while words and words[0] in FIRST_PERSON_OPENERS:
+        words = words[1:]
+    return not words or words[0] not in NON_ACTION_OPENERS
+
 
 class SentenceTransformerMatcher(IntentMatcher):
     """!
@@ -418,6 +464,10 @@ class SentenceTransformerMatcher(IntentMatcher):
             genuinely-actionable input below confidence_threshold. Cheap and heuristic on
             purpose -- mirrors Intent_Classification.process_input's own prefix-stripping
             convention rather than a full parse.
+            A derived phrasing that doesn't open like an action (see NON_ACTION_OPENERS) is
+            dropped: truncation is what manufactured "is your forge really" (forgery) out of
+            "gareth, is your forge really that hot?", and a fragment like that has lost the
+            very context that marked it as banter.
         @param processed_text The cleaned and processed player input.
         @return A list of candidate strings to score, always including the original text
             first (deduplicated, order-preserving).
@@ -438,10 +488,11 @@ class SentenceTransformerMatcher(IntentMatcher):
 
         seen = set()
         unique_candidates = []
-        for candidate in candidates:
-            if candidate not in seen:
-                seen.add(candidate)
-                unique_candidates.append(candidate)
+        for index, candidate in enumerate(candidates):
+            if candidate in seen or (index > 0 and not _opens_like_an_action(candidate)):
+                continue
+            seen.add(candidate)
+            unique_candidates.append(candidate)
         return unique_candidates
 
     def _match_by_keyword(self, processed_text):
@@ -456,13 +507,24 @@ class SentenceTransformerMatcher(IntentMatcher):
             (ex: "cost" for appraise and "dagger" for blades both appearing in "what's this
             dagger worth"), and _best_keyword_match picks between them by embedding score
             rather than accepting whichever happens to come first in skills.toml.
+
+            Only sentences that open like an action are searched (see NON_ACTION_OPENERS):
+            "find" in "find the dockmaster" is the action being declared, while "find" in
+            "let's find a room" or "look" in "you look like you could use a drink" is just a
+            word in a remark.
         @param processed_text The cleaned and processed player input.
         @return A list of every matching skill's name, in skills.toml declaration order.
         """
+        searchable = " . ".join(
+            sentence for sentence in SENTENCE_BOUNDARY_PATTERN.split(processed_text)
+            if _opens_like_an_action(sentence)
+        )
         matches = []
+        if not searchable:
+            return matches
         for name, skill in self.skills_data.items():
             for keyword in skill.get("keywords", []):
-                if re.search(rf"\b{re.escape(keyword)}\b", processed_text):
+                if re.search(rf"\b{re.escape(keyword)}\b", searchable):
                     matches.append(name)
                     break
         return matches
