@@ -229,9 +229,16 @@ class SocialMixin(DMCoreProtocol):
         if memories:
             parts.append("Memories: " + "; ".join(memories))
 
+        # How they talk -- register, dialect, verbosity, tics -- next to lines they've actually
+        # said, which are the best example of it. What keeps a dialogue reply from coming out in
+        # the narrator's own voice (see LLMCore._build_dialogue_system_message).
+        voice = entity.get("voice")
+        if voice:
+            parts.append(f"Voice: {voice}")
+
         quotes = entity.get("quotes")
         if quotes:
-            parts.append("Known to say: " + "; ".join(f"\"{quote}\"" for quote in quotes))
+            parts.append("Lines in their voice: " + "; ".join(f"\"{quote}\"" for quote in quotes))
 
         # A directive planted by Social_Resolution.py's set_prompt_directive (ex: spells.toml's
         # "suggestion" landing) -- appended right before attitude, both being the most

@@ -570,6 +570,14 @@ def decide_entity_removal(
     return {"removed": True, "name": name, "reason": arguments.get("reason", "")}
 
 
+# What a generated person's "voice" field asks for -- shared by the creature tool (promotion,
+# conjuring) and narrated population, so every generated speaker can carry one. See
+# DM_Social.py's describe_character for where it lands in a dialogue prompt.
+VOICE_FIELD_DESCRIPTION = (
+    "How they talk, in a few words: register, dialect, how much they say, any verbal tic (ex: 'clipped, dockside slang, calls everyone friend')."
+)
+
+
 def _build_creature_tool_schema(npc_keywords, allowed_dispositions=CREATURE_DISPOSITIONS,
                                 decline_hint="Use this instead if the requested creature doesn't make sense here."):
     """!
@@ -611,6 +619,7 @@ def _build_creature_tool_schema(npc_keywords, allowed_dispositions=CREATURE_DISP
                             "description": "How it regards the player -- 'hostile' is the only disposition that will actually fight.",
                         },
                         "power": {"type": "string", "enum": list(CREATURE_POWERS)},
+                        "voice": {"type": "string", "description": VOICE_FIELD_DESCRIPTION},
                     },
                     "required": ["name", "description", "keywords", "disposition", "power"],
                 },
@@ -747,6 +756,9 @@ def _build_creature_entity(arguments, npc_keywords, target_cr, skills_catalog, h
         # entity carrying this flag rather than the ordinary hp/inventory/etc. diff.
         "ad_hoc": True,
     }
+    voice = str(arguments.get("voice") or "").strip()
+    if voice:
+        entity["voice"] = voice
 
     if disposition == "hostile":
         # fit_skills_to_cr builds skills offense-first, then defense, then resistive, then
@@ -897,6 +909,7 @@ NARRATED_FREEFORM_FIELDS = {
     "languages": {"type": "array", "items": {"type": "string"}, "description": "Languages they speak."},
     "memories": {"type": "array", "items": {"type": "string"}, "maxItems": 3,
                  "description": "Up to three things they know or care about."},
+    "voice": {"type": "string", "description": VOICE_FIELD_DESCRIPTION},
 }
 DEFAULT_NARRATED_FREEFORM = tuple(NARRATED_FREEFORM_FIELDS)
 NARRATED_EXTRACTION_TIMEOUT = 120
@@ -1078,6 +1091,10 @@ def _apply_narrated_flavor(entity, raw, occupation, allowed):
         memories = [str(memory).strip() for memory in raw.get("memories") or [] if str(memory).strip()]
         if memories:
             entity["memories"] = memories[:3]
+    if "voice" in allowed:
+        voice = str(raw.get("voice") or "").strip()
+        if voice:
+            entity["voice"] = voice
 
 
 def _indefinite(phrase):

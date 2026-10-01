@@ -825,6 +825,10 @@ current_language = "common"                 # Player-entity only, runtime state 
                                             # player's side is ever narrowed to one active tongue.
 memories = [ "A wife at home" ]
 quotes = [ "Hello, world" ]
+voice = "Gruff and clipped; says little"   # How they talk -- register, dialect, verbosity,
+                                            # tics -- read beside quotes by describe_character
+                                            # so dialogue replies sound like this person, not the
+                                            # narrator. Optional; narrated people get one too.
 
 [entity.qualities]
                                             # key -> value, joined as "Qualities: k v, k v, ..."

@@ -87,3 +87,9 @@ grounding for promotion (`docs/adam-improvisation.md`). It's restored *after* th
 rather than in the prologue, since nothing during re-instancing reads it and the mid-load
 narration `load_game` itself triggers would otherwise be the first thing appended to it. Absent
 from an older save, which is harmless.
+
+`"conversation_partner"` (`{"key", "idle_turns"}` or null — who the player is talking to, see
+`docs/social-dialogue.md`'s "Conversation partner") is restored at the same point and for a
+related reason: re-instancing re-enters the saved location, and `_enter_location` clears it.
+`load_game` then republishes it (`conversation_partner_updated`) so NLPCore routes the next
+unmarked line correctly. Absent from an older save: no conversation running.

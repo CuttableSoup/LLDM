@@ -146,8 +146,9 @@ thread at the top of the next player-input handler, so anyone the narration intr
 addressable by the very next thing typed. A batch is dropped if the player left the scene first.
 
 **What the narrator controls, and what it can't.** `freeform` fields — name, occupation,
-description, race, gender, age, languages, memories — come from the narrator, so the cast is as
-varied as its prose. Skills and HP are fit to a bystander's share of the player's challenge
+description, race, gender, age, languages, memories, voice — come from the narrator, so the cast
+is as varied as its prose. `voice` (how they talk, see `docs/social-dialogue.md`'s "Voice") is also
+an optional field on the creature tool, so a person materialized by promotion can carry one too. Skills and HP are fit to a bystander's share of the player's challenge
 rating by the same deterministic `fit_skills_to_cr` every generated creature uses. Abilities,
 behavior and hostility are never given: the tool schema's disposition enum excludes `"hostile"`
 (a model that returns one anyway is dropped, not defanged), so a narrated person structurally

@@ -37,7 +37,9 @@ Practical constraints when touching this file:
   roll a skill, genuine actions answered with "I don't understand", and social-skill attempts
   that roll. Lower a bound whenever the worst setting improves on it. When a matching change
   moves a phrasing, add that line to the corpus (kept free of any one setting's nouns) instead
-  of writing a one-off test for it.
+  of writing a one-off test for it. A second pass reruns the corpus mid-conversation (a
+  conversation partner set, see `docs/social-dialogue.md`) and ratchets how much conversation
+  reaches dialogue, how many actions it swallows, and that social skills still roll.
   `TestIntentClassification` covers `Intent_Classification.py`'s gate/precedence order instead
   — `IntentClassifier` exercised directly against `FakeMatcher` (a canned `IntentMatcher`
   double defined alongside it), no model load, EventBus, or DMCore needed. Most other classes

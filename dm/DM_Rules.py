@@ -1083,6 +1083,8 @@ class RulesMixin(DMCoreProtocol):
         # Keeps current_target in sync with scenario_entities on every location entry -- covers
         # __init__, load_game, and every later travel/room move alike.
         self.current_target = self._choose_combat_target()
+        # A new location ends whatever conversation was running in the old one.
+        self._set_conversation_partner(None)
 
         self._resolve_location_encounter(self._current_room() or location)
         self._run_on_enter_programs()

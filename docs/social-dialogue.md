@@ -21,7 +21,7 @@ not a quality of how something was said) — see "Extended goals" for the fuller
 phrase per axis.
 
 `describe_character(entity_name, toward_name=None)` builds a flavor-text roster line from purely
-descriptive TOML fields (`description`, `qualities`, `memories`, `quotes`) plus, when
+descriptive TOML fields (`description`, `qualities`, `memories`, `voice`, `quotes`) plus, when
 `toward_name` is given, the attitude sentence above — deliberately excluding mechanical data.
 The one genuinely dynamic exception: if the entity's own `prompt_directive` (a plain
 `{"text", "source", "expires_in_blocks"?}` dict) is set, its text is appended too — "Currently
@@ -326,3 +326,83 @@ entity must never become the default "open it" target (see `docs/npc-generation.
 materialized that entity into the scene. It bypasses resolution, never the gates — a promoted NPC
 is present, alive, visible and not an object, so it passes them on its own merits. See
 `docs/adam-improvisation.md`'s "Promotion on reference".
+
+
+## Conversation partner
+
+Only `DIALOGUE_KEYWORDS` or quoted speech used to reach an NPC, so a player talking naturally
+("do you ever get tired of all this?", "let's find somewhere quieter") was sent to the skill pass.
+The last fix stopped most of those turns rolling, but they still came back as narrator prose,
+not a reply. DMCore now remembers who the player is talking to:
+`conversation_partner = {"key", "idle_turns"}` or `None` (`DM_Dialogue.py`).
+
+- **Set** by `_resolve_dialogue` whenever it finds a target, including across a language
+  barrier (the player is still talking to them). Naming someone else switches it.
+- **Read** by the addressee fallback: literal name → partner → default scene target. So "tell me
+  what you know" mid-talk stays with whoever the player was already addressing.
+- **Validated lazily** (`_current_conversation_partner`) against the same present/alive/not-hidden
+  gates `_resolve_dialogue` uses; a failed check ends the conversation.
+- **Ends** on `_enter_location`, or after `CONVERSATION_IDLE_TURNS` (3) turn-costing turns that
+  weren't dialogue (`_tick_conversation_partner`, from `_on_turn_detected`). Free-standing intents
+  don't count. Combat doesn't end it, since shouting mid-fight is still dialogue.
+- **Round-trips** through save/load (`docs/persistence.md`).
+
+Every change is published as `conversation_partner_updated {"partner": {"key", "name", "aliases"}
+| None}`. NLPCore keeps the copy (`IntentClassifier.set_conversation_partner`), and while one
+is set, `classify`'s dialogue gate also accepts `detect_implicit_speech` (`Intent_Classification.py`).
+That check is structural and needs no model call. Any sentence that has a `?`, fails
+`opens_like_an_action` (the `NON_ACTION_OPENERS` list the skill fallbacks already use to spot
+banter, read after stripping a leading vocative like "gareth, "), or opens as an imperative
+aimed at the speaker ("help me", "come help me", "join us") counts. Social-skill attempts
+("persuade the captain to lend us his boat") open on their own verb, so they still reach the
+skill pass and roll. Implicit dialogue is skipped when a free-standing intent already claimed a
+clause: "what do you know about the troll" stays a lore check. The `dialogue_detected` payload
+carries `implicit: true` for the logs and the playtest harness. With no partner, nothing
+changes.
+
+
+## Speech framing and voice
+
+**Framing.** `Intent_Classification.py`'s `frame_speech` decides how the narrator should hear a
+dialogue line, and `dialogue_detected` carries the result as `speech_form`/`utterance` (DMCore
+passes both through on `dialogue_resolved`):
+
+- `greet`: a dialogue keyword naming someone and nothing else ("talk to the fishmonger"). The
+  prompt has the player approach, and the NPC speaks first.
+- `reported`: any other keyword-led line, restated in the second person from the keyword on
+  ("ask about the kelp beds" → "You ask about the kelp beds."). A movement clause before the
+  keyword is its own quiet intent, so it's left out.
+- `verbatim`: the player's own words, quoted as said: a quoted span (the quote only), implicit
+  speech (see "Conversation partner"), or a keyword aimed back at the speaker ("tell me what you
+  know").
+
+Before this, the raw command itself was quoted as speech (`The player says: "talk to the
+fishmonger"`), and the model invented a conversation to fit. `LLMCore._build_speech_prompt`
+builds one prompt per form, always in the second person. The PC is "you" in every dialogue
+prompt, including language-barrier and not-found ones. The model used to copy "the player"
+straight into replies.
+
+**Reply shape.** `_build_dialogue_system_message` lays the NPC out as "Who {target} is" (persona)
+and "How {target} feels about you" (attitude). It asks for:
+
+- mostly the NPC's own spoken words, in quotes, in everyday language
+- at most one short action beat, with no scenery and no narrating the PC
+- at most one speech tag
+- length set by mood: guarded, busy or hostile gets a line or two; friendly gets up to three or
+  four sentences
+
+The existing rules (answer the question; don't repeat a deflection) are unchanged.
+
+**Voice.** `voice` is an optional entity field: one line on how someone talks (register, dialect,
+how much they say, verbal tics). `describe_character` emits it as "Voice: ...", and `quotes`
+become "Lines in their voice: ..." — examples to match, not just trivia. Most people the player
+actually talks to are generated, so `voice` is part of both narrated population
+(`NARRATED_FREEFORM_FIELDS`, plus each setting's `[narration_population.limits].freeform`) and
+the creature tool used for promotion (optional, not required). Without a voice, the prompt tells
+the model to sound like an ordinary person of the NPC's station, not a storyteller.
+`lost_coast`'s hand-authored NPCs are mostly unvoiced so far; only the opening `dockhand` has one.
+
+`tools/playtest.py` flags three dialogue smells per turn: "the player" in the reply, a reply with
+no quoted speech, and a meta parenthetical. It also logs each turn's `speech` forms and counts
+implicit dialogue.
+

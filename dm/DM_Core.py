@@ -217,6 +217,11 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         # the dungeon's chest or the tavern's innkeeper). Set for real by load_scenario()
         # (via _choose_combat_target()) once entities/scenario are actually loaded below.
         self.current_target = None
+        # Who the player is talking to right now -- {"key", "idle_turns"} or None. Lets an
+        # unmarked line of speech reach that person rather than a skill roll or the default
+        # scene target (see DialogueMixin._set_conversation_partner). Must be set before
+        # load_scenario() below, whose _enter_location clears it.
+        self.conversation_partner = None
         # The last prose roster _publish_scene_roster actually published (DM_Rules.py) -- its
         # dirty guard, so the roster hooks scattered across every scenario_entities mutation
         # site can be called freely without republishing an unchanged scene. Must be set before
@@ -384,6 +389,9 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         # player's own action proceeds against whatever state now exists" timing an "on_enter"
         # roll already has relative to the very first action taken in a freshly-entered room.
         self._resolve_ambient_encounter()
+        # A real turn spent doing something other than talking -- see
+        # DialogueMixin._tick_conversation_partner.
+        self._tick_conversation_partner()
         input_text = data.get("input")
         # Every clause this turn -- item interaction or skill/ability action alike -- shares
         # the same cumulative -1D economy (see this method's own "Multiple actions" note). 0
@@ -1624,6 +1632,10 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             input_text, sentiments, forced_target=self._promote_addressed_npc(data, input_text),
         )
         result["input"] = input_text
+        # How the narrator should hear what was said -- see Intent_Classification.py's
+        # frame_speech. Absent (an older caller) reads as the player's own words.
+        result["speech_form"] = data.get("speech_form") or "verbatim"
+        result["utterance"] = data.get("utterance") if data.get("speech_form") else input_text
         # How the prompt should refer to the addressee -- a crowd member's "name" is a job
         # title, not a name (see SocialMixin.display_label).
         if result.get("target"):

@@ -202,7 +202,7 @@ prose_sentences = "5-6"                                    # how long those narr
 # behavior and hostility are never in this list: the engine sets them, so nothing the narrator
 # writes can move combat balance. A narrated person is always a non-hostile bystander.
 [narration_population.limits]
-freeform     = [ "name", "occupation", "description", "race", "gender", "age", "languages", "memories" ]
+freeform     = [ "name", "occupation", "description", "race", "gender", "age", "languages", "memories", "voice" ]
 max_cr_share = 0.25                                        # of the player's challenge rating
 
 [character_creation]

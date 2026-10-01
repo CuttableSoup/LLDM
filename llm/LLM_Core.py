@@ -758,8 +758,8 @@ class LLMCore:
                 "cant_talk": f"{target or 'that'} isn't something that can hold a conversation",
             }.get(data.get("reason"), "there's no one who can answer that right now")
             prompt = (
-                f"The player tries to say something (input: \"{data.get('input', '')}\"), but "
-                f"{reason_text} -- no reply is possible.\n"
+                f"You try to say something (\"{data.get('utterance') or data.get('input', '')}\"), "
+                f"but {reason_text} -- no reply is possible.\n"
                 f"Narrate a brief, in-character explanation in 1-2 sentences as the Game Master, "
                 f"stating only that reason -- don't invent where anyone went, who they're with, "
                 f"or any other detail to explain their absence."
@@ -775,16 +775,43 @@ class LLMCore:
         speaker = data.get("target_label") or target
         if data.get("language_barrier"):
             prompt = self._build_language_barrier_prompt(
-                data.get("input", ""), speaker, data.get("target_language"), data.get("nonsense_phrase"),
+                data.get("utterance") or data.get("input", ""), speaker,
+                data.get("target_language"), data.get("nonsense_phrase"),
             )
         else:
-            prompt = f"The player says: \"{data.get('input', '')}\""
+            prompt = self._build_speech_prompt(
+                speaker, data.get("speech_form"), data.get("utterance") or data.get("input", ""),
+            )
 
         self._queue_dialogue(
             target, speaker, data.get("persona", ""), data.get("attitude", ""), prompt,
             rag_query=data.get("input"), present_entities=data.get("present_entities"),
             label=f"dialogue:{target}",
         )
+
+    @staticmethod
+    def _build_speech_prompt(speaker, speech_form, utterance):
+        """!
+        @brief The user-role prompt for an ordinary dialogue turn, shaped by how the player
+            actually spoke (Intent_Classification.py's frame_speech) -- so "talk to the
+            fishmonger" reaches the model as walking up to him, not as words to answer, and
+            "ask about the kelp beds" as a question about the kelp beds rather than a command
+            to quote. Always second person: the player character is "you", never "the player",
+            which the model otherwise copies straight into the reply.
+        @param speaker The addressee's display label.
+        @param speech_form "greet", "reported", or "verbatim" (anything else reads as verbatim).
+        @param utterance The player's own words ("verbatim"), a second-person restatement
+            ("reported", ex: "You ask about the kelp beds."), or ignored ("greet").
+        @return The prompt string.
+        """
+        if speech_form == "greet":
+            return (
+                f"You approach {speaker} to talk. {speaker} speaks first: a greeting or opening "
+                f"line, the way they'd actually meet a stranger (or someone they know)."
+            )
+        if speech_form == "reported":
+            return f"Speaking to {speaker}: {utterance}"
+        return f"You say to {speaker}: \"{utterance}\""
 
     @staticmethod
     def _build_language_barrier_prompt(player_input, target, target_language, nonsense_phrase):
@@ -804,13 +831,13 @@ class LLMCore:
             is told explicitly not to reuse it verbatim, just to match its phonetic flavor.
         @return The complete prompt string.
         """
-        language_name = target_language or "a language the player doesn't know"
+        language_name = target_language or "a language you don't know"
         prompt = (
-            f"The player says: \"{player_input}\"\n"
+            f"You say to {target}: \"{player_input}\"\n"
             f"{target} does not understand this at all -- {target} only speaks {language_name}, "
-            f"a language the player doesn't share. Narrate {target} replying with a short, "
-            "quoted, untranslatable-sounding line of invented gibberish in that tongue -- no "
-            "real words the player could understand, and don't translate or explain it."
+            f"a language you don't share. Narrate {target} replying with a short, quoted, "
+            "untranslatable-sounding line of invented gibberish in that tongue -- no real words "
+            "you could understand, and don't translate or explain it."
         )
         if nonsense_phrase:
             prompt += (
@@ -1049,34 +1076,39 @@ class LLMCore:
             target, never as target itself.
         @param target The entity being addressed, in-character.
         @param persona describe_character(target)'s own flavor text (DM_Social.py) -- who
-            target is, purely descriptive data (no mechanical stats).
+            target is, purely descriptive data (no mechanical stats), including its own
+            "voice"/"quotes" for how they talk.
         @param attitude describe_attitude(target, player)'s own prose -- target's own
             disposition toward the player, to ground tone (warm, wary, hostile, ...).
         @param rag_query What to retrieve sourcebook lore against (see perform_rag).
         @return The complete system message string for this one dialogue request.
         """
         system_message = (
-            f"You are the Game Master, narrating {target}'s reply as part of an ongoing "
-            f"tabletop scene."
+            f"You are the Game Master, voicing {target} in an ongoing tabletop scene. The "
+            f"player character is \"you\" -- never call them \"the player\"."
         )
         if persona:
-            system_message += f" {persona}"
+            system_message += f"\nWho {target} is: {persona}"
         if attitude:
-            system_message += f" {attitude}"
+            system_message += f"\nHow {target} feels about you: {attitude}"
         system_message += (
-            f" Narrate in the third person, exactly the way you narrate every other beat of "
-            f"the scene -- describe what {target} does and quote {target}'s own spoken words "
-            f"directly (ex: The innkeeper shrugs. \"Can't say I've heard that name,\" she "
-            f"says.). Never write in the first person as {target}, never let {target} narrate "
-            f"anyone else's actions, and never step outside {target}'s own reply to narrate "
-            f"anything else in the scene -- only the player ever speaks in the first person. A "
-            f"few sentences only. Actually answer what was asked: if you have no specific fact "
-            "to draw on, invent a small, plausible, in-setting detail rather than deflecting -- "
-            "a real person asked a direct question gives a real answer, even a brief or "
-            "mistaken one. Only stonewall, demand clarification, or turn the question aside if "
-            "your persona or attitude above specifically calls for secrecy, suspicion, or "
-            "hostility, and even then don't repeat the same deflection you already gave "
-            "earlier in this conversation -- escalate or change tack instead."
+            f"\nWrite {target}'s reply as mostly {target}'s own spoken words, in quotes, the way "
+            f"this particular person really talks: everyday words, contractions, fragments where "
+            f"natural. If a voice or known lines are given above, match them; if not, sound like "
+            f"an ordinary person of {target}'s station, not a storyteller. At most one short "
+            f"action beat (a gesture or expression) -- no scenery, no one else's actions, and "
+            f"never narrate what you do. Tag the speech at most once (ex: The innkeeper shrugs. "
+            f"\"Can't say I've heard that name.\"). Length follows mood: guarded, busy or "
+            f"hostile gets a line or two; friendly and interested, three or four sentences at "
+            f"most. Third person only -- never write as {target} in the first person outside "
+            f"the quotes.\n"
+            "Actually answer what was asked: if you have no specific fact to draw on, invent a "
+            "small, plausible, in-setting detail rather than deflecting -- a real person asked a "
+            "direct question gives a real answer, even a brief or mistaken one. Only stonewall, "
+            "demand clarification, or turn the question aside if who they are or how they feel "
+            "above specifically calls for secrecy, suspicion, or hostility, and even then don't "
+            "repeat the same deflection you already gave earlier in this conversation -- "
+            "escalate or change tack instead."
         )
 
         rag_context = self.perform_rag(rag_query)

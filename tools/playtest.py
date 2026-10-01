@@ -106,10 +106,12 @@ class Harness:
         self.lock = threading.Lock()
         self.responses = []
         self.counts = {"action_resolved": 0, "action_not_understood": 0,
-                       "improvisation_requested": 0, "item_interaction": 0, "dialogue": 0}
+                       "improvisation_requested": 0, "item_interaction": 0, "dialogue": 0,
+                       "implicit_dialogue": 0}
         self.log_errors = []
         self.turn_skills = []   # (skill, how, score) mapped during the current turn
         self.turn_intents = []  # item-interaction intents resolved during the current turn
+        self.turn_dialogue = []  # dialogue_detected payloads seen during the current turn
         self.saved_slots = []
 
         self.bus.subscribe("llm_response_ready", self._on_response)
@@ -119,6 +121,7 @@ class Harness:
                            ("dialogue_resolved", "dialogue")):
             self.bus.subscribe(event, lambda d, k=key: self._count(k))
         self.bus.subscribe("item_interaction_resolved", self._on_item_interaction)
+        self.bus.subscribe("dialogue_detected", self._on_dialogue_detected)
         self.bus.subscribe("log_error", lambda m: self.log_errors.append(str(m)))
         self.bus.subscribe("log_info", self._on_info)
 
@@ -142,6 +145,11 @@ class Harness:
         self._count("item_interaction")
         intent = data.get("intent") if isinstance(data, dict) else None
         self.turn_intents.append(intent or "?")
+
+    def _on_dialogue_detected(self, data):
+        self.turn_dialogue.append(data)
+        if data.get("implicit"):
+            self._count("implicit_dialogue")
 
     def _on_info(self, message):
         match = MAPPED_SKILL_RE.search(str(message))
@@ -196,6 +204,14 @@ class Harness:
         for skill, how, score in self.turn_skills:
             if how == "keyword fallback" and score < WEAK_KEYWORD_SCORE:
                 flags.append(f"weak skill match: {skill} via keyword fallback ({score:.2f})")
+        # Dialogue-only smells: the reply should be someone talking to "you".
+        if self.turn_dialogue:
+            if re.search(r"\bthe player\b", text, re.IGNORECASE):
+                flags.append("dialogue says 'the player'")
+            if not re.search(r'["\u201c\u201d]', text):
+                flags.append("dialogue reply has no quoted speech")
+            if "*(" in text:
+                flags.append("dialogue reply has a meta parenthetical")
         return flags
 
     def roundtrip_check(self, turn):
@@ -263,7 +279,7 @@ class Harness:
 
                 before_counts, before_errors = dict(self.counts), len(self.log_errors)
                 before = len(self.responses)
-                self.turn_skills, self.turn_intents = [], []
+                self.turn_skills, self.turn_intents, self.turn_dialogue = [], [], []
                 t0 = time.time()
                 # Boundary marker so each turn's LLM exchanges can be found in the session log.
                 self.bus.publish("log_info", f"PLAYTEST turn {turn} input: {action}")
@@ -297,6 +313,8 @@ class Harness:
 
                 record = {"turn": turn, "input": action, "narration": narration, "seconds": elapsed,
                           "skills": skills, "intents": self.turn_intents,
+                          "speech": [{"form": d.get("speech_form"), "implicit": d.get("implicit")}
+                                     for d in self.turn_dialogue],
                           "events": {k: self.counts[k] - before_counts[k] for k in self.counts},
                           "problems": problems, "flags": flags,
                           "log_errors": self.log_errors[before_errors:]}
@@ -319,7 +337,7 @@ class Harness:
               f"{self.counts['improvisation_requested']} improvised, "
               f"{self.counts['action_resolved']} resolved, "
               f"{self.counts['item_interaction']} item interactions, "
-              f"{self.counts['dialogue']} dialogue.")
+              f"{self.counts['dialogue']} dialogue ({self.counts['implicit_dialogue']} implicit).")
         if flag_counts:
             print("Flags: " + ", ".join(f"{k} x{v}" for k, v in sorted(flag_counts.items())))
         if replay is not None:

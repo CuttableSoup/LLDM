@@ -7,6 +7,12 @@ from dm.DM_Types import DMCoreProtocol
 WORD_BOUNDARY = r"\b%s\b"
 
 
+# How many turn-costing, non-dialogue turns a conversation survives before it lapses -- long
+# enough to hand over a coin or glance around mid-talk, short enough that wandering off to pick
+# a lock doesn't leave the last shopkeeper answering every stray remark.
+CONVERSATION_IDLE_TURNS = 3
+
+
 class DialogueMixin(DMCoreProtocol):
     """!
     @brief Direct, in-character address of a specific present entity (DMCore mixin -- only
@@ -64,6 +70,58 @@ class DialogueMixin(DMCoreProtocol):
                     return name
         return None
 
+    def _set_conversation_partner(self, target_name):
+        """!
+        @brief Records target_name as who the player is talking to, and restarts its idle
+            count. Publishes "conversation_partner_updated" only when the partner actually
+            changes -- NLPCore keeps its own copy (IntentClassifier.set_conversation_partner)
+            to decide whether an unmarked line is speech at all.
+        @param target_name The entity key just spoken to, or None to end the conversation.
+        """
+        current = (self.conversation_partner or {}).get("key")
+        self.conversation_partner = {"key": target_name, "idle_turns": 0} if target_name else None
+        if target_name != current:
+            self._publish_conversation_partner()
+
+    def _publish_conversation_partner(self):
+        """!
+        @brief Publishes the current conversation partner (or None) for NLPCore -- called on
+            every change and once after load_game, which restores the field directly.
+        """
+        partner = None
+        if self.conversation_partner:
+            key = self.conversation_partner["key"]
+            entity = self.entities.get(key, {})
+            partner = {"key": key, "name": entity.get("name", key), "aliases": list(entity.get("aliases", []))}
+        self.event_bus.publish("conversation_partner_updated", {"partner": partner})
+
+    def _current_conversation_partner(self):
+        """!
+        @brief The conversation partner's key if they can still hear the player -- present,
+            alive, and not hidden, the same gates _resolve_dialogue applies -- else None, ending
+            the conversation as a side effect. Checked lazily, wherever the partner is read,
+            rather than hooked into every site that can kill, hide, or move an entity.
+        """
+        key = (self.conversation_partner or {}).get("key")
+        if not key:
+            return None
+        if key not in self.scenario_entities or self.get_current_hp(key) <= 0 or self.is_hidden(key):
+            self._set_conversation_partner(None)
+            return None
+        return key
+
+    def _tick_conversation_partner(self):
+        """!
+        @brief Counts one turn-costing turn that wasn't dialogue against the current
+            conversation, ending it after CONVERSATION_IDLE_TURNS. Called from DMCore's
+            _on_turn_detected; dialogue itself resets the count via _set_conversation_partner.
+        """
+        if not self._current_conversation_partner():
+            return
+        self.conversation_partner["idle_turns"] += 1
+        if self.conversation_partner["idle_turns"] >= CONVERSATION_IDLE_TURNS:
+            self._set_conversation_partner(None)
+
     def _resolve_dialogue_target(self, input_text):
         """!
         @brief Figures out who's being addressed: whoever _literal_dialogue_target (above)
@@ -79,7 +137,11 @@ class DialogueMixin(DMCoreProtocol):
         @return The addressed entity's name, or None if nothing named matches and there's no
                 default target either (ex: an empty scene).
         """
-        return self._literal_dialogue_target(input_text) or self._get_target_name(include_background=True)
+        return (
+            self._literal_dialogue_target(input_text)
+            or self._current_conversation_partner()
+            or self._get_target_name(include_background=True)
+        )
 
     def _resolve_dialogue(self, input_text, sentiments=None, forced_target=None):
         """!
@@ -133,6 +195,9 @@ class DialogueMixin(DMCoreProtocol):
             target_name = self._literal_dialogue_target(input_text)
             if target_name:
                 resolution = "literal match -- named by key/display name/alias in the input"
+            elif self._current_conversation_partner():
+                target_name = self._current_conversation_partner()
+                resolution = "conversation partner -- no name in the input, still talking to them"
             else:
                 target_name = self._get_target_name(include_background=True)
                 resolution = "fallback default -- no name matched in the input" if target_name else None
@@ -153,6 +218,10 @@ class DialogueMixin(DMCoreProtocol):
 
         if self.entities.get(target_name, {}).get("supertype") == "object":
             return {"target": target_name, "found": False, "reason": "cant_talk"}
+
+        # Talking to them at all -- understood or not -- is what makes them the partner the
+        # next unmarked line goes to.
+        self._set_conversation_partner(target_name)
 
         barrier_language, nonsense_phrase = self._detect_language_barrier(target_name)
         if barrier_language:

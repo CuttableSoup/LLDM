@@ -281,6 +281,7 @@ class PersistenceMixin(DMCoreProtocol):
             "watch_rotation_index": self.watch_rotation_index,
             "pending_downtime": self.pending_downtime,
             "current_target": self.current_target,
+            "conversation_partner": self.conversation_partner,
             "scenario_entities": self.scenario_entities,
             "current_location_key": self.current_location_key,
             "current_room_key": self.current_room_key,
@@ -674,6 +675,11 @@ class PersistenceMixin(DMCoreProtocol):
         # DM_Core.py's _on_llm_response_ready.
         self.recent_narration.clear()
         self.recent_narration.extend(data.get("recent_narration", []))
+
+        # Also after re-instancing, which re-entered the saved location and so cleared it (see
+        # _enter_location). Absent from an older save: no conversation running.
+        self.conversation_partner = data.get("conversation_partner")
+        self._publish_conversation_partner()
 
         # _enter_location/enter_room already published a roster mid-load, but every restored
         # ad hoc entity and every generated entity's saved name/description landed *after*

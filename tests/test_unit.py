@@ -54,6 +54,7 @@ from dm.DM_ActionOutcome import (
     RolledOutcome, SummonEffect, TeleportEffect, TransferOutcome,
 )
 from dm.DM_Core import DMCore, PERSON_TARGET_INTENTS, RECENT_NARRATION_CHARS, RECENT_NARRATION_TURNS
+from dm.DM_Dialogue import CONVERSATION_IDLE_TURNS
 from dm.DM_Improvisation import MAX_PROMOTED_PER_SCENE
 from dm.DM_Rules import RulesMixin, list_available_scenarios, list_available_settings
 from dm.DM_Travel import ROAD_ENCOUNTER_KEY
@@ -96,9 +97,12 @@ from nlp.Intent_Classification import (
     _phrase_matches,
     detect_dialogue_intent,
     detect_help_intent,
+    detect_implicit_speech,
     detect_item_intent,
     detect_save_load_intent,
     detect_scene_query_intent,
+    frame_speech,
+    process_input,
     split_action_clauses,
 )
 import LLDM
@@ -615,6 +619,53 @@ class TestPlayerInputCorpus(unittest.TestCase):
                 )
                 self.assertGreaterEqual(len(social_skill_rolls) / totals["S"], self.MIN_SOCIAL_SKILL_ROLL_RATE, setting)
 
+    # The same corpus again, mid-conversation (IntentClassifier.set_conversation_partner), where
+    # unmarked talk should reach the partner (detect_implicit_speech). Measured at introduction:
+    # 39/52 conversation lines to dialogue in every setting (6 without a partner), actions
+    # swallowed 2/49 ("wait for a better chance", and a question followed by an action), and
+    # social-skill rolls unchanged from the partner-less pass.
+    MIN_PARTNER_CONVERSATION_DIALOGUE_RATE = 0.75
+    MAX_PARTNER_ACTION_DIALOGUE_RATE = 0.05
+
+    def test_conversation_partner_routes_talk_without_swallowing_actions(self):
+        totals = {label: sum(1 for entry in self.corpus if entry["label"] == label) for label in "ANS"}
+        self.addCleanup(self.nlp_core.classifier.set_conversation_partner, None)
+
+        for setting in list_available_settings():
+            with self.subTest(setting=setting):
+                self._load_setting_rules(setting)
+                self.nlp_core.classifier.set_conversation_partner({"key": "listener", "name": "listener", "aliases": []})
+                talk_missed, actions_swallowed, social_skill_rolls = [], [], []
+                for entry in self.corpus:
+                    _processed, events = self.nlp_core.classifier.classify(entry["text"])
+                    names = [event["event"] for event in events]
+                    rolled = any(
+                        clause.get("skill") for event in events if event["event"] == "turn_detected"
+                        for clause in event["payload"]["clauses"]
+                    )
+                    if entry["label"] == "N" and "dialogue_detected" not in names:
+                        talk_missed.append(repr(entry["text"]))
+                    elif entry["label"] == "A" and "dialogue_detected" in names:
+                        actions_swallowed.append(repr(entry["text"]))
+                    elif entry["label"] == "S" and rolled:
+                        social_skill_rolls.append(entry["text"])
+
+                print(
+                    f"\n[player input corpus, mid-conversation] {setting}: conversation to dialogue "
+                    f"{totals['N'] - len(talk_missed)}/{totals['N']}, actions to dialogue "
+                    f"{len(actions_swallowed)}/{totals['A']}, social-skill rolls "
+                    f"{len(social_skill_rolls)}/{totals['S']}"
+                )
+                self.assertGreaterEqual(
+                    1 - len(talk_missed) / totals["N"], self.MIN_PARTNER_CONVERSATION_DIALOGUE_RATE,
+                    f"{setting}:\n" + "\n".join(talk_missed),
+                )
+                self.assertLessEqual(
+                    len(actions_swallowed) / totals["A"], self.MAX_PARTNER_ACTION_DIALOGUE_RATE,
+                    f"{setting}:\n" + "\n".join(actions_swallowed),
+                )
+                self.assertGreaterEqual(len(social_skill_rolls) / totals["S"], self.MIN_SOCIAL_SKILL_ROLL_RATE, setting)
+
 
 # Minimal keyword catalog/skills catalog for generate_referenced_npc, which is DMCore-
 # independent (same reasoning FAKE_SKILLS_CATALOG is declared separately for its siblings).
@@ -889,7 +940,9 @@ class TestIntentClassification(unittest.TestCase):
             [{
                 "event": "dialogue_detected",
                 "payload": {
-                    "input": "talk to the wolf", "score": None, "sentiment": None, "sentiment_score": 0.0,
+                    "input": "talk to the wolf", "score": None, "implicit": False,
+                    "speech_form": "greet", "utterance": None,
+                    "sentiment": None, "sentiment_score": 0.0,
                     "threat_sentiment": None, "threat_score": 0.0,
                     "familiarity_sentiment": None, "familiarity_score": 0.0,
                     # The promotion gate's own evidence pair (see extract_address_phrase /
@@ -910,6 +963,88 @@ class TestIntentClassification(unittest.TestCase):
         _processed, events = classifier.classify("talk to the innkeeper, thank you")
         self.assertEqual(events[0]["payload"]["sentiment"], "positive")
         self.assertEqual(events[0]["payload"]["sentiment_score"], 0.7)
+
+    def test_detect_implicit_speech_reads_talk_but_not_declared_actions(self):
+        for text in (
+            "do you ever get tired of all this hard work?",
+            "let's find somewhere quieter",
+            "forget the lumber. let's find a private place.",
+            "come help me relax",
+            "gareth, is your forge really that hot",
+            "maybe a little break",
+        ):
+            self.assertTrue(detect_implicit_speech(text), text)
+        for text in (
+            "check the debris",
+            "persuade him to lower the price",
+            "threaten to report him",
+            "hide behind the barrel",
+            "draw my blade, then charge",
+        ):
+            self.assertFalse(detect_implicit_speech(text), text)
+
+    def test_unmarked_speech_is_dialogue_only_while_a_conversation_is_running(self):
+        classifier = IntentClassifier(FakeMatcher())
+        _processed, events = classifier.classify("Do you ever get tired of all this?")
+        self.assertEqual(events[0]["event"], "action_not_understood")
+
+        classifier.set_conversation_partner({"key": "innkeeper", "name": "innkeeper", "aliases": []})
+        _processed, events = classifier.classify("Do you ever get tired of all this?")
+        self.assertEqual(events[0]["event"], "dialogue_detected")
+        self.assertTrue(events[0]["payload"]["implicit"])
+
+        classifier.set_conversation_partner(None)
+        _processed, events = classifier.classify("Do you ever get tired of all this?")
+        self.assertEqual(events[0]["event"], "action_not_understood")
+
+    def test_social_skill_attempt_still_rolls_mid_conversation(self):
+        classifier = IntentClassifier(FakeMatcher(actions={"persuade him to lower the price": ("charisma", 0.9)}))
+        classifier.set_conversation_partner({"key": "innkeeper", "name": "innkeeper", "aliases": []})
+        _processed, events = classifier.classify("persuade him to lower the price")
+        self.assertEqual(events[0]["event"], "turn_detected")
+        self.assertEqual(events[0]["payload"]["clauses"][0]["skill"], "charisma")
+
+    def _frame(self, raw):
+        processed = process_input(raw)
+        return frame_speech(raw, processed, detect_dialogue_intent(processed))
+
+    def test_frame_speech_turns_a_bare_address_into_a_greeting(self):
+        self.assertEqual(self._frame("Talk to the fishmonger"), {"speech_form": "greet", "utterance": None})
+        self.assertEqual(self._frame("Greet Silas")["speech_form"], "greet")
+
+    def test_frame_speech_restates_a_keyword_request_in_the_second_person(self):
+        self.assertEqual(self._frame("Ask about the kelp beds")["utterance"], "You ask about the kelp beds.")
+        self.assertEqual(self._frame("Tell Silas to back off")["utterance"], "You tell Silas to back off.")
+        # From the keyword on: a movement clause before it is its own (quiet) intent.
+        self.assertEqual(
+            self._frame("I approach the merchant and ask about the celebration")["utterance"],
+            "You ask about the celebration.",
+        )
+
+    def test_frame_speech_keeps_the_players_own_words_verbatim(self):
+        self.assertEqual(
+            self._frame('I approach the fishmonger. "Is something going on?"'),
+            {"speech_form": "verbatim", "utterance": "Is something going on?"},
+        )
+        # Aimed back at the speaker: direct speech, not "You tell me...".
+        self.assertEqual(self._frame("Tell me what you know")["speech_form"], "verbatim")
+        self.assertEqual(
+            frame_speech("Do you ever get tired?", process_input("Do you ever get tired?"), False),
+            {"speech_form": "verbatim", "utterance": "Do you ever get tired?"},
+        )
+
+    def test_dialogue_detected_carries_the_speech_framing(self):
+        classifier = IntentClassifier(FakeMatcher())
+        _processed, events = classifier.classify("Ask about the kelp beds")
+        self.assertEqual(events[0]["payload"]["speech_form"], "reported")
+        self.assertEqual(events[0]["payload"]["utterance"], "You ask about the kelp beds.")
+
+    def test_lore_check_question_is_not_paired_with_implicit_dialogue(self):
+        classifier = IntentClassifier(FakeMatcher())
+        classifier.set_conversation_partner({"key": "innkeeper", "name": "innkeeper", "aliases": []})
+        _processed, events = classifier.classify("what do you know about the troll")
+        self.assertEqual([event["event"] for event in events], ["item_interaction_detected"])
+        self.assertEqual(events[0]["payload"]["intent"], "lore_check")
 
     def test_adam_wins_over_both_item_verb_and_dialogue_in_the_same_input(self):
         # Checked ahead of both the item-interaction pass and DIALOGUE_KEYWORDS -- naming
@@ -1247,6 +1382,55 @@ class TestFreeformDialogueNarration(LLMTestCase):
         self.assertIn("have you heard anything from the road", entry["content"])
         self.assertEqual(entry["present"], ["gladstone", "innkeeper"])
 
+    def _speech_prompt(self, **payload):
+        self.event_bus.publish("dialogue_resolved", {
+            "target": "market_person_3", "target_label": "the Fishmonger", "found": True,
+            "persona": "A fishmonger.", "attitude": "neutral",
+            "present_entities": ["gladstone", "market_person_3"], **payload,
+        })
+        return self.llm_core.context_window[-1]["content"]
+
+    def test_a_greeting_asks_the_npc_to_open_rather_than_quoting_the_command(self):
+        prompt = self._speech_prompt(input="talk to the fishmonger", speech_form="greet", utterance=None)
+        self.assertIn("You approach the Fishmonger", prompt)
+        self.assertIn("speaks first", prompt)
+        self.assertNotIn("talk to the fishmonger", prompt)
+
+    def test_a_reported_request_reaches_the_model_as_what_was_asked(self):
+        prompt = self._speech_prompt(
+            input="ask about the kelp beds", speech_form="reported", utterance="You ask about the kelp beds.",
+        )
+        self.assertEqual(prompt, "Speaking to the Fishmonger: You ask about the kelp beds.")
+
+    def test_verbatim_speech_is_quoted_as_said(self):
+        prompt = self._speech_prompt(
+            input="do you ever get tired?", speech_form="verbatim", utterance="Do you ever get tired?",
+        )
+        self.assertEqual(prompt, 'You say to the Fishmonger: "Do you ever get tired?"')
+
+    def test_dialogue_prompts_never_call_the_pc_the_player(self):
+        # "the player" in the prompt is what the model copied into replies ("doesn't look
+        # directly at the player").
+        for payload in (
+            {"input": "hi", "speech_form": "greet", "utterance": None},
+            {"input": "hi", "speech_form": "verbatim", "utterance": "hi"},
+            {"input": "hi", "language_barrier": True, "target_language": "dwarvish", "nonsense_phrase": None},
+        ):
+            with self.subTest(payload=payload):
+                self.assertNotIn("the player", self._speech_prompt(**payload))
+        system = self.llm_core._build_dialogue_system_message("the Fishmonger", "A fishmonger.", "neutral", "")
+        self.assertIn('never call them "the player"', system)
+        self.assertNotIn("only the player", system)
+
+    def test_dialogue_system_message_asks_for_speech_in_the_npcs_own_voice(self):
+        system = self.llm_core._build_dialogue_system_message(
+            "the Fishmonger", "A fishmonger. | Voice: gruff and clipped", "wary", "",
+        )
+        self.assertIn("Who the Fishmonger is: A fishmonger. | Voice: gruff and clipped", system)
+        self.assertIn("How the Fishmonger feels about you: wary", system)
+        self.assertIn("At most one short action beat", system)
+        self.assertIn("Length follows mood", system)
+
     def test_not_found_dialogue_falls_back_to_ordinary_gm_narration(self):
         self.event_bus.publish("dialogue_resolved", {
             "target": None, "input": "hello?", "found": False, "reason": "no_one_here",
@@ -1345,10 +1529,10 @@ class TestFreeformDialogueNarration(LLMTestCase):
             })
             mock_thread.call_args.kwargs["target"]()
 
-        self.assertIn('The player says: "ask about the kelp beds"', debug_events[0]["query"])
+        self.assertIn('You say to the Fishmonger: "ask about the kelp beds"', debug_events[0]["query"])
         # The prior turn's own exchange is still there too -- presence-filtered history, not
         # just the triggering turn alone.
-        self.assertIn('The player says: "tell me what you know"', debug_events[0]["query"])
+        self.assertIn('You say to the Fishmonger: "tell me what you know"', debug_events[0]["query"])
         self.assertIn("Aye, I know a bit.", debug_events[0]["query"])
 
     def test_filter_present_history_excludes_entries_the_entity_never_witnessed(self):
@@ -5340,6 +5524,13 @@ class TestPromptDirective(DMTestCase):
         }
         description = self.dm_core.describe_character("target_dummy")
         self.assertIn("Currently privately convinced (planted by gladstone): \"open the gate\"", description)
+
+    def test_describe_character_carries_voice_beside_known_lines(self):
+        self.dm_core.entities["target_dummy"]["voice"] = "clipped, dockside slang"
+        self.dm_core.entities["target_dummy"]["quotes"] = ["Mind the ropes."]
+        description = self.dm_core.describe_character("target_dummy")
+        self.assertIn("Voice: clipped, dockside slang", description)
+        self.assertIn('Lines in their voice: "Mind the ropes."', description)
 
     def test_describe_character_omits_anything_when_no_directive_is_planted(self):
         description = self.dm_core.describe_character("target_dummy")
@@ -10746,6 +10937,92 @@ class TestFreeformDialogue(DMTestCase):
         self.assertFalse(result["found"])
         self.assertEqual(result["reason"], "no_one_here")
 
+    def _add_second_speaker(self):
+        # A second person in the tavern, placed after the innkeeper so the innkeeper stays
+        # the default target -- the partner has to beat that default to be seen at all.
+        self.dm_core.scenario_entities.append("thane")
+
+    def test_unnamed_line_goes_to_the_conversation_partner_over_the_default(self):
+        self._add_second_speaker()
+        self._talk("i talk to thane")
+
+        result = self._talk("what have you heard lately")
+
+        self.assertEqual(result["target"], "thane")
+
+    def test_naming_someone_else_switches_the_partner(self):
+        self._add_second_speaker()
+        self._talk("i talk to thane")
+        self._talk("i ask the innkeeper about the road")
+
+        self.assertEqual(self._talk("and the weather")["target"], "innkeeper")
+
+    def test_partner_changes_are_published_for_nlp(self):
+        updates = self._capture("conversation_partner_updated")
+        self._talk("i talk to the innkeeper")
+        self._talk("thanks")  # same partner again -- no second publish
+
+        self.assertEqual([update["partner"]["key"] for update in updates], ["innkeeper"])
+
+    def test_conversation_lapses_after_idle_turns(self):
+        self._talk("i talk to the innkeeper")
+        for _ in range(CONVERSATION_IDLE_TURNS - 1):
+            self.dm_core._tick_conversation_partner()
+        self.assertEqual(self.dm_core.conversation_partner["key"], "innkeeper")
+
+        self.dm_core._tick_conversation_partner()
+        self.assertIsNone(self.dm_core.conversation_partner)
+
+    def test_a_real_turn_counts_against_the_conversation(self):
+        self._talk("i talk to the innkeeper")
+        self.dm_core._on_turn_detected({"clauses": [{"kind": "action", "skill": "observation"}], "input": "look around"})
+        self.assertEqual(self.dm_core.conversation_partner["idle_turns"], 1)
+
+    def test_talking_again_resets_the_idle_count(self):
+        self._talk("i talk to the innkeeper")
+        self.dm_core._tick_conversation_partner()
+        self._talk("one more thing")
+        self.assertEqual(self.dm_core.conversation_partner["idle_turns"], 0)
+
+    def test_dead_partner_ends_the_conversation(self):
+        self._add_second_speaker()
+        self._talk("i talk to thane")
+        self.dm_core.apply_damage("thane", 9999)
+
+        result = self._talk("are you all right")
+
+        # Falls through to the default target, who then becomes the new partner.
+        self.assertEqual(result["target"], "innkeeper")
+        self.assertEqual(self.dm_core.conversation_partner["key"], "innkeeper")
+
+    def test_changing_location_ends_the_conversation(self):
+        self._talk("i talk to the innkeeper")
+        self._load_ad_hoc_scenario([])
+        self.assertIsNone(self.dm_core.conversation_partner)
+
+    def test_conversation_partner_round_trips_through_save_and_load(self):
+        slot_name = "test_conversation_partner_slot"
+        self.addCleanup(shutil.rmtree, self.dm_core._save_slot_dir(slot_name), ignore_errors=True)
+        updates = self._capture("conversation_partner_updated")
+        self._talk("i talk to the innkeeper")
+        self.dm_core._tick_conversation_partner()
+
+        self.dm_core.save_game(slot_name)
+        self.dm_core.load_game(slot_name)
+
+        self.assertEqual(self.dm_core.conversation_partner, {"key": "innkeeper", "idle_turns": 1})
+        # NLP has to hear about it too, or it can't route the next unmarked line.
+        self.assertEqual(updates[-1]["partner"]["key"], "innkeeper")
+
+    def test_speech_framing_passes_through_to_narration(self):
+        self.dm_core._on_dialogue_detected({
+            "input": "ask the innkeeper about the road", "speech_form": "reported",
+            "utterance": "You ask the innkeeper about the road.",
+        })
+        result = self.dialogue_events[-1]
+        self.assertEqual(result["speech_form"], "reported")
+        self.assertEqual(result["utterance"], "You ask the innkeeper about the road.")
+
     def test_every_dialogue_resolution_is_tagged_with_current_presence(self):
         result = self._talk("i talk to the innkeeper")
         self.assertEqual(set(result["present_entities"]), set(self.dm_core.scenario_entities))
@@ -13051,6 +13328,11 @@ class TestNarratedPopulation(DMTestCase):
     def _crowd(self):
         return [n for n in self.dm_core.scenario_entities if self.dm_core.entities[n].get("source") == "narration"]
 
+    def test_a_narrated_person_keeps_their_voice(self):
+        self._populate([self._person(voice="Brisk; haggles over every copper")])
+        [name] = self._crowd()
+        self.assertEqual(self.dm_core.entities[name]["voice"], "Brisk; haggles over every copper")
+
     def test_a_narrated_person_becomes_a_real_scene_entity(self):
         self.assertEqual(self._populate([self._person()]), 1)
 
@@ -13406,6 +13688,13 @@ class TestReferencedNpcGeneration(unittest.TestCase):
         self.assertTrue(result["created"])
         self.assertEqual(result["entity"]["name"], "Ferrin")
         self.assertTrue(result["entity"]["ad_hoc"])
+
+    def test_a_materialized_bystander_keeps_its_voice(self):
+        captured = {}
+        result = self._generate(self._fake_call(captured, voice="Soft-spoken, trails off mid-sentence"))
+
+        self.assertIn("voice", captured["tools"][0]["function"]["parameters"]["properties"])
+        self.assertEqual(result["entity"]["voice"], "Soft-spoken, trails off mid-sentence")
 
     def test_the_schema_offers_no_hostile_disposition(self):
         captured = {}

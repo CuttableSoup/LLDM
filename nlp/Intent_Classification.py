@@ -171,6 +171,52 @@ DIALOGUE_KEYWORDS = (
     "talk to ", "speak to ", "speak with ", "ask ", "tell ", "say to ", "greet ", "chat with ",
 )
 
+# Opening words that mark text as something other than a declared action -- a question ("can",
+# "does", "why"), a hypothetical ("if", "maybe", "wait"), a suggestion ("let's", "we"), or a
+# remark about someone/something else ("you", "it's", "this"). Consulted by map_to_action's
+# two FALLBACK paths (see opens_like_an_action), never its direct semantic match, and by
+# detect_implicit_speech while a conversation is running. Both map_to_action
+# fallbacks work from a fragment of the input rather than the input as a whole, so they're the
+# ones that turn an ordinary word into a bogus skill roll -- "let's find a room" (observation,
+# keyword "find"), "shall we slip away" (escape, "slip"), "is your forge really" (forgery, an
+# alternate phrasing truncated at " that "). A player declaring an action leads with the action
+# ("find the dockmaster", "try to convince the guard", "i'll bargain with her over the cost"),
+# which is why this is a list of what disqualifies rather than of what qualifies: an open-ended
+# verb vocabulary is exactly what skills.toml's own data-driven keywords already are.
+#
+# Measured against 219 real logged inputs plus 66 targeted ones (plain actions, social-skill
+# attempts, banter containing skill keywords): the keyword-fallback path alone produced 39
+# conversation rolls against 22 genuine action rolls, with fully overlapping scores (0.22-0.48
+# vs 0.21-0.47) -- so no keyword_fallback_floor could separate them, while this opening-word
+# test kept every genuine one.
+NON_ACTION_OPENERS = frozenset({
+    "am", "is", "are", "was", "were", "do", "does", "did", "can", "could", "should", "would",
+    "will", "shall", "may", "might", "must", "have", "has", "had",
+    "why", "how", "what", "where", "who", "whom", "whose", "when", "which", "whether",
+    "if", "so", "but", "or", "since", "because", "though", "although", "unless", "wait",
+    "maybe", "perhaps", "like", "well", "honestly",
+    "let's", "lets", "we", "we're", "we'll", "we've", "you", "you're", "you've", "your",
+    "he", "she", "they", "it", "it's", "its", "this", "that", "these", "those", "there", "here",
+    "i'd", "i'm", "im", "i've",
+})
+# Stripped before the opener is read, so "i'll bargain with her" and a mid-clause sentence
+# starting "i study the pattern" both open on their real verb. process_input only strips a
+# leading "i " from the very start of the whole input.
+FIRST_PERSON_OPENERS = frozenset({"i", "i'll", "ill"})
+
+
+def opens_like_an_action(text):
+    """!
+    @brief Whether text opens the way a declared action does -- see NON_ACTION_OPENERS.
+    @param text A processed (lowercased) sentence or fragment.
+    @return False if its first word, after any FIRST_PERSON_OPENERS, is a NON_ACTION_OPENERS
+        word; True otherwise (including empty text, which no fallback can match anyway).
+    """
+    words = re.findall(r"[a-z']+", text)
+    while words and words[0] in FIRST_PERSON_OPENERS:
+        words = words[1:]
+    return not words or words[0] not in NON_ACTION_OPENERS
+
 # A double-quoted span of at least a few characters -- see detect_dialogue_intent. Double quotes
 # only: an apostrophe is a contraction far more often than a quotation mark.
 QUOTED_SPEECH_PATTERN = re.compile(r'"[^"]{2,}"')
@@ -689,6 +735,47 @@ def detect_dialogue_intent(processed_text):
     return _keyword_gate(processed_text, DIALOGUE_KEYWORDS) or bool(QUOTED_SPEECH_PATTERN.search(processed_text or ""))
 
 
+# A leading "gareth, " -- stripped before detect_implicit_speech reads the opening word, so
+# naming the listener first doesn't hide what follows. Capped at three words; a short clause
+# stripped by mistake ("draw my blade, then charge") only leaves its remainder to be read, which
+# still opens like an action.
+VOCATIVE_PATTERN = re.compile(r"^[a-z'\-]+(?: [a-z'\-]+){0,2}, ")
+# The speaker as the object of an opening imperative ("help me", "come help me", "join us") --
+# aimed at someone else, not an action of the player's own. Within the first three words only:
+# "persuade the captain to lend us his boat" names "us" too, but as the payoff of a social-skill
+# attempt that still has to roll.
+SPEAKER_OBJECT_PATTERN = re.compile(r"^(?:[a-z']+ ){1,2}(?:me|us)\b")
+SENTENCE_SPLIT_PATTERN = re.compile(r"[.!;]+\s*")
+
+
+def detect_implicit_speech(processed_text):
+    """!
+    @brief Whether processed_text reads as something said TO someone rather than something
+        done, with no dialogue keyword or quotation marks to say so -- "do you ever get tired
+        of all this?", "let's find somewhere quieter", "come help me relax". Only consulted
+        while the player already has a conversation partner (see
+        IntentClassifier.set_conversation_partner): without one there's no listener to hand
+        the line to, and the same text stays with the ordinary skill/intent passes.
+
+        Deliberately cheap and structural, no model call: a question mark, an opening word that
+        doesn't declare an action (NON_ACTION_OPENERS, the same list the skill fallbacks use to
+        recognise banter), or the player as the object of an imperative -- in any sentence. A
+        social-skill attempt ("persuade him to lower the price", "threaten to report him") opens
+        on its own verb and names no "me"/"us", so it still reaches the skill pass and rolls.
+    @param processed_text The processed player input.
+    """
+    text = (processed_text or "").strip()
+    if "?" in text:
+        return True
+    # Every sentence, not just the first -- "forget the lumber. let's find a private place."
+    # opens on a verb but is plainly talk by its second sentence.
+    for sentence in SENTENCE_SPLIT_PATTERN.split(text):
+        sentence = VOCATIVE_PATTERN.sub("", sentence.strip())
+        if sentence and (not opens_like_an_action(sentence) or SPEAKER_OBJECT_PATTERN.search(sentence)):
+            return True
+    return False
+
+
 def extract_address_phrase(processed_text):
     """!
     @brief The noun phrase the player used to address someone, if they used one at all --
@@ -743,6 +830,72 @@ def extract_address_phrase(processed_text):
             break
         phrase.append(word)
     return " ".join(phrase) or None
+
+
+def _original_casing(raw_input, processed_text):
+    """!
+    @brief The tail of raw_input that processed_text was made from, in the player's own casing
+        -- process_input only strips, lowercases and drops a leading prefix, all of which keep
+        the kept text's length, so the tail of the stripped raw input lines up exactly.
+    """
+    stripped = (raw_input or "").strip()
+    if not processed_text or len(processed_text) > len(stripped):
+        return processed_text or ""
+    return stripped[len(stripped) - len(processed_text):]
+
+
+def frame_speech(raw_input, processed_text, explicit):
+    """!
+    @brief How a dialogue line should be put to the narrator, so a command is never quoted as
+        if it were speech -- "talk to the fishmonger" passed along as the player's own words
+        had the model inventing a whole conversation around it.
+          - "verbatim": the player's own words, to quote as said -- a quoted span (just the
+            quote), implicit speech (the whole line, see detect_implicit_speech), or a
+            keyword aimed back at the speaker ("tell me what you know").
+          - "greet": a dialogue keyword naming someone and nothing more ("talk to the
+            fishmonger") -- the NPC should open the conversation.
+          - "reported": anything else keyword-led ("ask about the kelp beds", "tell silas to
+            back off"), restated in the second person from the keyword on ("You ask about the
+            kelp beds.") so the narrator hears what was asked, not how it was typed.
+    @param raw_input The player's raw input, for casing.
+    @param processed_text process_input(raw_input).
+    @param explicit Whether a dialogue keyword or quotation marks triggered this at all.
+    @return {"speech_form", "utterance"} -- utterance is None for "greet".
+    """
+    original = _original_casing(raw_input, processed_text)
+    quotes = re.findall(r'"([^"]{2,})"', original)
+    if quotes:
+        return {"speech_form": "verbatim", "utterance": " ".join(quote.strip() for quote in quotes)}
+    if not explicit:
+        return {"speech_form": "verbatim", "utterance": original}
+
+    earliest = None
+    for keyword in DIALOGUE_KEYWORDS:
+        match = re.search(rf"\b{re.escape(keyword.strip())}\b", processed_text)
+        if match and (earliest is None or match.start() < earliest.start()):
+            earliest = match
+    if earliest is None:
+        return {"speech_form": "verbatim", "utterance": original}
+
+    words = [word.strip(ADDRESS_STRIP_CHARS) for word in processed_text[earliest.end():].split()]
+    words = [word for word in words if word]
+    if words and words[0] in ("me", "us"):
+        return {"speech_form": "verbatim", "utterance": original}
+
+    # Skip past the addressee the same way extract_address_phrase reads it; anything left
+    # over is what was actually asked or said.
+    rest = list(words)
+    while rest and rest[0] in ADDRESS_ARTICLES:
+        rest.pop(0)
+    for _ in range(MAX_ADDRESS_WORDS):
+        if not rest or rest[0] in ADDRESS_TERMINATORS or rest[0] in ADDRESS_NON_ADDRESSEES:
+            break
+        rest.pop(0)
+    if not rest:
+        return {"speech_form": "greet", "utterance": None}
+
+    clause = original[earliest.start():].strip().rstrip(".!")
+    return {"speech_form": "reported", "utterance": f"You {clause[:1].lower()}{clause[1:]}."}
 
 
 def detect_help_intent(processed_text):
@@ -852,6 +1005,11 @@ class IntentClassifier:
             FakeMatcher in tests.
         """
         self.matcher = matcher
+        # Who the player is currently talking to, as DMCore last published it (DM_Dialogue.py's
+        # _set_conversation_partner) -- None when no conversation is running. Only its
+        # presence matters here: it's what lets detect_implicit_speech route an unmarked line
+        # to dialogue. DMCore, not this class, still decides who that line actually reaches.
+        self.conversation_partner = None
 
     def on_rules_loaded(self, data):
         """!@brief Forwards a "rules_loaded" payload to the matcher to build its embeddings."""
@@ -868,6 +1026,10 @@ class IntentClassifier:
     def set_present_entities(self, entities):
         """!@brief Forwards the current scene's own cast to the matcher's own bank."""
         self.matcher.set_present_entities(entities)
+
+    def set_conversation_partner(self, partner):
+        """!@brief Records DMCore's current conversation partner ({"key", ...} or None)."""
+        self.conversation_partner = partner
 
     def classify(self, raw_input):
         """!
@@ -944,7 +1106,18 @@ class IntentClassifier:
         # Only a genuine item_interaction turn_clauses entry -- something that actually costs
         # the turn action -- still suppresses dialogue outright, the same priority the old
         # single-clause code already gave item intents over dialogue.
-        if not turn_clauses and detect_dialogue_intent(processed):
+        # A running conversation widens the gate: a question, a suggestion, or banter with no
+        # "talk to"/quotation marks goes to whoever the player is already talking to rather
+        # than down to the skill pass (see detect_implicit_speech). Not when a free-standing
+        # intent already claimed a clause: "what do you know about the troll" is a lore check
+        # that happens to be phrased as a question, and pairing it with dialogue would silence
+        # its own narration (see "quiet" below).
+        explicit_dialogue = detect_dialogue_intent(processed)
+        implicit_dialogue = (
+            not explicit_dialogue and not found_exempt and self.conversation_partner is not None
+            and detect_implicit_speech(processed)
+        )
+        if not turn_clauses and (explicit_dialogue or implicit_dialogue):
             if found_exempt:
                 # The exempt clause(s) just appended above (ex: "advance") are about to share
                 # this turn with real dialogue -- the movement is mechanically real (DMCore
@@ -978,13 +1151,15 @@ class IntentClassifier:
             # scan still wins. The matcher is only consulted when there's a phrase to score,
             # so an ordinary "ask about the weather" costs nothing extra.
             address_phrase = extract_address_phrase(processed)
+            framing = frame_speech(raw_input, processed, explicit_dialogue)
             address_match, address_score = (
                 self.matcher.map_to_present_entity(address_phrase) if address_phrase else (None, 0.0)
             )
             events.append({
                 "event": "dialogue_detected",
                 "payload": {
-                    "input": processed, "score": None,
+                    "input": processed, "score": None, "implicit": implicit_dialogue,
+                    "speech_form": framing["speech_form"], "utterance": framing["utterance"],
                     "sentiment": sentiment, "sentiment_score": sentiment_score,
                     "threat_sentiment": threat_sentiment, "threat_score": threat_score,
                     "familiarity_sentiment": familiarity_sentiment, "familiarity_score": familiarity_score,

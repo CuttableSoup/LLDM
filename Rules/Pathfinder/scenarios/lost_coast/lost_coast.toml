@@ -113,6 +113,8 @@ name = "dockhand"
 supertype = "creature"
 subtype = "humanoid"
 description = "A sun-weathered dockhand coiling rope at the quayside, keeping half an eye on the newly arrived ship."
+voice = "Easygoing and unhurried; short dockside sentences, drops his g's, calls newcomers 'friend'."
+quotes = [ "Ship's in, friend. Mind the ropes." ]
 
 max_hp = 10
 
