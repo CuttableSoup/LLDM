@@ -28,6 +28,25 @@ MAX_PROMOTED_PER_SCENE = 3
 BYSTANDER_CR_SHARE = 0.25
 
 
+def catalog_entry(name, entity):
+    """!
+    @brief One "item_catalog_updated" payload entry for a runtime-created/restored entity.
+        "targetable" applies the same rule NLPCore's own boot-time target bank uses (see
+        SentenceTransformerMatcher.on_rules_loaded): a creature, or anything carrying its own
+        [entity.test]. Without it, an ad hoc creature or a narrated bystander could be spoken
+        to but never named as a target ("kick Hemlock"), since that bank is otherwise only ever
+        built once, from "rules_loaded".
+    @param name The entity's own dict key.
+    @param entity The entity dict.
+    @return {"name", "description", "targetable"}.
+    """
+    return {
+        "name": name,
+        "description": entity.get("description", ""),
+        "targetable": entity.get("supertype") == "creature" or bool(entity.get("test")),
+    }
+
+
 class ImprovisationMixin(DMCoreProtocol):
     """!
     @brief Ad hoc entity creation/removal/editing (DMCore mixin -- only ever composed into
@@ -147,7 +166,7 @@ class ImprovisationMixin(DMCoreProtocol):
         # re-trigger creation or dead-end, since NLPCore's embeddings are otherwise only ever
         # (re)built once, from "rules_loaded".
         self.event_bus.publish("item_catalog_updated", {
-            "entities": [{"name": name, "description": entity.get("description", "")}],
+            "entities": [catalog_entry(name, entity)],
         })
 
         # Decides where the newly-created entity physically lands; the actual narration/
@@ -411,7 +430,7 @@ class ImprovisationMixin(DMCoreProtocol):
             name, entity, insert_front=False, claim_target=self.is_hostile(name, self.player_name),
         )
         self.event_bus.publish("item_catalog_updated", {
-            "entities": [{"name": name, "description": entity.get("description", "")}],
+            "entities": [catalog_entry(name, entity)],
         })
 
         return {"created_creature": True, "name": name}
@@ -437,7 +456,9 @@ class ImprovisationMixin(DMCoreProtocol):
             "hint": location.get("population_hint", "") if active else "",
             "sentences": str(config.get("prose_sentences", "2-3")) if active else "2-3",
             "max": int(location.get("population_max", config.get("max_per_scene", 4))),
-            "triggers": tuple(config.get("triggers", ("scenario_intro", "move", "travel"))),
+            "triggers": tuple(config.get("triggers", (
+                "scenario_intro", "item_interaction", "skill_response", "clarification", "encounter",
+            ))),
             "freeform": tuple(limits.get("freeform", DEFAULT_NARRATED_FREEFORM)),
             "cr_share": float(limits.get("max_cr_share", BYSTANDER_CR_SHARE)),
         }
@@ -454,8 +475,10 @@ class ImprovisationMixin(DMCoreProtocol):
         @param data The "scene_narration_ready" payload ({text, label, present_entities}).
         """
         settings = self._population_settings()
-        trigger = (data.get("label") or "").split(":")[-1]
-        if not settings["active"] or trigger not in settings["triggers"]:
+        # A trigger names either a whole label kind ("item_interaction", "skill_response") or one
+        # item intent ("move", "travel") -- "item_interaction:move" answers to both.
+        kind, _, intent = (data.get("label") or "").partition(":")
+        if not settings["active"] or not ({kind, intent} & set(settings["triggers"])):
             return
         self._extract_scene_population(data.get("text", ""), settings)
 
@@ -488,11 +511,23 @@ class ImprovisationMixin(DMCoreProtocol):
             text, self._current_scene_description(), settings["hint"],
             [self.entities.get(name, {}).get("name", name) for name in list(self.scenario_entities)],
             room, self.get_challenge_rating(self.player_name) * settings["cr_share"],
-            npc_keywords, self.skills, settings["freeform"],
+            npc_keywords, self.skills, settings["freeform"], report=self._report_population_decline,
         )
         if people:
             self._pending_population.append({"scene": scene, "people": people})
         return len(people)
+
+    def _report_population_decline(self, reason):
+        """!
+        @brief extract_narrated_people's own report hook -- a model that can't be reached or
+            returns no usable tool call is a warning (that's how a whole session's NPCs used to
+            go missing without a trace); an explicit decline is ordinary, logged at info.
+        @param reason "unavailable", or the decline's own reason text.
+        """
+        if reason == "unavailable":
+            self.event_bus.publish("log_warning", "Scene population: extraction model unavailable; nobody was added.")
+        else:
+            self.event_bus.publish("log_info", f"Scene population: nobody added ({reason}).")
 
     def _apply_pending_population(self):
         """!
@@ -526,7 +561,7 @@ class ImprovisationMixin(DMCoreProtocol):
                 name = self._unique_entity_key(entity["name"])
                 self._place_and_register_scene_entity(name, entity, insert_front=False, claim_target=False)
                 self.event_bus.publish("item_catalog_updated", {
-                    "entities": [{"name": name, "description": entity.get("description", "")}],
+                    "entities": [catalog_entry(name, entity)],
                 })
                 self.event_bus.publish("log_info", f"Narration populated the scene: '{name}' ({entity.get('name')}).")
 
@@ -629,7 +664,7 @@ class ImprovisationMixin(DMCoreProtocol):
         name = self._unique_entity_key(entity["name"])
         self._place_and_register_scene_entity(name, entity, insert_front=False, claim_target=False)
         self.event_bus.publish("item_catalog_updated", {
-            "entities": [{"name": name, "description": entity.get("description", "")}],
+            "entities": [catalog_entry(name, entity)],
         })
         self.event_bus.publish("log_info", f"Promoted '{address_phrase}' into the scene as '{name}'.")
         return name
@@ -670,7 +705,7 @@ class ImprovisationMixin(DMCoreProtocol):
             entity["edited"] = True
             changed = True
             self.event_bus.publish("item_catalog_updated", {
-                "entities": [{"name": name, "description": entity.get("description", "")}],
+                "entities": [catalog_entry(name, entity)],
             })
         if decision.get("apply_condition"):
             self.apply_condition(name, decision["apply_condition"], duration="permanent", dismiss="")

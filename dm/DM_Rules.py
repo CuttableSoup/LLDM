@@ -1159,9 +1159,10 @@ class RulesMixin(DMCoreProtocol):
         """
         characters = self._describe_scenario_characters()
         population = self._population_prompt_settings()
-        if (characters, population) == self._last_scene_roster:
+        scene_name = self._current_scene_name()
+        if (characters, population, scene_name) == self._last_scene_roster:
             return
-        self._last_scene_roster = (characters, population)
+        self._last_scene_roster = (characters, population, scene_name)
 
         entities = []
         for entity_name in self.scenario_entities:
@@ -1180,6 +1181,9 @@ class RulesMixin(DMCoreProtocol):
             "entities": entities,
             "present_entities": list(self.scenario_entities),
             "population": population,
+            # Where the player actually is -- LLMCore pins every narration here (see its own
+            # location_rule), so prose can't walk the player somewhere the engine never went.
+            "scene_name": scene_name,
         })
 
     def _run_on_enter_programs(self):

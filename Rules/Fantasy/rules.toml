@@ -158,7 +158,10 @@ default_speed = 24
 # thing off for a setting.
 [narration_population]
 enabled         = true
-triggers        = [ "scenario_intro", "move", "travel" ]   # which narrations are read
+# Which narrations are read: a label kind ("skill_response", "item_interaction") or one item
+# intent ("move"). Not just arrivals -- people the narrator introduces mid-scene have to become
+# real too, or the player can't address or fight them. max_per_scene bounds the extra calls.
+triggers        = [ "scenario_intro", "item_interaction", "skill_response", "clarification", "encounter" ]
 max_per_scene   = 4                                        # narrated people alive in one scene
 prose_sentences = "5-6"                                    # how long those narrations run
 
@@ -251,6 +254,20 @@ name = "combat_hit"
 disposition = -20
 threat = -15
 familiarity = -10
+
+# Being attacked by someone you weren't fighting -- applied once, at full strength, hit or miss
+# (DM_Core.py's own attack redirect), unlike combat_hit, which measures how badly a fight that's
+# already happening is going. Whether it starts a fight is yes-or-no, not a matter of damage, so
+# this has to carry anyone past is_hostile's -100: its own "cap" lifts it over the 60 every
+# other action event is held to. Even a friendly (60) bystander lands at -140. Only someone
+# truly devoted (100) whom the player has also sweet-talked to the talk cap (+40) stays above
+# -100 -- they'll take a punch without swinging back.
+[[attitude_event]]
+name = "assaulted"
+disposition = -200
+threat = -20
+familiarity = -15
+cap = 200
 
 [[attitude_event]]
 name = "theft"

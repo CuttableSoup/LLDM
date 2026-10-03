@@ -30,7 +30,18 @@ into an actual narrated line, "Summoning" above) and background-fetch plumbing
 
 The scenario/room setting and character roster are re-injected into the system message on every
 request, so narration stays grounded even after the intro scrolls out of the rolling 100-message
-`context_window`. `generate_npc_dialogue`'s own system message (built by
+`context_window`. So is `location_rule`: the player is at the engine's own current scene
+(`scene_roster_updated`'s `"scene_name"`) and stays there — only the game moves the player — with
+the location's real exits listed (`location_exits_updated`). Exempt only for a real
+`item_interaction:move`/`travel`, whose whole job is arriving. Without it the narrator walked a
+playtest's player into a tavern and then underground ruins over a few clarification/skill replies
+while the engine never left the market, so every later turn described a place the game wasn't in.
+
+Every skill/round narration (`_describe_player_actions`) also tells the narrator to narrate what
+the player actually wrote — the skill only names the dice — and that the player's gear is exactly
+the payload's `"player_gear"` (DMCore's equipped items). A playtest's "grab the finest jar of
+spices" mismatched to *polearms*; told only "Skill used: polearms", the narrator handed over a
+polearm the player never owned, and the player LLM swung it for fifteen turns. `generate_npc_dialogue`'s own system message (built by
 `_build_dialogue_system_message`) is different in kind, not just content — it speaks as the
 addressed entity, grounded in `persona`/`attitude` plus that entity's own presence-filtered
 history, never the standing GM framing.

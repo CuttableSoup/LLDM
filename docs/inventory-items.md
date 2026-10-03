@@ -126,7 +126,11 @@ separately, against the whole input, ahead of per-clause classification. Every o
 through the `IntentMatcher` seam's own `map_to_item`, an embedding match against every
 `supertype == "object"` entity's name/description (currency checked first as a fixed synonym
 list, returning the sentinel `"currency"`), and — if it
-resolves — joins the same shared per-turn clause list a skill/ability action does.
+resolves — joins the same shared per-turn clause list a skill/ability action does. For the verbs
+that cost the player something (`ITEM_LOSING_INTENTS`: give/drop/trade/use) the semantic hit
+alone isn't enough — the clause must also name the item (`_clause_names_item`: a word of the name
+in the clause, or a clause word inside a name word, so "the potions"/"the sword" still reach
+"health potion"/"longsword"); otherwise "…might give a clue" hands a potion to a bystander.
 
 `DMCore._on_item_interaction_detected` resolves with zero dice rolls:
 - `"equip"`/`"unequip"`/`"drop"` are checked first, since none care about target_name/the

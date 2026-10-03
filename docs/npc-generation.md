@@ -127,7 +127,12 @@ authors only a hint about who belongs there.
 **Data.** Three pieces, all authored, none in Python:
 
 - A setting-wide `[narration_population]` table in `rules.toml` — `enabled`, `triggers` (which
-  narrations are read: `scenario_intro`, `move`, `travel`), `max_per_scene`, `prose_sentences`
+  narrations are read — a label kind such as `scenario_intro`, `skill_response`, `clarification`,
+  `encounter`, `item_interaction`, or one item intent such as `move`; both shipped settings read
+  all five kinds, since people the narrator introduces mid-scene must become real too or the
+  player can't address or fight them — NPC dialogue is never read, as someone a speaker merely
+  mentions isn't standing there), `max_per_scene` (which also bounds the extra model calls: no
+  call is made once the scene is full), `prose_sentences`
   (how long those narrations run, ex: `"5-6"`) — plus `[narration_population.limits]`:
   `freeform` (the fields the narrator may fill in) and `max_cr_share`. Absent or `enabled =
   false` turns the whole thing off for a setting (`Rules/Zombie/` authors none).
@@ -141,7 +146,9 @@ place populated (`scene_length_instruction`), then publishes `scene_narration_re
 prose is already on screen. `DM_Improvisation.py`'s `_on_scene_narration_ready` — on LLMCore's own
 fetch thread — makes a second model call (`AdHoc_Generation.py`'s `extract_narrated_people`) that
 reads the prose and reports the individual people in it. That call overlaps the player reading;
-it only appends to `_pending_population`. `_apply_pending_population` then runs on the game
+it only appends to `_pending_population`. When no people come back, its `report` hook logs why —
+a warning if the model was unreachable or replied unusably, info for an ordinary decline — so a
+scene that stays empty is never silent. `_apply_pending_population` then runs on the game
 thread at the top of the next player-input handler, so anyone the narration introduced is
 addressable by the very next thing typed. A batch is dropped if the player left the scene first.
 

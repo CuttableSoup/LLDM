@@ -2,6 +2,7 @@ import json
 import os
 
 import resolution.Combat_Resolution as Combat_Resolution
+from dm.DM_Improvisation import catalog_entry
 from dm.DM_Types import DMCoreProtocol
 from paths import PROJECT_ROOT
 
@@ -577,8 +578,7 @@ class PersistenceMixin(DMCoreProtocol):
                 self.entities[name] = entity_dict
             self.event_bus.publish("item_catalog_updated", {
                 "entities": [
-                    {"name": name, "description": entity_dict.get("description", "")}
-                    for name, entity_dict in saved_ad_hoc_entities.items()
+                    catalog_entry(name, entity_dict) for name, entity_dict in saved_ad_hoc_entities.items()
                 ],
             })
 
@@ -591,12 +591,17 @@ class PersistenceMixin(DMCoreProtocol):
         # "name in self.entities" so a stale reference (ex: the scenario file changed between
         # saves, or a name whose own ad_hoc_entities entry is missing/corrupt) is silently
         # dropped rather than adding a dangling scenario_entities entry nothing can resolve.
-        # Appended in saved order, after whatever's already present -- exact position doesn't
-        # matter (nothing reads scenario_entities order as meaningful; initiative decides
-        # actual turn order every round regardless), only presence does.
-        for name in data.get("scenario_entities", []):
+        # Then the whole list is put back in its saved order. Order does matter: every
+        # first-match scan (_get_target_name's "open it" default, _literal_dialogue_target's
+        # tie-break) reads it, and an improvised container/trap is inserted at the FRONT when
+        # made (DM_Improvisation.py) -- appending it here instead moved it, and a playtest's
+        # save -> load -> save came back with a different scenario_entities.
+        saved_order = data.get("scenario_entities", [])
+        for name in saved_order:
             if name not in self.scenario_entities and name in self.entities:
                 self.scenario_entities.append(name)
+        position = {name: index for index, name in enumerate(saved_order)}
+        self.scenario_entities.sort(key=lambda name: position.get(name, len(position)))
 
         for location_key, saved_ground in data.get("ground", {}).items():
             location = self.locations.get(location_key)

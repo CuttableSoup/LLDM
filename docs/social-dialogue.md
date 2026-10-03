@@ -133,7 +133,11 @@ player's own "already owned" self-transfer no-op (see "Items and movement as int
 `action_attitude_deltas` is capped independently of `attitude_deltas` — `ACTION_ATTITUDE_DRIFT_CAP`
 (60) rather than `TALK_ATTITUDE_DRIFT_CAP` (40) — a real betrayal or a real act of generosity can
 move an axis further than words alone, and the two accumulators are tracked separately
-specifically so each can enforce its own ceiling rather than sharing one. Round-trips through
+specifically so each can enforce its own ceiling rather than sharing one. An `[[attitude_event]]`
+may author its own `cap` instead (`"assaulted"`: 200, so being attacked out of the blue can push
+anyone past `is_hostile`'s -100 — see "Attacking anyone" in `docs/combat.md`). A cap limits how
+far *that* nudge may push; it never pulls back a total a wider-capped event already set, so an
+ordinary `combat_hit` right after an assault can't snap -200 back to -60. Round-trips through
 save/load the same unconditional way `attitude_deltas` already does (`DM_Persistence.py`).
 
 

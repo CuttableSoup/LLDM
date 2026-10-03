@@ -519,6 +519,25 @@ class TestNlpConfidenceThreshold(unittest.TestCase):
             self.nlp_core.matcher.item_embeddings = original_embeddings
             self.nlp_core.matcher.item_indices = original_indices
 
+    def test_item_catalog_updated_registers_a_targetable_entity_for_map_to_target(self):
+        # Found by playtest: a narrated bystander could be spoken to but "kick old man hemlock"
+        # never named him as a target -- the target bank was only ever built at boot.
+        matcher = self.nlp_core.matcher
+        saved = (matcher.item_embeddings, list(matcher.item_indices),
+                 matcher.target_embeddings, list(matcher.target_indices))
+        try:
+            self.event_bus.publish("item_catalog_updated", {"entities": [
+                {"name": "Old Man Hemlock", "description": "A stooped old fishmonger.", "targetable": True},
+                {"name": "rubber chicken talisman", "description": "A glowing rubber chicken talisman."},
+            ]})
+
+            target, _score = matcher.map_to_target("kick old man hemlock")
+            self.assertEqual(target, "Old Man Hemlock")
+            self.assertNotIn("rubber chicken talisman", matcher.target_indices)
+        finally:
+            (matcher.item_embeddings, matcher.item_indices,
+             matcher.target_embeddings, matcher.target_indices) = saved
+
     def test_keyword_fallback_ignores_a_keyword_inside_a_remark_rather_than_an_action(self):
         # Both observation's own keyword "find" -- the first leads a declared action, the
         # second is just a word in a suggestion (see NLP_Core.py's NON_ACTION_OPENERS). Scores
@@ -711,7 +730,7 @@ class FakeMatcher:
     def on_rules_loaded(self, data):
         pass
 
-    def register_item(self, name, description):
+    def register_item(self, name, description, targetable=False):
         pass
 
     def match_modifier(self, processed_text):
@@ -811,6 +830,14 @@ class TestIntentClassification(unittest.TestCase):
             "intent": "lore_check", "item_name": None,
             "input": "what do you know about the troll", "score": None,
         }}])
+
+    def test_a_dialogue_verb_inside_a_subordinate_clause_is_not_dialogue(self):
+        # Found by playtest: "...until they can't ask questions" sent a kick to dialogue.
+        self.assertFalse(detect_dialogue_intent("kick my opponent until they can't ask questions."))
+        self.assertFalse(detect_dialogue_intent("punch him before he can tell anyone"))
+        self.assertTrue(detect_dialogue_intent("if you see her, tell her i'm here"))
+        self.assertTrue(detect_dialogue_intent("wait until he arrives, then talk to him"))
+        self.assertTrue(detect_dialogue_intent("tell him when you're ready"))
 
     def test_quoted_speech_counts_as_dialogue_without_a_dialogue_verb(self):
         self.assertTrue(detect_dialogue_intent('i approach the fishmonger. "is something going on?"'))
@@ -931,6 +958,50 @@ class TestIntentClassification(unittest.TestCase):
         self.assertEqual(
             events[0]["payload"]["clauses"], [{"kind": "item", "intent": "give", "item_name": "longsword"}],
         )
+
+    def test_item_losing_verb_needs_the_item_actually_named(self):
+        # Found by playtest: "give" gated on "might give a clue", map_to_item paired the
+        # sentence's gist with "health potion" at 0.55, and the potion went to a bystander.
+        idiom = "dip my finger into the dust, hoping to lift fragments that might give a clue"
+        classifier = IntentClassifier(FakeMatcher(items={
+            idiom: ("health potion", 0.55),
+            "give her the potions": ("health potion", 0.6),
+            "hand over the sword": ("longsword", 0.7),
+        }))
+
+        _processed, events = classifier.classify(idiom)
+        self.assertNotIn("turn_detected", [event["event"] for event in events])
+
+        for text, item in (("give her the potions", "health potion"), ("hand over the sword", "longsword")):
+            _processed, events = classifier.classify(text)
+            self.assertEqual(events[0]["payload"]["clauses"], [{"kind": "item", "intent": "give", "item_name": item}])
+
+    def test_a_pronoun_clause_takes_the_whole_inputs_target(self):
+        # Found by playtest: the kick matched on "start kicking him", which names nobody.
+        text = "shove the old man hemlock into the river and start kicking him"
+        classifier = IntentClassifier(FakeMatcher(
+            actions={"start kicking him": ("brawling", 0.7), "kick the door": ("brawling", 0.7)},
+            targets={text: ("Old Man Hemlock", 0.6), "walk past the guard and kick the door": ("guard", 0.6)},
+        ))
+
+        _processed, events = classifier.classify(text)
+        self.assertEqual(events[0]["payload"]["clauses"][-1].get("target"), "Old Man Hemlock")
+        # No pronoun, no fallback -- the door's kick must not land on the guard.
+        _processed, events = classifier.classify("walk past the guard and kick the door")
+        self.assertIsNone(events[0]["payload"]["clauses"][-1].get("target"))
+
+    def test_semantic_router_never_takes_travel_from_a_question(self):
+        # Found by playtest: "is that argument about the docks...?" routed to travel and walked
+        # the player to the shipyard mid-conversation.
+        question = "is that argument about the docks or about something else entirely?"
+        classifier = IntentClassifier(FakeMatcher(intents={
+            question: ("travel", 0.59), "head into the tavern": ("travel", 0.9),
+        }))
+
+        _processed, events = classifier.classify(question)
+        self.assertNotIn("travel", [event["payload"].get("intent") for event in events])
+        _processed, events = classifier.classify("head into the tavern")
+        self.assertEqual(events[0]["payload"]["intent"], "travel")
 
     def test_dialogue_wins_once_item_pass_finds_nothing(self):
         classifier = IntentClassifier(FakeMatcher())
@@ -7298,6 +7369,142 @@ class TestActionPrevented(DMTestCase):
         self.assertIsNone(self.dm_core.resolve_behavior_action("wolf", "gladstone"))
 
 
+class TestAttackingAnyone(DMTestCase):
+    """!
+    @brief Any NPC can be attacked (not always wisely): an attack naming a non-hostile creature
+        redirects to it and applies the "assaulted" attitude event (rules.toml), which carries
+        it past is_hostile's -100 via its own cap. Arena's own thane (an ally, disposition 40)
+        is the fixture.
+    """
+
+    def _attack(self, skill, target, text):
+        self.dm_core._on_turn_detected({"clauses": [{"kind": "action", "skill": skill, "target": target}], "input": text})
+
+    def test_attacking_a_named_non_hostile_creature_targets_it_and_turns_it_hostile(self):
+        self.assertFalse(self.dm_core.is_hostile("thane", "gladstone"))
+        self._attack("blades", "thane", "i attack thane")
+
+        self.assertEqual(self.dm_core.current_target, "thane")
+        self.assertTrue(self.dm_core.is_hostile("thane", "gladstone"))
+        # Through the attitude itself, so the narrator's own describe_attitude agrees.
+        self.assertLessEqual(self.dm_core.get_attitude("thane", "gladstone")[0], -100)
+
+    def test_an_assault_maneuver_counts_as_an_attack_but_a_friendly_one_does_not(self):
+        # Found by playtest: "shove over, you lumbering dockworker" matched bull rush, which deals
+        # no damage, so it could never be aimed at a non-hostile NPC.
+        self._attack("treat wounds", "thane", "i treat thane's wounds")
+        self.assertFalse(self.dm_core.is_hostile("thane", "gladstone"))
+
+        self._attack("bull rush", "thane", "i bull rush thane")
+        self.assertEqual(self.dm_core.current_target, "thane")
+        self.assertTrue(self.dm_core.is_hostile("thane", "gladstone"))
+
+    def _clear_the_fight(self):
+        for wolf in ("wolf", "wolf_2"):
+            self.dm_core.apply_damage(wolf, 999)
+        self.dm_core.current_target = "thane"  # the "first living non-player" leftover
+
+    def test_an_attack_naming_nobody_goes_at_the_conversation_partner(self):
+        # Found by playtest: "my turn to hit you!" mid-argument targeted nothing at all.
+        self._clear_the_fight()
+        self.dm_core._set_conversation_partner("thane")
+        self.dm_core._on_turn_detected({"clauses": [{"kind": "action", "skill": "blades"}], "input": "my turn to hit you!"})
+
+        self.assertTrue(self.dm_core.is_hostile("thane", "gladstone"))
+
+    def test_an_attack_describing_someone_present_finds_them_but_not_by_a_modifier_word(self):
+        # Found by playtest: "pin the merchant's feet" never reached the spice merchant. Narrated
+        # people carry their occupation words as aliases -- the head word counts, "spice" doesn't.
+        self._clear_the_fight()
+        self.dm_core.entities["thane"]["aliases"] = ["merchant", "spice", "spice merchant"]
+        attack = {"clauses": [{"kind": "action", "skill": "blades"}]}
+
+        self.dm_core._on_turn_detected({**attack, "input": "kick the spice cart over"})
+        self.assertFalse(self.dm_core.is_hostile("thane", "gladstone"))
+
+        self.dm_core._on_turn_detected({**attack, "input": "shove my blade at the merchant's feet"})
+        self.assertTrue(self.dm_core.is_hostile("thane", "gladstone"))
+
+    def test_an_attack_with_no_one_to_hit_says_so_and_spares_a_leftover_ally(self):
+        resolved = []
+        self.event_bus.subscribe("action_resolved", resolved.append)
+        self._clear_the_fight()
+        thane_hp = self.dm_core.get_current_hp("thane")
+        self._stub_roll_dice(20)
+
+        self.dm_core._on_turn_detected({"clauses": [{"kind": "action", "skill": "blades"}], "input": "strike them until they drop!"})
+
+        [outcome] = resolved[-1]["actions"]
+        self.assertTrue(outcome.no_opponent)
+        self.assertIsNone(outcome.defender)
+        self.assertEqual(self.dm_core.get_current_hp("thane"), thane_hp)
+        self.assertFalse(self.dm_core.is_hostile("thane", "gladstone"))
+
+    def test_a_non_attack_skill_never_redirects_to_a_non_hostile_creature(self):
+        self.assertFalse(self.dm_core._apply_target_redirect("thane", "i study thane", allow_non_hostile=False))
+        self.assertEqual(self.dm_core.current_target, "wolf")
+
+    def test_a_later_combat_hit_never_pulls_an_assault_back_under_the_ordinary_cap(self):
+        self.dm_core.nudge_attitude_from_event("thane", "gladstone", "assaulted", 1.0)
+        self.dm_core.nudge_attitude_from_event("thane", "gladstone", "combat_hit", 0.5)
+        self.assertTrue(self.dm_core.is_hostile("thane", "gladstone"))
+
+    def test_an_assaulted_npc_with_no_behavior_fights_back_even_after_a_reload(self):
+        slot = "test_assaulted_round_trip"
+        self.addCleanup(shutil.rmtree, os.path.join("Saves", slot), ignore_errors=True)
+        self.dm_core.entities["thane"].pop("behavior")
+        self.dm_core.nudge_attitude_from_event("thane", "gladstone", "assaulted", 1.0)
+        self.dm_core.save_game(slot)
+
+        fresh_dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds")
+        fresh_dm.load_game(slot)
+        fresh_dm.entities["thane"].pop("behavior")  # re-instanced from the template, which has one
+        fresh_dm._resolve_combat_round({"actions": []})
+        thane = fresh_dm.entities["thane"]
+        self.assertEqual(thane["behavior"][-1]["action"], f"{thane['name']} attack")
+
+    def test_an_authored_hostile_without_behavior_is_left_unarmed(self):
+        # Hostile by its own authored attitude, not by anything that happened in play.
+        thane = self.dm_core.entities["thane"]
+        thane.pop("behavior")
+        thane["attitudes"] = {"default": [-120, 0, 0]}
+        self.dm_core._arm_if_turned_hostile("thane", "gladstone")
+        self.assertNotIn("behavior", thane)
+
+    def test_an_unowned_catalog_ability_rolls_on_its_own_skill(self):
+        # Found by playtest: "kick" matched a horse's own innate ability, which the player
+        # doesn't own and isn't a skill -- it rolled 0 dice under its own name.
+        self.assertEqual(self.dm_core._resolve_action_skill("kick"), ("brawling", None))
+
+
+class TestImprovisedContainerPlacement(DMTestCase):
+    """!
+    @brief An improvised container/trap goes to the FRONT of scenario_entities. Found by playtest:
+        a reload appended it to the end instead (save -> load -> save drifted), and as first in
+        line it became the default listener for unaddressed trash talk.
+    """
+
+    def _place_crate(self):
+        crate = {"name": "Crate of Fish", "description": "A crate of fish.", "supertype": "object",
+                 "subtype": "container", "ad_hoc": True, "inventory": []}
+        self.dm_core._place_and_register_scene_entity("Crate of Fish", crate, insert_front=True, claim_target=False)
+
+    def test_scene_order_survives_save_and_load(self):
+        slot = "test_container_order_round_trip"
+        self.addCleanup(shutil.rmtree, os.path.join("Saves", slot), ignore_errors=True)
+        self._place_crate()
+        before = list(self.dm_core.scenario_entities)
+
+        self.dm_core.save_game(slot)
+        self.dm_core.load_game(slot)
+
+        self.assertEqual(self.dm_core.scenario_entities, before)
+
+    def test_an_object_is_never_the_default_listener(self):
+        self._place_crate()
+        self.assertNotEqual(self.dm_core._resolve_dialogue_target("you'll regret that"), "Crate of Fish")
+
+
 class TestScenarioLoading(DMTestCase):
     def test_duplicate_entities_get_unique_instance_names(self):
         # debug.toml's own location lists gladstone and thane (persistent across the whole
@@ -8325,7 +8532,7 @@ class TestImprovisation(DMTestCase):
         self.assertIn("stone", self.dm_core.entities["gladstone"]["inventory"])
         self.assertNotIn("stone", self.dm_core._current_ground_items())
         self.assertEqual(self.catalog_events, [
-            {"entities": [{"name": "stone", "description": "A smooth grey stone."}]},
+            {"entities": [{"name": "stone", "description": "A smooth grey stone.", "targetable": False}]},
         ])
 
     def test_ground_placement_examine_describes_without_taking(self):
@@ -13328,6 +13535,14 @@ class TestNarratedPopulation(DMTestCase):
     def _crowd(self):
         return [n for n in self.dm_core.scenario_entities if self.dm_core.entities[n].get("source") == "narration"]
 
+    def test_a_narrated_person_is_published_as_targetable(self):
+        catalog = []
+        self.dm_core.event_bus.subscribe("item_catalog_updated", catalog.append)
+        self._populate([self._person()])
+        [name] = self._crowd()
+        self.assertIn({"name": name, "description": self.dm_core.entities[name].get("description", ""),
+                       "targetable": True}, [entry for event in catalog for entry in event["entities"]])
+
     def test_a_narrated_person_keeps_their_voice(self):
         self._populate([self._person(voice="Brisk; haggles over every copper")])
         [name] = self._crowd()
@@ -13402,10 +13617,29 @@ class TestNarratedPopulation(DMTestCase):
         self.assertEqual(never_called.call_count, 0)
 
     def test_only_scene_setting_narrations_are_read(self):
+        # NPC dialogue isn't a trigger: someone a speaker merely mentions isn't standing there.
         with patch("resolution.AdHoc_Generation._real_call_chat_completion") as never_called:
-            self.dm_core._on_scene_narration_ready({"text": "A crowd mills about.", "label": "skill_response"})
+            self.dm_core._on_scene_narration_ready({"text": "Ask Marla, she knows.", "label": "dialogue:innkeeper"})
 
         self.assertEqual(never_called.call_count, 0)
+
+    def test_people_introduced_mid_scene_are_read_too(self):
+        # Found by playtest: a vendor the narrator introduced in a clarification and a stranger in
+        # a skill result never became real, so fifty turns of fighting them targeted nothing.
+        for label in ("clarification", "skill_response", "item_interaction:take"):
+            with patch("resolution.AdHoc_Generation._real_call_chat_completion",
+                       return_value=self._reply([self._person()])) as called:
+                self.dm_core._on_scene_narration_ready({"text": "Marla gutting fish.", "label": label})
+            self.assertEqual(called.call_count, 1, label)
+            self.dm_core._pending_population.clear()
+
+    def test_an_unreachable_extraction_model_is_logged_as_a_warning(self):
+        warnings = []
+        self.dm_core.event_bus.subscribe("log_warning", warnings.append)
+        with patch("resolution.AdHoc_Generation._real_call_chat_completion", side_effect=ConnectionError):
+            self.dm_core._extract_scene_population("Marla Venn gutting fish.")
+
+        self.assertTrue(any("extraction model unavailable" in warning for warning in warnings))
 
     def test_extraction_runs_on_a_scene_setting_narration(self):
         with patch("resolution.AdHoc_Generation._real_call_chat_completion", return_value=self._reply([self._person()])):
@@ -13604,6 +13838,34 @@ class TestSceneRosterNarration(LLMTestCase):
 
         self.assertIn("a gruff innkeeper", system_message)
         self.assertNotIn("fruit seller", system_message)
+
+    def test_an_attack_with_no_opponent_tells_the_narrator_not_to_invent_one(self):
+        outcome = RolledOutcome(entity="gladstone", skill="brawling", roll=7, difficulty=0, success=True, no_opponent=True)
+        self.assertIn("There is no opponent", self.llm_core._describe_outcome(outcome))
+        outcome.no_opponent = False
+        self.assertNotIn("no opponent", self.llm_core._describe_outcome(outcome))
+
+    def test_action_narration_is_told_to_narrate_the_attempt_and_stay_inside_the_players_gear(self):
+        # Found by playtest: a polearms mismatch got the player a polearm they never owned.
+        outcome = RolledOutcome(entity="gladstone", skill="polearms", roll=7, difficulty=0, success=True,
+                                input="grab the finest jar of spices")
+        text = self.llm_core._describe_player_actions({"actions": [outcome], "player_gear": ["longsword", "chain mail"]})
+        self.assertIn("Narrate what the player actually tried", text)
+        self.assertIn("The player's gear is exactly: longsword, chain mail", text)
+
+    def test_narration_pins_the_player_to_the_engines_scene_except_on_a_real_move(self):
+        # Found by playtest: the narrator walked the player into a tavern, then into underground
+        # ruins, over clarification/skill replies while the engine never left the market.
+        self.event_bus.publish("scenario_loaded", {"name": "Market", "description": "A square.", "characters": []})
+        self.event_bus.publish("scene_roster_updated", {
+            "characters": [], "entities": [], "present_entities": [], "scene_name": "The Fish Market",
+        })
+        self.event_bus.publish("location_exits_updated", {"destinations": [{"key": "inn", "name": "The Rusty Dragon"}]})
+
+        pinned = self.llm_core._build_system_message("", label="clarification")
+        self.assertIn("The player is at The Fish Market and stays there", pinned)
+        self.assertIn("Ways out from here: The Rusty Dragon.", pinned)
+        self.assertNotIn("stays there", self.llm_core._build_system_message("", label="item_interaction:travel"))
 
 
 class TestAddressPhraseExtraction(unittest.TestCase):

@@ -42,6 +42,7 @@ subtype = "maneuver"
 description = "Sand in the eyes, a low blow, anything to throw an opponent off their game."
 keywords = [ "dirty trick", "cheap shot", "throw sand in their eyes", "low blow" ]
 skill = [ "trickery" ]
+assault = true
 range = 0
 on_pass = { do = "condition", entity = "target", name = "dazzled", duration = "rounds", length = 1 }
 
@@ -52,6 +53,7 @@ subtype = "maneuver"
 description = "A false opening meant to trick an opponent into dropping their guard."
 keywords = [ "feint", "fake them out", "fake an opening" ]
 skill = [ "trickery" ]
+assault = true
 range = 0
 on_pass = { do = "condition", entity = "target", name = "flat_footed", duration = "rounds", length = 1 }
 
@@ -68,6 +70,7 @@ description = "A leg sweep that knocks an opponent off their feet."
 # to close, and a risk already anticipated for any keyword-driven catalog match.
 keywords = [ "trip", "sweep their legs", "knock them down", "leg sweep", "trip the creature" ]
 skill = [ "athletics" ]
+assault = true
 range = 0
 on_pass = { do = "condition", entity = "target", name = "prone", duration = "permanent" }
 
@@ -88,6 +91,7 @@ subtype = "maneuver"
 description = "A grab and a twist meant to knock a weapon loose from an opponent's grip."
 keywords = [ "disarm", "knock their weapon", "wrench their weapon loose" ]
 skill = [ "athletics" ]
+assault = true
 range = 0
 on_pass = { do = "destroy_equipped", entity = "target", slot = "rhand" }
 
@@ -104,6 +108,7 @@ keywords = [
 # as part of a weapon attack, unlike trip/disarm/bull rush/grapple's own athletics-only framing.
 # athletics stays too, for a bare-handed/improvised sunder attempt.
 skill = [ "athletics", "blades", "axes", "polearms", "brawling" ]
+assault = true
 range = 0
 # One ability, two outcomes, checked live against whatever "target" actually is: a creature's
 # weapon gets condition-disarmed exactly as before; an inanimate object (a door, a statue, a
@@ -123,6 +128,7 @@ subtype = "maneuver"
 description = "A shoulder-first shove meant to knock an opponent off balance."
 keywords = [ "bull rush", "shove them", "shove them back", "barrel into them" ]
 skill = [ "athletics" ]
+assault = true
 range = 0
 on_pass = { do = "condition", entity = "target", name = "staggered", duration = "rounds", length = 1 }
 
@@ -133,6 +139,7 @@ subtype = "maneuver"
 description = "Seizing hold of an opponent to wrestle them down and restrict their movement."
 keywords = [ "grapple", "wrestle them down", "seize them", "hold them down" ]
 skill = [ "athletics" ]
+assault = true
 range = 0
 on_pass = { do = "condition", entity = "target", name = "grappled", duration = "permanent" }
 
@@ -147,6 +154,7 @@ subtype = "maneuver"
 description = "Bearing down on an already-grappled opponent to hold them fully immobile."
 keywords = [ "pin them", "pin them down", "hold them completely still" ]
 skill = [ "athletics" ]
+assault = true
 range = 0
 # Only actually lands if the target is already grappled -- the roll itself always happens
 # regardless (this engine has no mechanism to gate an ability *attempt* on the target's own

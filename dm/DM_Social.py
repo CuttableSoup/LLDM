@@ -1,5 +1,6 @@
 import resolution.Social_Resolution as Social_Resolution
 from dm.DM_Types import DMCoreProtocol
+from resolution.AdHoc_Generation import basic_combat_kit
 from resolution.Social_Resolution import ACTION_ATTITUDE_DRIFT_CAP, ATTITUDE_AXES, TALK_ATTITUDE_DRIFT_CAP
 
 # nudge_attitude's own scaling factor -- the disposition delta for one dialogue turn is
@@ -148,6 +149,34 @@ class SocialMixin(DMCoreProtocol):
             return True
         disposition = self.get_attitude(entity_name, toward_name)[0]
         return disposition <= -100
+
+    def _arm_if_turned_hostile(self, entity_name, toward_name):
+        """!
+        @brief Hands basic_combat_kit (on its best offense-role skill) to an entity that has
+            turned hostile toward toward_name during play but has no [[entity.behavior]] to
+            fight with -- every narrated bystander, most townsfolk -- so being attacked (the
+            "assaulted" [[attitude_event]]) actually gets a swing back. Called per combat
+            round rather than at the moment of the attack, so a reload needs nothing saved:
+            the attitude round-trips and the kit follows from it. "Turned hostile during play"
+            means hostile now but not without its own action_attitude_deltas -- an authored
+            hostile that deliberately has no behavior is left exactly as authored.
+        @param entity_name A scene entity.
+        @param toward_name Who it might have turned on (the player).
+        """
+        entity = self.entities.get(entity_name, {})
+        if entity.get("behavior") or "attitudes" not in entity or not self.is_hostile(entity_name, toward_name):
+            return
+        drift = entity.get("action_attitude_deltas", {}).get(toward_name, [0, 0, 0])[0]
+        if self.get_attitude(entity_name, toward_name)[0] - drift <= -100:
+            return
+        skills = entity.get("skills", {})
+        offense = [name for name in skills if self.skills.get(name, {}).get("combat_role") == "offense"]
+        attack_skill = max(offense, key=lambda name: skills[name].get("dice", 0)) if offense else "brawling"
+        abilities, behavior = basic_combat_kit(
+            entity.get("name", entity_name), attack_skill, skills.get(attack_skill, {}).get("dice", 0),
+        )
+        entity["abilities"] = list(entity.get("abilities", [])) + abilities
+        entity["behavior"] = behavior
 
     def get_attitude_tier(self, value):
         """!

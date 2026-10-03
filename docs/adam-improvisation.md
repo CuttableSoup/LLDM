@@ -220,7 +220,11 @@ that would be permanently unreachable to `map_to_item` without `item_catalog_upd
 forwards each entry in that event's payload to `IntentClassifier.register_item`, which delegates
 to the matcher's own `register_item`, encoding the `{name, description}` pair and appending onto
 the existing tensor/index list (`torch.cat`) rather than rebuilding from scratch. Every
-capability above that introduces a name or description change republishes this event.
+capability above that introduces a name or description change republishes this event. Each
+payload entry comes from `DM_Improvisation.py`'s `catalog_entry`, whose `"targetable"` flag (a
+creature, or anything with an `[entity.test]` — the boot-time target bank's own rule) also
+appends the pair to `target_embeddings`, so a summoned creature or narrated bystander can be
+*named* as a target ("kick Hemlock"), not just matched as an item or addressed in dialogue.
 
 
 ## Summoning

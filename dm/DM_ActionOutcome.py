@@ -124,6 +124,9 @@ class RolledOutcome:
     opposing_skill: str | None = None
     effects: list = field(default_factory=list)
     input: str | None = None
+    # An attack with nobody to aim it at -- told to the narrator so it doesn't invent an opponent
+    # (see DM_Core.py's _on_turn_detected).
+    no_opponent: bool = False
 
 
 @dataclass

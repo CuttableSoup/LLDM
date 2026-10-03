@@ -129,7 +129,11 @@ and thresholds set above `confidence_threshold`, because the error costs run opp
 matching here — the right answer is usually *not* in the catalog, and a mis-routed travel
 confidently narrates "there's no way through in that direction" where "I don't understand" was
 correct, while a false negative costs exactly nothing (it's the old behavior). Scope is read-only
-and low-stakes intents only; no item-named intent is routed this way. Calibration is an
+and low-stakes intents only; no item-named intent is routed this way. The two routes that *do*
+change state — `travel` (a confident destination match really moves the player) and `rest` (the
+clock) — are never taken from input containing a `?` (`QUESTION_BLOCKED_ROUTES`): anything
+reaching the router already missed every keyword gate, so a question there is talk, not a command
+(playtest: "is that argument about the docks…?" walked the player to the shipyard). Calibration is an
 executable artifact, not prose —
 `test_intent_router_separates_held_out_paraphrases_from_ordinary_actions` scores a held-out
 battery through the real model, asserting the phrases aren't themselves prototypes so it measures

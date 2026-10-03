@@ -363,6 +363,14 @@ language_dependent = true                   # Opt-in precondition, not a damage 
                                             # "persuade the guard"), _ability_requires_language
                                             # (DM_Combat.py) falls back to checking the skill's own
                                             # declared "abilities" list (skills.toml) instead.
+assault = true                              # An act of aggression even though it deals no
+                                            # damage (ex: maneuvers.toml's trip/grapple/bull
+                                            # rush) -- like a damage_value, it lets the player
+                                            # aim this at a named NON-hostile creature, which
+                                            # then takes rules.toml's "assaulted" attitude
+                                            # event (DM_Core.py's _on_turn_detected). Absent
+                                            # (the default) for anything friendly or social --
+                                            # treat wounds, charm, sleight of hand.
 ignores_concealment = true                  # Lets this ability bypass a defender's own
                                             # concealment/miss_chance (ex: a ghost touch/seeking
                                             # weapon cutting through an invisible target's

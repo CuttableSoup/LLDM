@@ -74,8 +74,13 @@ CONTEXT_TOKEN_BUDGET = 4096
 # real headroom.
 RESPONSE_TOKEN_RESERVE = 900
 # The narration labels DMCore may extract scene population from -- see _fetch_and_publish. Which of
-# these actually fire is a per-setting choice ([narration_population].triggers).
-SCENE_SETTING_LABELS = ("scenario_intro", "item_interaction:move", "item_interaction:travel")
+# these actually fire is a per-setting choice ([narration_population].triggers). Matched on the
+# label's own kind (before any ":"), so every item_interaction:<intent> qualifies. Every
+# narration that describes the scene is offered, not just arrivals: a playtest's brawler spent
+# fifty turns fighting a vendor and a stranger the narrator introduced mid-scene, neither of
+# whom ever became real, so nothing could target them. NPC dialogue/ADaM/scene queries stay
+# out -- someone a speaker merely mentions isn't standing there.
+SCENE_SETTING_LABELS = ("scenario_intro", "item_interaction", "skill_response", "clarification", "encounter")
 # Deliberately a crude chars-per-token estimate rather than a real tokenizer -- the exact count
 # doesn't matter when the whole point is to stay well clear of a hard ceiling, and importing a
 # tokenizer here would pull a model load into a module that otherwise needs none.
@@ -168,10 +173,17 @@ def _format_rolled_outcome(outcome, actor):
         for effect in effects_by_type.get(effect_type, [])
     )
 
+    # Found by playtest: told only "brawling ... succeeds" for "strike them until they drop!" with
+    # nobody there to strike, the narrator invented an opponent and a fifty-turn fight the game
+    # knew nothing about.
+    no_opponent_text = (
+        " There is no opponent: nobody here is being fought, so the blow meets only air or "
+        "objects -- don't invent anyone being hit." if getattr(outcome, "no_opponent", False) else ""
+    )
     return (
         f"Skill used: {outcome.skill} "
         f"(rolled {outcome.roll} vs difficulty {outcome.difficulty}{opposition}) "
-        f"- the action {success_word}.{effects_text}"
+        f"- the action {success_word}.{effects_text}{no_opponent_text}"
     )
 
 
@@ -223,8 +235,12 @@ class LLMCore:
         self.scenario_characters = []
         # Read by scene_length_instruction; refreshed from DMCore on scenario_loaded/scene_roster_updated.
         self.population = {"sentences": "2-3", "hint": ""}
+        # Where the player actually is, and where they can actually go -- see location_rule.
+        self.scene_name = ""
+        self.exit_names = []
         self.event_bus.subscribe("scenario_loaded", self.generate_scene_intro)
         self.event_bus.subscribe("scene_roster_updated", self._on_scene_roster_updated)
+        self.event_bus.subscribe("location_exits_updated", self._on_location_exits_updated)
         self.event_bus.subscribe("round_resolved", self.generate_round_response)
         self.event_bus.subscribe("action_resolved", self.generate_response)
         self.event_bus.subscribe("action_not_understood", self.generate_clarification_response)
@@ -255,6 +271,34 @@ class LLMCore:
         """
         self.scenario_characters = list(data.get("characters", []))
         self.population = dict(data.get("population") or self.population)
+        self.scene_name = data.get("scene_name", self.scene_name)
+
+    def _on_location_exits_updated(self, data):
+        """!@brief Keeps the current location's real exits for location_rule (names only)."""
+        self.exit_names = [d["name"] for d in data.get("destinations", []) if d.get("name")]
+
+    def location_rule(self, label):
+        """!
+        @brief The standing "the player stays put" instruction appended to every GM narration's
+            system message -- except a real move/travel, the one narration whose whole job is
+            arriving somewhere. Found by playtest: twice, the narrator walked the player out of
+            Sandpoint's market into a tavern or underground ruins over a few clarification/skill
+            replies while the engine never moved, so every later turn described a place the game
+            wasn't in. Naming the real exits gives a player who wants to leave the actual way out.
+        @param label The narration's own label (see _fetch_and_publish).
+        @return The instruction text, or "" when there's no scene to pin to or it's an arrival.
+        """
+        if not self.scene_name or (label or "").split(":")[-1] in ("move", "travel"):
+            return ""
+        rule = (
+            f"\nThe player is at {self.scene_name} and stays there: never move them to another "
+            "place, building, room, or area in this narration -- only the game moves the player. "
+            "If they set off somewhere, narrate them heading that way or looking toward it, "
+            "still here at the end."
+        )
+        if self.exit_names:
+            rule += f" Ways out from here: {', '.join(self.exit_names)}."
+        return rule
 
     def scene_length_instruction(self, kind):
         """!
@@ -393,7 +437,20 @@ class LLMCore:
                 f"The player attempts {len(actions)} actions this turn -- each one rolls at "
                 f"-{len(actions) - 1}D for splitting their attention.\n"
             )
-        return penalty_text + "\n".join(self._describe_outcome(action) for action in actions)
+        # Found by playtest: "grabbing the finest jar of spices" mismatched to polearms, the narrator
+        # handed the player a polearm they don't own, and the player LLM swung it for 15 turns.
+        # The skill is which dice were rolled; what happened is what the player wrote.
+        gear = action_result.get("player_gear")
+        fidelity_text = (
+            "\nNarrate what the player actually tried, as they wrote it -- the skill only says which "
+            "dice were rolled, so don't name it or turn the attempt into a different action."
+        )
+        if gear is not None:
+            fidelity_text += (
+                f" The player's gear is exactly: {', '.join(gear) or 'nothing equipped'} -- never "
+                "give them a weapon or item they don't have."
+            )
+        return penalty_text + "\n".join(self._describe_outcome(action) for action in actions) + fidelity_text
 
     def generate_scene_intro(self, scenario_data):
         """!
@@ -407,6 +464,7 @@ class LLMCore:
         self.scenario_description = scenario_data.get("description", "")
         self.scenario_characters = scenario_data.get("characters", [])
         self.population = dict(scenario_data.get("population") or self.population)
+        self.scene_name = scenario_data.get("name", "")
 
         if scenario_data.get("skip_intro"):
             # Set by DMCore's own throwaway pre-load construction (see DMCore.__init__'s own
@@ -850,7 +908,7 @@ class LLMCore:
         )
         return prompt
 
-    def _build_system_message(self, rag_query):
+    def _build_system_message(self, rag_query, label=None):
         """!
         @brief Builds the per-request system message: the standing GM framing plus whatever's
             specific to this exact request (scenario setting/characters, retrieved sourcebook
@@ -860,6 +918,7 @@ class LLMCore:
         @param rag_query The text to retrieve sourcebook lore against (see perform_rag) --
             deliberately *not* always the full narration prompt (see _queue_narration's
             rag_query param for why).
+        @param label The narration's own label, for location_rule's move/travel exemption.
         @return The complete system message string for this one request.
         """
         system_message = "You are the Game Master."
@@ -867,6 +926,7 @@ class LLMCore:
             system_message += f" Setting: \"{self.scenario_name}\" - {self.scenario_description}"
         if self.scenario_characters:
             system_message += " Characters: " + " | ".join(self.scenario_characters)
+        system_message += self.location_rule(label)
 
         # Retrieved fresh per request from this specific prompt, not stored in context_window --
         # otherwise every future turn would replay every past turn's lore excerpts too, quickly
@@ -1020,7 +1080,7 @@ class LLMCore:
                 self.context_window.append({"role": "assistant", "content": llm_text, "present": present_entities})
             self.event_bus.publish("llm_response_ready", llm_text)
             self.event_bus.publish("llm_debug_updated", {"query": query_text, "response": llm_text, "label": label})
-            if label in SCENE_SETTING_LABELS:
+            if label and label.split(":")[0] in SCENE_SETTING_LABELS:
                 # After the narration is already on screen, so extraction (a second, slower model
                 # call) overlaps with the player reading it -- see scene_length_instruction.
                 self.event_bus.publish("scene_narration_ready", {
@@ -1057,7 +1117,7 @@ class LLMCore:
         if len(self.context_window) > 100:
             self.context_window = self.context_window[-100:]
 
-        system_message = self._build_system_message(rag_query if rag_query else prompt)
+        system_message = self._build_system_message(rag_query if rag_query else prompt, label)
 
         def fetch_from_llm():
             messages = [{"role": "system", "content": system_message}] + self._api_messages(

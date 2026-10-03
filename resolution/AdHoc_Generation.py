@@ -767,34 +767,48 @@ def _build_creature_entity(arguments, npc_keywords, target_cr, skills_catalog, h
         # separate ranking is needed here.
         attack_skill = next(iter(skills), None)
         if attack_skill:
-            ability_name = f"{name} attack"
-            attack_dice = skills[attack_skill]["dice"]
-            entity["abilities"] = [{
-                "name": ability_name,
-                "supertype": "innate",
-                "subtype": "weapon",
-                "skill": attack_skill,
-                "damage_value": {"dice": max(1, attack_dice // 2), "pips": 0, "bonus": 0},
-                "damage_tags": ["physical"],
-            }]
-            # Mirrors debug.toml's own wolf/bandit shape exactly -- flee once
-            # genuinely hurt (hp_per_remain under 0.40, the same cutoff statuses.toml's "wounded"
-            # tier bottoms out at), otherwise keep attacking until effectively dead.
-            entity["behavior"] = [
-                {
-                    "requirements": [
-                        {"field": "hp_per_remain", "operator": ">=", "value": 0.01},
-                        {"field": "hp_per_remain", "operator": "<", "value": 0.40},
-                    ],
-                    "action": "retreat",
-                },
-                {
-                    "requirements": [{"field": "hp_per_remain", "operator": ">=", "value": 0.01}],
-                    "action": ability_name,
-                },
-            ]
+            entity["abilities"], entity["behavior"] = basic_combat_kit(name, attack_skill, skills[attack_skill]["dice"])
 
     return {"created": True, "entity": entity}
+
+
+def basic_combat_kit(name, attack_skill, attack_dice):
+    """!
+    @brief The minimal "can fight back" kit: one innate attack on attack_skill plus the
+        behavior to use it -- shared by a hostile generated creature (above) and an NPC that
+        turned hostile in play with no combat behavior of its own (DM_Social.py's
+        _arm_if_turned_hostile).
+    @param name The entity's display name, for the ability's own name.
+    @param attack_skill The skill the attack rolls on.
+    @param attack_dice That skill's own dice, halved (min 1) for the damage roll.
+    @return (abilities, behavior) -- two lists in the [[entity.abilities]]/[[entity.behavior]] shape.
+    """
+    ability_name = f"{name} attack"
+    abilities = [{
+        "name": ability_name,
+        "supertype": "innate",
+        "subtype": "weapon",
+        "skill": attack_skill,
+        "damage_value": {"dice": max(1, attack_dice // 2), "pips": 0, "bonus": 0},
+        "damage_tags": ["physical"],
+    }]
+    # Mirrors debug.toml's own wolf/bandit shape exactly -- flee once genuinely hurt
+    # (hp_per_remain under 0.40, the same cutoff statuses.toml's "wounded" tier bottoms out at),
+    # otherwise keep attacking until effectively dead.
+    behavior = [
+        {
+            "requirements": [
+                {"field": "hp_per_remain", "operator": ">=", "value": 0.01},
+                {"field": "hp_per_remain", "operator": "<", "value": 0.40},
+            ],
+            "action": "retreat",
+        },
+        {
+            "requirements": [{"field": "hp_per_remain", "operator": ">=", "value": 0.01}],
+            "action": ability_name,
+        },
+    ]
+    return abilities, behavior
 
 
 def generate_referenced_npc(
@@ -971,7 +985,7 @@ def extract_narrated_people(
     narration, scene_description, population_hint, present_names, max_people, target_cr,
     npc_keywords, skills_catalog, freeform_fields=DEFAULT_NARRATED_FREEFORM,
     call_chat_completion=None, api_url=DEFAULT_API_URL, timeout=NARRATED_EXTRACTION_TIMEOUT,
-    hp_divisor=DEFAULT_HP_DIVISOR, offense_share=0.5,
+    hp_divisor=DEFAULT_HP_DIVISOR, offense_share=0.5, report=None,
 ):
     """!
     @brief Reads a passage of the narrator's own prose and turns the ordinary people it puts in
@@ -995,6 +1009,8 @@ def extract_narrated_people(
     @param npc_keywords/skills_catalog See generate_referenced_npc.
     @param freeform_fields Which NARRATED_FREEFORM_FIELDS to ask for and accept.
     @param call_chat_completion Injectable for tests; defaults to the module's real client.
+    @param report Optional callable(reason), called when no report_people call came back --
+        reason is "unavailable" (no reachable model / unusable reply) or the decline's own text.
     @return A list of entity dicts (each "ad_hoc", "background", "source" = "narration"), possibly
             empty -- never raises.
     """
@@ -1033,6 +1049,8 @@ def extract_narrated_people(
         call_chat_completion, api_url, timeout, max_tokens=NARRATED_EXTRACTION_MAX_TOKENS,
     )
     if function_name is None:
+        if report:
+            report(payload)
         return []
 
     allowed = set(freeform_fields) | {"name"}

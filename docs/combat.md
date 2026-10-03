@@ -49,6 +49,39 @@ living same-family siblings in the scene: it re-checks the turn's raw input for 
 gated at the same `0.40` cutoff `statuses.toml`'s `"wounded"` tier uses), falling back to the naive
 match otherwise. A name with no live duplicates short-circuits immediately.
 
+**Attacking anyone.** Any living creature can be attacked, not just a hostile one — just not
+always wisely. `_apply_target_redirect` honors an explicitly named *non-hostile* creature only
+when the action is an attack (the resolved ability carries `damage_value`, or is authored
+`assault = true` — `maneuvers.toml`'s trip/grapple/bull rush/pin/disarm/sunder/feint/dirty
+trick, aggression that deals no damage; never treat wounds/charm/sleight of hand); for anything else
+(a skill check near an ally) it still ignores the name. Once that attack actually rolls, hit or
+miss, the victim gets `rules.toml`'s `"assaulted"` `[[attitude_event]]` at full strength — a
+yes-or-no event, unlike `combat_hit`, which scales with damage because it measures how a fight
+already underway is going. `"assaulted"` authors its own `cap` (200) so it can carry anyone past
+`is_hostile`'s -100 (the shared action cap of 60 never could), and the same turn becomes a combat
+round. Being plain attitude, the narrator's own `describe_attitude` sees it, a gift can slowly
+walk it back, and it saves like any other drift. Only someone devoted (100) *and* sweet-talked
+to the talk cap stays above -100 — they take the punch without swinging back. Each combat round,
+`_arm_if_turned_hostile` (`DM_Social.py`) hands `basic_combat_kit` (`AdHoc_Generation.py`, the
+same kit a hostile generated creature gets, on its best `combat_role = "offense"` skill) to any
+entity hostile *only because of its action drift* that has no `[[entity.behavior]]` (every
+narrated bystander, most townsfolk), so it fights back — an authored hostile without behavior is
+left as authored. An attack NLPCore matched no name for, while nothing hostile is the current
+target, first tries `_literal_attack_target` — someone present its words describe, by key, name or
+alias ("pin the merchant's feet" finds a narrated spice merchant through his occupation alias),
+skipping a one-word alias that is only a modifier inside a longer one, so "kick the spice cart"
+assaults nobody — then the conversation partner ("my turn to hit you!"), assaulted the same way;
+otherwise it has no target at all — never a non-hostile creature left over as `current_target`
+(an object there, like a chest, stays fair game) — and its `RolledOutcome.no_opponent` tells the
+narrator the blow meets only air or objects, rather than letting it invent an opponent (a
+playtest's brawler fought fifty turns of a fight the engine never knew about). Two NLP pieces feed this: a narrated/ad hoc creature joins
+`map_to_target`'s bank at runtime (see `catalog_entry`, `docs/adam-improvisation.md`), and a
+clause that only says *him/her/them* ("…and start kicking him") takes the whole input's target
+(`REFERRING_PRONOUN_PATTERN`; never *it*, which is as likely a door). Separately, an action-bank
+match on another creature's own innate ability the player doesn't own (a horse's `"kick"`) rolls
+on that ability's skill (`_catalog_ability_skill`) with the player's own matching attack, rather
+than on 0 dice under its own name.
+
 A behavior entry's `action` is either an ability name or one of two reserved movement words,
 `"advance"`/`"retreat"` (`MOVEMENT_ACTIONS`, `DM_Combat.py`), routed to `move_toward_or_away`
 instead of an ability lookup. An explicit `"retreat"` entry is how a creature values its own

@@ -57,7 +57,11 @@ def apply_capped_drift(entities, entity_name, toward_name, deltas_key, axis_delt
     axis = deltas.setdefault(toward_name, [0, 0, 0])
     for index, delta in enumerate(axis_deltas):
         if delta:
-            axis[index] = max(-cap, min(cap, axis[index] + delta))
+            # cap limits how far THIS nudge may push, never pulls back a total a wider-capped
+            # event already set -- an ordinary combat_hit (60) right after an "assaulted" (its
+            # own cap) must not snap the victim's -200 back to -60 and undo their hostility.
+            limit = max(cap, abs(axis[index]))
+            axis[index] = max(-limit, min(limit, axis[index] + delta))
 
 
 def get_attitude(entities, entity_name, toward_name):
@@ -169,4 +173,7 @@ def nudge_attitude_from_event(entities, rules, entity_name, toward_name, event_n
     if not event:
         return
     axis_deltas = [event.get(axis, 0) * magnitude for axis in ATTITUDE_AXES]
-    apply_capped_drift(entities, entity_name, toward_name, "action_attitude_deltas", axis_deltas, ACTION_ATTITUDE_DRIFT_CAP)
+    # An event may author its own "cap" (ex: "assaulted", which has to be able to carry anyone
+    # past is_hostile's -100) -- every other event keeps the shared default.
+    cap = event.get("cap", ACTION_ATTITUDE_DRIFT_CAP)
+    apply_capped_drift(entities, entity_name, toward_name, "action_attitude_deltas", axis_deltas, cap)

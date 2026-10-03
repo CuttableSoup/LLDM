@@ -140,7 +140,7 @@ class DialogueMixin(DMCoreProtocol):
         return (
             self._literal_dialogue_target(input_text)
             or self._current_conversation_partner()
-            or self._get_target_name(include_background=True)
+            or self._get_target_name(include_background=True, include_objects=False)
         )
 
     def _resolve_dialogue(self, input_text, sentiments=None, forced_target=None):

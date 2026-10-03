@@ -469,6 +469,25 @@ IMPROVISABLE_INTENTS = PLAYER_CENTRIC_INTENTS | GROUND_AWARE_INTENTS | TARGET_CE
 # (entity["currency"]), not an object-supertype entity with a name/description to embed.
 CURRENCY_SYNONYMS = ("gold", "coin", "currency", "money")
 
+# Item verbs that silently cost the player something (an item handed over, dropped or used up;
+# money spent) -- for these, a semantic map_to_item hit alone isn't enough, the clause has to
+# actually name the item (see _clause_names_item). Found by playtest: "...fragments that might
+# give a clue" gated "give", map_to_item paired it with "health potion" at 0.55 off the
+# sentence's general gist, and the potion silently went to a bystander.
+ITEM_LOSING_INTENTS = frozenset({"give", "drop", "trade", "use"})
+
+# Semantic-router intents that move the player or the clock -- never taken from a question.
+# The router only sees input every keyword gate already declined (a real "can i go to the
+# docks?" hits TRAVEL_KEYWORDS first), so a question reaching it is talk, not a command. Found
+# by playtest: "is that argument about the docks or about something else entirely?" routed to
+# travel and walked the player to the shipyard mid-conversation.
+QUESTION_BLOCKED_ROUTES = frozenset({"travel", "rest"})
+
+# A clause pointing back at someone the rest of the input named ("...and start kicking him") --
+# _classify_skill_pass falls back to the whole input's target for these. Personal pronouns only:
+# "it" is as likely a door as a person, and "walk past the guard and kick it" must not hit the guard.
+REFERRING_PRONOUN_PATTERN = re.compile(r"\b(?:him|her|them)\b")
+
 # _detect_save_load_intent checks these ahead of everything else (item intent included --
 # a slot name could otherwise contain a word like "take" and misfire the item intercept).
 # Longest/most-specific prefix first in each tuple, since matching stops at the first hit and
@@ -493,8 +512,9 @@ class IntentMatcher:
         """!@brief Builds skill/item/target embeddings from a fresh "rules_loaded" payload."""
         raise NotImplementedError
 
-    def register_item(self, name, description):
-        """!@brief Incrementally registers one ad hoc item's name/description for map_to_item."""
+    def register_item(self, name, description, targetable=False):
+        """!@brief Incrementally registers one ad hoc item's name/description for map_to_item
+            (and, if targetable, for map_to_target too)."""
         raise NotImplementedError
 
     def map_to_action(self, processed_text):
@@ -724,6 +744,25 @@ def _keyword_gate(processed_text, keywords):
     return any(_phrase_matches(keyword, processed_text) for keyword in keywords)
 
 
+def _clause_names_item(clause, item_name):
+    """!
+    @brief Whether clause literally mentions item_name -- any 3+ letter word of the name
+        appearing inside the clause ("potions" names "health potion"), or any 4+ letter word
+        of the clause appearing inside a word of the name ("sword" names "longsword"). The
+        guard ITEM_LOSING_INTENTS applies on top of map_to_item's semantic score.
+    @param clause One processed clause of player input.
+    @param item_name The entity key map_to_item returned ("currency" always passes, since
+        map_to_item only returns it on a literal synonym hit).
+    """
+    if item_name == "currency":
+        return True
+    name_words = [word for word in re.findall(r"[a-z]+", item_name.lower()) if len(word) >= 3]
+    clause_words = [word for word in re.findall(r"[a-z]+", clause.lower()) if len(word) >= 4]
+    return any(word in clause for word in name_words) or any(
+        clause_word in name_word for clause_word in clause_words for name_word in name_words
+    )
+
+
 def detect_dialogue_intent(processed_text):
     """!
     @brief True if processed_text contains any DIALOGUE_KEYWORDS phrase, or a quoted span of
@@ -731,8 +770,17 @@ def detect_dialogue_intent(processed_text):
         writes their own line of dialogue in quotation marks is talking to whoever they just
         named, whether or not they also spelled out "speak to". DMCore's literal addressee scan
         (DM_Dialogue.py's _literal_dialogue_target) still decides who, from the whole input.
+        Keywords inside a subordinate clause don't count (SUBORDINATE_CLAUSE_PATTERN): found by
+        playtest, "kick my opponent until they can't ask questions" went to dialogue on "ask".
     """
-    return _keyword_gate(processed_text, DIALOGUE_KEYWORDS) or bool(QUOTED_SPEECH_PATTERN.search(processed_text or ""))
+    main_clauses = SUBORDINATE_CLAUSE_PATTERN.sub("", processed_text or "")
+    return _keyword_gate(main_clauses, DIALOGUE_KEYWORDS) or bool(QUOTED_SPEECH_PATTERN.search(processed_text or ""))
+
+
+# A subordinate clause, up to the next punctuation -- what it says is a condition or a purpose,
+# not what the player is doing: "kick him until they can't ask", "if you see her, tell her"
+# (only "if you see her" goes; "tell her" is still the player talking).
+SUBORDINATE_CLAUSE_PATTERN = re.compile(r"\b(?:until|unless|because|before|after|while|if|when)\b[^,.;!?]*")
 
 
 # A leading "gareth, " -- stripped before detect_implicit_speech reads the opening word, so
@@ -1015,9 +1063,9 @@ class IntentClassifier:
         """!@brief Forwards a "rules_loaded" payload to the matcher to build its embeddings."""
         self.matcher.on_rules_loaded(data)
 
-    def register_item(self, name, description):
+    def register_item(self, name, description, targetable=False):
         """!@brief Forwards one ad hoc item's name/description to the matcher's own catalog."""
-        self.matcher.register_item(name, description)
+        self.matcher.register_item(name, description, targetable)
 
     def set_destinations(self, destinations):
         """!@brief Forwards the current location's reachable exits to the matcher's own bank."""
@@ -1169,7 +1217,7 @@ class IntentClassifier:
             })
             return processed, events
 
-        best_score = self._classify_skill_pass(remaining_clauses, turn_clauses)
+        best_score = self._classify_skill_pass(remaining_clauses, turn_clauses, processed)
 
         self._finalize(processed, turn_clauses, found_exempt, unmatched_item_verbs, best_score, events)
         return processed, events
@@ -1213,6 +1261,8 @@ class IntentClassifier:
                 continue
             if clause_intent:
                 item_name, _item_score = self.matcher.map_to_item(clause)
+                if item_name and clause_intent in ITEM_LOSING_INTENTS and not _clause_names_item(clause, item_name):
+                    item_name = None
                 if item_name:
                     turn_clauses.append({"kind": "item", "intent": clause_intent, "item_name": item_name})
                     continue
@@ -1226,7 +1276,7 @@ class IntentClassifier:
 
         return turn_clauses, remaining_clauses, found_exempt, unmatched_item_verbs
 
-    def _classify_skill_pass(self, remaining_clauses, turn_clauses):
+    def _classify_skill_pass(self, remaining_clauses, turn_clauses, processed=""):
         """!
         @brief Pass 2: skill/ability matching for whatever clauses the item pass didn't
             already claim. Appends matched clauses directly onto turn_clauses.
@@ -1268,6 +1318,10 @@ class IntentClassifier:
             # not against the whole input, so "attack the orc and cast a ward on thane" can
             # redirect each action at its own named target.
             target_name, _target_score = self.matcher.map_to_target(matched_clause)
+            if not target_name and processed != clause and REFERRING_PRONOUN_PATTERN.search(matched_clause):
+                # "shove hemlock into the river and start kicking him" -- the kick's own clause
+                # only says "him"; whoever the whole input names is who "him" is.
+                target_name, _target_score = self.matcher.map_to_target(processed)
             if target_name:
                 action["target"] = target_name
             turn_clauses.append(action)
@@ -1345,6 +1399,8 @@ class IntentClassifier:
         """
         intent, _score = self.matcher.map_to_intent(processed, strict=strict)
         if not intent:
+            return None
+        if intent in QUESTION_BLOCKED_ROUTES and "?" in processed:
             return None
         if intent == "scene_query":
             return {"event": "scene_query_detected", "payload": {"input": processed}}

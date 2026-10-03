@@ -11,7 +11,7 @@ from dm.DM_ActionOutcome import (
 from dm.DM_CharacterCreation import CharacterCreationMixin
 from dm.DM_Combat import CombatMixin
 from dm.DM_Crafting import CraftingMixin
-from dm.DM_Dialogue import DialogueMixin
+from dm.DM_Dialogue import WORD_BOUNDARY, DialogueMixin
 from dm.DM_Encounters import EncounterMixin
 from dm.DM_Help import HelpMixin
 from dm.DM_Improvisation import ImprovisationMixin
@@ -444,11 +444,38 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
                 player_actions.append(item_result)
                 continue
 
-            self._apply_target_redirect(explicit_target, input_text)
+            attack_ability = named_ability or self.find_attack_ability(self.player_name, skill_name)
+            # A damaging ability, or one authored as an act of aggression that deals none
+            # (maneuvers.toml's trip/grapple/bull rush -- entity_schema.toml's "assault").
+            is_attack = bool(attack_ability and ("damage_value" in attack_ability or attack_ability.get("assault")))
+            assaulting = self._apply_target_redirect(explicit_target, input_text, allow_non_hostile=is_attack)
             target_name = self.current_target
+            if is_attack and not assaulting and self._is_bystander(target_name):
+                # An attack NLPCore matched no name for, with no fight on: someone present it
+                # describes ("pin the merchant's feet" -- a narrated person's occupation is an
+                # alias), else whoever the player is talking to ("my turn to hit you!"), else
+                # nobody -- never silently a non-hostile creature left over as current_target
+                # (a chest or trap there stays fair game: smashing one is fine).
+                partner = (self.conversation_partner or {}).get("key")
+                target_name = None
+                for candidate in (self._literal_attack_target(input_text), partner):
+                    if not candidate:
+                        continue
+                    before = self.current_target
+                    assaulting = self._apply_target_redirect(candidate, input_text, allow_non_hostile=True)
+                    if assaulting or self.current_target != before:
+                        target_name = self.current_target
+                        break
             engaged_combat_target = True
 
             result, ability, via_test = self._resolve_roll(skill_name, named_ability, target_name, dice_penalty, modifier)
+            if is_attack and target_name is None and isinstance(result, RolledOutcome):
+                result.no_opponent = True
+            if assaulting and isinstance(result, RolledOutcome) and not via_test:
+                # Hit or miss, swinging at someone you weren't fighting is "assaulted" at full
+                # strength (rules.toml) -- applied before the round check below, so it's this
+                # very turn they fight back.
+                self.nudge_attitude_from_event(target_name, self.player_name, "assaulted", 1.0)
             self._finish_rolled_outcome(result, skill_name, named_ability, ability, target_name, via_test, input_text)
             player_actions.append(result)
 
@@ -461,6 +488,13 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             # Room-level presence snapshot -- see scenario_loaded's own publish for why every
             # DM-published narration-triggering event carries one.
             "present_entities": list(self.scenario_entities),
+            # What the player actually carries in hand/on body -- the narrator is told to stay
+            # inside it (LLMCore._describe_player_actions), not invent gear from a skill name.
+            "player_gear": [
+                self.entities.get(item, {}).get("name", item)
+                for item in dict.fromkeys(self.entities.get(self.player_name, {}).get("equipped", {}).values())
+                if item
+            ],
         }
 
         # Checked once, after every one of the player's own skill/ability actions this turn
@@ -509,7 +543,30 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         named_ability = self.resolve_named_ability(self.player_name, skill_name)
         if named_ability:
             skill_name = self.select_ability_skill(self.player_name, named_ability) or skill_name
+        elif skill_name not in self.skills:
+            # NLPCore's action bank holds every entity's abilities, so "kick him" can match a
+            # horse's own innate "kick" -- unowned and not a skill, it used to roll 0 dice under
+            # its own name. Roll the skill it uses instead, with the player's own matching attack.
+            skill_name = self._catalog_ability_skill(skill_name) or skill_name
         return skill_name, named_ability
+
+    def _catalog_ability_skill(self, ability_name):
+        """!
+        @brief The skill some entity's own ability called ability_name rolls on -- the first
+            one found, inline [[entity.abilities]] or a standalone ability entity alike.
+        @param ability_name An ability name NLPCore matched.
+        @return A skill name (the first, for a multi-skill ability), or None.
+        """
+        candidates = [self.entities.get(ability_name)]
+        for entity in self.entities.values():
+            candidates.extend(entry for entry in entity.get("abilities", []) if isinstance(entry, dict))
+        for ability in candidates:
+            if ability and ability.get("name", ability_name) == ability_name and ability.get("skill"):
+                skill = ability["skill"]
+                skill = skill[0] if isinstance(skill, list) else skill
+                if skill in self.skills:
+                    return skill
+        return None
 
     def _resolve_action_modifier(self, modifier_name):
         """!
@@ -676,11 +733,13 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
                 return candidate_skill
         return None
 
-    def _apply_target_redirect(self, explicit_target, input_text=""):
+    def _apply_target_redirect(self, explicit_target, input_text="", allow_non_hostile=False):
         """!
         @brief Honors an explicit, NLP-matched target as a combat redirect -- only if it
-            names a live, hostile, in-scene entity. Naming a confidently-matched but
-            non-hostile entity (ex: an ally) is silently ignored rather than making it the
+            names a live, in-scene entity that is hostile, or any living creature at all when
+            allow_non_hostile (the action is an attack: anyone can be attacked, and the caller
+            applies the "assaulted" attitude event once it rolls). Naming a confidently-matched non-hostile entity for anything
+            else (ex: a skill check near an ally) is silently ignored rather than making it the
             target; leaves self.current_target untouched if explicit_target doesn't qualify.
             Resolves multi-instance ambiguity (see _resolve_named_instance_ambiguity) first,
             so a disambiguating word in input_text can redirect explicit_target to a same-
@@ -688,15 +747,26 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         @param explicit_target NLPCore's best-guess target name (map_to_target), or None.
         @param input_text The player's raw turn input, forwarded to
             _resolve_named_instance_ambiguity.
+        @param allow_non_hostile True when the action is an attack (a damage-dealing ability, or
+            one authored "assault = true").
+        @return True if the redirect landed on a non-hostile creature -- the caller applies
+            "assaulted" to it once the attack actually rolls.
         """
         explicit_target = self._resolve_named_instance_ambiguity(explicit_target, input_text)
-        if (
+        if not (
             explicit_target
             and explicit_target in self.scenario_entities
-            and self.is_hostile(explicit_target, self.player_name)
+            and explicit_target != self.player_name
             and self.get_current_hp(explicit_target) > 0
         ):
+            return False
+        if self.is_hostile(explicit_target, self.player_name):
             self.current_target = explicit_target
+            return False
+        if allow_non_hostile and self.entities.get(explicit_target, {}).get("supertype") == "creature":
+            self.current_target = explicit_target
+            return True
+        return False
 
     def _instance_family(self, entity_name):
         """!
@@ -1324,6 +1394,8 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         for entity_name in self.scenario_entities:
             if entity_name == self.player_name:
                 continue
+            # A bystander the player just assaulted has no behavior to fight back with -- yet.
+            self._arm_if_turned_hostile(entity_name, self.player_name)
             opponent = self.player_name if self.is_hostile(entity_name, self.player_name) else self.current_target
             if not opponent:
                 continue
@@ -1771,7 +1843,42 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         """
         return bool(self.entities.get(entity_name, {}).get("background"))
 
-    def _get_target_name(self, include_background=False):
+    def _is_bystander(self, entity_name):
+        """!
+        @brief Whether an attack that named nobody has no fair target in entity_name (normally
+            current_target): there is none, or it's a creature not hostile to the player. An
+            object (a chest, a trap) is still fair game, and so is anything already fighting.
+        @param entity_name The candidate target, or None.
+        """
+        if entity_name is None:
+            return True
+        entity = self.entities.get(entity_name, {})
+        return entity.get("supertype") == "creature" and not self.is_hostile(entity_name, self.player_name)
+
+    def _literal_attack_target(self, input_text):
+        """!
+        @brief Who present an attack's own words point at -- _literal_dialogue_target's whole-
+            word key/name/alias scan, minus one kind of alias: a single word that is only a
+            modifier inside a longer alias. A narrated spice merchant's aliases are "spice
+            merchant", "spice", and "merchant"; "pin the merchant" must find him, but "kick the
+            spice cart" must not assault him, so "spice" is skipped and "merchant" (the head
+            word, last in the phrase) kept. Creatures only.
+        @param input_text The player's raw (lowercased) input.
+        @return An entity key, or None.
+        """
+        text = input_text or ""
+        for name in self.scenario_entities:
+            entity = self.entities.get(name, {})
+            if name == self.player_name or entity.get("supertype") != "creature":
+                continue
+            aliases = [alias.lower() for alias in entity.get("aliases", [])]
+            modifiers = {word for alias in aliases if " " in alias for word in alias.split()[:-1]}
+            phrases = [name, entity.get("name", "")] + [alias for alias in aliases if alias not in modifiers]
+            if any(phrase and re.search(WORD_BOUNDARY % re.escape(phrase.lower()), text) for phrase in phrases):
+                return name
+        return None
+
+    def _get_target_name(self, include_background=False, include_objects=True):
         """!
         @brief Picks the current opposed target from the instantiated scenario entities.
         @param include_background Whether an ambient crowd member may be picked. False for
@@ -1781,12 +1888,17 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             whichever fishmonger happens to stand first in scenario_entities. True only for
             DM_Dialogue.py's own addressee fallback, where a bare "ask about the weather"
             landing on a nearby townsperson is exactly what should happen.
+        @param include_objects False for that same addressee fallback: an improvised container
+            is inserted at the FRONT of scenario_entities (so "open it" finds it), which made a
+            playtest's trash talk land on a "Crate of Fish" as its default listener.
         @return The name of the first non-party entity instance in the scenario, or None if there isn't one.
         """
         for instance_name in self.scenario_entities:
             if self._is_party_member(instance_name):
                 continue
             if not include_background and self._is_background(instance_name):
+                continue
+            if not include_objects and self.entities.get(instance_name, {}).get("supertype") == "object":
                 continue
             return instance_name
         return None

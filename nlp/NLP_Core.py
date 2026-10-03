@@ -378,7 +378,7 @@ class SentenceTransformerMatcher(IntentMatcher):
 
         self.event_bus.publish("log_info", f"NLPCore: {len(target_phrases)} target phrases encoded for {len(set(target_indices))} targetable entities.")
 
-    def register_item(self, name, description):
+    def register_item(self, name, description, targetable=False):
         """!
         @brief Incrementally registers one newly-created (or reload-restored) ad hoc entity
             into item_embeddings/item_indices, the same two-phrase-per-item ([name],
@@ -392,6 +392,9 @@ class SentenceTransformerMatcher(IntentMatcher):
             hoc entity).
         @param name The entity's own dict key/entity_id.
         @param description The entity's own "description" field, if any.
+        @param targetable Also append the same phrases to target_embeddings/target_indices, for
+            map_to_target -- the runtime counterpart of on_rules_loaded's own creature/test
+            rule (DM_Improvisation.py's catalog_entry computes it).
         """
         if not name:
             return
@@ -408,6 +411,13 @@ class SentenceTransformerMatcher(IntentMatcher):
         else:
             self.item_embeddings = torch.cat([self.item_embeddings, new_embeddings], dim=0)
         self.item_indices.extend(new_indices)
+
+        if targetable:
+            if self.target_embeddings is None:
+                self.target_embeddings = new_embeddings
+            else:
+                self.target_embeddings = torch.cat([self.target_embeddings, new_embeddings], dim=0)
+            self.target_indices.extend(new_indices)
 
         self.event_bus.publish("log_info", f"NLPCore: {len(new_phrases)} item phrases registered for 1 ad hoc item(s).")
 
@@ -928,10 +938,12 @@ class NLPCore:
         @brief Forwards every entity in the "item_catalog_updated" payload to the classifier's
             own register_item, one at a time.
         @param data The "item_catalog_updated" payload ({"entities": [{"name",
-            "description"}, ...]}).
+            "description", "targetable"}, ...]}).
         """
         for entry in data.get("entities", []):
-            self.classifier.register_item(entry.get("name"), entry.get("description", ""))
+            self.classifier.register_item(
+                entry.get("name"), entry.get("description", ""), bool(entry.get("targetable")),
+            )
 
     def _on_location_exits_updated(self, data):
         """!
