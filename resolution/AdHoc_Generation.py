@@ -274,7 +274,7 @@ def _extract_tool_call(response):
 
 
 def _call_tool_or_decline(messages, tools, accepted_function_names, call_chat_completion, api_url, timeout,
-                          max_tokens=None):
+                          max_tokens=None, reasoning_effort=None):
     """!
     @brief Shared LLM-calling boilerplate for every function below -- calls
         call_chat_completion, extracts the tool call, and resolves whether the model picked one
@@ -299,12 +299,16 @@ def _call_tool_or_decline(messages, tools, accepted_function_names, call_chat_co
         can spend the client's 1024 default on thinking before it ever reaches the tool call
         (finish_reason "length", no tool_calls), which reads as "unavailable". Omitted by every
         caller whose call is small enough not to need it.
+    @param reasoning_effort Optional, forwarded only when given -- "none" for a quick enum pick
+        that gains nothing from hidden reasoning (see LLM_Client.call_chat_completion).
     @return (function_name, arguments) when function_name is in accepted_function_names.
             (None, reason) otherwise -- reason is "unavailable" if call_chat_completion or
             _extract_tool_call raised, else arguments.get("reason", "declined") (guarded for a
             non-dict arguments) for an explicit decline or any unrecognized function name.
     """
     extra = {"max_tokens": max_tokens} if max_tokens else {}
+    if reasoning_effort:
+        extra["reasoning_effort"] = reasoning_effort
     try:
         response = call_chat_completion(api_url, messages, tools=tools, tool_choice="auto", timeout=timeout, **extra)
         function_name, arguments = _extract_tool_call(response)
@@ -496,6 +500,94 @@ def generate_ad_hoc_item(
             entity["skills"] = skills
 
     return {"created": True, "entity": entity, "location": location}
+
+
+# rate_difficulty's own "no roll at all" answer, offered alongside a setting's own tier names.
+TRIVIAL_DIFFICULTY = "trivial"
+# Runs synchronously on the game thread before the roll. Reasoning off: measured on gemma4, a
+# rating with reasoning on took 5-15s and sometimes ran out of max_tokens mid-thought (no tool
+# call at all); with it off, under a second and always a valid tier. A timeout just means the
+# fallback tier (see DMCore._untargeted_difficulty).
+DIFFICULTY_TIMEOUT = 10
+DIFFICULTY_MAX_TOKENS = 256
+DIFFICULTY_REASONING = "none"
+
+
+def rate_difficulty(
+    attempt, skill_name, scene_description, tiers, call_chat_completion=None,
+    api_url=DEFAULT_API_URL, timeout=DIFFICULTY_TIMEOUT,
+):
+    """!
+    @brief Asks the model how hard an unopposed check is -- one of the setting's own
+        [[difficulty_tier]] names (rules.toml), or TRIVIAL_DIFFICULTY for something that
+        needs no roll at all. The model only ever picks a name from an enum (same reasoning as
+        CREATURE_POWERS: a small local model picks an enum far more reliably than it invents a
+        number); the number itself stays authored.
+    @param attempt The player's own words for what they're trying.
+    @param skill_name The skill the attempt rolls on.
+    @param scene_description The current room/location's own description.
+    @param tiers The setting's [[difficulty_tier]] list ({name, difficulty, description}).
+    @param call_chat_completion Injectable for tests; defaults to the module's real client.
+    @return (tier_name, reason) -- tier_name is None if the model was unreachable, declined, or
+            answered outside the enum; reason then says why ("unavailable", a decline's text,
+            "invalid_tier").
+    """
+    if not tiers:
+        return None, "no_tiers"
+    call_chat_completion = call_chat_completion or _real_call_chat_completion
+    names = [TRIVIAL_DIFFICULTY] + [tier["name"] for tier in tiers]
+    tier_lines = "\n".join(
+        f"- {tier['name']} ({tier.get('difficulty')}): {tier.get('description', '')}" for tier in tiers
+    )
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a tabletop RPG Game Master setting the difficulty of a skill check. "
+                "Judge the task itself, in this scene -- not how skilled the character is."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Scene: {scene_description or 'unknown'}.\n"
+                f"The player attempts: \"{attempt}\" (rolled on {skill_name}). Nothing is "
+                f"actively resisting them.\n"
+                f"Pick {TRIVIAL_DIFFICULTY} if it needs no roll at all -- anyone simply does it "
+                f"(picking something up, looking at what's in plain view, walking across a "
+                f"room). Otherwise pick the tier that fits:\n{tier_lines}\n"
+                "Call rate_difficulty."
+            ),
+        },
+    ]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "rate_difficulty",
+                "description": "Sets how hard the attempted task is.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "tier": {"type": "string", "enum": names},
+                        "reason": {"type": "string"},
+                    },
+                    "required": ["tier"],
+                },
+            },
+        },
+        _decline_tool_schema("Call this only if the attempt makes no sense as a task at all."),
+    ]
+    function_name, payload = _call_tool_or_decline(
+        messages, tools, {"rate_difficulty"}, call_chat_completion, api_url, timeout,
+        max_tokens=DIFFICULTY_MAX_TOKENS, reasoning_effort=DIFFICULTY_REASONING,
+    )
+    if function_name is None:
+        return None, payload
+    tier = str(payload.get("tier", "")).strip().lower()
+    if tier not in names:
+        return None, "invalid_tier"
+    return tier, payload.get("reason", "")
 
 
 def decide_entity_removal(

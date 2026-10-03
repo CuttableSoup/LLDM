@@ -127,6 +127,9 @@ class RolledOutcome:
     # An attack with nobody to aim it at -- told to the narrator so it doesn't invent an opponent
     # (see DM_Core.py's _on_turn_detected).
     no_opponent: bool = False
+    # An unopposed check rated "trivial" (DMCore._untargeted_difficulty) -- no dice were rolled
+    # at all; it simply succeeds.
+    trivial: bool = False
 
 
 @dataclass

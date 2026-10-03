@@ -192,6 +192,22 @@ class TestEventBus(unittest.TestCase):
         self.assertEqual(calls, [("first", 1), ("first", 2), ("late", 2)])
 
 
+# Rating an unopposed check's difficulty is a live model call (DMCore._untargeted_difficulty),
+# never made from a unit test: every test sees the old difficulty-0 behavior, and the tests of
+# the rating itself (TestUntargetedDifficulty) restore REAL_UNTARGETED_DIFFICULTY and stub the
+# chat client instead.
+REAL_UNTARGETED_DIFFICULTY = DMCore._untargeted_difficulty
+_UNRATED_DIFFICULTY = patch.object(DMCore, "_untargeted_difficulty", lambda self, skill_name, input_text: (0, False))
+
+
+def setUpModule():
+    _UNRATED_DIFFICULTY.start()
+
+
+def tearDownModule():
+    _UNRATED_DIFFICULTY.stop()
+
+
 class DMTestCase(unittest.TestCase):
     """Shared setUp for tests that just need a fresh DMCore over a real scenario.
     Subclasses set scenario_name to pick which one, and override setUp (calling
@@ -7477,6 +7493,66 @@ class TestAttackingAnyone(DMTestCase):
         self.assertEqual(self.dm_core._resolve_action_skill("kick"), ("brawling", None))
 
 
+class TestUntargetedDifficulty(DMTestCase):
+    """!
+    @brief An unopposed check's difficulty: a [[difficulty_tier]] the model picks, "trivial"
+        for no roll, a fallback when the model can't answer. Found by playtest: it was always
+        0, so ~800 turns of searching/climbing/sneaking never once failed.
+    """
+
+    def setUp(self):
+        super().setUp()
+        restore = patch.object(DMCore, "_untargeted_difficulty", REAL_UNTARGETED_DIFFICULTY)
+        restore.start()
+        self.addCleanup(restore.stop)
+
+    def _rated(self, tier):
+        reply = {"choices": [{"message": {"tool_calls": [{"function": {
+            "name": "rate_difficulty", "arguments": json.dumps({"tier": tier, "reason": "test"}),
+        }}]}}]}
+        return patch("resolution.AdHoc_Generation._real_call_chat_completion", return_value=reply)
+
+    def test_the_rated_tier_sets_the_difficulty(self):
+        with self._rated("difficult"):
+            result, _ability, _via_test = self.dm_core._resolve_roll("athletics", None, None, input_text="climb the wall")
+        self.assertEqual(result.difficulty, 15)
+        self.assertFalse(result.trivial)
+
+    def test_the_rating_call_turns_the_models_reasoning_off(self):
+        # Measured on gemma4: reasoning on took 5-15s a rating and sometimes ran out of tokens
+        # mid-thought; off, under a second and always a valid tier.
+        with self._rated("easy") as client:
+            self.dm_core._untargeted_difficulty("observation", "look around")
+        self.assertEqual(client.call_args.kwargs.get("reasoning_effort"), "none")
+
+    def test_a_trivial_task_skips_the_roll(self):
+        with self._rated("trivial"):
+            result, _ability, _via_test = self.dm_core._resolve_roll("observation", None, None, input_text="look at the cup")
+        self.assertTrue(result.trivial and result.success)
+
+    def test_an_unreachable_model_falls_back_to_the_skills_default_then_the_settings(self):
+        with patch("resolution.AdHoc_Generation._real_call_chat_completion", side_effect=ConnectionError):
+            self.assertEqual(self.dm_core._untargeted_difficulty("athletics", "climb"), (10, False))
+            self.dm_core.skills["athletics"]["default_difficulty"] = "easy"
+            self.assertEqual(self.dm_core._untargeted_difficulty("athletics", "climb"), (6, False))
+
+    def test_a_named_spell_cast_at_no_one_is_never_rated(self):
+        # spells.toml authors an untargeted cast as automatic ("summoning before a fight starts
+        # is trivial") -- only a plain unopposed skill check is rated.
+        with patch("resolution.AdHoc_Generation._real_call_chat_completion") as never_called:
+            result, _ability, _via_test = self.dm_core._resolve_roll(
+                "arcane", {"name": "glyph", "skill": "arcane", "difficulty": 12}, None, input_text="cast glyph",
+            )
+        self.assertEqual(result.difficulty, 0)
+        self.assertEqual(never_called.call_count, 0)
+
+    def test_a_setting_with_no_tiers_keeps_difficulty_zero(self):
+        self.dm_core.rules.pop("difficulty_tier")
+        with patch("resolution.AdHoc_Generation._real_call_chat_completion") as never_called:
+            self.assertEqual(self.dm_core._untargeted_difficulty("athletics", "climb"), (0, False))
+        self.assertEqual(never_called.call_count, 0)
+
+
 class TestImprovisedContainerPlacement(DMTestCase):
     """!
     @brief An improvised container/trap goes to the FRONT of scenario_entities. Found by playtest:
@@ -13844,6 +13920,12 @@ class TestSceneRosterNarration(LLMTestCase):
         self.assertIn("There is no opponent", self.llm_core._describe_outcome(outcome))
         outcome.no_opponent = False
         self.assertNotIn("no opponent", self.llm_core._describe_outcome(outcome))
+
+    def test_a_trivial_check_is_narrated_without_a_roll(self):
+        outcome = RolledOutcome(entity="gladstone", skill="observation", roll=0, difficulty=0, success=True, trivial=True)
+        text = self.llm_core._describe_outcome(outcome)
+        self.assertIn("no roll needed", text)
+        self.assertNotIn("rolled", text)
 
     def test_action_narration_is_told_to_narrate_the_attempt_and_stay_inside_the_players_gear(self):
         # Found by playtest: a polearms mismatch got the player a polearm they never owned.

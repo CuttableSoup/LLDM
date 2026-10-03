@@ -51,8 +51,8 @@ action-kind entry goes through:
    `[entity.test]` instead, which always wins when it matches), else the ordinary opposed roll
    against the defender's own best matching skill — or against an item-level `[entity.test]`
    target one level deeper (a container's contents or something already in inventory — see
-   "Entity tests"), or with no target at all (difficulty 0). Every dice roll here is reduced by
-   this turn's own `dice_penalty` (see "Multiple actions").
+   "Entity tests"), or with no target at all — see "Unopposed checks" below. Every dice roll here
+   is reduced by this turn's own `dice_penalty` (see "Multiple actions").
 4. On a hit, `calculate_damage` rolls damage, resolves the `bonus` field (plain number or
    `"user.<rule>"` reference into `rules.toml`), applies armor/resistance reduction and
    vulnerability bonus, and `apply_damage` applies net damage to HP; the `RolledOutcome` gets
@@ -64,6 +64,29 @@ action-kind entry goes through:
 Once every action-kind entry has resolved, `DMCore` decides `round_resolved` vs.
 `action_resolved` — and, for combat, runs every other scene entity's own turn — exactly once
 for the whole batch, not once per entry (see "Multiple actions").
+
+
+## Unopposed checks
+
+A skill use with nothing resisting it — no target, no `[entity.test]` — used to roll against 0
+and so could never fail (~800 playtest turns of searching, climbing and sneaking, every one a
+success). Now `DMCore._untargeted_difficulty` asks the local model (`AdHoc_Generation.py`'s
+`rate_difficulty`, one tool call constrained to an enum) to pick one of the setting's
+`[[difficulty_tier]]` names from the attempt and the scene — `rules.toml` authors the numbers,
+calibrated to this engine's plain d6 sums (2D untrained, 4D trained, 5D expert) rather than WEG's
+attribute+skill pools: very easy 3, easy 6, moderate 10, difficult 15, very difficult 18, heroic 22
+(at WEG's own 10/15/20 a 2D skill could never pass moderate — a playtest failed 13 of 20) — or
+`"trivial"`, meaning no roll at all (`RolledOutcome.trivial`; narrated as simply happening). If
+the model is unreachable, declines, or answers off the list, the skill's own optional
+`default_difficulty` (a tier name in `skills.toml`) is used, else `[difficulty].fallback`; a
+warning is logged when the model was unreachable. A setting that authors no tiers (`Rules/Zombie/`)
+keeps the old difficulty 0. A named spell/technique cast at no one is never rated — it keeps its
+authored automatic success (`spells.toml`: "summoning before a fight starts is trivial"). The call
+runs on the game thread before the roll, with the model's reasoning turned off (`reasoning_effort =
+"none"`: measured on gemma4, 5-15s and occasional token-limit failures with it on, under a second
+with it off), so each unopposed check costs about a second; unit
+tests never make it (`test_unit.py` stubs `_untargeted_difficulty` module-wide to the old 0, and
+`TestUntargetedDifficulty` restores it against a stubbed chat client).
 
 
 ## Multiple actions

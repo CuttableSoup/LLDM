@@ -152,6 +152,9 @@ def _format_missing_materials_outcome(outcome, actor):
 
 
 def _format_rolled_outcome(outcome, actor):
+    if getattr(outcome, "trivial", False):
+        # Rated "trivial" (DMCore._untargeted_difficulty) -- no dice at all.
+        return f"Skill used: {outcome.skill} - trivial, no roll needed; it simply happens."
     success_word = "succeeds" if outcome.success else "fails"
     if outcome.opposing_skill:
         opposition = f" opposed by {outcome.defender}'s {outcome.opposing_skill}"

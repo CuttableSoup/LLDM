@@ -22,7 +22,7 @@ DEFAULT_MODEL = "gemma4"
 
 def call_chat_completion(
     api_url, messages, tools=None, tool_choice=None, model=DEFAULT_MODEL, temperature=0.7,
-    max_tokens=1024, timeout=DEFAULT_TIMEOUT,
+    max_tokens=1024, timeout=DEFAULT_TIMEOUT, reasoning_effort=None,
 ):
     """!
     @brief Posts one chat/completions request and returns the parsed JSON response.
@@ -34,6 +34,10 @@ def call_chat_completion(
     @param model The Ollama model tag to target (ex: "gemma4") -- Ollama, unlike LM Studio,
         requires this on every request.
     @param temperature/max_tokens Standard OpenAI-style sampling params.
+    @param reasoning_effort Optional OpenAI-style reasoning control, sent only when given --
+        "none" turns a thinking model's hidden reasoning off for a quick enum pick (measured
+        on gemma4: a difficulty rating went from 5-15s, sometimes cut off at max_tokens
+        mid-thought, to under a second).
     @param timeout Seconds to wait before giving up -- a hard requirement here (unlike
         fetch_from_llm's own unbounded call), since a caller of this function is blocking
         synchronously, in place, potentially on the GUI thread; a hung Ollama must not be able
@@ -47,6 +51,8 @@ def call_chat_completion(
         payload["tools"] = tools
     if tool_choice is not None:
         payload["tool_choice"] = tool_choice
+    if reasoning_effort is not None:
+        payload["reasoning_effort"] = reasoning_effort
 
     request = urllib.request.Request(
         api_url,

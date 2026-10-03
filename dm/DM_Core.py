@@ -27,6 +27,7 @@ from dm.DM_Time import TimeMixin
 from dm.DM_Travel import TravelMixin
 from dm.DM_Validation import ValidationMixin
 from intents.registry import HANDLERS as FREE_STANDING_INTENT_HANDLERS
+from resolution.AdHoc_Generation import TRIVIAL_DIFFICULTY, rate_difficulty
 from resolution.Combat_Resolution import matches_supertype_or_subtype, resolve_damage_value
 from resolution.Program_Interpreter import run_program
 
@@ -468,7 +469,9 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
                         break
             engaged_combat_target = True
 
-            result, ability, via_test = self._resolve_roll(skill_name, named_ability, target_name, dice_penalty, modifier)
+            result, ability, via_test = self._resolve_roll(
+                skill_name, named_ability, target_name, dice_penalty, modifier, input_text=input_text,
+            )
             if is_attack and target_name is None and isinstance(result, RolledOutcome):
                 result.no_opponent = True
             if assaulting and isinstance(result, RolledOutcome) and not via_test:
@@ -855,7 +858,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
 
         return explicit_target
 
-    def _resolve_roll(self, skill_name, named_ability, target_name, dice_penalty=0, modifier=None):
+    def _resolve_roll(self, skill_name, named_ability, target_name, dice_penalty=0, modifier=None, input_text=None):
         """!
         @brief Rolls the actual check for this action: a flat difficulty check against the
             target's own [entity.test] if one applies (ex: a chest's lock), a range-gated flat
@@ -875,6 +878,8 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             consulted in the range-gated target branch below, once the actual attack ability is
             known -- see _apply_ability_modifier for how its own "skill_divisor"/"damage_bonus"/
             "damage_multiplier" fields are folded in.
+        @param input_text The player's own words, for rating an unopposed check's difficulty
+            (see _untargeted_difficulty).
         @return (result, ability, via_test) -- ability is the attack ability resolved for the
             roll (a per-cast copy with modifier's own damage bonus/multiplier already applied,
             if one matched), needed again by _apply_damage_if_hit; via_test is True if this was
@@ -989,9 +994,53 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
                 )
                 result = rolled_outcome_from_roll(roll)
         else:
-            roll = self.resolve_action(self.player_name, skill_name, dice_penalty=dice_penalty)
-            result = rolled_outcome_from_roll(roll)
+            # Unopposed: nothing resists, so the task itself sets the bar (_untargeted_difficulty).
+            # A named spell/technique cast at no one keeps its long-standing automatic success --
+            # spells.toml authors that on purpose ("summoning before a fight starts is trivial").
+            if named_ability:
+                difficulty, trivial = 0, False
+            else:
+                difficulty, trivial = self._untargeted_difficulty(skill_name, input_text)
+            if trivial:
+                result = RolledOutcome(
+                    entity=self.player_name, skill=skill_name, roll=0, difficulty=0, success=True, trivial=True,
+                )
+            else:
+                roll = self.resolve_action(self.player_name, skill_name, difficulty, dice_penalty=dice_penalty)
+                result = rolled_outcome_from_roll(roll)
         return result, ability, via_test
+
+    def _untargeted_difficulty(self, skill_name, input_text):
+        """!
+        @brief The difficulty of an unopposed check. Before this existed it was always 0, so no
+            such check could ever fail (~800 playtest turns, every one a success). The local
+            model picks one of the setting's [[difficulty_tier]] names (rules.toml) from the
+            attempt and the scene, or "trivial" -- no roll at all. If it can't be reached or
+            declines: the skill's own default_difficulty (skills.toml, optional), else
+            [difficulty].fallback. A setting authoring no tiers keeps the old difficulty 0.
+        @param skill_name The skill being rolled.
+        @param input_text The player's own words for the attempt.
+        @return (difficulty, trivial) -- trivial means skip the roll and succeed.
+        """
+        tiers = self.rules.get("difficulty_tier", [])
+        if not tiers:
+            return 0, False
+        tier_name, reason = rate_difficulty(input_text or skill_name, skill_name, self._current_scene_description(), tiers)
+        if tier_name == TRIVIAL_DIFFICULTY:
+            self.event_bus.publish("log_info", f"Difficulty: trivial for {skill_name} -- no roll.")
+            return 0, True
+        tier = next((t for t in tiers if t["name"] == tier_name), None)
+        if tier is None:
+            fallback = (
+                self.skills.get(skill_name, {}).get("default_difficulty")
+                or (self.rules.get("difficulty") or {}).get("fallback")
+            )
+            tier = next((t for t in tiers if t["name"] == fallback), tiers[len(tiers) // 2])
+            log = "log_warning" if reason == "unavailable" else "log_info"
+            self.event_bus.publish(log, f"Difficulty: rating failed ({reason}); using {tier['name']} for {skill_name}.")
+        else:
+            self.event_bus.publish("log_info", f"Difficulty: {tier['name']} ({tier.get('difficulty', 0)}) for {skill_name}.")
+        return int(tier.get("difficulty", 0)), False
 
     def _finish_rolled_outcome(self, result, skill_name, named_ability, ability, target_name, via_test, input_text=None):
         """!

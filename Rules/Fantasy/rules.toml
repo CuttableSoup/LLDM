@@ -176,6 +176,52 @@ max_cr_share = 0.25                                        # of the player's cha
 pool_dice = 15
 max_allocation_per_skill = 5
 
+# How hard an UNOPPOSED check is -- a skill use with no creature resisting it, no [entity.test],
+# and no difficulty of its own (searching a stall, climbing a wall, reading a sigil). Without
+# this every such check rolled against 0 and could never fail: ~800 playtest turns, every one a
+# success. DMCore asks the local model to pick one of these tiers from the attempt and the scene
+# (AdHoc_Generation.py's rate_difficulty), or "trivial" -- no roll at all, the player just does
+# it (picking up a cup). The model only ever picks a name; the number is authored here,
+# calibrated to this engine's plain d6 sums (2D untrained, 4D trained, 5D expert) rather than
+# WEG's attribute+skill pools -- at WEG's 10/15/20, a 2D skill could never pass a moderate
+# check (one playtest: 13 of 20 unopposed checks failed). Success odds, 2D/3D/4D/5D:
+# very easy 3 97/100/100/100, easy 6 72/95/100/100, moderate 10 17/62/90/98,
+# difficult 15 0/9/44/78, very difficult 18 0/0/16/50, heroic 22 0/0/1/11. If it
+# can't be reached or declines, the skill's own default_difficulty (skills.toml, optional) is
+# used, else [difficulty].fallback. A setting with no tiers keeps the old always-succeeds roll.
+[difficulty]
+fallback = "moderate"
+
+[[difficulty_tier]]
+name = "very easy"
+difficulty = 3
+description = "Anyone manages it almost every time, barring real bad luck."
+
+[[difficulty_tier]]
+name = "easy"
+difficulty = 6
+description = "An ordinary person usually manages it; a little care is enough."
+
+[[difficulty_tier]]
+name = "moderate"
+difficulty = 10
+description = "Needs real competence -- an untrained attempt often fails."
+
+[[difficulty_tier]]
+name = "difficult"
+difficulty = 15
+description = "A trained professional can fail it; an amateur rarely succeeds."
+
+[[difficulty_tier]]
+name = "very difficult"
+difficulty = 18
+description = "Only experts succeed with any regularity."
+
+[[difficulty_tier]]
+name = "heroic"
+difficulty = 22
+description = "The stuff of legend -- even a master needs luck."
+
 # Each entry contributes one skill's dice/pips to the combined initiative pool DMCore.roll_initiative
 # rolls once per round for turn ordering -- "dodge + observation" today, but a third contributing
 # skill later is just another entry, no code change needed (same list-of-terms pattern [[status]]
