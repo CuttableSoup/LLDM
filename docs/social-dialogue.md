@@ -158,8 +158,10 @@ no further resolution.
 
 `DMCore._on_dialogue_detected` delegates to `DM_Dialogue.py`'s `DialogueMixin`:
 `_resolve_dialogue_target` searches the input for any present entity's name (whole-word,
-excluding the player), falling back to `_get_target_name()`'s default scene target if none is
-named. `_resolve_dialogue` gates on the target being present/alive (`reason: "not_present"`)
+excluding the player). If none is named, it falls back to `_default_listener`: the first person
+present who understands the player's current language, else `_get_target_name()`'s default scene
+target. A playtest's first market vendor spoke only another tongue, so 80 turns of unnamed talk
+came back as gibberish. `_resolve_dialogue` gates on the target being present/alive (`reason: "not_present"`)
 and not an inanimate `"object"` (`reason: "cant_talk"`) — but deliberately **not** on hostility:
 addressing a hostile entity is allowed (shouting mid-fight), and the model is free to read that
 as hostile/dismissive in character rather than being denied outright. A found target's
@@ -361,8 +363,26 @@ aimed at the speaker ("help me", "come help me", "join us") counts. Social-skill
 ("persuade the captain to lend us his boat") open on their own verb, so they still reach the
 skill pass and roll. Implicit dialogue is skipped when a free-standing intent already claimed a
 clause: "what do you know about the troll" stays a lore check. The `dialogue_detected` payload
-carries `implicit: true` for the logs and the playtest harness. With no partner, nothing
-changes.
+carries `implicit: true` for the logs and the playtest harness. With no partner, the same check
+still runs whenever anyone besides the player is in the scene (`IntentClassifier.anyone_present`,
+from `scene_roster_updated`). This lets a conversation *start* without "talk to": the line goes to
+whoever `_resolve_dialogue_target` picks (a name in the input, or the scene's default person).
+Before this, playtests showed 210 turns of talk to NPCs never reaching dialogue once. Only an
+empty scene leaves unmarked talk to the skill pass. An order given by name ("bram, attack the
+goblin") still opens like an action. "i bet …" counts as a remark rather than a wager when the
+next word is a pronoun or determiner (`BET_REMARK_FOLLOWERS`), so it no longer rolls gambling.
+"i'm <verb>ing" is a declared action ("i'm knocking this stall over") unless the verb is stative
+(`STATIVE_PROGRESSIVES`: "i'm starving", "i'm thinking").
+
+A line that is partly speech and partly a declared action ("you call that a fight? punch bram.")
+is split by `_split_speech_from_action`. Each sentence is judged on its own by
+`detect_implicit_speech`, and the line becomes a `dialogue_detected` for the spoken sentences
+plus a `turn_detected` for the rest, in the order written. This only happens when the action
+half resolves to something real: a matched item, or a skill matched at
+`MIXED_ACTION_MIN_SCORE` (0.5) or above. If not ("forget the lumber. let's find a private
+place.", or an item verb naming nothing real), the whole line stays dialogue. A clause that opens
+on a gesture verb (`GESTURE_VERBS`: bow, nod, grin, shrug…) never reaches skill matching at all.
+"(bows head dramatically)" had rolled missiles.
 
 
 ## Speech framing and voice

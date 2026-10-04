@@ -99,8 +99,10 @@ wire at once). At least one entry always survives even if it alone blows the bud
 the prompt that actually prompted this turn and letting the model truncate beats sending a bare
 system message with no player action in it. The reserve is measured, not guessed: an ordinary
 2-3 sentence narration runs ~550 completion tokens, and capping at 512 visibly truncated one
-mid-sentence. Behind that, `_fetch_and_publish` retries once on an empty completion and, if it
-is still empty, publishes a `System:` notice rather than a blank turn and **never stores it in
+mid-sentence. Behind that, `_fetch_and_publish` retries once on an empty completion, then once more
+with only the system message and this turn's own prompt (a playtest got two instant empties on a
+14 KB request, which wasn't a starved context, and an identical retry just repeated it). If it is
+still empty, it publishes a `System:` notice rather than a blank turn and **never stores it in
 `context_window`** — an empty assistant turn isn't something the scene witnessed, and keeping it
 would spend budget on nothing and teach the model that empty replies belong here. This is a
 per-symptom guard, not a substitute for the budget: if empties start appearing again, the prompt

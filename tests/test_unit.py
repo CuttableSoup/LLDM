@@ -102,6 +102,7 @@ from nlp.Intent_Classification import (
     detect_save_load_intent,
     detect_scene_query_intent,
     frame_speech,
+    normalize_declared_verb,
     process_input,
     split_action_clauses,
 )
@@ -117,7 +118,7 @@ from llm.LLM_Core import (
 import llm.Ollama_Launcher as Ollama_Launcher
 from llm.Ollama_Launcher import ensure_ollama_running
 from llm.LLM_Rag import RagIndex
-from nlp.NLP_Core import NLPCore
+from nlp.NLP_Core import NLPCore, SentenceTransformerMatcher, _base_verb
 from resolution.NPC_Generation import (
     _describe_qualities,
     fit_skills_to_cr,
@@ -678,7 +679,8 @@ class TestPlayerInputCorpus(unittest.TestCase):
                         clause.get("skill") for event in events if event["event"] == "turn_detected"
                         for clause in event["payload"]["clauses"]
                     )
-                    if entry["label"] == "N" and "dialogue_detected" not in names:
+                    # A rules question ("do i need to roll for that?") is talk for ADaM, not the partner.
+                    if entry["label"] == "N" and not {"dialogue_detected", "help_detected"} & set(names):
                         talk_missed.append(repr(entry["text"]))
                     elif entry["label"] == "A" and "dialogue_detected" in names:
                         actions_swallowed.append(repr(entry["text"]))
@@ -1059,6 +1061,8 @@ class TestIntentClassification(unittest.TestCase):
             "come help me relax",
             "gareth, is your forge really that hot",
             "maybe a little break",
+            "i'm starving.",
+            "i bet the rooms here are lovely",
         ):
             self.assertTrue(detect_implicit_speech(text), text)
         for text in (
@@ -1067,6 +1071,9 @@ class TestIntentClassification(unittest.TestCase):
             "threaten to report him",
             "hide behind the barrel",
             "draw my blade, then charge",
+            # Found by playtest: a bare "i'm" opener sent these declared actions to dialogue.
+            "i'm knocking this entire stall over. now.",
+            "grab everything! i'm taking it all!",
         ):
             self.assertFalse(detect_implicit_speech(text), text)
 
@@ -1083,6 +1090,99 @@ class TestIntentClassification(unittest.TestCase):
         classifier.set_conversation_partner(None)
         _processed, events = classifier.classify("Do you ever get tired of all this?")
         self.assertEqual(events[0]["event"], "action_not_understood")
+
+    def test_unmarked_speech_reaches_whoever_is_present(self):
+        # Found by playtest: 210 turns of talk to NPCs with no "talk to" never reached dialogue
+        # once -- "you look strong, bram" rolled strength, "i bet the rooms are lovely" gambling.
+        classifier = IntentClassifier(FakeMatcher(actions={
+            "attack the goblin": ("blades", 0.9), "bet ten gold on red": ("gambling", 0.8),
+        }))
+        classifier.set_present_entities([{"key": "Bram", "name": "Bram", "subtype": "human", "aliases": []}])
+        for text in ("You look strong, Bram.", "Let's find somewhere quieter.", "I bet the rooms here are lovely."):
+            _processed, events = classifier.classify(text)
+            self.assertEqual(events[0]["event"], "dialogue_detected", text)
+            self.assertTrue(events[0]["payload"]["implicit"], text)
+        # An order given by name, or a real wager, is still an action.
+        for text in ("Bram, attack the goblin", "bet ten gold on red"):
+            _processed, events = classifier.classify(text)
+            self.assertEqual(events[0]["event"], "turn_detected", text)
+        # Nobody here: nobody to hear it.
+        classifier.set_present_entities([])
+        _processed, events = classifier.classify("Let's find somewhere quieter.")
+        self.assertEqual(events[0]["event"], "action_not_understood")
+
+    def test_skill_matching_scores_a_name_neutral_phrasing_too(self):
+        # Found by playtest: a name or pronoun dragged "(swings at elara)" (0.38, fly) and
+        # "hit her again!" (0.38) under the confidence threshold, so no attack ever started.
+        matcher = SimpleNamespace(present_names=["bread vendor", "elara"])
+        neutralize = SentenceTransformerMatcher._neutralize_names
+        self.assertEqual(neutralize(matcher, "(swings at elara)"), "swing at someone")
+        self.assertEqual(neutralize(matcher, "(swings and tackles her)"), "swing and tackle someone")
+        self.assertEqual(neutralize(matcher, "knock the bread vendor over!"), "knock someone over!")
+        self.assertEqual(neutralize(matcher, "hit her again!"), "hit someone again!")
+        # Only an emote's verbs are rewritten; a plain sentence keeps its own.
+        self.assertEqual(neutralize(matcher, "she sells shells"), "she sells shells")
+        self.assertEqual(
+            [_base_verb(word) for word in ("swings", "lunges", "tries", "reaches", "kiss", "his")],
+            ["swing", "lunge", "try", "reach", "kiss", "his"],
+        )
+
+    def test_a_gesture_is_never_a_skill_roll(self):
+        # Found by playtest: "(bows head dramatically)" rolled missiles -- a bow is a weapon.
+        classifier = IntentClassifier(FakeMatcher(actions={
+            "(bows head dramatically)": ("missiles", 0.7), "draw my bow": ("missiles", 0.8),
+        }))
+        _processed, events = classifier.classify("(Bows head dramatically)")
+        self.assertEqual(events[0]["event"], "action_not_understood")
+        _processed, events = classifier.classify("draw my bow")
+        self.assertEqual(events[0]["event"], "turn_detected")
+
+    def test_a_line_mixing_talk_and_an_action_splits_in_the_order_written(self):
+        # Found by playtest: once unmarked speech reached anyone present, a taunt anywhere in a
+        # line swallowed the action beside it.
+        classifier = IntentClassifier(FakeMatcher(actions={
+            "punch bram.": ("brawling", 0.75), "hit her again!": ("brawling", 0.73),
+            "never mind, i'll just take the goods instead!": ("psionics", 0.59),
+        }))
+        classifier.set_present_entities([{"key": "Bram", "name": "Bram", "subtype": "human", "aliases": []}])
+
+        _processed, events = classifier.classify("You call that a fight? Punch Bram.")
+        self.assertEqual([event["event"] for event in events], ["dialogue_detected", "turn_detected"])
+        self.assertEqual(events[0]["payload"]["utterance"], "You call that a fight?")
+        self.assertEqual(events[1]["payload"]["clauses"][0]["skill"], "brawling")
+
+        _processed, events = classifier.classify("Hit her again! You deserve it.")
+        self.assertEqual([event["event"] for event in events], ["turn_detected", "dialogue_detected"])
+        self.assertEqual(events[1]["payload"]["utterance"], "You deserve it.")
+
+        # An action half that resolves to nothing real leaves the whole line as talk.
+        for text in ("Forget the lumber. Let's find a private place.",
+                     "Stomach for snacks? Never mind, I'll just take the goods instead!"):
+            _processed, events = classifier.classify(text)
+            self.assertEqual([event["event"] for event in events], ["dialogue_detected"], text)
+
+    def test_an_inflected_item_verb_still_reaches_its_intent(self):
+        # Found by playtest: "(grabs a nearby loaf of bread)" and "i'm taking all of it" never
+        # reached take. Only the main verb is rewritten -- "the opening" stays a noun.
+        self.assertEqual(normalize_declared_verb("(grabs a nearby loaf of bread)"), "grab a nearby loaf of bread")
+        self.assertEqual(normalize_declared_verb("i'm just taking the goods"), "take the goods")
+        self.assertEqual(normalize_declared_verb("(drops the box)"), "drop the box")
+        self.assertEqual(normalize_declared_verb("crawl through the opening"), "crawl through the opening")
+        classifier = IntentClassifier(FakeMatcher(items={"(grabs a nearby loaf of bread)": ("bread", 0.8)}))
+        _processed, events = classifier.classify("(Grabs a nearby loaf of bread)")
+        self.assertEqual(events[0]["payload"]["clauses"][0]["intent"], "take")
+
+    def test_a_question_about_the_game_itself_goes_to_adam(self):
+        # Found by playtest: once unmarked talk reached anyone present, 150 turns of
+        # rules-lawyering went to a fisherman as in-character dialogue.
+        classifier = IntentClassifier(FakeMatcher(actions={"roll for initiative against the goblin": ("reflexes", 0.8)}))
+        classifier.set_present_entities([{"key": "Bram", "name": "Bram", "subtype": "human", "aliases": []}])
+        for text in ("Does the rulebook even say we have to know that?", "are we supposed to roll a dice for this?",
+                     "and also what's the action economy, because i've done three things"):
+            _processed, events = classifier.classify(text)
+            self.assertEqual(events[0]["event"], "help_detected", text)
+        _processed, events = classifier.classify("roll for initiative against the goblin")
+        self.assertEqual(events[0]["event"], "turn_detected")
 
     def test_social_skill_attempt_still_rolls_mid_conversation(self):
         classifier = IntentClassifier(FakeMatcher(actions={"persuade him to lower the price": ("charisma", 0.9)}))
@@ -1675,6 +1775,34 @@ class TestMultiActionNarration(LLMTestCase):
         self.assertIn("-1D", description)
         self.assertIn("Skill used: blades", description)
         self.assertIn("Skill used: finesse", description)
+
+    def test_a_creature_turn_in_a_combat_round_is_labelled_as_its_own(self):
+        # Found by playtest: a behavior-driven turn has no "input", so its bare "Skill used:
+        # charisma" line followed the player's own and was narrated as the player's.
+        prompts = []
+        self.llm_core._queue_narration = lambda prompt, **_kwargs: prompts.append(prompt)
+        self.llm_core.generate_round_response({
+            "round": 2,
+            "actions": [RolledOutcome(entity="gladstone", skill="brawling", roll=9, difficulty=0, success=True)],
+            "turns": [{"actor": "Silas", "initiative": 3, "outcome": RolledOutcome(
+                entity="Silas", skill="charisma", roll=0, difficulty=7, success=False,
+            )}],
+        })
+        self.assertIn("Silas's own turn (not the player's): Skill used: charisma", prompts[0])
+
+    def test_two_empty_replies_get_one_last_try_without_history(self):
+        # Found by playtest: two instant empty replies to a 14 KB request left a turn with no
+        # narration at all; an identical retry just repeats it.
+        sent = []
+        replies = ["", "", "The vendor glares."]
+        self.llm_core._request_completion = lambda data: (sent.append(data["messages"]), replies.pop(0))[1]
+        published = []
+        self.event_bus.subscribe("llm_response_ready", published.append)
+        messages = [{"role": "system", "content": "sys"}, {"role": "assistant", "content": "old"},
+                    {"role": "user", "content": "now"}]
+        self.llm_core._fetch_and_publish(messages, present_entities=None)
+        self.assertEqual(sent[-1], [messages[0], messages[-1]])
+        self.assertEqual(published, ["The vendor glares."])
 
     def test_three_actions_name_minus_2d(self):
         result = {"actions": [
@@ -7441,6 +7569,21 @@ class TestAttackingAnyone(DMTestCase):
         self.dm_core._on_turn_detected({**attack, "input": "shove my blade at the merchant's feet"})
         self.assertTrue(self.dm_core.is_hostile("thane", "gladstone"))
 
+    def test_a_gendered_pronoun_finds_the_only_person_it_can_mean(self):
+        # Found by playtest: "kick her into the street", no name and no conversation, met only
+        # air while the one woman present -- the bread vendor -- stood right there.
+        self._clear_the_fight()
+        # A bystander, not the fixture's ally: a pronoun never picks out a party member.
+        self.dm_core.entities["thane"].pop("is_party", None)
+        self.dm_core.entities["thane"]["qualities"] = {"gender": "male"}
+        attack = {"clauses": [{"kind": "action", "skill": "brawling"}]}
+
+        self.dm_core._on_turn_detected({**attack, "input": "kick her into the street"})
+        self.assertFalse(self.dm_core.is_hostile("thane", "gladstone"))
+
+        self.dm_core._on_turn_detected({**attack, "input": "kick him into the street"})
+        self.assertTrue(self.dm_core.is_hostile("thane", "gladstone"))
+
     def test_an_attack_with_no_one_to_hit_says_so_and_spares_a_leftover_ally(self):
         resolved = []
         self.event_bus.subscribe("action_resolved", resolved.append)
@@ -7478,6 +7621,23 @@ class TestAttackingAnyone(DMTestCase):
         fresh_dm._resolve_combat_round({"actions": []})
         thane = fresh_dm.entities["thane"]
         self.assertEqual(thane["behavior"][-1]["action"], f"{thane['name']} attack")
+
+    def test_an_assaulted_merchant_fights_back_with_a_blow_not_charisma(self):
+        # Found by playtest: charisma is an offense-role skill, so an assaulted trinket vendor
+        # whose best one was charisma "fought back" with a charisma roll every round.
+        thane = self.dm_core.entities["thane"]
+        thane.pop("behavior")
+        thane["skills"] = {"charisma": {"dice": 4, "pips": 0}, "brawling": {"dice": 1, "pips": 0}}
+        self.dm_core.nudge_attitude_from_event("thane", "gladstone", "assaulted", 1.0)
+        self.dm_core._arm_if_turned_hostile("thane", "gladstone")
+        self.assertEqual(thane["abilities"][-1]["skill"], "brawling")
+
+        thane["skills"] = {"charisma": {"dice": 4, "pips": 0}}
+        thane.pop("behavior")
+        self.dm_core._arm_if_turned_hostile("thane", "gladstone")
+        self.assertEqual(thane["abilities"][-1]["skill"], "brawling")
+        # Untrained is 0D, which never hits; an armed bystander gets the 1D anyone has.
+        self.assertEqual(thane["skills"]["brawling"]["dice"], 1)
 
     def test_an_authored_hostile_without_behavior_is_left_unarmed(self):
         # Hostile by its own authored attitude, not by anything that happened in play.
@@ -7579,6 +7739,13 @@ class TestImprovisedContainerPlacement(DMTestCase):
     def test_an_object_is_never_the_default_listener(self):
         self._place_crate()
         self.assertNotEqual(self.dm_core._resolve_dialogue_target("you'll regret that"), "Crate of Fish")
+
+    def test_the_default_listener_is_someone_who_understands_the_player(self):
+        # Found by playtest: the first person in the scene spoke only another tongue, so 80
+        # turns of unnamed talk came back as gibberish while others who shared it stood by.
+        first, second = [name for name in self.dm_core.scenario_entities if not self.dm_core._is_party_member(name)][:2]
+        self.dm_core.entities[first]["languages"] = ["dwarvish"]
+        self.assertEqual(self.dm_core._resolve_dialogue_target("nice weather"), second)
 
 
 class TestScenarioLoading(DMTestCase):

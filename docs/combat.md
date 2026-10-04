@@ -63,18 +63,33 @@ round. Being plain attitude, the narrator's own `describe_attitude` sees it, a g
 walk it back, and it saves like any other drift. Only someone devoted (100) *and* sweet-talked
 to the talk cap stays above -100 — they take the punch without swinging back. Each combat round,
 `_arm_if_turned_hostile` (`DM_Social.py`) hands `basic_combat_kit` (`AdHoc_Generation.py`, the
-same kit a hostile generated creature gets, on its best `combat_role = "offense"` skill) to any
+same kit a hostile generated creature gets) to any
 entity hostile *only because of its action drift* that has no `[[entity.behavior]]` (every
-narrated bystander, most townsfolk), so it fights back — an authored hostile without behavior is
+narrated bystander, most townsfolk), so it fights back. The kit rolls on its best *physical*
+offense skill: one the setting's defense-role skill (dodge) opposes, else brawling, floored at 1D
+(untrained is 0D, which never hits; an assaulted old man rolled 0 for eight rounds). Charisma and
+intimidation are offense-role too, and an assaulted merchant used to "fight back" with charisma
+every round. An authored hostile without behavior is
 left as authored. An attack NLPCore matched no name for, while nothing hostile is the current
 target, first tries `_literal_attack_target` — someone present its words describe, by key, name or
 alias ("pin the merchant's feet" finds a narrated spice merchant through his occupation alias),
 skipping a one-word alias that is only a modifier inside a longer one, so "kick the spice cart"
-assaults nobody — then the conversation partner ("my turn to hit you!"), assaulted the same way;
+assaults nobody — then the conversation partner ("my turn to hit you!"), assaulted the same way; between the two,
+`_pronoun_attack_target` resolves *her/she* or *him/his/he* to the one non-party creature present
+whose `qualities.gender` fits (only when exactly one fits);
 otherwise it has no target at all — never a non-hostile creature left over as `current_target`
 (an object there, like a chest, stays fair game) — and its `RolledOutcome.no_opponent` tells the
 narrator the blow meets only air or objects, rather than letting it invent an opponent (a
-playtest's brawler fought fifty turns of a fight the engine never knew about). Two NLP pieces feed this: a narrated/ad hoc creature joins
+playtest's brawler fought fifty turns of a fight the engine never knew about). Before any of this,
+the attack has to be recognized at all: `map_to_action` also scores a name-neutral phrasing of the
+input (`_neutralize_names`, `NLP_Core.py`). That phrasing swaps present names, aliases and
+him/her/them for "someone", and turns a parenthesised third-person emote back into the
+imperative ("(swings and tackles her)" -> "swing and tackle someone"). Without it, a named target
+dragged "(swings at elara)" to 0.38. The neutral phrasing's scores are docked
+`neutral_phrasing_penalty` (0.05) so a rewrite has to win by more than the player's own words: a
+bare "(lunging)" otherwise scored fly at 0.50. Combat-round narration labels each other actor's
+turn "X's own turn (not the player's)", because a behavior-driven attack has no typed input to
+name its actor and the narrator was handing those rolls to the player. Two more NLP pieces feed target resolution: a narrated/ad hoc creature joins
 `map_to_target`'s bank at runtime (see `catalog_entry`, `docs/adam-improvisation.md`), and a
 clause that only says *him/her/them* ("…and start kicking him") takes the whole input's target
 (`REFERRING_PRONOUN_PATTERN`; never *it*, which is as likely a door). Separately, an action-bank

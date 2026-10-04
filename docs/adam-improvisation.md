@@ -15,7 +15,11 @@ whole-input, pre-clause-split reserved word — right after save/load detection,
 inter-room direction detection and the item-interaction pass — so it reaches the help channel
 rather than being swallowed by `DIALOGUE_KEYWORDS` or an item verb first. Reserves the literal
 name "adam" the same way `PLAYER_PLACEHOLDER` reserves "player" — a known, accepted tradeoff.
-Publishes `help_detected {input}`.
+Publishes `help_detected {input}`. A question about the game itself reaches ADaM without
+"adam" (`detect_out_of_character`). It needs a game-mechanics term (`OUT_OF_CHARACTER_PATTERN`:
+rulebook, the rules, roll a dice, saving throw, action economy, NPC, GM/DM…) in a line that
+reads as talk (`detect_implicit_speech`), so "roll for initiative against the goblin" still
+rolls. A playtest had 150 turns of rules-lawyering answered by a fisherman in character.
 
 `DM_Help.py`'s `HelpMixin._on_help_detected` gathers a fresh snapshot of live state every time
 it fires (no memory of past exchanges — see below) and publishes `help_resolved`: the player's

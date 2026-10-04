@@ -63,7 +63,7 @@ UNEQUIP_KEYWORDS = ("unequip ", "take off")
 # DMCore._resolve_drop_intent) -- unlike "give"/"trade" (both aimed at the current target),
 # this one has no recipient at all.
 DROP_KEYWORDS = ("drop ", "discard ", "put down")
-TAKE_KEYWORDS = ("take ", "grab ", "pick up", "loot ")
+TAKE_KEYWORDS = ("take ", "grab ", "pick up", "loot ", "snatch ")
 # "give"/"trade" move an item the opposite directions ("give" is player -> target, "trade" is
 # target -> player but paid) -- see DMCore._on_item_interaction_detected. TRADE_KEYWORDS
 # deliberately avoids every word in skills.toml's "appraise" keywords list (evaluation,
@@ -193,6 +193,7 @@ NON_ACTION_OPENERS = frozenset({
     "am", "is", "are", "was", "were", "do", "does", "did", "can", "could", "should", "would",
     "will", "shall", "may", "might", "must", "have", "has", "had",
     "why", "how", "what", "where", "who", "whom", "whose", "when", "which", "whether",
+    "what's", "whats", "where's", "how's", "who's", "why's", "when's",
     "if", "so", "but", "or", "since", "because", "though", "although", "unless", "wait",
     "maybe", "perhaps", "like", "well", "honestly",
     "let's", "lets", "we", "we're", "we'll", "we've", "you", "you're", "you've", "your",
@@ -203,6 +204,33 @@ NON_ACTION_OPENERS = frozenset({
 # starting "i study the pattern" both open on their real verb. process_input only strips a
 # leading "i " from the very start of the whole input.
 FIRST_PERSON_OPENERS = frozenset({"i", "i'll", "ill"})
+# Skipped the same way, since they say nothing about whether what follows is talk or an action:
+# "and also what's the action economy?" opens on "what's", "oh, kick him" on "kick".
+LEADING_FILLER_WORDS = frozenset({"and", "also", "oh", "ok", "okay", "ugh", "hey", "um", "uh", "ah"})
+# "i bet the rooms here are lovely" is a remark, "bet ten gold on red" a wager. Found by playtest:
+# the idiom rolled gambling seven times in sixty turns. Only the word after "bet" tells them apart.
+# A clause opening on one of these is body language, not an attempt at anything -- never sent to
+# skill matching (see _classify_skill_pass). Found by playtest: "(bows head dramatically)" rolled
+# missiles (a bow is a weapon), "(grins savagely)" nearly rolled miracles.
+GESTURE_VERBS = frozenset({
+    "bow", "bows", "bowing", "nod", "nods", "nodding", "grin", "grins", "grinning", "smile",
+    "smiles", "smiling", "shrug", "shrugs", "shrugging", "laugh", "laughs", "laughing", "sigh",
+    "sighs", "sighing", "wink", "winks", "winking", "chuckle", "chuckles", "chuckling", "smirk",
+    "smirks", "smirking", "frown", "frowns", "frowning", "blush", "blushes", "blushing",
+})
+# A skill matched in the action half of a mixed speech/action line must clear this to split it off
+# (see IntentClassifier._split_speech_from_action) -- the same bar map_to_action's own direct
+# match uses, so a keyword-fallback hit never takes a turn away from talk.
+MIXED_ACTION_MIN_SCORE = 0.5
+# "i'm <verb>ing" words that describe a state rather than declare an action (opens_like_an_action).
+STATIVE_PROGRESSIVES = frozenset({
+    "feeling", "thinking", "starving", "wondering", "hoping", "kidding", "joking", "saying",
+    "asking", "telling", "being", "listening", "waiting", "bleeding", "dying", "freezing",
+})
+BET_REMARK_FOLLOWERS = frozenset({
+    "you", "your", "that", "that's", "the", "there", "there's", "it", "it's", "this", "we",
+    "they", "he", "she", "i", "everyone", "nobody",
+})
 
 
 def opens_like_an_action(text):
@@ -213,8 +241,16 @@ def opens_like_an_action(text):
         word; True otherwise (including empty text, which no fallback can match anyway).
     """
     words = re.findall(r"[a-z']+", text)
-    while words and words[0] in FIRST_PERSON_OPENERS:
+    while words and (words[0] in FIRST_PERSON_OPENERS or words[0] in LEADING_FILLER_WORDS):
         words = words[1:]
+    if len(words) > 1 and words[0] == "bet" and words[1] in BET_REMARK_FOLLOWERS:
+        return False
+    if len(words) > 1 and words[0] in ("i'm", "im"):
+        # "i'm knocking this stall over" declares an action; "i'm starving"/"i'm sure" remark.
+        # Found by playtest once unmarked speech reached anyone present: the bare "i'm" opener
+        # sent "grab everything! i'm taking it all!" to dialogue.
+        verb = words[2] if words[1] in ("just", "really", "now", "still") and len(words) > 2 else words[1]
+        return verb.endswith("ing") and verb not in STATIVE_PROGRESSIVES
     return not words or words[0] not in NON_ACTION_OPENERS
 
 # A double-quoted span of at least a few characters -- see detect_dialogue_intent. Double quotes
@@ -719,6 +755,61 @@ def detect_item_intent(processed_text):
     return None
 
 
+def _verb_forms(base):
+    """!@brief A regular verb's own inflections -- "grab" -> grabs/grabbing/grabbed, "take" ->
+        takes/taking, "pry" -> pries/prying -- each mapped back to base."""
+    forms = {base + "s", base + "ed", base + "ing"}
+    if base.endswith("e"):
+        forms |= {base + "d", base[:-1] + "ing"}
+    if base.endswith("y"):
+        forms |= {base[:-1] + "ies", base[:-1] + "ied"}
+    if re.search(r"(?:ch|sh|x|z|ss)$", base):
+        forms |= {base + "es"}
+    if re.search(r"[^aeiou][aeiou][bdgmnpt]$", base):
+        forms |= {base + base[-1] + "ing", base + base[-1] + "ed"}
+    return {form: base for form in forms}
+
+
+# The main verb of every item-interaction keyword (the first word of each phrase), with every
+# inflection of it mapped back -- see normalize_declared_verb.
+ITEM_VERB_BASES = {}
+for _keywords in (
+    EXAMINE_KEYWORDS, EQUIP_KEYWORDS, UNEQUIP_KEYWORDS, DROP_KEYWORDS, TAKE_KEYWORDS, GIVE_KEYWORDS,
+    TRADE_KEYWORDS, USE_KEYWORDS, CRAFT_KEYWORDS, OPEN_KEYWORDS, CLOSE_KEYWORDS, MOUNT_KEYWORDS,
+    DISMOUNT_KEYWORDS, HITCH_KEYWORDS, UNHITCH_KEYWORDS,
+):
+    for _phrase in _keywords:
+        ITEM_VERB_BASES.update(_verb_forms(_phrase.split()[0]))
+# Words between a first-person opener and the verb it leads to: "i'm just taking it", "then i grab".
+DECLARED_VERB_FILLER = frozenset({"just", "then", "and", "so", "now", "also", "quickly", "finally", "simply"})
+
+
+def normalize_declared_verb(clause):
+    """!
+    @brief clause with its main verb put in the base form item keywords are written in, when
+        that verb is an inflected item verb -- "(grabs a loaf of bread)" -> "grab a loaf of
+        bread", "i'm taking all of it" -> "take all of it". Found by playtest: emotes and
+        first-person progressives never reached take, so "(snags the bread)"-style turns came
+        back not understood. Only the clause's MAIN verb (after a wrapping parenthesis, a
+        first-person opener and filler words): "crawl through the opening" must not turn into
+        an "open" intent. Anything else comes back unchanged.
+    """
+    text = clause.strip()
+    if text.startswith("(") and text.endswith(")"):
+        text = text[1:-1].strip()
+    words = text.split()
+    index = 0
+    while index < len(words) and (words[index] in FIRST_PERSON_OPENERS or words[index] in ("i'm", "im")
+                                  or words[index] in DECLARED_VERB_FILLER):
+        index += 1
+    if index >= len(words):
+        return clause
+    base = ITEM_VERB_BASES.get(words[index].strip(".,!?;"))
+    if not base:
+        return clause
+    return " ".join([base] + words[index + 1:])
+
+
 def _phrase_matches(phrase, processed_text):
     """!
     @brief Whole-word/whole-phrase containment check -- a word-boundary regex, not the raw
@@ -801,9 +892,10 @@ def detect_implicit_speech(processed_text):
     @brief Whether processed_text reads as something said TO someone rather than something
         done, with no dialogue keyword or quotation marks to say so -- "do you ever get tired
         of all this?", "let's find somewhere quieter", "come help me relax". Only consulted
-        while the player already has a conversation partner (see
-        IntentClassifier.set_conversation_partner): without one there's no listener to hand
-        the line to, and the same text stays with the ordinary skill/intent passes.
+        while someone could hear it -- a conversation partner (see
+        IntentClassifier.set_conversation_partner) or anyone else in the scene
+        (IntentClassifier.anyone_present); in an empty scene the same text stays with the
+        ordinary skill/intent passes.
 
         Deliberately cheap and structural, no model call: a question mark, an opening word that
         doesn't declare an action (NON_ACTION_OPENERS, the same list the skill fallbacks use to
@@ -818,7 +910,12 @@ def detect_implicit_speech(processed_text):
     # Every sentence, not just the first -- "forget the lumber. let's find a private place."
     # opens on a verb but is plainly talk by its second sentence.
     for sentence in SENTENCE_SPLIT_PATTERN.split(text):
-        sentence = VOCATIVE_PATTERN.sub("", sentence.strip())
+        sentence = sentence.strip()
+        # Read before the vocative strip too: VOCATIVE_PATTERN can't tell "gareth, is it hot"
+        # from "you look strong, bram", which it would cut down to a bare "bram".
+        if sentence and not opens_like_an_action(sentence):
+            return True
+        sentence = VOCATIVE_PATTERN.sub("", sentence)
         if sentence and (not opens_like_an_action(sentence) or SPEAKER_OBJECT_PATTERN.search(sentence)):
             return True
     return False
@@ -946,6 +1043,30 @@ def frame_speech(raw_input, processed_text, explicit):
     return {"speech_form": "reported", "utterance": f"You {clause[:1].lower()}{clause[1:]}."}
 
 
+# Talk about the game rather than within it -- see detect_out_of_character. Phrases, not bare
+# "roll"/"rules": "roll under the gate" (acrobatics) and "the rules of the guild" are in-fiction.
+OUT_OF_CHARACTER_PATTERN = re.compile(
+    r"\b(?:rulebook|rule ?book|the rules|house rules?|game master|dungeon master|gm|dm|npcs?|"
+    r"metagam\w*|game mechanics|mechanics|roll (?:a |the )?dice|roll for|dice rolls?|a dice|"
+    r"the dice|d6|d20|saving throws?|bonus actions?|action economy|skill checks?|ability checks?|"
+    r"perception checks?|character sheet|hit points|damage chart|turn order|experience points|"
+    r"level up|xp)\b"
+)
+
+
+def detect_out_of_character(processed_text):
+    """!
+    @brief Whether the player is asking about the game itself -- "does the rulebook say...",
+        "are we supposed to roll a dice for this?", "what's the action economy?" -- the kind of
+        question ADaM (help_detected) answers. Found by playtest: once unmarked talk reached
+        anyone present, 150 turns of rules-lawyering went to a fisherman as in-character
+        dialogue. Needs both a game-mechanics term and a line that reads as talk rather than a
+        declared action (detect_implicit_speech), so "roll for initiative against the goblin"
+        or "i'm going to roll perception" still reach the skill pass.
+    """
+    return bool(OUT_OF_CHARACTER_PATTERN.search(processed_text or "")) and detect_implicit_speech(processed_text)
+
+
 def detect_help_intent(processed_text):
     """!@brief True if processed_text contains the whole word "adam" (any case)."""
     return bool(ADAM_NAME_PATTERN.search(processed_text))
@@ -1058,6 +1179,9 @@ class IntentClassifier:
         # presence matters here: it's what lets detect_implicit_speech route an unmarked line
         # to dialogue. DMCore, not this class, still decides who that line actually reaches.
         self.conversation_partner = None
+        # Whether anyone besides the player is in the scene, as DMCore last published it -- with
+        # nobody here, unmarked speech has no listener (see the dialogue gate in classify).
+        self.anyone_present = False
 
     def on_rules_loaded(self, data):
         """!@brief Forwards a "rules_loaded" payload to the matcher to build its embeddings."""
@@ -1074,6 +1198,7 @@ class IntentClassifier:
     def set_present_entities(self, entities):
         """!@brief Forwards the current scene's own cast to the matcher's own bank."""
         self.matcher.set_present_entities(entities)
+        self.anyone_present = any(entity.get("key") for entity in entities or [])
 
     def set_conversation_partner(self, partner):
         """!@brief Records DMCore's current conversation partner ({"key", ...} or None)."""
@@ -1104,7 +1229,9 @@ class IntentClassifier:
             events.append({"event": f"{save_load_intent}_requested", "payload": {"slot": slot_name}})
             return processed, events
 
-        if detect_help_intent(processed):
+        if detect_help_intent(processed) or detect_out_of_character(processed):
+            # A question about the game itself reaches ADaM without "adam" said aloud -- see
+            # detect_out_of_character.
             events.append({"event": "help_detected", "payload": {
                 "input": processed,
                 "removal_candidate": detect_removal_intent(processed),
@@ -1159,10 +1286,18 @@ class IntentClassifier:
         # than down to the skill pass (see detect_implicit_speech). Not when a free-standing
         # intent already claimed a clause: "what do you know about the troll" is a lore check
         # that happens to be phrased as a question, and pairing it with dialogue would silence
-        # its own narration (see "quiet" below).
+        # its own narration (see "quiet" below). With no conversation running yet, anyone in
+        # the scene is a listener: DMCore's _resolve_dialogue_target already sends an unnamed
+        # remark to the scene's default person. Found by playtest: 210 turns of talk to NPCs
+        # with no "talk to" reached dialogue zero times, rolling gambling ("i bet..."), sunder
+        # and husbandry instead. Only an empty scene leaves the line to the skill pass.
         explicit_dialogue = detect_dialogue_intent(processed)
+        has_listener = (
+            self.conversation_partner is not None
+            or self.anyone_present
+        )
         implicit_dialogue = (
-            not explicit_dialogue and not found_exempt and self.conversation_partner is not None
+            not explicit_dialogue and not found_exempt and has_listener
             and detect_implicit_speech(processed)
         )
         if not turn_clauses and (explicit_dialogue or implicit_dialogue):
@@ -1179,48 +1314,110 @@ class IntentClassifier:
                 for event in events:
                     if event["event"] == "item_interaction_detected":
                         event["payload"]["quiet"] = True
-            # Classified here, not left to DMCore, since sentiment-of-an-utterance is the same
-            # kind of fast local model judgment call skill/item/target matching already is --
-            # the matcher seam is what lets this stay local classification (see
-            # SentenceTransformerMatcher.classify_sentiment/classify_threat/classify_familiarity)
-            # rather than an LLM round trip. Three independent axis reads, not one -- each
-            # score (the classifier's own confidence) rides along too -- DM_Social.py's
-            # nudge_attitude scales each axis's actual nudge by its own score, rather than every
-            # dialogue line of the same sentiment moving that axis by an identical flat amount.
-            sentiment, sentiment_score = self.matcher.classify_sentiment(processed)
-            threat_sentiment, threat_score = self.matcher.classify_threat(processed)
-            familiarity_sentiment, familiarity_score = self.matcher.classify_familiarity(processed)
-            # Evidence for DMCore's promotion gate, not a decision: "the player addressed
-            # someone by this phrase" (mechanical -- see extract_address_phrase) and "somebody
-            # already in the scene plausibly answers to it" (semantic). DMCore still resolves
-            # the addressee literally first and is free to ignore both (see
-            # _on_dialogue_detected) -- the same division of labour the travel path already
-            # uses, where NLP offers a destination match and DM_Movement.py's literal exit
-            # scan still wins. The matcher is only consulted when there's a phrase to score,
-            # so an ordinary "ask about the weather" costs nothing extra.
-            address_phrase = extract_address_phrase(processed)
-            framing = frame_speech(raw_input, processed, explicit_dialogue)
-            address_match, address_score = (
-                self.matcher.map_to_present_entity(address_phrase) if address_phrase else (None, 0.0)
-            )
-            events.append({
-                "event": "dialogue_detected",
-                "payload": {
-                    "input": processed, "score": None, "implicit": implicit_dialogue,
-                    "speech_form": framing["speech_form"], "utterance": framing["utterance"],
-                    "sentiment": sentiment, "sentiment_score": sentiment_score,
-                    "threat_sentiment": threat_sentiment, "threat_score": threat_score,
-                    "familiarity_sentiment": familiarity_sentiment, "familiarity_score": familiarity_score,
-                    "address_phrase": address_phrase,
-                    "address_match": address_match, "address_score": address_score,
-                },
-            })
+            if implicit_dialogue:
+                mixed = self._split_speech_from_action(raw_input, processed)
+                if mixed:
+                    events.extend(mixed)
+                    return processed, events
+            events.append(self._dialogue_event(
+                processed, frame_speech(raw_input, processed, explicit_dialogue), implicit_dialogue,
+            ))
             return processed, events
 
         best_score = self._classify_skill_pass(remaining_clauses, turn_clauses, processed)
 
         self._finalize(processed, turn_clauses, found_exempt, unmatched_item_verbs, best_score, events)
         return processed, events
+
+    def _dialogue_event(self, processed, framing, implicit):
+        """!
+        @brief Builds one dialogue_detected event for processed (the whole input, or just its
+            spoken sentences -- see _split_speech_from_action).
+        @param framing frame_speech's own {"speech_form", "utterance"}.
+        @param implicit Whether no dialogue keyword or quotation marks triggered it.
+        """
+        # Classified here, not left to DMCore, since sentiment-of-an-utterance is the same
+        # kind of fast local model judgment call skill/item/target matching already is --
+        # the matcher seam is what lets this stay local classification (see
+        # SentenceTransformerMatcher.classify_sentiment/classify_threat/classify_familiarity)
+        # rather than an LLM round trip. Three independent axis reads, not one -- each
+        # score (the classifier's own confidence) rides along too -- DM_Social.py's
+        # nudge_attitude scales each axis's actual nudge by its own score, rather than every
+        # dialogue line of the same sentiment moving that axis by an identical flat amount.
+        sentiment, sentiment_score = self.matcher.classify_sentiment(processed)
+        threat_sentiment, threat_score = self.matcher.classify_threat(processed)
+        familiarity_sentiment, familiarity_score = self.matcher.classify_familiarity(processed)
+        # Evidence for DMCore's promotion gate, not a decision: "the player addressed
+        # someone by this phrase" (mechanical -- see extract_address_phrase) and "somebody
+        # already in the scene plausibly answers to it" (semantic). DMCore still resolves
+        # the addressee literally first and is free to ignore both (see
+        # _on_dialogue_detected) -- the same division of labour the travel path already
+        # uses, where NLP offers a destination match and DM_Movement.py's literal exit
+        # scan still wins. The matcher is only consulted when there's a phrase to score,
+        # so an ordinary "ask about the weather" costs nothing extra.
+        address_phrase = extract_address_phrase(processed)
+        address_match, address_score = (
+            self.matcher.map_to_present_entity(address_phrase) if address_phrase else (None, 0.0)
+        )
+        return {
+            "event": "dialogue_detected",
+            "payload": {
+                "input": processed, "score": None, "implicit": implicit,
+                "speech_form": framing["speech_form"], "utterance": framing["utterance"],
+                "sentiment": sentiment, "sentiment_score": sentiment_score,
+                "threat_sentiment": threat_sentiment, "threat_score": threat_score,
+                "familiarity_sentiment": familiarity_sentiment, "familiarity_score": familiarity_score,
+                "address_phrase": address_phrase,
+                "address_match": address_match, "address_score": address_score,
+            },
+        }
+
+    def _split_speech_from_action(self, raw_input, processed):
+        """!
+        @brief Splits an implicit-speech input that also declares an action -- "stomach for
+            snacks? never mind, i'll just take the goods instead!" -- into a turn for the action
+            and dialogue for the words, in the order the player wrote them. Found by playtest:
+            once unmarked speech reached anyone present, a taunt anywhere in a line swallowed
+            the action beside it.
+
+            A sentence is speech by detect_implicit_speech's own test, applied to it alone.
+            Only a sentence that resolves to something real counts as the action: an item
+            interaction with a matched item, or a skill matched semantically (a keyword-fallback
+            hit, or an item verb naming no real item, is too weak to take a turn away from talk). Anything less leaves the whole input
+            as dialogue, exactly as before -- "forget the lumber. let's find a private place."
+            stays talk.
+        @return [event, ...] for both halves, or None to keep the input whole.
+        """
+        original = _original_casing(raw_input, processed)
+        speech, action = [], []
+        for match in re.finditer(r"[^.!?;]+[.!?;]*", processed):
+            sentence = match.group().strip()
+            if not sentence:
+                continue
+            (speech if detect_implicit_speech(sentence) else action).append(match)
+        if not speech or not action:
+            return None
+
+        action_text = " ".join(match.group().strip() for match in action)
+        exempt_events = []
+        turn_clauses, remaining, _found_exempt, unmatched = self._classify_item_pass(action_text, exempt_events)
+        if unmatched:
+            # An item verb naming nothing real ("i'll just take the goods") -- the skill pass
+            # would only guess at it ("never mind" -> psionics), too weak to split talk over.
+            return None
+        self._classify_skill_pass(remaining, turn_clauses, action_text)
+        turn_clauses = [
+            clause for clause in turn_clauses
+            if clause["kind"] == "item" or clause.get("score", 0.0) >= MIXED_ACTION_MIN_SCORE
+        ]
+        if not turn_clauses:
+            return None
+
+        speech_text = " ".join(match.group().strip() for match in speech)
+        utterance = " ".join(original[match.start():match.end()].strip() for match in speech)
+        dialogue = self._dialogue_event(speech_text, {"speech_form": "verbatim", "utterance": utterance}, True)
+        turn = {"event": "turn_detected", "payload": {"clauses": turn_clauses, "input": action_text}}
+        return [dialogue, turn] if speech[0].start() < action[0].start() else [turn, dialogue]
 
     def _classify_item_pass(self, processed, events):
         """!
@@ -1249,7 +1446,7 @@ class IntentClassifier:
         unmatched_item_verbs = []
 
         for clause in split_action_clauses(processed):
-            clause_intent = detect_item_intent(clause)
+            clause_intent = detect_item_intent(normalize_declared_verb(clause))
             if clause_intent in EXEMPT_ITEM_INTENTS:
                 found_exempt = True
                 events.append({"event": "item_interaction_detected", "payload": {
@@ -1288,6 +1485,11 @@ class IntentClassifier:
         """
         best_score = 0.0
         for clause in remaining_clauses:
+            words = re.findall(r"[a-z']+", clause)
+            while words and words[0] in FIRST_PERSON_OPENERS:
+                words = words[1:]
+            if words and words[0] in GESTURE_VERBS:
+                continue
             # A trained combat-trick/metamagic modifier (ex: "power attack", "empowered") is
             # named literally, not semantically -- checked and stripped before map_to_action
             # runs on the remainder, so its own phrase never dilutes the base ability's match

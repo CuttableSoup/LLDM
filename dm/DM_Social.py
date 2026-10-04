@@ -170,8 +170,25 @@ class SocialMixin(DMCoreProtocol):
         if self.get_attitude(entity_name, toward_name)[0] - drift <= -100:
             return
         skills = entity.get("skills", {})
-        offense = [name for name in skills if self.skills.get(name, {}).get("combat_role") == "offense"]
-        attack_skill = max(offense, key=lambda name: skills[name].get("dice", 0)) if offense else "brawling"
+        # A blow, not any offense-role skill: charisma/intimidation/arcane are offense-role too,
+        # and a merchant's best of those is charisma -- found by playtest, an assaulted trinket
+        # vendor "fought back" with a charisma roll every round. A physical attack is one the
+        # setting's own defense-role skill (dodge) opposes.
+        defense = set(self._skills_with_role("defense"))
+        physical = [
+            name for name in self._skills_with_role("offense")
+            if defense & set(self.skills.get(name, {}).get("opposes", []))
+        ]
+        trained = [name for name in physical if name in skills]
+        if trained:
+            attack_skill = max(trained, key=lambda name: skills[name].get("dice", 0))
+        else:
+            attack_skill = "brawling" if "brawling" in physical or not physical else physical[0]
+        if skills.get(attack_skill, {}).get("dice", 0) < 1:
+            # Untrained is 0D, which never hits -- found by playtest, an assaulted old man swung
+            # brawling eight rounds running and rolled 0 every time. Anyone can throw a punch.
+            entity["skills"] = {**skills, attack_skill: {"dice": 1, "pips": 0}}
+            skills = entity["skills"]
         abilities, behavior = basic_combat_kit(
             entity.get("name", entity_name), attack_skill, skills.get(attack_skill, {}).get("dice", 0),
         )

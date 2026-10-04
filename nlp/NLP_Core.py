@@ -22,6 +22,7 @@ from nlp.Intent_Classification import (
     CURRENCY_SYNONYMS,
     INTENT_PROTOTYPES,
     OTHER_INTENT,
+    REFERRING_PRONOUN_PATTERN,
     IntentClassifier,
     IntentMatcher,
     opens_like_an_action,
@@ -38,6 +39,20 @@ from nlp.Intent_Classification import (
 # language-understanding provides. Named here, not inline in __init__, so it's easy to find/swap
 # without hunting through the constructor.
 NLI_MODEL_NAME = "facebook/bart-large-mnli"
+
+
+def _base_verb(word):
+    """!@brief A third-person-singular verb's base form ("swings" -> "swing", "lunges" ->
+        "lunge", "tries" -> "try"); anything else unchanged. Crude on purpose: only applied
+        to the verbs of a parenthesised emote (see _neutralize_names), and only ever adds a
+        candidate phrasing, never replaces the player's own."""
+    if len(word) <= 3 or not word.endswith("s") or word.endswith("ss"):
+        return word
+    if word.endswith("ies"):
+        return word[:-3] + "y"
+    if re.search(r"(?:ch|sh|x|z)es$", word):
+        return word[:-2]
+    return word[:-1]
 
 # The library's own bare defaults (["negative", "neutral", "positive"] + "This example is {}.")
 # misread plain informational dialogue ("do you know where the blacksmith is") as
@@ -150,6 +165,8 @@ class SentenceTransformerMatcher(IntentMatcher):
         # to clear this much lower floor, so a coincidental keyword collision on an otherwise
         # unrelated sentence doesn't get accepted on keyword evidence alone.
         self.keyword_fallback_floor = 0.2
+        # Docked from every score of the name-neutral phrasing (_neutralize_names) -- see map_to_action.
+        self.neutral_phrasing_penalty = 0.05
         # A separate pipeline, not self.model -- NLI_MODEL_NAME is an entailment model scored via
         # zero-shot-classification against SENTIMENT_CANDIDATE_LABELS, not this class's own
         # semantic-similarity embedding model, so there's no shared weights or shared encode()
@@ -182,6 +199,9 @@ class SentenceTransformerMatcher(IntentMatcher):
         self.present_entity_confidence_threshold = 0.45
         self.present_entity_embeddings = None
         self.present_entity_indices = []
+        # The same bank's phrases, lowercased and longest first, for _generate_match_candidates'
+        # own name-neutral phrasing.
+        self.present_names = []
 
         # Static and setting-independent (INTENT_PROTOTYPES is a module constant, not rules
         # data), so this is built once here rather than rebuilt on every on_rules_loaded call --
@@ -442,6 +462,19 @@ class SentenceTransformerMatcher(IntentMatcher):
         """
         candidates = [processed_text]
 
+        # The same text with whoever it names swapped for "someone". A name or pronoun drags
+        # the whole-sentence embedding away from the skill bank's own subjectless phrases --
+        # found by playtest: "(swings at elara)" scored 0.38 (fly), "hit her again!" 0.38,
+        # "knock the bread vendor over!" 0.39 (trip), and 150 turns of a brawler persona never
+        # started a fight. "someone" measured best of the neutral stand-ins tried: "the
+        # creature" pulled every attack to blades (whose own keyword is "attack the
+        # creature"), "the enemy"/"the target" pulled talk and looking toward combat.
+        neutral = self._neutralize_names(processed_text)
+        if neutral != processed_text and re.sub(r"[^a-z ]", "", neutral).strip() != "someone":
+            # A clause that was only a name ("bram, attack the goblin" -> "bram") would score
+            # bare "someone" against the bank -- appraise, 0.51.
+            candidates.append(neutral)
+
         for marker in TOPIC_CLAUSE_MARKERS:
             index = processed_text.find(marker)
             if index > 0:
@@ -462,6 +495,22 @@ class SentenceTransformerMatcher(IntentMatcher):
             seen.add(candidate)
             unique_candidates.append(candidate)
         return unique_candidates
+
+    def _neutralize_names(self, processed_text):
+        """!
+        @brief processed_text with every present entity's name/alias (see set_present_entities)
+            and every referring pronoun (him/her/them) replaced by "someone", and a
+            third-person emote put back in the imperative the bank is phrased in -- "(swings
+            and tackles her)" -> "swing and tackle someone" -- see _generate_match_candidates.
+        """
+        text = processed_text.strip()
+        if text.startswith("(") and text.endswith(")"):
+            text = text[1:-1].strip()
+            text = re.sub(r"\b(?:and|then) ([a-z]+)", lambda m: m.group(0)[:-len(m.group(1))] + _base_verb(m.group(1)), text)
+            text = re.sub(r"^[a-z]+", lambda m: _base_verb(m.group(0)), text)
+        for name in self.present_names:
+            text = re.sub(rf"\b(?:the )?{re.escape(name)}\b", "someone", text)
+        return REFERRING_PRONOUN_PATTERN.sub("someone", text)
 
     def _match_by_keyword(self, processed_text):
         """!
@@ -558,6 +607,13 @@ class SentenceTransformerMatcher(IntentMatcher):
         # anywhere in the matrix wins, so a topic-stripped or clause-split phrasing can win over
         # the full sentence without needing to know in advance which one will score highest.
         cosine_scores = util.cos_sim(candidate_embeddings, self.all_embeddings).cpu().numpy()
+        neutral = self._neutralize_names(processed_text)
+        if neutral in candidates[1:]:
+            # The name-neutral phrasing is a rewrite, not the player's words, so it has to win
+            # by more -- found by playtest, a bare "(lunging)" -> "lunging" scored fly at 0.50
+            # and "(reaches for the herbs)" polearms at 0.52, while the attacks it exists for
+            # score 0.61 and up.
+            cosine_scores[candidates.index(neutral)] -= self.neutral_phrasing_penalty
         best_candidate_idx, best_phrase_idx = np.unravel_index(np.argmax(cosine_scores), cosine_scores.shape)
         best_score = cosine_scores[best_candidate_idx, best_phrase_idx].item()
         best_skill = self.skill_indices[best_phrase_idx]
@@ -574,7 +630,9 @@ class SentenceTransformerMatcher(IntentMatcher):
                 self.event_bus.publish("log_info", f"Mapped input to action: {best_skill} via best phrase (Score: {best_score:.4f})")
             return best_skill, best_score
 
-        keyword_skill, keyword_score = self._best_keyword_match(processed_text, cosine_scores)
+        # The neutral phrasing too: "(kicks the nearest crate)" only says "kick" once rewritten.
+        keyword_text = processed_text if neutral == processed_text else f"{processed_text}. {neutral}"
+        keyword_skill, keyword_score = self._best_keyword_match(keyword_text, cosine_scores)
         if keyword_skill and keyword_score >= self.keyword_fallback_floor:
             self.event_bus.publish(
                 "log_info",
@@ -840,6 +898,7 @@ class SentenceTransformerMatcher(IntentMatcher):
         else:
             self.present_entity_embeddings = None
             self.present_entity_indices = []
+        self.present_names = sorted({phrase.lower() for phrase in phrases}, key=len, reverse=True)
 
         self.event_bus.publish(
             "log_info",

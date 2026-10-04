@@ -42,6 +42,9 @@ from resolution.Program_Interpreter import run_program
 TARGET_ORDINAL_KEYWORDS = {"first": 1, "second": 2, "third": 3, "fourth": 4}
 TARGET_OTHER_KEYWORDS = ("other", "another")
 TARGET_WOUNDED_KEYWORDS = ("wounded", "hurt", "injured")
+# qualities.gender values a gendered pronoun can point at -- see _pronoun_attack_target.
+FEMALE_GENDERS = frozenset({"female", "woman", "girl", "f"})
+MALE_GENDERS = frozenset({"male", "man", "boy", "m"})
 TARGET_HEALTHY_KEYWORDS = ("healthy", "unhurt", "uninjured", "unharmed")
 # The same 0.40 hp_per_remain cutoff statuses.toml's own "wounded" status tier -- and debug.toml's
 # wolf retreat behavior -- already use elsewhere in this codebase (see CLAUDE.md's "Combat"),
@@ -459,7 +462,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
                 # (a chest or trap there stays fair game: smashing one is fine).
                 partner = (self.conversation_partner or {}).get("key")
                 target_name = None
-                for candidate in (self._literal_attack_target(input_text), partner):
+                for candidate in (self._literal_attack_target(input_text), self._pronoun_attack_target(input_text), partner):
                     if not candidate:
                         continue
                     before = self.current_target
@@ -1926,6 +1929,31 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             if any(phrase and re.search(WORD_BOUNDARY % re.escape(phrase.lower()), text) for phrase in phrases):
                 return name
         return None
+
+    def _pronoun_attack_target(self, input_text):
+        """!
+        @brief Who a gendered pronoun in an attack can only mean -- "kick her into the street"
+            with one woman present. Found by playtest: with no name in the input and no
+            conversation running, that kick met only air while the bread vendor stood right
+            there. Only an unambiguous match counts; two women present and "her" means nobody.
+        @param input_text The player's raw (lowercased) input.
+        @return An entity key, or None.
+        """
+        words = set(re.findall(r"[a-z]+", input_text or ""))
+        if words & {"her", "she", "hers"}:
+            wanted = FEMALE_GENDERS
+        elif words & {"him", "his", "he"}:
+            wanted = MALE_GENDERS
+        else:
+            return None
+        matches = [
+            name for name in self.scenario_entities
+            if name != self.player_name and not self._is_party_member(name)
+            and self.entities.get(name, {}).get("supertype") == "creature"
+            and self.get_current_hp(name) > 0 and not self.is_hidden(name)
+            and str((self.entities[name].get("qualities") or {}).get("gender", "")).lower() in wanted
+        ]
+        return matches[0] if len(matches) == 1 else None
 
     def _get_target_name(self, include_background=False, include_objects=True):
         """!

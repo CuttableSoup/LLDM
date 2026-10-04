@@ -113,7 +113,10 @@ between rooms, and directing the party's formation all bypass the *skill/dice* s
 — none of them warrant a roll (most still cost a turn action and share in the multi-action
 penalty pool — see "Multiple actions"). `Intent_Classification.py`'s `detect_item_intent`
 recognizes phrase-level keywords for thirteen intents, run per clause once save/load and
-inter-room movement have had their own whole-input shot: `examine`, `equip`
+inter-room movement have had their own whole-input shot. Each clause's main verb is put in base
+form first (`normalize_declared_verb`, from the item keywords' own verbs and their inflections),
+so "(grabs a loaf)" and "i'm just taking the goods" reach `take`. Only the main verb is rewritten,
+so "crawl through the opening" never becomes `open`. The intents are: `examine`, `equip`
 (`equip`/`wear`/`wield`/`put on`), `unequip` (`unequip`/`take off` — deliberately not a broader
 `remove`, which would collide with items.toml's own trap names and finesse's `disarm`/`trap`
 keywords), `drop` (`drop`/`discard`/`put down`), `take`, `give`, `trade`, `open`, `close`, `use`

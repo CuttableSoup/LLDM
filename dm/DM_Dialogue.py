@@ -140,8 +140,28 @@ class DialogueMixin(DMCoreProtocol):
         return (
             self._literal_dialogue_target(input_text)
             or self._current_conversation_partner()
-            or self._get_target_name(include_background=True, include_objects=False)
+            or self._default_listener()
         )
+
+    def _default_listener(self):
+        """!
+        @brief Who an unnamed remark reaches with no conversation running: the first person
+            present who understands the player's current language, else _get_target_name's own
+            first non-object. Found by playtest: the first person in a market scene spoke only
+            another tongue, so 80 turns of unnamed talk all came back as gibberish while
+            neighbors who shared the player's language stood by.
+        @return An entity key, or None in an empty scene.
+        """
+        for name in self.scenario_entities:
+            entity = self.entities.get(name, {})
+            if (
+                self._is_party_member(name) or entity.get("supertype") == "object"
+                or self.get_current_hp(name) <= 0 or self.is_hidden(name)
+            ):
+                continue
+            if self._detect_language_barrier(name)[0] is None:
+                return name
+        return self._get_target_name(include_background=True, include_objects=False)
 
     def _resolve_dialogue(self, input_text, sentiments=None, forced_target=None):
         """!
@@ -199,7 +219,7 @@ class DialogueMixin(DMCoreProtocol):
                 target_name = self._current_conversation_partner()
                 resolution = "conversation partner -- no name in the input, still talking to them"
             else:
-                target_name = self._get_target_name(include_background=True)
+                target_name = self._default_listener()
                 resolution = "fallback default -- no name matched in the input" if target_name else None
 
         if not target_name:

@@ -509,8 +509,13 @@ class LLMCore:
         """
         self.event_bus.publish("log_info", f"Generating LLM response for combat round {action_result.get('round')}.")
 
+        # Each turn opens on its actor. A behavior-driven attack carries no "input", so
+        # _describe_outcome gives it no "X attempts" line -- found by playtest, an assaulted
+        # vendor's bare "Skill used: charisma ..." right after the player's own action was
+        # narrated round after round as the player's ("you follow up with a commanding word").
         turns_text = "".join(
-            f"\n{self._describe_outcome(turn['outcome'], actor=turn.get('actor', 'the creature'))}"
+            f"\n{turn.get('actor', 'the creature')}'s own turn (not the player's): "
+            f"{self._describe_outcome(turn['outcome'], actor=turn.get('actor', 'the creature'))}"
             for turn in action_result.get("turns", [])
         )
         prompt = (
@@ -1071,6 +1076,13 @@ class LLMCore:
                 # out a one-off rather than hand the player a blank turn.
                 self.event_bus.publish("log_warning", "LLM returned an empty response; retrying once.")
                 llm_text = self._request_completion(data)
+            if not llm_text.strip() and len(messages) > 2:
+                # Found by playtest: two instant empty replies on a 14 KB request -- not a
+                # starved context, just a request this model keeps ending at once, which an
+                # identical retry repeats. A last try without the history (system message and
+                # this turn's own prompt only) asks it something different enough to answer.
+                self.event_bus.publish("log_warning", "LLM returned an empty response again; retrying without history.")
+                llm_text = self._request_completion({**data, "messages": [messages[0], messages[-1]]})
             if not llm_text.strip():
                 # Deliberately NOT stored in context_window -- an empty assistant turn is not
                 # something the scene witnessed, and keeping it would spend budget on nothing

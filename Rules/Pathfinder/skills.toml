@@ -34,6 +34,8 @@ description = "Using swords and knives in close combat."
 keywords = [
     "combat", "melee", "armed", "sword", "dagger", "knife", "blade", "stab", "slash", "cut", "attack",
     "attack the creature", "attack the creature with my weapon",
+    # Found by playtest: "(swings at elara)" and "swing the sword at him" never reached an attack.
+    "swing", "swing at someone",
 ]
 opposes = ["dodge", "blades", "brawling", "axes", "polearms"]
 # See athletics' own combat_role comment.
@@ -85,7 +87,12 @@ abilities = [ "sunder" ]
 [[skill]]
 name = "brawling"
 description = "Unarmed melee combat."
-keywords = ["combat", "melee", "unarmed", "punch", "kick", "unarmed strike", "fight"]
+# "hit"/"strike"/"tackle"/"charge"/"slap": found by playtest, where "hit her again!",
+# "(charges her again)" and "(swings and tackles her)" all scored under 0.5 and rolled nothing.
+keywords = [
+    "combat", "melee", "unarmed", "punch", "kick", "unarmed strike", "fight",
+    "hit", "strike", "tackle", "charge", "slap", "hit someone", "charge at someone",
+]
 opposes = ["dodge", "brawling", "blades", "axes", "polearms"]
 # See athletics' own combat_role comment.
 combat_role = "offense"

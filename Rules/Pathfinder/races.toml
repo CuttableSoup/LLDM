@@ -64,7 +64,7 @@
 [[race]]
 name = "human"
 description = "Versatile generalists, equally at home swinging a blade, reading a crowd, or reading the land -- no glaring weakness anywhere, but no singular natural gift either."
-language = "common"
+language = "varisian"
 nonsense_phrase = "Oping tu stei laik cius go mo men"
 
 [race.skill_dice]
