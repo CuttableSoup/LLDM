@@ -12,6 +12,7 @@ from dm.DM_Core import DMCore, scenario_exists
 from dm.DM_Rules import list_available_characters
 from gui.GUI_Core import GUICore
 from nlp.NLP_Core import NLPCore
+from llm.LLM_Backend import BACKEND_NAMES, describe, load_backend, set_backend
 from llm.Ollama_Launcher import ensure_ollama_running, stop_ollama
 
 DEFAULT_SCENARIO = "lost_coast"
@@ -78,7 +79,23 @@ def main():
              "self-contained TOML data pack (skills/entities/rules/scenarios). Only meaningful "
              "alongside 'scenario'. Defaults to 'Pathfinder'.",
     )
+    parser.add_argument(
+        "--llm",
+        choices=BACKEND_NAMES,
+        default=None,
+        help="Where narration comes from: 'local' (Ollama on this machine), or online for a machine "
+             "that can't run a model -- 'google' (Gemma 4 on Google AI Studio; needs GEMINI_API_KEY) "
+             "or 'openrouter' (needs OPENROUTER_API_KEY); either key can instead go in "
+             "llm_config.toml. Defaults to llm_config.toml's own 'backend', else 'local'.",
+    )
     args = parser.parse_args()
+
+    try:
+        backend = load_backend(args.llm)
+    except Exception as e:
+        print(f"Error: llm_config.toml: {e}", file=sys.stderr)
+        sys.exit(1)
+    set_backend(backend)
 
     # Fail fast on a bad scenario name before spending ~15-20s loading NLPCore's
     # sentence-transformers model, rather than silently continuing with no scenario
@@ -130,7 +147,7 @@ def main():
 
     def _bootstrap_ollama():
         nonlocal ollama_process
-        ollama_process = ensure_ollama_running(log=_report_ollama_status)
+        ollama_process = ensure_ollama_running(model=backend.model, log=_report_ollama_status)
 
     def _stop_ollama_if_started():
         # Only ever stops a process this call itself started, never a pre-existing Ollama
@@ -138,8 +155,11 @@ def main():
         # runner child goes with it -- see that function for what leaving it behind costs.
         stop_ollama(ollama_process)
 
-    atexit.register(_stop_ollama_if_started)
-    threading.Thread(target=_bootstrap_ollama, daemon=True).start()
+    # Online (OpenRouter), there's nothing to install or start -- just say where narration is from.
+    _report_ollama_status(describe(backend))
+    if backend.launches_ollama:
+        atexit.register(_stop_ollama_if_started)
+        threading.Thread(target=_bootstrap_ollama, daemon=True).start()
 
     # 2. Initialize cores that subscribe to events
     # NLPCore needs to hear 'rules_loaded' from DMCore

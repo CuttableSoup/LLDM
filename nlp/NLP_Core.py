@@ -592,13 +592,14 @@ class SentenceTransformerMatcher(IntentMatcher):
         """!
         @brief The one matcher call that asks the local LLM instead of embeddings -- see
             IntentMatcher.adjudicate and AdHoc_Generation.py's adjudicate_player_input. A
-            failure is logged and left to the rules (None).
+            failure is logged and left to the rules (None). Otherwise the verdict dict
+            ({"kind", "game_action", "item"}).
         """
-        kind, reason = adjudicate_player_input(text, present_names, partner, recent_narration)
-        if kind is None:
+        verdict, reason = adjudicate_player_input(text, present_names, partner, recent_narration)
+        if verdict is None:
             self.event_bus.publish("log_warning" if reason == "unavailable" else "log_info",
                                    f"Input adjudication gave no answer ({reason}); the rules stand.")
-        return kind
+        return verdict
 
     def map_to_action(self, processed_text):
         """!
@@ -1003,7 +1004,9 @@ class NLPCore:
         self.event_bus.publish("log_info", f"Processing player input: {player_input} -> {processed}")
         if self.classifier.last_adjudication:
             verdict, trigger = self.classifier.last_adjudication
-            self.event_bus.publish("log_info", f"Adjudicated ambiguous input ({trigger}): {verdict}.")
+            action = self.classifier.last_adjudicated_action
+            detail = f" ({action[0]}: {action[1]})" if action else ""
+            self.event_bus.publish("log_info", f"Adjudicated ambiguous input ({trigger}): {verdict}{detail}.")
         for event in events:
             self.event_bus.publish(event["event"], event["payload"])
 

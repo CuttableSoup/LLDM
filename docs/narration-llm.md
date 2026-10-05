@@ -1,6 +1,6 @@
 # LLDM — Narration and LLM Integration
 
-Part of the [LLDM](../CLAUDE.md) docs — narration triggers, Ollama wiring, RAG grounding.
+Part of the [LLDM](../CLAUDE.md) docs — narration triggers, LLM backends (Ollama/OpenRouter), RAG grounding.
 
 ## Narration
 
@@ -74,11 +74,42 @@ Every `_queue_narration`/`_queue_dialogue` call's background fetch also publishe
 
 ## LLM integration
 
-Endpoint is Ollama's OpenAI-compatible API (`http://127.0.0.1:11434/v1/chat/completions`,
+**Backends.** Every request goes to the current backend — `LLM_Backend.py`'s `get_backend()`,
+picked at boot by `load_backend` (`--llm local|google|openrouter` on `LLDM.py`/`tools/playtest.py`,
+else `llm_config.toml`'s `backend`, else `local`; the file is gitignored, and
+`llm_config.example.toml` is its template). All three speak the same OpenAI-style
+chat/completions API, so a `Backend` only differs in URL, model, key and a few request fields
+(`Backend.payload`/`headers`): `LLM_Client.call_chat_completion` with `api_url=None` (every
+generator's `DEFAULT_API_URL`) and `LLMCore._request_completion` both read it per request.
+
+- `local` — Ollama, launched (and if needed installed) by `Ollama_Launcher.py`, below.
+- `google` — Gemma 4 on Google AI Studio's OpenAI-compatible endpoint, for a machine that can't
+  run a model; no Ollama is started at all. Key from `GEMINI_API_KEY`, else `[google].api_key`.
+  Only the large Gemma 4 models are served (`gemma-4-26b-a4b-it`, the default — a mixture of
+  experts with ~4B active per token, ~1s per adjudication and 1.5–1.7s per narration — and
+  `gemma-4-31b-it`; every smaller name 404s). Every request carries `reasoning_effort: "minimal"`:
+  Google rejects `"none"` for Gemma, and with no setting it thinks for 300–700 tokens a call
+  (7–16s adjudications, narration opening with a `<thought>` block). No fallback models.
+- `openrouter` — free models through OpenRouter; no Ollama is started either. The key
+  comes from `OPENROUTER_API_KEY`, else the file's `[openrouter].api_key`. Requests carry
+  OpenRouter's `models` fallback list (at most three, tried in order when one is rate-limited
+  or down — default `OPENROUTER_FREE_MODELS`, checked 2026-10-05) and its own
+  `reasoning: {enabled: false}` on every request, narration included (with reasoning on, a free
+  model's thinking came back as the narration), in place of the `reasoning_effort: "none"` Ollama
+  takes. Free Gemma 4 here runs on one quota shared by every OpenRouter user, usually exhausted.
+  Not `openrouter/free`: it picks a different model per call, and about one in six rejected
+  reasoning off.
+
+Input adjudication waits `adjudication_timeout` (1.5s local, 2.5s online — the network round
+trip). A failed online request tells the player why (`Backend.failure_message`: a free quota
+used up, a rejected key, busy models). `sourcebook_grounding = false` keeps RAG excerpts
+(below) out of prompts, since online they reach a third party.
+
+Locally, the endpoint is Ollama's OpenAI-compatible API (`http://127.0.0.1:11434/v1/chat/completions`,
 `ollama serve`'s default). Ollama can have several models pulled at once, so
-every request payload carries an explicit `"model"` field — `LLM_Client.py`'s own
-`DEFAULT_MODEL` ("gemma4") and `LLM_Core.py`'s own `self.model`, each independently, mirroring
-the same intentional non-sharing `_save_slot_dir`'s own module note documents. `/v1/models`
+every request payload carries an explicit `"model"` field — the backend's own (`LLM_Backend.py`'s
+`OLLAMA_MODEL`, "gemma4"; `LLM_Client.py`'s `DEFAULT_MODEL` only covers an explicit URL that isn't
+the backend's). `/v1/models`
 lists every locally pulled model (Ollama's native `/api/tags` is the same catalog, non-OpenAI-
 shaped); a chat completion against a model name that hasn't been pulled 404s rather than
 falling back to whatever's loaded.
@@ -184,7 +215,14 @@ nothing publishes them until `DMCore` exists, and `DMCore` isn't constructed unt
 this point (see "Booting the game"). One consequence worth naming: the player can open
 Character → Create... and start a scenario while the Ollama bootstrap is still mid-download —
 narration during that window degrades to "Could not connect to the local LLM"
-(`LLM_Core.py`'s own existing best-effort path) until the bootstrap catches up.
+(`LLM_Core.py`'s own existing best-effort path) until the bootstrap catches up. The bootstrap
+only runs for the `local` backend; `LLDM.py` posts `LLM_Backend.describe`'s one-line status
+(which backend and models, or a missing OpenRouter key) either way.
+
+An Ollama this module spawns runs with `SERVER_ENVIRONMENT` (a value the user already set wins):
+`OLLAMA_NUM_PARALLEL=2`, so input adjudication never queues behind a narration still generating
+(measured 5.5–6.3s queued vs 0.3–0.4s), and `OLLAMA_KEEP_ALIVE=-1`, so the model isn't unloaded
+after five idle minutes (a reload takes ~9s, far past the adjudication timeout).
 
 
 ## RAG / sourcebook grounding

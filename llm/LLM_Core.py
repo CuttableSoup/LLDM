@@ -11,6 +11,7 @@ from dm.DM_ActionOutcome import (
     RolledOutcome, SummonEffect, TeleportEffect, TransferOutcome,
 )
 from intents.registry import HANDLERS as FREE_STANDING_INTENT_HANDLERS
+from llm.LLM_Backend import get_backend
 from llm.LLM_Rag import RagIndex
 from paths import PROJECT_ROOT
 
@@ -242,11 +243,8 @@ class LLMCore:
         """
         self.event_bus = event_bus
         self.event_bus.publish("log_info", "LLMCore initialized.")
-        self.api_url = "http://127.0.0.1:11434/v1/chat/completions"
-        # Ollama's OpenAI-compat endpoint 400s without an explicit "model" field (it can have
-        # many models pulled at once, unlike LM Studio's "whatever's currently loaded"), so
-        # every request built below includes this.
-        self.model = "gemma4"
+        # Where requests go (local Ollama or OpenRouter) is LLM_Backend.py's get_backend(), read
+        # per request -- see _request_completion.
         # Builds itself on a background thread (see RagIndex.__init__) -- perform_rag returns
         # no context at all until it's ready, rather than blocking LLMCore's own boot on
         # potentially minutes of first-time PDF extraction/embedding.
@@ -374,8 +372,12 @@ class LLMCore:
         @param query The search query -- in practice, the narration prompt itself (see
             _queue_narration), since a full prompt embeds just as well as a hand-picked
             keyword query and needs no per-call-site plumbing to construct.
-        @return The retrieved context as a string, or "" if there's nothing to add.
+        @return The retrieved context as a string, or "" if there's nothing to add -- always ""
+            when the backend has sourcebook_grounding off (online, excerpts would go to a third
+            party; see LLM_Backend.py).
         """
+        if not get_backend().sourcebook_grounding:
+            return ""
         matches = self.rag_index.query(query)
         if not matches:
             return ""
@@ -999,21 +1001,31 @@ class LLMCore:
         """
         return [entry for entry in self.context_window if entity_name in (entry.get("present") or ())]
 
+    @property
+    def model(self):
+        """!@brief The current backend's primary model (LLM_Backend.py)."""
+        return get_backend().model
+
     def _request_completion(self, data):
         """!
-        @brief One POST to Ollama, returning the model's own reply text. An empty string is a
+        @brief One POST to the current backend (LLM_Backend.py), returning the model's own reply text. An empty string is a
             real thing a local model returns rather than an error case, so it comes back as-is
             for the caller to decide about; only transport/decode failures raise.
-        @param data The request body to send.
+        @param data The request body's fields, "messages" included -- the backend adds its model.
         @return The reply content, "" included.
         """
+        backend = get_backend()
         req = urllib.request.Request(
-            self.api_url,
-            data=json.dumps(data).encode('utf-8'),
-            headers={'Content-Type': 'application/json'},
+            backend.api_url,
+            data=json.dumps(backend.payload(**data)).encode('utf-8'),
+            headers=backend.headers(),
         )
         response = urllib.request.urlopen(req)
         result = json.loads(response.read().decode('utf-8'))
+        served = result.get("model")
+        if backend.fallback_models and served and served != backend.model:
+            # OpenRouter moved on down the list (see LLM_Backend.py's OPENROUTER_FREE_MODELS).
+            self.event_bus.publish("log_info", f"LLM reply came from fallback model {served}.")
         return result['choices'][0]['message']['content'] or ""
 
     def _fit_history(self, system_message, history):
@@ -1083,7 +1095,7 @@ class LLMCore:
             two replies to one query but wasn't. None (unlabeled call sites, ex: a bare
             _fetch_and_publish caller that predates this) just omits the tag.
         """
-        data = {"model": self.model, "messages": messages, "temperature": 0.7,
+        data = {"messages": messages, "temperature": 0.7,
                 "max_tokens": RESPONSE_TOKEN_RESERVE}
         # Exactly what's about to go over the wire, formatted for a human -- see
         # display_llm_debug (GUI_Core.py)'s Debug tab, not narration itself.
@@ -1108,7 +1120,7 @@ class LLMCore:
                 # something the scene witnessed, and keeping it would spend budget on nothing
                 # and teach the model that empty replies belong here.
                 self.event_bus.publish("log_error", "LLM returned an empty response twice; nothing to narrate this turn.")
-                self.event_bus.publish("llm_response_ready", "System: The local LLM returned an empty response.")
+                self.event_bus.publish("llm_response_ready", "System: The LLM returned an empty response.")
                 self.event_bus.publish("llm_debug_updated", {"query": query_text, "response": "[EMPTY]", "label": label})
                 return
             # Before it's stored, so a slip never reaches the history the next reply imitates.
@@ -1125,7 +1137,7 @@ class LLMCore:
                 })
         except Exception as e:
             self.event_bus.publish("log_error", f"LLM connection failed: {e}")
-            self.event_bus.publish("llm_response_ready", "System: Could not connect to the local LLM.")
+            self.event_bus.publish("llm_response_ready", f"System: {get_backend().failure_message(e)}")
             self.event_bus.publish("llm_debug_updated", {"query": query_text, "response": f"[ERROR] {e}", "label": label})
 
     def _queue_narration(self, prompt, rag_query=None, present_entities=None, label=None):

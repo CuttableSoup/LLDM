@@ -2,7 +2,8 @@
 
 An autonomous dungeon master: the player types free-text actions, NLP maps them to a skill,
 a simplified D6 (West End Games) engine rolls dice and resolves outcomes, and a local LLM
-(currently Gemma via Ollama at `http://127.0.0.1:11434`) narrates what happened. Skills,
+(Gemma via a local Ollama at `http://127.0.0.1:11434` by default, or online via Google AI
+Studio/OpenRouter with `--llm google|openrouter` — see `LLM_Backend.py`) narrates what happened. Skills,
 entities, items, spells, rules, and scenarios are all data-driven via TOML, organized into
 "settings" — self-contained sibling directories under `Rules/` (`Rules/Fantasy/`,
 `Rules/Zombie/`, `Rules/Pathfinder/`), each independently scanned by `load_rules`. None of the

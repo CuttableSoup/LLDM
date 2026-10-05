@@ -20,7 +20,8 @@ from resolution.Challenge_Rating import DEFAULT_HP_DIVISOR, calculate_challenge_
 from llm.LLM_Client import call_chat_completion as _real_call_chat_completion
 from paths import PROJECT_ROOT
 
-DEFAULT_API_URL = "http://127.0.0.1:11434/v1/chat/completions"
+# None: the current LLM backend (local Ollama or OpenRouter -- see LLM_Backend.py).
+DEFAULT_API_URL = None
 
 # A named "key skill" landing at 0D would read as a design bug, not a deliberately weak NPC --
 # 1D (rating 3) is the floor a fitted skill can ever land on.

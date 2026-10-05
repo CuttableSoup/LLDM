@@ -1,0 +1,39 @@
+# Copy to llm_config.toml (gitignored) to choose where narration comes from.
+# LLDM.py's --llm flag overrides "backend" for one run.
+
+# "local": Ollama on this machine (LLDM installs and starts it).
+# Online, for a machine that can't run a model:
+#   "google": Gemma 4 on Google AI Studio -- fastest online option. Free key at aistudio.google.com.
+#   "openrouter": free models via OpenRouter, switching model when one is busy. Free key at openrouter.ai.
+backend = "local"
+
+[local]
+# model = "gemma4"
+
+[google]
+# The key: prefer the GEMINI_API_KEY environment variable, which wins over this line.
+# api_key = "..."
+# Only the large Gemma 4 models are served: gemma-4-26b-a4b-it (default, ~4B active, fast) or gemma-4-31b-it.
+# model = "gemma-4-26b-a4b-it"
+# adjudication_timeout = 2.5
+# Google's free tier may use prompts to improve its products; false keeps sourcebook excerpts local.
+# sourcebook_grounding = true
+
+[openrouter]
+# The key: prefer the OPENROUTER_API_KEY environment variable, which wins over this line.
+# api_key = "sk-or-v1-..."
+
+# Tried in order -- the next takes over when one is rate-limited or down. At most three.
+# Free models come and go; check https://openrouter.ai/models?max_price=0 if all three fail.
+# models = [
+#     "google/gemma-4-26b-a4b-it:free",
+#     "nvidia/nemotron-3.5-lightning:free",
+#     "nvidia/nemotron-3-super-120b-a12b:free",
+# ]
+
+# Seconds gameplay waits for the quick "what kind of line is this?" check before the rules decide.
+# adjudication_timeout = 2.5
+
+# Narration prompts carry excerpts of your sourcebook PDFs. Online, those go to OpenRouter and
+# the model's provider; set false to keep them local.
+# sourcebook_grounding = true

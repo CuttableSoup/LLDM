@@ -10,3 +10,6 @@ vendor/
 .claude
 skills-lock.json
 *.pdf
+# Per-machine LLM backend choice -- can hold an API key (see llm_config.example.toml).
+llm_config.toml
+gemini.txt

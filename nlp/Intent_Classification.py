@@ -558,6 +558,14 @@ IMPROVISABLE_INTENTS = PLAYER_CENTRIC_INTENTS | GROUND_AWARE_INTENTS | TARGET_CE
 # map_to_item checks these before any embedding match -- currency is a plain integer field
 # (entity["currency"]), not an object-supertype entity with a name/description to embed.
 CURRENCY_SYNONYMS = ("gold", "coin", "currency", "money")
+# The adjudicator's game actions (see AdHoc_Generation.py's GAME_ACTIONS) as item intents.
+ADJUDICATED_ITEM_INTENTS = {"buy": "trade", "give": "give", "take": "take", "use": "use"}
+# Money named as an adjudicated action's item -- never routed: currency moves only as a trade's
+# price, and an improvised "coppers" item handed over would be worse than not understanding.
+MONEY_PATTERN = re.compile(
+    r"\b(?:coins?|coppers?|silvers?|golds?|platinum|money|currency|payment|cash|purse|"
+    r"(?:copper|silver|gold) pieces?|[cgsp]p)\b"
+)
 
 # Item verbs that silently cost the player something (an item handed over, dropped or used up;
 # money spent) -- for these, a semantic map_to_item hit alone isn't enough, the clause has to
@@ -1322,6 +1330,8 @@ class IntentClassifier:
         self.present_names = []
         self.recent_narration = ""
         self.last_adjudication = None
+        # (game_action, item) the model named with its last "action" verdict, or None.
+        self.last_adjudicated_action = None
 
     def on_rules_loaded(self, data):
         """!@brief Forwards a "rules_loaded" payload to the matcher to build its embeddings."""
@@ -1356,7 +1366,9 @@ class IntentClassifier:
             "declarative" -- the rules called an unquestioning line talk on its opening words
             ("let's go down that cut-through."); "weak_turn" -- every skill clause scored below
             WEAK_TURN_SCORE; "not_understood" -- nothing claimed it. The model only picks the
-            channel. Records (verdict, trigger) in last_adjudication for NLPCore's log.
+            channel -- except that an "action" may name an item action and its item, kept in
+            last_adjudicated_action for _adjudicated_item_event. Records (verdict, trigger) in
+            last_adjudication for NLPCore's log.
         @return "action"/"speech"/"game_question"/"musing", or None to leave the rules' call.
         """
         adjudicate = getattr(self.matcher, "adjudicate", None)
@@ -1364,8 +1376,49 @@ class IntentClassifier:
             processed, self.present_names,
             (self.conversation_partner or {}).get("name"), self.recent_narration,
         ) if adjudicate else None
-        self.last_adjudication = (verdict, trigger)
-        return verdict
+        if isinstance(verdict, str):
+            verdict = {"kind": verdict}
+        verdict = verdict or {}
+        kind = verdict.get("kind")
+        game_action, item = verdict.get("game_action"), verdict.get("item")
+        self.last_adjudication = (kind, trigger)
+        self.last_adjudicated_action = (game_action, item) if kind == "action" and game_action and item else None
+        return kind
+
+    def _adjudicated_item_event(self, processed, raw_input=""):
+        """!
+        @brief The item event for an "action" verdict that named buy/give/take/use and its item,
+            when the rules found nothing to claim the line or only guessed a skill -- the item's own catalog entry if
+            map_to_item finds one, else improvisation (which, for a purchase, stocks the seller
+            with what the narrator offered). Found by playtest: "let's get the peppers." and
+            "here are the coppers." were judged actions but came back not understood.
+            A purchase or gift of nothing but money is said, not done: currency moves only as a
+            trade's price, so "here are the coppers." after the sale went through is talk to the
+            seller (found by replay, once the verdict's "reason" field was dropped).
+        @return One {"event", "payload"} dict, or None (no such verdict, money taken, or a
+            hypothetical line).
+        """
+        if not self.last_adjudicated_action or (self.last_adjudication or (None,))[0] != "action":
+            return None
+        game_action, item = self.last_adjudicated_action
+        intent = ADJUDICATED_ITEM_INTENTS.get(game_action)
+        phrase = process_input(item)
+        if not intent or not phrase:
+            return None
+        if MONEY_PATTERN.search(phrase):
+            return self._verdict_event("speech", processed, raw_input) if intent in ("trade", "give") else None
+        if intent in HYPOTHETICAL_BLOCKED_INTENTS and is_hypothetical(processed):
+            return None
+        item_name, _score = self.matcher.map_to_item(phrase)
+        if item_name == "currency" or (item_name and intent in ITEM_LOSING_INTENTS and not _clause_names_item(phrase, item_name)):
+            item_name = None
+        if item_name:
+            return {"event": "turn_detected", "payload": {
+                "clauses": [{"kind": "item", "intent": intent, "item_name": item_name}], "input": processed,
+            }}
+        return {"event": "improvisation_requested", "payload": {
+            "intent": intent, "phrase": phrase, "input": processed,
+        }}
 
     def _verdict_event(self, verdict, processed, raw_input):
         """!@brief The event a non-action verdict routes to, or None ("action", or no verdict)."""
@@ -1406,6 +1459,7 @@ class IntentClassifier:
         processed = process_input(raw_input)
         events = []
         self.last_adjudication = None
+        self.last_adjudicated_action = None
 
         save_load_intent, slot_name = detect_save_load_intent(processed)
         if save_load_intent:
@@ -1538,14 +1592,19 @@ class IntentClassifier:
             remaining_clauses, turn_clauses, processed,
             item_verb_clauses={verb["phrase"] for verb in unmatched_item_verbs},
         )
-        if (
-            turn_clauses and has_listener and not found_exempt and self.last_adjudication is None
-            and all(clause["kind"] == "action" and clause.get("score", 1.0) < WEAK_TURN_SCORE for clause in turn_clauses)
-        ):
+        weak_turn = turn_clauses and has_listener and not found_exempt and all(
+            clause["kind"] == "action" and clause.get("score", 1.0) < WEAK_TURN_SCORE for clause in turn_clauses
+        )
+        if weak_turn and self.last_adjudication is None:
             verdict_event = self._verdict_event(self._adjudicate(processed, "weak_turn"), processed, raw_input)
             if verdict_event:
                 events.append(verdict_event)
                 return processed, events
+        # A guessed skill never beats the item action the model named for the same line.
+        item_event = self._adjudicated_item_event(processed, raw_input) if weak_turn else None
+        if item_event:
+            events.append(item_event)
+            return processed, events
 
         self._finalize(processed, turn_clauses, found_exempt, unmatched_item_verbs, best_score, events, raw_input)
         return processed, events
@@ -1916,15 +1975,20 @@ class IntentClassifier:
             return
 
         has_listener = self.conversation_partner is not None or self.anyone_present
+        verdict = None
         if has_listener and self.last_adjudication is None:
             verdict = self._adjudicate(processed, "not_understood")
             verdict_event = self._verdict_event(verdict, processed, raw_input)
             if verdict_event:
                 events.append(verdict_event)
                 return
-            if verdict is not None:
-                events.append({"event": "action_not_understood", "payload": {"input": processed, "score": best_score}})
-                return
+        item_event = self._adjudicated_item_event(processed, raw_input)
+        if item_event:
+            events.append(item_event)
+            return
+        if verdict is not None:
+            events.append({"event": "action_not_understood", "payload": {"input": processed, "score": best_score}})
+            return
 
         if processed.rstrip().endswith("!") and has_listener:
             # Nothing claimed it and someone can hear it: a barked line is said to them. Found by

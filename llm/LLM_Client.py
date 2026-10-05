@@ -1,7 +1,8 @@
 """!
 @file LLM_Client.py
-@brief A small, stateless, synchronous helper for talking to Ollama's OpenAI-compatible
-    chat/completions endpoint. Deliberately standalone -- not shared with LLM_Core.py's own
+@brief A small, stateless, synchronous helper for talking to the current LLM backend's
+    OpenAI-compatible chat/completions endpoint (a local Ollama or OpenRouter -- see
+    LLM_Backend.py). Deliberately standalone -- not shared with LLM_Core.py's own
     async fetch_from_llm (see NPC_Generation.py's own notes on why): that call always runs on
     its own background thread and must never raise (it always publishes llm_response_ready,
     even on failure); this one is called synchronously, in place, by whatever needs the result
@@ -12,52 +13,55 @@
 import json
 import urllib.request
 
+from llm.LLM_Backend import Backend, get_backend
+
 DEFAULT_TIMEOUT = 20
-# Unlike LM Studio (which infers the model from whatever's the one thing currently loaded),
-# Ollama's OpenAI-compat endpoint 400s without an explicit "model" field, since a single Ollama
-# instance can have many models pulled at once -- every caller either accepts this default or
-# threads its own override through, mirroring api_url's own pattern.
+# The model for an explicit api_url that isn't the current backend's own (see
+# call_chat_completion) -- Ollama's OpenAI-compat endpoint 400s without a "model" field.
 DEFAULT_MODEL = "gemma4"
 
 
 def call_chat_completion(
-    api_url, messages, tools=None, tool_choice=None, model=DEFAULT_MODEL, temperature=0.7,
+    api_url, messages, tools=None, tool_choice=None, model=None, temperature=0.7,
     max_tokens=1024, timeout=DEFAULT_TIMEOUT, reasoning_effort=None,
 ):
     """!
     @brief Posts one chat/completions request and returns the parsed JSON response.
-    @param api_url The full chat/completions endpoint URL.
+    @param api_url None (every caller's default) for the current backend (LLM_Backend.py's
+        get_backend), whose key and model fallbacks then apply -- or an explicit endpoint URL,
+        which gets a plain request with no key (a key only ever goes to its own backend).
     @param messages The OpenAI-style messages list ({"role", "content"} dicts).
     @param tools Optional OpenAI-style "tools" list (function-calling schema).
     @param tool_choice Optional "tool_choice" value (ex: "auto") -- only meaningful alongside
         tools.
-    @param model The Ollama model tag to target (ex: "gemma4") -- Ollama, unlike LM Studio,
-        requires this on every request.
+    @param model Overrides the backend's model (and its fallbacks); None for the backend's own.
     @param temperature/max_tokens Standard OpenAI-style sampling params.
-    @param reasoning_effort Optional OpenAI-style reasoning control, sent only when given --
-        "none" turns a thinking model's hidden reasoning off for a quick enum pick (measured
-        on gemma4: a difficulty rating went from 5-15s, sometimes cut off at max_tokens
-        mid-thought, to under a second).
+    @param reasoning_effort Optional reasoning control, sent only when given -- "none" turns a
+        thinking model's hidden reasoning off for a quick enum pick (measured on gemma4: a
+        difficulty rating went from 5-15s, sometimes cut off at max_tokens mid-thought, to
+        under a second). The backend picks the field that carries it (Backend.payload).
     @param timeout Seconds to wait before giving up -- a hard requirement here (unlike
         fetch_from_llm's own unbounded call), since a caller of this function is blocking
-        synchronously, in place, potentially on the GUI thread; a hung Ollama must not be able
+        synchronously, in place, potentially on the GUI thread; a hung server must not be able
         to freeze the whole app indefinitely.
     @return The parsed JSON response body.
     @raises Exception (network error, non-2xx response, invalid JSON) -- callers are expected
         to catch broadly and fall back, not to inspect the specific error type.
     """
-    payload = {"model": model, "messages": messages, "temperature": temperature, "max_tokens": max_tokens}
+    backend = get_backend()
+    if api_url is not None and api_url != backend.api_url:
+        backend = Backend("custom", api_url, model or DEFAULT_MODEL)
+    fields = {"temperature": temperature, "max_tokens": max_tokens}
     if tools is not None:
-        payload["tools"] = tools
+        fields["tools"] = tools
     if tool_choice is not None:
-        payload["tool_choice"] = tool_choice
-    if reasoning_effort is not None:
-        payload["reasoning_effort"] = reasoning_effort
+        fields["tool_choice"] = tool_choice
+    payload = backend.payload(messages, model=model, reasoning_effort=reasoning_effort, **fields)
 
     request = urllib.request.Request(
-        api_url,
+        backend.api_url,
         data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers=backend.headers(),
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))

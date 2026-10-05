@@ -61,6 +61,22 @@ _USER_AGENT = "LLDM-Ollama-Launcher"
 # own Tkinter GUI -- this suppresses it.
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
+# Server settings for an Ollama this module spawns -- a variable the user already set wins.
+# NUM_PARALLEL: a second slot, so input adjudication (AdHoc_Generation.py's
+# adjudicate_player_input) never queues behind a narration still generating -- measured 5.5-6.3s
+# queued vs 0.3-0.4s with two slots, the narration itself no slower. KEEP_ALIVE: the default
+# unloads the model after five idle minutes, and the next call then waits ~9s for it to reload --
+# far past the adjudicator's timeout. "-1" holds it for the server's life, which LLDM ends on exit.
+SERVER_ENVIRONMENT = {"OLLAMA_NUM_PARALLEL": "2", "OLLAMA_KEEP_ALIVE": "-1"}
+
+
+def _server_environment(environ=None):
+    """!@brief environ (default os.environ) with SERVER_ENVIRONMENT's defaults filled in."""
+    environment = dict(os.environ if environ is None else environ)
+    for name, value in SERVER_ENVIRONMENT.items():
+        environment.setdefault(name, value)
+    return environment
+
 
 def _default_is_reachable(host):
     try:
@@ -397,7 +413,9 @@ def ensure_ollama_running(
     pull_model = pull_model or _default_pull_model
 
     if is_reachable(host):
-        log("Ollama already running.")
+        # Not ours to configure: its own settings apply (see SERVER_ENVIRONMENT).
+        log("Ollama already running. For quick input routing, start it with "
+            + " and ".join(f"{name}={value}" for name, value in SERVER_ENVIRONMENT.items()) + ".")
         _ensure_model_pulled(host, model, log, is_reachable, list_models, pull_model, ready_timeout)
         return None
 
@@ -409,7 +427,7 @@ def ensure_ollama_running(
     try:
         process = popen(
             [executable, "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            creationflags=_NO_WINDOW,
+            creationflags=_NO_WINDOW, env=_server_environment(),
         )
     except OSError as e:
         log(f"Failed to start Ollama: {e}")

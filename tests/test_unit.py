@@ -118,6 +118,7 @@ from llm.LLM_Core import (
     LLMCore,
     _OUTCOME_FORMATTERS,
 )
+import llm.LLM_Backend as LLM_Backend
 import llm.Ollama_Launcher as Ollama_Launcher
 from llm.Ollama_Launcher import ensure_ollama_running
 from llm.LLM_Rag import RagIndex
@@ -794,7 +795,8 @@ class FakeMatcher:
     def map_to_destination(self, processed_text):
         return self._destinations.get(processed_text, (None, 0.0))
 
-    # {processed text: verdict} -- set directly by a test; anything unlisted gets no answer.
+    # {processed text: verdict} -- set directly by a test; anything unlisted gets no answer. A
+    # verdict is a kind ("speech") or the full {"kind", "game_action", "item"} dict.
     adjudications = {}
 
     def adjudicate(self, text, present_names=(), partner=None, recent_narration=""):
@@ -1298,6 +1300,53 @@ class TestIntentClassification(unittest.TestCase):
         alone.adjudications = {"look around for a place to rest.": "speech"}
         _processed, events = IntentClassifier(alone).classify("Look around for a place to rest.")
         self.assertFalse(getattr(alone, "adjudicated", []))
+
+    def test_an_action_the_model_names_as_a_purchase_reaches_trade(self):
+        # Found by playtest: both lines were judged actions but came back not understood.
+        buy = lambda item: {"kind": "action", "game_action": "buy", "item": item}
+        classifier, _matcher = self._adjudicating({
+            "let's get the peppers.": buy("the smoked peppers"),
+            "here are the coppers.": buy("Smoked Peppers"),
+            "let's get the rope.": buy("the rope"),
+        }, items={"smoked peppers": ("smoked peppers", 0.9)}, actions={"let's get the rope.": ("athletics", 0.4)})
+        classifier.set_recent_narration("Barnaby offers smoked peppers for four coppers.")
+
+        # Narrated stock with no catalog entry is improvised into the seller's inventory.
+        _processed, events = classifier.classify("Let's get the peppers.")
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["event"], "improvisation_requested")
+        self.assertEqual((events[0]["payload"]["intent"], events[0]["payload"]["phrase"]), ("trade", "the smoked peppers"))
+        self.assertEqual(classifier.last_adjudicated_action, ("buy", "the smoked peppers"))
+
+        # Paying is buying the thing on offer, found in the catalog when it's there.
+        _processed, events = classifier.classify("Here are the coppers.")
+        self.assertEqual(events[0]["event"], "turn_detected")
+        self.assertEqual(events[0]["payload"]["clauses"], [{"kind": "item", "intent": "trade", "item_name": "smoked peppers"}])
+
+        # A guessed skill doesn't beat the purchase.
+        _processed, events = classifier.classify("Let's get the rope.")
+        self.assertEqual(events[0]["event"], "improvisation_requested")
+        self.assertEqual(events[0]["payload"]["intent"], "trade")
+
+    def test_an_adjudicated_action_never_moves_money_or_guesses_an_item(self):
+        classifier, _matcher = self._adjudicating({
+            "let's settle up.": {"kind": "action", "game_action": "buy", "item": None},
+            "here you go.": {"kind": "action", "game_action": "give", "item": "four coppers"},
+            "there, all yours.": {"kind": "action", "game_action": "give", "item": "the gold pieces"},
+            "here, for your trouble.": {"kind": "action", "game_action": "give", "item": "the shiny stuff"},
+            "let's do this.": {"kind": "action", "game_action": "other", "item": "the door"},
+        }, items={"the shiny stuff": ("currency", 1.0)})
+        classifier.matcher.adjudications["i'll scoop up the coins."] = {"kind": "action", "game_action": "take", "item": "the coins"}
+        for text in ("Let's settle up.", "Here you go.", "There, all yours.", "Let's do this.", "I'll scoop up the coins."):
+            _processed, events = classifier.classify(text)
+            self.assertNotIn(events[0]["event"], ("turn_detected", "improvisation_requested"), text)
+            # Paying or handing over money is said to the listener; taking it is not.
+            self.assertEqual(events[0]["event"] == "dialogue_detected", text in ("Here you go.", "There, all yours."), text)
+        _processed, events = classifier.classify("Here, for your trouble.")
+        self.assertFalse(any(
+            clause.get("item_name") == "currency"
+            for event in events for clause in event["payload"].get("clauses", [])
+        ))
 
     def test_a_barked_line_nothing_else_claims_is_said_to_whoever_hears_it(self):
         # Found by playtest: six of a brawler's fifteen not-understood turns were lines like these.
@@ -7922,6 +7971,147 @@ class TestAttackingAnyone(DMTestCase):
         self.assertEqual(self.dm_core._resolve_action_skill("kick"), ("brawling", None))
 
 
+class TestLLMBackend(unittest.TestCase):
+    """!
+    @brief LLM_Backend.py -- choosing local Ollama vs OpenRouter (load_backend) and how a request
+        to each is shaped, through the two request paths that read it (LLM_Client's
+        call_chat_completion, LLMCore._request_completion) with urlopen patched.
+    """
+
+    def setUp(self):
+        self._saved_backend = LLM_Backend.get_backend()
+        self.addCleanup(LLM_Backend.set_backend, self._saved_backend)
+        self.sent = []
+
+    def _config(self, text):
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory)
+        path = os.path.join(directory, "llm_config.toml")
+        with open(path, "w", encoding="utf-8") as config_file:
+            config_file.write(text)
+        return path
+
+    def _capture(self, request, timeout=None):
+        self.sent.append((request, json.loads(request.data)))
+        response = MagicMock()
+        response.read.return_value = json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode("utf-8")
+        response.__enter__.return_value = response
+        return response
+
+    def test_local_is_the_default_and_a_flag_beats_the_file(self):
+        missing = os.path.join(tempfile.gettempdir(), "no_such_llm_config.toml")
+        backend = LLM_Backend.load_backend(config_path=missing, environ={})
+        self.assertEqual((backend.name, backend.model, backend.launches_ollama), ("local", "gemma4", True))
+
+        path = self._config('backend = "openrouter"\n[openrouter]\napi_key = "from-file"\n')
+        backend = LLM_Backend.load_backend(config_path=path, environ={})
+        self.assertEqual((backend.name, backend.api_key, backend.launches_ollama), ("openrouter", "from-file", False))
+        self.assertEqual((backend.model, *backend.fallback_models), LLM_Backend.OPENROUTER_FREE_MODELS)
+        # The environment variable wins over the file's key.
+        backend = LLM_Backend.load_backend(config_path=path, environ={"OPENROUTER_API_KEY": "from-env"})
+        self.assertEqual(backend.api_key, "from-env")
+        self.assertEqual(LLM_Backend.load_backend("local", config_path=path, environ={}).name, "local")
+
+    def test_openrouter_keeps_at_most_three_models_and_an_unknown_name_is_refused(self):
+        path = self._config('backend = "openrouter"\n[openrouter]\nmodels = ["a", "b", "c", "d"]\n')
+        backend = LLM_Backend.load_backend(config_path=path, environ={})
+        self.assertEqual((backend.model, backend.fallback_models), ("a", ("b", "c")))
+        with self.assertRaises(ValueError):
+            LLM_Backend.load_backend("cloud", config_path=path, environ={})
+
+    def test_a_request_carries_its_own_backends_key_fallbacks_and_reasoning_field(self):
+        from llm.LLM_Client import DEFAULT_MODEL, call_chat_completion
+        LLM_Backend.set_backend(LLM_Backend.openrouter_backend({"api_key": "k"}, environ={}))
+        messages = [{"role": "user", "content": "hi"}]
+        with patch("urllib.request.urlopen", side_effect=self._capture):
+            call_chat_completion(None, messages, reasoning_effort="none")
+            call_chat_completion(None, messages, model="just/this")
+            call_chat_completion("http://elsewhere/v1/chat/completions", messages)
+        (online, body), (_pinned, pinned_body), (elsewhere, elsewhere_body) = self.sent
+        self.assertEqual(online.full_url, LLM_Backend.OPENROUTER_URL)
+        self.assertEqual(online.get_header("Authorization"), "Bearer k")
+        self.assertEqual(body["models"], list(LLM_Backend.OPENROUTER_FREE_MODELS))
+        self.assertEqual(body["reasoning"], {"enabled": False})
+        self.assertNotIn("reasoning_effort", body)
+        # Asking for one model drops the fallbacks.
+        self.assertEqual((pinned_body["model"], "models" in pinned_body), ("just/this", False))
+        # The key never goes to any other URL.
+        self.assertIsNone(elsewhere.get_header("Authorization"))
+        self.assertEqual(elsewhere_body["model"], DEFAULT_MODEL)
+
+        LLM_Backend.set_backend(LLM_Backend.local_backend())
+        with patch("urllib.request.urlopen", side_effect=self._capture):
+            call_chat_completion(None, messages, reasoning_effort="none")
+        local, local_body = self.sent[-1]
+        self.assertEqual((local.full_url, local_body["reasoning_effort"]), (LLM_Backend.OLLAMA_URL, "none"))
+        self.assertNotIn("models", local_body)
+        self.assertIsNone(local.get_header("Authorization"))
+
+    def test_google_sends_its_key_and_minimal_thinking_on_every_request(self):
+        from llm.LLM_Client import call_chat_completion
+        path = self._config('backend = "google"\n')
+        backend = LLM_Backend.load_backend(config_path=path, environ={"GEMINI_API_KEY": "g"})
+        self.assertEqual((backend.name, backend.model, backend.fallback_models, backend.launches_ollama),
+                         ("google", "gemma-4-26b-a4b-it", (), False))
+        LLM_Backend.set_backend(backend)
+        with patch("urllib.request.urlopen", side_effect=self._capture):
+            call_chat_completion(None, [{"role": "user", "content": "hi"}], reasoning_effort="none")
+            LLMCore._request_completion(SimpleNamespace(), {"messages": [{"role": "user", "content": "x"}]})
+        for request, body in self.sent:
+            self.assertEqual((request.full_url, request.get_header("Authorization")), (LLM_Backend.GOOGLE_URL, "Bearer g"))
+            # Google rejects "none" for Gemma, and unset it thinks for seconds -- narration included.
+            self.assertEqual(body["reasoning_effort"], "minimal")
+            self.assertNotIn("models", body)
+
+    def test_a_failed_google_request_says_why(self):
+        import io
+        import urllib.error
+        backend = LLM_Backend.google_backend({}, environ={})
+
+        def error(code, body="{}"):
+            return urllib.error.HTTPError("u", code, "x", {}, io.BytesIO(body.encode("utf-8")))
+        self.assertIn("quota", backend.failure_message(error(429)))
+        self.assertIn("overloaded", backend.failure_message(error(503)))
+        self.assertIn("GEMINI_API_KEY", backend.failure_message(error(400, '{"error":{"message":"API key not valid."}}')))
+        self.assertEqual(backend.failure_message(ConnectionError()), "Could not reach Google AI Studio.")
+        self.assertIn("no API key", LLM_Backend.describe(backend))
+
+    def test_narration_requests_go_to_the_current_backend(self):
+        LLM_Backend.set_backend(LLM_Backend.openrouter_backend({"api_key": "k"}, environ={}))
+        with patch("urllib.request.urlopen", side_effect=self._capture):
+            reply = LLMCore._request_completion(SimpleNamespace(), {"messages": [{"role": "user", "content": "x"}]})
+        request, body = self.sent[0]
+        self.assertEqual((reply, request.get_header("Authorization")), ("ok", "Bearer k"))
+        self.assertEqual(body["model"], LLM_Backend.OPENROUTER_FREE_MODELS[0])
+        # Reasoning is off for narration too online -- a free model's thinking came back as the story.
+        self.assertEqual(body["reasoning"], {"enabled": False})
+
+    def test_a_failed_online_request_says_why(self):
+        import io
+        import urllib.error
+        backend = LLM_Backend.openrouter_backend({}, environ={})
+
+        def error(code, body):
+            return urllib.error.HTTPError("u", code, "x", {}, io.BytesIO(body.encode("utf-8")))
+        self.assertIn("daily", backend.failure_message(error(429, '{"error":{"message":"Rate limit exceeded: free-models-per-day"}}')))
+        self.assertIn("busy", backend.failure_message(error(429, '{"error":{"message":"rate-limited upstream"}}')))
+        self.assertIn("API key", backend.failure_message(error(401, "{}")))
+        self.assertEqual(backend.failure_message(ConnectionError()), "Could not reach OpenRouter.")
+        self.assertEqual(LLM_Backend.local_backend().failure_message(ConnectionError()), "Could not connect to the local LLM.")
+
+    def test_sourcebook_excerpts_and_the_adjudication_wait_follow_the_backend(self):
+        index = SimpleNamespace(query=lambda query: [({"source": "Book", "page": 3, "text": "Lore."}, 0.9)])
+        core = SimpleNamespace(rag_index=index, event_bus=EventBus())
+        self.assertIn("Lore.", LLMCore.perform_rag(core, "q"))
+        LLM_Backend.set_backend(LLM_Backend.openrouter_backend({"sourcebook_grounding": False}, environ={}))
+        self.assertEqual(LLMCore.perform_rag(core, "q"), "")
+
+        from resolution.AdHoc_Generation import adjudicate_player_input
+        waits = []
+        adjudicate_player_input("x", call_chat_completion=lambda *a, timeout=None, **k: waits.append(timeout))
+        self.assertEqual(waits, [LLM_Backend.OPENROUTER_ADJUDICATION_TIMEOUT])
+
+
 class TestInputAdjudication(unittest.TestCase):
     """!
     @brief AdHoc_Generation.py's adjudicate_player_input -- the one enum-constrained call
@@ -7930,19 +8120,19 @@ class TestInputAdjudication(unittest.TestCase):
     """
 
     @staticmethod
-    def _answer(kind):
+    def _answer(kind, **fields):
         return {"choices": [{"message": {"tool_calls": [{"function": {
-            "name": "classify_input", "arguments": json.dumps({"kind": kind, "reason": "test"}),
+            "name": "classify_input", "arguments": json.dumps({"kind": kind, "reason": "test", **fields}),
         }}]}}]}
 
     def test_the_model_picks_one_of_the_kinds_from_the_scene_it_is_given(self):
         from resolution.AdHoc_Generation import adjudicate_player_input
         sent = []
         stub = lambda api_url, messages, **kwargs: (sent.append(messages), self._answer("action"))[1]
-        kind, _reason = adjudicate_player_input(
+        verdict, _reason = adjudicate_player_input(
             "Let's go down that cut-through.", ["Finn"], "Finn", "Finn points at an alley.", call_chat_completion=stub,
         )
-        self.assertEqual(kind, "action")
+        self.assertEqual(verdict, {"kind": "action", "game_action": None, "item": None})
         prompt = sent[0][-1]["content"]
         for expected in ("Finn", "talking to Finn", "Finn points at an alley.", "cut-through"):
             self.assertIn(expected, prompt)
@@ -7954,6 +8144,19 @@ class TestInputAdjudication(unittest.TestCase):
         def unreachable(*args, **kwargs):
             raise ConnectionError
         self.assertEqual(adjudicate_player_input("x", call_chat_completion=unreachable), (None, "unavailable"))
+
+    def test_an_action_can_name_an_item_action_and_its_item(self):
+        from resolution.AdHoc_Generation import adjudicate_player_input
+        ask = lambda answer: adjudicate_player_input("x", call_chat_completion=lambda *a, **k: answer)[0]
+        self.assertEqual(ask(self._answer("action", game_action="buy", item=" the smoked peppers ")),
+                         {"kind": "action", "game_action": "buy", "item": "the smoked peppers"})
+        # Only an action names one, only a real one other than "other", and only with its item.
+        for answer in (self._answer("speech", game_action="buy", item="peppers"),
+                       self._answer("action", game_action="other", item="peppers"),
+                       self._answer("action", game_action="steal", item="peppers"),
+                       self._answer("action", game_action="buy")):
+            verdict = ask(answer)
+            self.assertEqual((verdict["game_action"], verdict["item"]), (None, None))
 
 
 class TestUntargetedDifficulty(DMTestCase):
@@ -10494,6 +10697,12 @@ class TestOllamaLauncher(unittest.TestCase):
         self.assertIs(result, fake_process)
         args, kwargs = fake_popen.call_args
         self.assertEqual(args[0], ["C:\\real\\ollama.exe", "serve"])
+        # A second slot so input adjudication never queues behind narration, and the model kept loaded.
+        self.assertEqual((kwargs["env"]["OLLAMA_NUM_PARALLEL"], kwargs["env"]["OLLAMA_KEEP_ALIVE"]), ("2", "-1"))
+
+    def test_a_server_setting_the_user_already_chose_wins(self):
+        environment = Ollama_Launcher._server_environment({"OLLAMA_NUM_PARALLEL": "4", "PATH": "x"})
+        self.assertEqual(environment, {"OLLAMA_NUM_PARALLEL": "4", "OLLAMA_KEEP_ALIVE": "-1", "PATH": "x"})
 
     def test_failed_launch_returns_none(self):
         def exploding_popen(*args, **kwargs):

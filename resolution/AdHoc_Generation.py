@@ -29,11 +29,13 @@
 import json
 import random
 
+from llm.LLM_Backend import get_backend
 from llm.LLM_Client import call_chat_completion as _real_call_chat_completion
 from resolution.Challenge_Rating import DEFAULT_HP_DIVISOR
 from resolution.NPC_Generation import fit_skills_to_cr
 
-DEFAULT_API_URL = "http://127.0.0.1:11434/v1/chat/completions"
+# None: the current LLM backend (local Ollama or OpenRouter -- see LLM_Backend.py).
+DEFAULT_API_URL = None
 DEFAULT_TIMEOUT = 8
 
 # The item-interaction verbs eligible for the ad hoc creation fallback, partitioned by which
@@ -605,13 +607,27 @@ INPUT_KINDS = {
     "game_question": "a question about the game itself -- its rules, dice, mechanics -- not the story",
     "musing": "thinking aloud or wondering with no one to hear it; neither said to anyone nor an attempt",
 }
-ADJUDICATION_TIMEOUT = 10
-ADJUDICATION_MAX_TOKENS = 128
+# Which item action an "action" line is, when it is one -- IntentClassifier routes these to the
+# ordinary item pipeline, and "other" leaves the line to the rules. Paying is buying: currency
+# only ever moves as a trade's price, never through give (which would hand over the whole purse).
+# Found by playtest: "let's get the peppers." and "here are the coppers." were read as actions
+# but reached neither trade nor give.
+GAME_ACTIONS = {
+    "buy": "buying something from someone -- including agreeing to a purchase (\"I'll take two\") "
+           "or handing over payment for something on offer (\"here's your silver\")",
+    "give": "handing one of their own things, not money, to someone",
+    "take": "picking up or taking something no one is selling",
+    "use": "drinking, eating or using up one of their own things",
+    "other": "any other action",
+}
+# Gameplay waits on this call, so a stall falls back to the rules quickly -- how long is the
+# backend's own adjudication_timeout (LLM_Backend.py), since online adds a network round trip.
+ADJUDICATION_MAX_TOKENS = 64
 
 
 def adjudicate_player_input(
     text, present_names=(), partner=None, recent_narration="", call_chat_completion=None,
-    api_url=DEFAULT_API_URL, timeout=ADJUDICATION_TIMEOUT,
+    api_url=DEFAULT_API_URL, timeout=None,
 ):
     """!
     @brief Asks the model what a player's line mainly is -- one of INPUT_KINDS -- for the lines
@@ -626,11 +642,17 @@ def adjudicate_player_input(
     @param partner Who the player is talking to, or None.
     @param recent_narration The last thing the narrator said, for context.
     @param call_chat_completion Injectable for tests; defaults to the module's real client.
-    @return (kind, reason) -- kind is None if the model was unreachable, declined, or answered
-            outside INPUT_KINDS; reason then says why.
+    @param timeout Seconds before the rules decide alone; None for the backend's own
+        adjudication_timeout.
+    @return (verdict, reason) -- verdict is {"kind", "game_action", "item"} (the last two None
+            unless kind is "action" and the model named one of GAME_ACTIONS besides "other" and
+            the thing it's about), with reason ""; or None if the model was unreachable,
+            declined, or answered outside INPUT_KINDS, with reason saying why.
     """
     call_chat_completion = call_chat_completion or _real_call_chat_completion
+    timeout = timeout or get_backend().adjudication_timeout
     kind_lines = "\n".join(f"- {kind}: {meaning}" for kind, meaning in INPUT_KINDS.items())
+    action_lines = "\n".join(f"- {action}: {meaning}" for action, meaning in GAME_ACTIONS.items())
     context = [f"People here: {', '.join(present_names) or 'no one else'}."]
     if partner:
         context.append(f"The player is talking to {partner}.")
@@ -648,7 +670,11 @@ def adjudicate_player_input(
             "role": "user",
             "content": (
                 "\n".join(context) + f"\nThe player typed: \"{text}\"\n"
-                f"What is it mainly?\n{kind_lines}\nCall classify_input."
+                f"What is it mainly?\n{kind_lines}\n"
+                f"If it's an action, which of these is it?\n{action_lines}\n"
+                "For buy, give, take or use, also name the item: the thing itself as a short noun "
+                "phrase, from the line or, when the line only points at it, from what the game "
+                "master last said. Never the money.\nCall classify_input."
             ),
         },
     ]
@@ -662,7 +688,10 @@ def adjudicate_player_input(
                     "type": "object",
                     "properties": {
                         "kind": {"type": "string", "enum": list(INPUT_KINDS)},
-                        "reason": {"type": "string"},
+                        "game_action": {"type": "string", "enum": list(GAME_ACTIONS)},
+                        "item": {"type": "string"},
+                        # No "reason": only ever logged, and it doubled the tokens generated
+                        # (62 -> 30), taking a call from ~0.84s to ~0.55s.
                     },
                     "required": ["kind"],
                 },
@@ -683,7 +712,11 @@ def adjudicate_player_input(
     kind = str(payload.get("kind", "")).strip().lower()
     if kind not in INPUT_KINDS:
         return None, "invalid_kind"
-    return kind, payload.get("reason", "")
+    game_action = str(payload.get("game_action") or "").strip().lower()
+    item = str(payload.get("item") or "").strip()
+    if kind != "action" or game_action not in GAME_ACTIONS or game_action == "other" or not item:
+        game_action = item = None
+    return {"kind": kind, "game_action": game_action, "item": item}, ""
 
 
 def decide_entity_removal(

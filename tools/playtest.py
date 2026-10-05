@@ -35,7 +35,6 @@ import shutil
 import sys
 import threading
 import time
-import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -43,6 +42,8 @@ sys.path.insert(0, ROOT)
 from Event_Bus import EventBus  # noqa: E402
 from Logger import Logger  # noqa: E402
 from dm.DM_Core import DMCore  # noqa: E402
+from llm.LLM_Backend import BACKEND_NAMES, describe, load_backend, set_backend  # noqa: E402
+from llm.LLM_Client import call_chat_completion  # noqa: E402
 from llm.LLM_Core import LLMCore  # noqa: E402
 from llm.Ollama_Launcher import ensure_ollama_running, stop_ollama  # noqa: E402
 from nlp.NLP_Core import NLPCore  # noqa: E402
@@ -88,17 +89,16 @@ MAPPED_SKILL_RE = re.compile(r"Mapped input to action: (\w+) via ([\w ]+?)(?: \"
 
 
 def ask_player(api_url, model, persona, history, timeout=120, nudge=None):
+    """api_url/model None: the game's own LLM backend (LLM_Backend.py), key and fallbacks included."""
     system = PLAYER_SYSTEM.format(persona=persona) + (f"\n{nudge}" if nudge else "")
     messages = [{"role": "system", "content": system}]
     for narration, action in history[-6:]:
         messages.append({"role": "user", "content": narration})
         if action:
             messages.append({"role": "assistant", "content": action})
-    body = json.dumps({"model": model, "messages": messages, "temperature": 0.9,
-                       "max_tokens": 1024}).encode()  # reasoning models spend budget thinking first
-    req = urllib.request.Request(api_url, body, {"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        text = json.load(resp)["choices"][0]["message"]["content"]
+    # max_tokens: reasoning models spend budget thinking first.
+    response = call_chat_completion(api_url, messages, model=model, temperature=0.9, max_tokens=1024, timeout=timeout)
+    text = response["choices"][0]["message"]["content"] or ""
     return text.strip().splitlines()[0].strip() if text.strip() else ""
 
 
@@ -168,7 +168,7 @@ class Harness:
         self.llm.set_setting(args.setting)
         self._count_llm_requests()
         self.dm = DMCore(self.bus, scenario_name=args.scenario, setting=args.setting)
-        self.player_model = args.player_model or self.llm.model
+        self.player_model = args.player_model
 
     # --- event capture -------------------------------------------------------------------
 
@@ -469,15 +469,22 @@ def main():
     p.add_argument("--keep-saves", action="store_true", help="keep Saves/playtest_* slots")
     p.add_argument("--strict", action="store_true", help="exit 1 on heuristic flags too")
     p.add_argument("--player-model", default=None,
-                   help="Ollama model for the player; defaults to the narrator's. Use a different "
+                   help="Model for the player; defaults to the narrator's. Use a different "
                         "one to avoid an echo chamber (and expect GPU contention either way).")
-    p.add_argument("--player-url", default="http://127.0.0.1:11434/v1/chat/completions")
+    p.add_argument("--player-url", default=None,
+                   help="Endpoint for the player LLM; defaults to the narrator's own backend.")
+    p.add_argument("--llm", choices=BACKEND_NAMES, default=None,
+                   help="LLM backend, as LLDM.py's --llm (default: llm_config.toml, else local).")
     args = p.parse_args()
 
-    # Same bootstrap LLDM.py's main() runs, but blocking: the first narration needs a live
-    # server. Only ever stops a process this call started, never a pre-existing Ollama.
-    ollama_process = ensure_ollama_running(log=print)
-    atexit.register(stop_ollama, ollama_process)
+    backend = load_backend(args.llm)
+    set_backend(backend)
+    print(describe(backend))
+    if backend.launches_ollama:
+        # Same bootstrap LLDM.py's main() runs, but blocking: the first narration needs a live
+        # server. Only ever stops a process this call started, never a pre-existing Ollama.
+        ollama_process = ensure_ollama_running(model=backend.model, log=print)
+        atexit.register(stop_ollama, ollama_process)
     sys.exit(Harness(args).run())
 
 
