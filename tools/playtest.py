@@ -128,6 +128,7 @@ class Harness:
         self.nlp = NLPCore(self.bus)
         self.llm = LLMCore(self.bus)
         self.llm.set_setting(args.setting)
+        self._count_llm_requests()
         self.dm = DMCore(self.bus, scenario_name=args.scenario, setting=args.setting)
         self.player_model = args.player_model or self.llm.model
 
@@ -156,9 +157,46 @@ class Harness:
         if match:
             self.turn_skills.append((match.group(1), match.group(2), float(match.group(3))))
 
+    def _count_llm_requests(self):
+        """
+        Counts narration requests from when LLMCore queues them (synchronously, while the input
+        is being handled) to when their background fetch publishes, so wait_for_narration can
+        wait for every one a turn started. Found by playtest: without it, a combat round's
+        narration still being generated when the next input went in was logged against that
+        next turn, so a whole fast fight's log was off by one.
+        """
+        self.in_flight = 0
+        self.in_flight_done = threading.Condition()
+
+        def counted_queue(queue):
+            def wrapper(*args, **kwargs):
+                with self.in_flight_done:
+                    self.in_flight += 1
+                return queue(*args, **kwargs)
+            return wrapper
+
+        # Each _queue_* method starts exactly one background _fetch_and_publish.
+        for name in ("_queue_narration", "_queue_dialogue", "_queue_adam_response", "_queue_scene_query"):
+            setattr(self.llm, name, counted_queue(getattr(self.llm, name)))
+        fetch = self.llm._fetch_and_publish
+
+        def counted_fetch(*args, **kwargs):
+            try:
+                return fetch(*args, **kwargs)
+            finally:
+                with self.in_flight_done:
+                    self.in_flight -= 1
+                    self.in_flight_done.notify_all()
+        self.llm._fetch_and_publish = counted_fetch
+
     def wait_for_narration(self, before, timeout=90, quiet=2.0):
-        """Wait for at least one new response, then until none arrive for `quiet` seconds."""
+        """
+        Wait until every narration request so far has published (see _count_llm_requests) and
+        at least one new response arrived, then until none arrive for `quiet` seconds.
+        """
         deadline = time.time() + timeout
+        with self.in_flight_done:
+            self.in_flight_done.wait_for(lambda: self.in_flight == 0, max(0.0, deadline - time.time()))
         while len(self.responses) <= before and time.time() < deadline:
             time.sleep(0.2)
         last, last_change = len(self.responses), time.time()
