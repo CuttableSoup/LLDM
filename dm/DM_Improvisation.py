@@ -140,13 +140,20 @@ class ImprovisationMixin(DMCoreProtocol):
             self._get_target_name(include_background=True) if intent in TARGET_CENTRIC_INTENTS else None
         )
         if intent in TARGET_CENTRIC_INTENTS and not target_name:
-            self.event_bus.publish("action_not_understood", {"input": input_text, "score": 0.0})
+            self.event_bus.publish("action_not_understood", {
+                "input": input_text, "score": 0.0, "reason": "no_seller", "phrase": phrase,
+            })
             return
 
+        # The last two beats, not just one: a seller's quote is often followed by a haggling
+        # line before the player actually says "I'll take it".
+        quoted_context = " ".join(list(self.recent_narration)[-2:]) if intent == "trade" else ""
         result = generate_ad_hoc_item(
             phrase, intent, self._current_scene_description(),
             valid_equip_slots=self.get_equip_slots(self.player_name),
             valid_skill_names=self.skills.keys(),
+            recent_narration=quoted_context,
+            pricing_note=self.rules.get("currency", {}).get("pricing_note", ""),
         )
         if result.get("scenery"):
             self.event_bus.publish("item_interaction_resolved", {
@@ -156,7 +163,12 @@ class ImprovisationMixin(DMCoreProtocol):
             })
             return
         if not result.get("created"):
-            self.event_bus.publish("action_not_understood", {"input": input_text, "score": 0.0})
+            # "unavailable": the model never answered (timeout, backend down) -- worth simply
+            # trying again, unlike a real decline.
+            reason = "improvisation_unavailable" if result.get("reason") == "unavailable" else "improvisation_declined"
+            self.event_bus.publish("action_not_understood", {
+                "input": input_text, "score": 0.0, "reason": reason, "phrase": phrase, "intent": intent,
+            })
             return
 
         entity = result["entity"]

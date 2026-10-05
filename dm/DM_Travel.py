@@ -206,10 +206,8 @@ class TravelMixin(DMCoreProtocol):
             point in an unmapped gap, or a polity that itself authors no "language" all resolve
             here the same way.
         """
-        grid = self.locations.get(self.current_location_key, {}).get("grid")
-        if not grid:
-            return None
-        polity_name = self._resolve_region_polity(grid["x"], grid["y"])
+        # current_polity (DM_Law.py): the location's own "polity" field, else its grid region's.
+        polity_name = self.current_polity()
         if not polity_name:
             return None
         polity = self._find_polity(polity_name)

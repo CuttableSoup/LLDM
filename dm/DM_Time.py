@@ -183,6 +183,9 @@ class TimeMixin(DMCoreProtocol):
         self.current_block += blocks
         self._expire_prompt_directives(blocks)
         self._tick_conditions_by_block(blocks)
+        if blocks:
+            # Witnesses who lived long enough to tell someone (DM_Law.py).
+            self._file_pending_reports()
         return self.get_time_state()
 
     def _tick_conditions_by_block(self, blocks):

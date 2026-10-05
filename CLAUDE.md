@@ -65,6 +65,8 @@ this overview.
   tone-driven attitude drift, free-form dialogue, and language barriers.
 - [docs/adam-improvisation.md](docs/adam-improvisation.md) — ADaM (out-of-character help), ad hoc
   entity creation/removal/editing, and summoning.
+- [docs/law.md](docs/law.md) — polity laws, crime detection, witnesses and what they know,
+  disguise, acclaim and recognition, and per-polity records (enforcement not built yet).
 - [docs/narration-llm.md](docs/narration-llm.md) — narration triggers, the Ollama bootstrap/model
   pull, and RAG sourcebook grounding.
 - [docs/persistence.md](docs/persistence.md) — the three-file-per-slot save/load contract.

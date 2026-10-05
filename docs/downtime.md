@@ -277,6 +277,10 @@ neither of the two new fields (every region shipped before they existed) behaves
 always did — this was the one hard constraint the whole design had to preserve, verified directly
 by `debug.toml`'s own shipped `trailhead`-to-`border_stones` trip still costing exactly one block.
 
+A polity also carries the law in force there (`[[polity.law]]`), and a `[[location]]` may name its
+polity directly with its own `polity` field, which beats the grid lookup. `advance_blocks` is
+when witness reports reach a polity's record. See [law.md](law.md).
+
 `terrain.toml`'s own `speed_multiplier` (default `1.0`) scales how far one block of travel actually
 covers: `_advance_pending_travel`'s per-block loop no longer computes a fixed block count up front
 from raw distance/speed the way it once did — each iteration samples `_effective_speed_multiplier`

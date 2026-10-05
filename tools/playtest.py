@@ -143,7 +143,7 @@ class Harness:
         self.logger = Logger(self.bus, debug=True)
         self.lock = threading.Lock()
         self.responses = []
-        self.counts = {"action_resolved": 0, "action_not_understood": 0,
+        self.counts = {"action_resolved": 0, "action_not_understood": 0, "player_notice": 0,
                        "improvisation_requested": 0, "item_interaction": 0, "dialogue": 0,
                        "implicit_dialogue": 0}
         self.log_errors = []
@@ -153,6 +153,9 @@ class Harness:
         self.saved_slots = []
 
         self.bus.subscribe("llm_response_ready", self._on_response)
+        # An out-of-character reply (a failed attempt to rephrase, a yes/no question) ends the
+        # turn like narration would, and the persona sees it, so it can rephrase or answer.
+        self.bus.subscribe("player_notice", self._on_notice)
         for event, key in (("action_resolved", "action_resolved"),
                            ("action_not_understood", "action_not_understood"),
                            ("improvisation_requested", "improvisation_requested"),
@@ -175,6 +178,11 @@ class Harness:
     def _on_response(self, text):
         with self.lock:
             self.responses.append(text)
+
+    def _on_notice(self, data):
+        self._count("player_notice")
+        with self.lock:
+            self.responses.append(f"[System] {data.get('message', '')}")
 
     def _count(self, key):
         with self.lock:

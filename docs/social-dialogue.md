@@ -50,6 +50,9 @@ bolted-on-per-mechanism countdown idiom `"summon_expires_in"`/`"surprised"` alre
 than the (never-enforced) `duration` field a `[[condition]]` itself carries.
 Round-trips through save/load the same unconditional per-instance way `current_language` already
 does (`DM_Persistence.py`).
+`describe_character` also appends the entity's own legal facts (`legal_facts_for`, `DM_Law.py`):
+crimes it actually witnessed, and for an enforcer, who is wanted here — the only route crime
+knowledge reaches an NPC's prompt. See [law.md](law.md).
 `DMCore.__init__` builds this roster into the `scenario_loaded` payload; `_on_turn_detected` also
 appends a fresh `DefenderDetailsEffect` to each `RolledOutcome`'s own `effects`.
 

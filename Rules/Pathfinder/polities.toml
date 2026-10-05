@@ -11,3 +11,22 @@
 name = "Varisia"
 language = "varisian"
 description = "A rugged, sparsely settled frontier region on Golarion's northwest coast, its scattered towns overshadowed by the ruins of a much older empire."
+
+# Laws in force across Varisia (docs/law.md). fine is in gp (value's own unit); acclaim is
+# what a filed report adds to the offender's acclaim here (negative = infamy). Placeholder
+# numbers, not sourced from Golarion -- tune freely. No bans (magic schools, undead) yet; those
+# are a per-setting lore choice.
+[[polity.law]]
+crime = "theft"
+fine = 5
+acclaim = -1
+
+[[polity.law]]
+crime = "assault"
+fine = 10
+acclaim = -2
+
+[[polity.law]]
+crime = "murder"
+fine = 100
+acclaim = -6

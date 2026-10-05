@@ -212,6 +212,13 @@ toward = "actor"
 event = "theft"
 magnitude = 0.5
 
+# A fumbled lift is noticed -- a crime wherever a theft law applies (docs/law.md). A clean one
+# isn't reported at all.
+[[entity.on_fail]]
+do = "report_crime"
+crime = "theft"
+victim = "target"
+
 # Pathfinder's own "Treat Deadly Wounds"/first aid -- medicine's own signature effect, closing
 # the "22 dead skills" gap for a skill that, until now, had no mechanical effect of its own at
 # all (see CLAUDE.md's "Problem").
@@ -243,3 +250,30 @@ language_dependent = true                   # Warm words only land if the words 
                                             # tongue, so it carries no such flag.
 on_pass = { do = "attitude", entity = "target", toward = "actor", event = "charmed", magnitude = 0.6 }
 on_fail = { do = "attitude", entity = "target", toward = "actor", event = "failed_charm", magnitude = 0.2 }
+
+# Putting on and dropping a disguise (see docs/law.md). Untrained universal abilities, listed on
+# the "disguise" skill. The disguise's quality is this roll's own total -- a witness's
+# observation has to beat it to see through -- so a botched roll still disguises, just badly
+# (on_fail runs the same op). Each disguise is a fresh identity: a bounty earned under one
+# doesn't follow the next.
+[[entity]]
+name = "don a disguise"
+supertype = "technique"
+subtype = "maneuver"
+description = "Changing clothes, posture and face enough to pass as someone else."
+keywords = [ "disguise myself", "put on a disguise", "don a disguise", "change my appearance", "hide my face" ]
+skill = [ "disguise" ]
+range = 0
+on_pass = { do = "disguise", entity = "actor" }
+on_fail = { do = "disguise", entity = "actor" }
+
+[[entity]]
+name = "drop the disguise"
+supertype = "technique"
+subtype = "maneuver"
+description = "Shedding a disguise and going back to looking like yourself."
+keywords = [ "drop the disguise", "remove my disguise", "take off the disguise", "unmask myself" ]
+skill = [ "disguise" ]
+range = 0
+on_pass = { do = "undisguise", entity = "actor" }
+on_fail = { do = "undisguise", entity = "actor" }

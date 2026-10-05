@@ -160,7 +160,11 @@ player-centric intent does. `TARGET_CENTRIC_INTENTS` (`trade` alone) ignores `lo
 stocks the entity into the current scene target's own inventory via the same `place_new_item`
 call — this is what lets a shopkeeper sell "most general goods" without every item being
 pre-authored (`Rules/Fantasy/scenarios/debug.toml`'s own `general_store` area); short-circuits to a decline if there's no
-current scene target to sell from. `_on_item_interaction_detected` itself resolves "examine"/
+current scene target to sell from. For a trade, `generate_ad_hoc_item` also gets the last two
+narration beats and is told to price the item at whatever was just quoted, plus the setting's
+`[currency] pricing_note` (see [inventory-items.md](inventory-items.md)) so "eight silver" comes
+back as `0.8` gp. Without the quote the model invents its own value and the purchase charges
+that instead. `_on_item_interaction_detected` itself resolves "examine"/
 "take" directly against the player whenever the item is already sitting in their own inventory
 (checked ahead of the locked/closed-target gates, not just the source/destination resolution, so
 an unrelated locked container elsewhere in the scene never blocks examining something the player

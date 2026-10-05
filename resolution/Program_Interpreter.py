@@ -311,6 +311,49 @@ def _op_transfer_currency(step, ctx, entities, rules, event_bus):
     Inventory_Resolution.transfer_currency(entities, event_bus, from_name, to_name, step.get("amount"))
 
 
+def _op_report_crime(step, ctx, entities, rules, event_bus):
+    """!
+    @brief `report_crime` -- flags a crime by `offender` (default "actor") against `victim`
+        (optional). The interpreter knows nothing about witnesses or polities, so this only
+        publishes "crime_committed"; DM_Law.py's LawMixin subscribes and does the rest (ex:
+        maneuvers.toml's "sleight of hand" on_fail -- a fumbled pickpocket is noticed).
+    """
+    event_bus.publish("crime_committed", {
+        "crime": _require(step, "crime"),
+        "offender": resolve_role(step.get("offender", "actor"), ctx),
+        "victim": resolve_role(step["victim"], ctx) if step.get("victim") else None,
+    })
+
+
+def _op_disguise(step, ctx, entities, rules, event_bus):
+    """!
+    @brief `disguise` -- puts entity's resolved role in disguise. Its quality is this roll's
+        own total (ctx "roll"): a witness's observation has to beat it to see through. A
+        botched roll still disguises -- just badly. Each new disguise is a fresh identity, so a
+        bounty earned under an old one doesn't follow the new one.
+    """
+    entity_name = resolve_role(_require(step, "entity"), ctx)
+    entity = entities.get(entity_name)
+    if entity is None:
+        return
+    entity["disguise_count"] = entity.get("disguise_count", 0) + 1
+    entity["disguise"] = {
+        "quality": ctx.get("roll") or 0,
+        "alias": step.get("alias", "a disguised stranger"),
+        "identity": f"{entity_name} (disguise {entity['disguise_count']})",
+    }
+    event_bus.publish("disguise_changed", {"entity": entity_name})
+
+
+def _op_undisguise(step, ctx, entities, rules, event_bus):
+    """!@brief `undisguise` -- drops entity's resolved role's disguise, if any."""
+    entity_name = resolve_role(_require(step, "entity"), ctx)
+    entity = entities.get(entity_name)
+    if entity is None or not entity.pop("disguise", None):
+        return
+    event_bus.publish("disguise_changed", {"entity": entity_name})
+
+
 # do -> handler(step, ctx, entities, rules, event_bus). A small dict registry, not an if/elif
 # chain -- adding an op later is one function plus one registry entry (see the design doc's own
 # "Module shape").
@@ -324,6 +367,9 @@ OP_HANDLERS = {
     "inject_directive": _op_inject_directive,
     "transfer_item": _op_transfer_item,
     "transfer_currency": _op_transfer_currency,
+    "report_crime": _op_report_crime,
+    "disguise": _op_disguise,
+    "undisguise": _op_undisguise,
 }
 
 

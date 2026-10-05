@@ -299,6 +299,10 @@ class SocialMixin(DMCoreProtocol):
                 f"\"{directive.get('text')}\""
             )
 
+        # Crimes this entity actually witnessed, or (an enforcer) knows are on record here --
+        # the only route crime knowledge reaches an NPC's prompt (DM_Law.py, docs/law.md).
+        parts.extend(self.legal_facts_for(entity_name))
+
         if toward_name and toward_name != entity_name:
             attitude = self.describe_attitude(entity_name, toward_name)
             if attitude:

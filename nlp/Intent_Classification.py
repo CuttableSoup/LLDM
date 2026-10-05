@@ -1427,7 +1427,9 @@ class IntentClassifier:
         if verdict == "game_question":
             return self._help_event(processed)
         if verdict == "musing":
-            return {"event": "action_not_understood", "payload": {"input": processed, "score": 0.0}}
+            # Thinking aloud -- nothing was attempted, so the narrator may acknowledge it (see
+            # LLMCore.generate_clarification_response's own reason handling).
+            return {"event": "action_not_understood", "payload": {"input": processed, "score": 0.0, "reason": "musing"}}
         return None
 
     @staticmethod
@@ -1987,7 +1989,11 @@ class IntentClassifier:
             events.append(item_event)
             return
         if verdict is not None:
-            events.append({"event": "action_not_understood", "payload": {"input": processed, "score": best_score}})
+            # The model judged it an action, but nothing here could resolve it -- an attempt
+            # that failed, told to the player out of character rather than narrated.
+            events.append({"event": "action_not_understood", "payload": {
+                "input": processed, "score": best_score, "reason": "unresolved_action",
+            }})
             return
 
         if processed.rstrip().endswith("!") and has_listener:
@@ -2000,7 +2006,9 @@ class IntentClassifier:
         # Below confidence_threshold on every remaining clause, the item pass found nothing, and
         # the semantic router declined too: publish this instead of staying silent, so the player
         # gets some response rather than the app appearing to stall.
-        events.append({"event": "action_not_understood", "payload": {"input": processed, "score": best_score}})
+        events.append({"event": "action_not_understood", "payload": {
+            "input": processed, "score": best_score, "reason": "unmatched",
+        }})
 
     def _route_intent(self, processed, strict):
         """!

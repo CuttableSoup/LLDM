@@ -218,6 +218,7 @@ class GUICore:
         # its embeddings from and so only fires once at boot/new game.
         self.event_bus.subscribe("party_status_changed", self._marshal(self.display_party_status))
         self.event_bus.subscribe("game_saved", self._marshal(self.display_game_saved))
+        self.event_bus.subscribe("player_notice", self._marshal(self.display_player_notice))
         self.event_bus.subscribe("game_loaded", self._marshal(self.display_game_loaded))
         self.event_bus.subscribe("game_load_failed", self._marshal(self.display_game_load_failed))
         # GUICore owns and persists its own save-slot slice (Saves/<slot>/gui_state.json),
@@ -574,6 +575,10 @@ class GUICore:
             name for name in os.listdir(saves_dir)
             if os.path.isdir(os.path.join(saves_dir, name))
         )
+
+    def display_player_notice(self, data):
+        # Out of character: a failed attempt to rephrase, or a yes/no question (LLMCore/DMCore).
+        self.append_to_history(f"[System] {data.get('message', '')}\n\n")
 
     def display_game_saved(self, data):
         self.append_to_history(f"[System] Game saved as '{data.get('slot')}'.\n\n")

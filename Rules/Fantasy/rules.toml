@@ -36,6 +36,59 @@ mod_multiplier = 2
 # never gear, sets this false.
 count_rider_gear = true
 
+# Seeing someone commit a crime (DM_Law.py) -- applied to each witness except the victim (who
+# already gets theft/assaulted), toward the offender, scaled by [law].witness_severity for that
+# crime. Fear and coldness, not a fight: even a murder witness lands frightened, not hostile.
+[[attitude_event]]
+name = "witnessed_crime"
+disposition = -60
+threat = -60
+familiarity = -20
+
+# Laws (docs/law.md). Which laws apply is a polity's own [[polity.law]] list (polities.toml),
+# plus a location's own [[location.law]]; this table holds what every polity shares:
+#   witness_skill / disguise_skill -- a witness's observation roll must beat a disguise's own
+#     quality (the "disguise" roll that made it) to see through it.
+#   recognition_skill -- what a witness rolls to recognize who someone is when no skill's
+#     lore_types covers them (a person, not a creature kind).
+#   spell_identify_base -- a witness identifies a cast spell with the lore_types skill covering
+#     spells (arcane) against this plus the spell's own "level", if authored.
+#   [[law.recognition]] -- how hard someone is to recognize, by |base acclaim| + |polity
+#     acclaim| (highest band reached wins). "automatic" needs no roll at all; below every band
+#     (or 0 acclaim) nobody can recognize them.
+[law]
+witness_skill = "observation"
+disguise_skill = "disguise"
+recognition_skill = "streetwise"
+spell_identify_base = 15
+# How hard witnessing each crime hits a witness's attitude toward the offender -- the
+# "witnessed_crime" [[attitude_event]]'s magnitude (0..1).
+witness_severity = { theft = 0.25, assault = 0.5, murder = 1.0, banned_ability = 0.4, banned_presence = 0.3 }
+
+[[law.recognition]]
+min_acclaim = 1
+tier = "very difficult"
+
+[[law.recognition]]
+min_acclaim = 3
+tier = "difficult"
+
+[[law.recognition]]
+min_acclaim = 6
+tier = "moderate"
+
+[[law.recognition]]
+min_acclaim = 10
+tier = "easy"
+
+[[law.recognition]]
+min_acclaim = 15
+tier = "very easy"
+
+[[law.recognition]]
+min_acclaim = 20
+tier = "automatic"
+
 # XP award formula -- _award_xp_for_defeat (DM_Combat.py) reads this once per kill, the moment a
 # hostile-to-the-player entity's HP first reaches 0 (calculate_damage's own "previous_hp > 0,
 # now 0" check). The base amount is the defeated entity's own "exp" field if it authored one

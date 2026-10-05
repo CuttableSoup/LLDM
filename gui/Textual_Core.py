@@ -36,6 +36,7 @@ class TextualCore(App):
         self.event_bus.subscribe("log_info", self._on_log_info)
         self.event_bus.subscribe("log_error", self._on_log_error)
         self.event_bus.subscribe("game_saved", self._on_game_saved)
+        self.event_bus.subscribe("player_notice", self._on_player_notice)
         self.event_bus.subscribe("game_loaded", self._on_game_loaded)
         self.event_bus.subscribe("game_load_failed", self._on_game_load_failed)
 
@@ -132,6 +133,9 @@ class TextualCore(App):
 
     def _on_log_error(self, message):
         self.call_safely(self._write, "event_log", f"ERROR: {message}")
+
+    def _on_player_notice(self, data):
+        self.call_safely(self._write, "history", f"[System] {data.get('message', '')}")
 
     def _on_game_saved(self, data):
         self.call_safely(self._write, "history", f"[System] Game saved as '{data.get('slot')}'.")

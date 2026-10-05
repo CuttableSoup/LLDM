@@ -15,6 +15,52 @@
 """
 
 
+def _settle(amount):
+    """!
+    @brief Rounds a balance after fractional prices have moved through it -- a setting may price
+        in fractions (Pathfinder: 8 sp = 0.8 gp), and float subtraction alone would leave a purse
+        holding 0.09999999999999998 instead of 0.1.
+    @param amount The raw post-transfer balance.
+    @return An int when whole, else the amount rounded to 4 places (a hundredth of a copper).
+    """
+    rounded = round(amount, 4)
+    return int(rounded) if float(rounded).is_integer() else rounded
+
+
+def format_currency(amount, denominations=()):
+    """!
+    @brief Spells a currency amount out the way the setting names its coins, for narration --
+        the internal "currency" field is one number, and "the player pays 0.8 currency" both
+        leaks that name into the prose and leaves the narrator guessing at coinage.
+    @param amount The amount, in the setting's own value unit (ex: Pathfinder's gp).
+    @param denominations The setting's [[currency.denomination]] entries (rules.toml), each
+        {name, plural?, worth} -- worth in that same unit (ex: silver piece = 0.1). plural
+        defaults to name + "s".
+    @return Largest coin first, ex: 1.24 -> "1 gold piece, 2 silver pieces and 4 copper pieces";
+            0.8 -> "8 silver pieces". With no denominations: "5 coins"/"0.8 coins".
+    """
+    coins = sorted(
+        (d for d in denominations if d.get("name") and (d.get("worth") or 0) > 0),
+        key=lambda d: d["worth"], reverse=True,
+    )
+    if not coins:
+        amount = _settle(amount)
+        return f"{amount} coin" if amount == 1 else f"{amount} coins"
+
+    # Counted in whole units of the smallest coin, so float division never leaves 7.999 silver.
+    smallest = coins[-1]["worth"]
+    remaining = round(amount / smallest)
+    parts = []
+    for coin in coins:
+        count, remaining = divmod(remaining, round(coin["worth"] / smallest))
+        if count:
+            label = coin["name"] if count == 1 else coin.get("plural") or coin["name"] + "s"
+            parts.append(f"{count} {label}")
+    if not parts:
+        return f"0 {coins[-1].get('plural') or coins[-1]['name'] + 's'}"
+    return parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
+
+
 def transfer_currency(entities, event_bus, from_name, to_name, amount=None):
     """!
     @brief Moves currency from one entity to another (ex: looting a chest's gold, or a
@@ -36,8 +82,8 @@ def transfer_currency(entities, event_bus, from_name, to_name, amount=None):
     if moved <= 0:
         return 0
 
-    source["currency"] = available - moved
-    destination["currency"] = destination.get("currency", 0) + moved
+    source["currency"] = _settle(available - moved)
+    destination["currency"] = _settle(destination.get("currency", 0) + moved)
     event_bus.publish("log_info", f"{moved} currency moved from {from_name} to {to_name}.")
     return moved
 

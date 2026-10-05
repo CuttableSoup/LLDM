@@ -7,3 +7,36 @@
 # -- never overriding an explicit choice) and names itself in arrival narration. No currency field
 # here on purpose -- the engine has one flat scalar "currency" per entity and no named-currency
 # subsystem at all, so a per-polity currency would be flavor text with no mechanic behind it.
+
+# A test fixture, referenced by no [[region]] -- tests point a location at it ("polity" on the
+# location) to exercise every crime kind (docs/law.md).
+[[polity]]
+name = "Test Crown"
+description = "A tidy little kingdom, kept for testing its laws."
+
+[[polity.law]]
+crime = "theft"
+fine = 5
+acclaim = -1
+
+[[polity.law]]
+crime = "assault"
+fine = 10
+acclaim = -2
+
+[[polity.law]]
+crime = "murder"
+fine = 100
+acclaim = -6
+
+[[polity.law]]
+crime = "banned_ability"
+match = { subtypes = ["necromancy"] }
+fine = 50
+acclaim = -3
+
+[[polity.law]]
+crime = "banned_presence"
+match = { subtypes = ["undead"] }
+fine = 100
+acclaim = -5

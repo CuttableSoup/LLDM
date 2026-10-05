@@ -48,6 +48,19 @@ trap/scythe trap are the shipped example, both pairing `xp = true` with their ow
   caller today).
 - **`loot_entity(from_name, to_name)`** — sweeps all currency plus every inventory item.
 
+Currency is one number per entity, in whatever unit the setting prices `value` in, and it may
+be fractional (Pathfinder stores gp unscaled, so 8 sp is `0.8`). `transfer_currency` rounds
+balances to 4 places so float subtraction never leaves `0.09999999999999998`. A setting's
+`rules.toml` can author a `[currency]` table:
+
+- `pricing_note` tells the model what unit `value` is in when it improvises an item (see
+  "Ad hoc entity creation" in [adam-improvisation.md](adam-improvisation.md)).
+- `[[currency.denomination]]` entries (`name`, optional `plural`, `worth` in that unit) are how
+  `format_currency` (`Inventory_Resolution.py`, wrapped by `DMCore.format_currency`) spells an
+  amount out for narration: `0.8` → "8 silver pieces". DMCore adds `price_text`/`amount_text`
+  to `item_interaction_resolved` and `currency_text` to `LootEffect`, so the narrator never
+  sees the internal word "currency". With no denominations it reads "5 coins".
+
 
 ## Carry capacity (bulk)
 

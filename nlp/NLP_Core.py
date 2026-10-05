@@ -133,6 +133,10 @@ TOPIC_CLAUSE_MARKERS = (" about ", " regarding ", " concerning ", " if ", " whet
 CLAUSE_SEPARATORS = ("--", "?", ",", ";", ":")
 
 SENTENCE_BOUNDARY_PATTERN = re.compile(r"[.!?]+\s*")
+# The first word of an answer to a yes/no question DMCore asked (see
+# NLPCore._answer_confirmation). Anything else drops the question and is routed as usual.
+CONFIRM_YES = frozenset({"y", "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "aye", "do", "attack"})
+CONFIRM_NO = frozenset({"n", "no", "nope", "nah", "cancel", "don't", "dont", "never", "wait", "stop"})
 
 
 class SentenceTransformerMatcher(IntentMatcher):
@@ -970,6 +974,10 @@ class NLPCore:
 
         self.event_bus.subscribe("rules_loaded", self._on_rules_loaded)
         self.event_bus.subscribe("user_input_submitted", self._on_user_input)
+        # DMCore asked the player a yes/no question; the next input is read as the answer
+        # first (see _answer_confirmation).
+        self.event_bus.subscribe("confirmation_requested", self._on_confirmation_requested)
+        self._awaiting_confirmation = False
         # DM_Improvisation.py publishes this whenever an ad hoc entity is created or restored
         # from a save -- see SentenceTransformerMatcher.register_item's own docstring.
         self.event_bus.subscribe("item_catalog_updated", self._on_item_catalog_updated)
@@ -1000,6 +1008,8 @@ class NLPCore:
         # see ImprovisationMixin._on_player_input_received); routing reads the present-entity
         # bank that does.
         self.event_bus.publish("player_input_received", player_input)
+        if self._answer_confirmation(player_input):
+            return
         processed, events = self.classifier.classify(player_input)
         self.event_bus.publish("log_info", f"Processing player input: {player_input} -> {processed}")
         if self.classifier.last_adjudication:
@@ -1009,6 +1019,28 @@ class NLPCore:
             self.event_bus.publish("log_info", f"Adjudicated ambiguous input ({trigger}): {verdict}{detail}.")
         for event in events:
             self.event_bus.publish(event["event"], event["payload"])
+
+    def _on_confirmation_requested(self, _data):
+        self._awaiting_confirmation = True
+
+    def _answer_confirmation(self, player_input):
+        """!
+        @brief Reads player_input as the answer to a pending yes/no question, publishing
+            "confirmation_answered". A plain yes or no is the whole turn; anything else drops
+            the question (answer None) and is classified as an ordinary input.
+        @return True if the input was consumed as the answer.
+        """
+        if not self._awaiting_confirmation:
+            return False
+        self._awaiting_confirmation = False
+        words = re.findall(r"[a-z']+", str(player_input).lower())
+        answer = None
+        if words and words[0] in CONFIRM_YES:
+            answer = "yes"
+        elif words and words[0] in CONFIRM_NO:
+            answer = "no"
+        self.event_bus.publish("confirmation_answered", {"answer": answer, "input": player_input})
+        return answer is not None
 
     def _on_rules_loaded(self, data):
         """!

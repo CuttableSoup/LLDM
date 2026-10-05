@@ -197,7 +197,8 @@ combat_role = "offense"
 # damage_bonus_vs/dispel/cure already use (Combat_Resolution.matches_supertype_or_subtype). A
 # subtype matching no skill's own lore_types at all (ex: an ordinary humanoid) simply has no
 # lore check available.
-lore_types = { subtypes = ["elemental", "monstrous humanoid"] }
+# supertypes = ["spell"]: a witness identifying a cast spell rolls this too (docs/law.md).
+lore_types = { supertypes = ["spell"], subtypes = ["elemental", "monstrous humanoid"] }
 
 [[skill]]
 name = "navigation"
@@ -288,6 +289,8 @@ name = "disguise"
 description = "Altering physical appearance to hide identity."
 keywords = ["concealment", "impersonation", "mask", "costume", "makeup", "blend in"]
 opposes = ["observation"]
+# See maneuvers.toml's own "don a disguise" -- anyone may try.
+abilities = [ "don a disguise", "drop the disguise" ]
 
 [[skill]]
 name = "husbandry"

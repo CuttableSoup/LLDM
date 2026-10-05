@@ -14,6 +14,7 @@ from intents.registry import HANDLERS as FREE_STANDING_INTENT_HANDLERS
 from llm.LLM_Backend import get_backend
 from llm.LLM_Rag import RagIndex
 from paths import PROJECT_ROOT
+from resolution.Inventory_Resolution import format_currency
 
 USER_REFERENCE_PATTERN = re.compile(r"\b(the user)('s)?\b", re.IGNORECASE)
 
@@ -41,10 +42,37 @@ def _format_reveal_effect(effect, actor):
     return f" The check reveals: {', '.join(effect.tags)}." if effect.tags else ""
 
 
+# Out-of-character replies for an attempt the engine couldn't resolve (an action_not_understood
+# "reason", or an item denial below) -- sent as a "player_notice" instead of narrated, so a
+# failure never becomes prose the narrator fills with things that didn't happen (found by
+# playtest: an unresolved "I'll buy the lantern" was narrated as the shopkeeper handing it over).
+# Nothing reaches the context window and no game time passes; the player just tries again.
+FAILED_ATTEMPT_MESSAGES = {
+    "unresolved_action": (
+        "Not sure what that does in the game. Try saying what you do and who or what it's aimed "
+        "at -- \"punch the guard\", \"search the crate\", \"buy the rope\"."
+    ),
+    "unmatched": "Didn't catch that. Say what your character does, or put what they say in quotes.",
+    "not_present": "There's no \"{item_name}\" here to {intent}.",
+    "no_recipient": "There's no one here to give that to.",
+    "no_seller": "There's no one here to buy \"{phrase}\" from.",
+    "improvisation_declined": "\"{phrase}\" isn't something you can {intent} here.",
+    "improvisation_unavailable": "Couldn't work that out just now -- try again.",
+}
+
+
+def _coin_text(data, key):
+    """!
+    @brief An item_interaction_resolved payload's price/amount as coin text -- DMCore's own
+        price_text/amount_text (the setting's denominations) when it sent one, else plain coins.
+    """
+    return data.get(f"{key}_text") or format_currency(data.get(key, 0))
+
+
 def _format_loot_effect(effect, actor):
     gained = []
     if effect.currency:
-        gained.append(f"{effect.currency} currency")
+        gained.append(effect.currency_text or format_currency(effect.currency))
     gained.extend(effect.items)
     return f" The player gains: {', '.join(gained)}." if gained else ""
 
@@ -272,6 +300,10 @@ class LLMCore:
         self.event_bus.subscribe("save_requested", self._on_save_requested)
         self.event_bus.subscribe("load_requested", self._on_load_requested)
         self.event_bus.subscribe("game_load_failed", self.generate_load_failed_response)
+        self.event_bus.subscribe("crime_witnessed", self._on_crime_witnessed)
+        # Who saw a crime this turn (DMCore's DM_Law.py) -- folded into the next narration prompt
+        # so the narrator lets only them react, then cleared. See _on_crime_witnessed.
+        self._crime_notes = []
 
     def _on_scene_roster_updated(self, data):
         """!
@@ -567,6 +599,21 @@ class LLMCore:
             present_entities=action_result.get("present_entities"), label="skill_response",
         )
 
+    def _publish_failed_attempt(self, reason, data):
+        """!
+        @brief Tells the player, out of character, why an attempt didn't resolve -- a
+            "player_notice" the GUIs show as a system line. No narration, no context-window
+            entry: nothing happened in the story.
+        @param reason A FAILED_ATTEMPT_MESSAGES key.
+        @param data The triggering payload -- its fields fill the message's placeholders.
+        """
+        fields = {"item_name": "that", "intent": "do that with", "phrase": "that", **{
+            key: value for key, value in data.items() if isinstance(value, str) and value
+        }}
+        message = FAILED_ATTEMPT_MESSAGES[reason].format(**fields)
+        self.event_bus.publish("log_info", f"Failed attempt ({reason}): told the player out of character.")
+        self.event_bus.publish("player_notice", {"message": message, "reason": reason, "input": data.get("input", "")})
+
     def generate_clarification_response(self, data):
         """!
         @brief Narrates a brief in-character non-response when the player's input didn't match
@@ -583,6 +630,10 @@ class LLMCore:
             "without inventing what the save might have contained" already follows.
         @param data The "action_not_understood" payload ({input, score}).
         """
+        reason = data.get("reason")
+        if reason in FAILED_ATTEMPT_MESSAGES:
+            self._publish_failed_attempt(reason, data)
+            return
         self.event_bus.publish("log_info", "Generating clarification response for unmatched input.")
 
         prompt = (
@@ -648,6 +699,12 @@ class LLMCore:
         # other intent always has one by the time this fires.
         subject = f"\"{item_name}\"" if item_name else (container or "it")
 
+        if not data.get("found") and data.get("reason") in ("not_present", "no_recipient"):
+            # Nothing in the world said no -- the thing or person simply isn't here. Told out
+            # of character, not narrated (see FAILED_ATTEMPT_MESSAGES).
+            self._publish_failed_attempt(data["reason"], data)
+            return
+
         if not data.get("found"):
             reason_text = {
                 "locked": f"{container or 'it'} is locked shut and can't be reached yet",
@@ -659,7 +716,7 @@ class LLMCore:
                 "not_openable": f"{subject} isn't something that can be opened or closed",
                 "already_open": f"{container or 'it'} is already open",
                 "already_closed": f"{container or 'it'} is already closed",
-                "cant_afford": f"the player can't afford the {data.get('price', 0)} currency it costs",
+                "cant_afford": f"the player can't afford the {_coin_text(data, 'price')} it costs",
                 "not_equippable": f"{subject} isn't something that can be worn or wielded",
                 "cant_equip": f"{subject} has nothing on the player's own body it could go onto",
                 "not_equipped": f"{subject} isn't currently equipped at all",
@@ -757,12 +814,12 @@ class LLMCore:
         elif item_name == "currency":
             if intent == "give":
                 prompt = (
-                    f"The player gives {data.get('amount', 0)} currency to {container}.\n"
+                    f"The player gives {_coin_text(data, 'amount')} to {container}.\n"
                     f"Narrate this in 1-2 sentences as the Game Master."
                 )
             else:
                 prompt = (
-                    f"The player takes {data.get('amount', 0)} currency and adds it to their own.\n"
+                    f"The player takes {_coin_text(data, 'amount')} and adds it to their own.\n"
                     f"Narrate this in 1-2 sentences as the Game Master."
                 )
         elif intent == "give":
@@ -772,7 +829,7 @@ class LLMCore:
             )
         elif intent == "trade":
             prompt = (
-                f"The player pays {data.get('price', 0)} currency to {container} in exchange "
+                f"The player pays {_coin_text(data, 'price')} to {container} in exchange "
                 f"for \"{item_name}\".\n"
                 f"Narrate this brief transaction in 1-2 sentences as the Game Master."
             )
@@ -1140,6 +1197,20 @@ class LLMCore:
             self.event_bus.publish("llm_response_ready", f"System: {get_backend().failure_message(e)}")
             self.event_bus.publish("llm_debug_updated", {"query": query_text, "response": f"[ERROR] {e}", "label": label})
 
+    def _on_crime_witnessed(self, data):
+        """!
+        @brief Notes who saw a crime, for the next narration prompt. Who knows is game state
+            (DMCore's known_crimes), so the narrator is told exactly that, rather than left to
+            decide a passing stranger noticed too.
+        @param data The "crime_witnessed" payload ({"crime", "offender", "victim", "witnesses"}).
+        """
+        witnesses = ", ".join(data.get("witnesses") or [])
+        if not witnesses:
+            return
+        self._crime_notes.append(
+            f"Seen by: {witnesses}. Nobody else present noticed -- only they may react to it."
+        )
+
     def _queue_narration(self, prompt, rag_query=None, present_entities=None, label=None):
         """!
         @brief Appends a narration prompt to the rolling context window and fetches the LLM's response in the background.
@@ -1161,6 +1232,9 @@ class LLMCore:
             action_not_understood, game_load_failed) are meta/OOC anyway, nothing an NPC
             should be treated as having "witnessed".
         """
+        if self._crime_notes:
+            prompt = prompt + "\n" + "\n".join(self._crime_notes)
+            self._crime_notes = []
         self.context_window.append({"role": "user", "content": prompt, "present": present_entities})
 
         if len(self.context_window) > 100:

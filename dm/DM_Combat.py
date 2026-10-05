@@ -175,6 +175,9 @@ class CombatMixin(DMCoreProtocol):
         killed = previous_hp > 0 and result["remaining_hp"] == 0
         if killed and self.is_hostile(defender_name, self.player_name):
             self._award_xp_for_defeat(defender_name)
+        if killed:
+            # Murder, if the killer's side struck this victim first (DM_Law.py's note_assault).
+            self.note_kill(attacker_name, defender_name)
         create_spawn = ability.get("create_spawn")
         if killed and create_spawn and Combat_Resolution.entity_matches_requirements(
             self.entities, self.event_bus, defender_name, create_spawn.get("requirements", []),

@@ -44,9 +44,11 @@ class DamageEffect:
 
 @dataclass
 class LootEffect:
-    """!@brief Currency/items gained -- from apply_test_outcome's own "loot" key."""
+    """!@brief Currency/items gained -- from apply_test_outcome's own "loot" key. currency_text
+        is the same amount in the setting's own coins (DMCore.format_currency), for narration."""
     currency: int
     items: list
+    currency_text: str = ""
 
 
 @dataclass

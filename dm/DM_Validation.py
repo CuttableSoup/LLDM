@@ -1,6 +1,7 @@
 from dm.DM_Combat import MOVEMENT_ACTIONS, TRANSFER_ACTIONS
 from dm.DM_Rules import PLAYER_PLACEHOLDER
 from dm.DM_Types import DMCoreProtocol
+from resolution.Law_Resolution import AUTOMATIC, CRIMES
 
 # Entity fields (see Rules/Fantasy/reference/template_schema.toml's own note) an
 # [[entity_template]] must never author -- NPC_Generation.py fills these in at instancing time,
@@ -23,7 +24,7 @@ TEMPLATE_FORBIDDEN_FIELDS = ("skills", "max_hp")
 SCALAR_FIELD_TYPES = {
     "name": str, "supertype": str, "subtype": str, "description": str,
     "is_player": bool, "is_party": bool,
-    "max_hp": (int, float), "currency": (int, float), "bulk": (int, float),
+    "max_hp": (int, float), "currency": (int, float), "bulk": (int, float), "acclaim": (int, float),
     "max_bulk": (int, float), "value": (int, float), "exp": (int, float),
     "container_capacity": (int, float),
     "speed": (int, float), "travel_speed": (int, float), "follow_offset": (int, float),
@@ -113,6 +114,7 @@ class ValidationMixin(DMCoreProtocol):
         self._validate_entity_shapes()
         self._validate_location_shapes()
         self._validate_status_shapes()
+        self._validate_law_shapes()
 
     # -----------------------------------------------------------------------------------------
     # Skill references
@@ -859,6 +861,49 @@ class ValidationMixin(DMCoreProtocol):
 
                 if is_template:
                     self._check_template_generation_fields(label, entity)
+
+    def _check_law_list(self, owner_label, laws):
+        """!@brief A [[polity.law]]/[[location.law]] list -- a known crime kind, numeric
+        fine/acclaim, and a "match" table of names/tags/supertypes/subtypes lists (docs/law.md)."""
+        for law in laws or []:
+            if law.get("crime") not in CRIMES:
+                self._log(owner_label, f"law crime should be one of {', '.join(CRIMES)}, not {law.get('crime')!r}.")
+            for field_name in ("fine", "acclaim"):
+                self._check_field_type(owner_label, f"law {field_name}", law.get(field_name), (int, float))
+            match = law.get("match")
+            if match is None:
+                continue
+            if not isinstance(match, dict) or not set(match) <= {"names", "tags", "supertypes", "subtypes"}:
+                self._log(owner_label, "law match should be a table of names/tags/supertypes/subtypes lists.")
+                continue
+            for key, value in match.items():
+                self._check_string_list(owner_label, f"law match {key}", value)
+
+    def _validate_law_shapes(self):
+        """!
+        @brief Laws (DM_Law.py): every polity's and location's own law list, a location's own
+            "polity" naming a real polity, and [law]'s own recognition bands naming real
+            difficulty tiers (or "automatic").
+        """
+        polity_names = {polity.get("name") for polity in self.rules.get("polity", [])}
+        for polity in self.rules.get("polity", []):
+            self._check_law_list(f"polity '{polity.get('name')}'", polity.get("law"))
+        for location_key, location in self.locations.items():
+            label = f"location '{location_key}'"
+            self._check_law_list(label, location.get("law"))
+            if location.get("polity") is not None and location["polity"] not in polity_names:
+                self._log(label, f"polity {location['polity']!r} names no [[polity]].")
+            if location.get("law") and not location.get("polity") and not location.get("grid"):
+                self._log(label, "[[location.law]] has no effect without a polity (a \"polity\" field or a grid region).")
+        tier_names = {tier.get("name") for tier in self.rules.get("difficulty_tier", [])} | {AUTOMATIC}
+        for crime, severity in ((self.rules.get("law") or {}).get("witness_severity") or {}).items():
+            if crime not in CRIMES:
+                self._log("[law]", f"witness_severity names an unknown crime {crime!r}.")
+            elif not isinstance(severity, (int, float)) or not 0 <= severity <= 1:
+                self._log("[law]", f"witness_severity for {crime} should be a number from 0 to 1.")
+        for band in (self.rules.get("law") or {}).get("recognition", []):
+            if band.get("tier") not in tier_names:
+                self._log("[law]", f"recognition tier {band.get('tier')!r} is not a [[difficulty_tier]] or \"{AUTOMATIC}\".")
 
     def _validate_status_shapes(self):
         """!@brief [[status]]'s own "apply" block -- {condition, duration, length, dismiss}."""

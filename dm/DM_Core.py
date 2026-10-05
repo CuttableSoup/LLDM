@@ -17,6 +17,7 @@ from dm.DM_Encounters import EncounterMixin
 from dm.DM_Help import HelpMixin
 from dm.DM_Improvisation import ImprovisationMixin
 from dm.DM_Inventory import InventoryMixin
+from dm.DM_Law import LawMixin
 from dm.DM_Movement import MovementMixin
 from dm.DM_NpcGeneration import NpcGenerationMixin
 from dm.DM_Persistence import PersistenceMixin
@@ -74,8 +75,10 @@ RECENT_NARRATION_TURNS = 3
 # Found by playtest: "use the fire for dramatic effect" (fireball, 0.57) and a keyword-fallback
 # psionics hit (0.30) on a remark both fell through to the conversation partner, set a market
 # burning and killed two bystanders. Naming the victim is intent enough: "trip silas" (0.645)
-# still lands.
-ASSAULT_MIN_SCORE = 0.65
+# still lands. Below this the player is asked first ("Attack Elara? (yes/no)") rather than
+# refused -- found by playtest: refusing turned "Fight me!" (0.58) into a dead end, while "let's
+# see what that knife is good for" (0.66) cleared the old 0.65 bar and killed a bystander.
+ASSAULT_CONFIRM_SCORE = 0.8
 RECENT_NARRATION_CHARS = 400
 # LLMCore publishes its own failure notices through the same llm_response_ready channel as
 # real narration (a dead Ollama, an empty completion). They describe the engine, not the
@@ -83,7 +86,7 @@ RECENT_NARRATION_CHARS = 400
 NARRATION_SYSTEM_PREFIX = "System: "
 
 
-class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixin, RulesMixin, PersistenceMixin, CharacterCreationMixin, NpcGenerationMixin, DialogueMixin, HelpMixin, ImprovisationMixin, EncounterMixin, SummoningMixin, CraftingMixin, ValidationMixin, TimeMixin, TravelMixin):
+class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixin, RulesMixin, PersistenceMixin, CharacterCreationMixin, NpcGenerationMixin, DialogueMixin, HelpMixin, ImprovisationMixin, EncounterMixin, SummoningMixin, CraftingMixin, ValidationMixin, TimeMixin, TravelMixin, LawMixin):
     """!
     @brief Main class handling the core mechanics of the RPG system. The implementation is
         composed from domain mixins in sibling files -- DM_Rules.py (rules/scenario
@@ -225,6 +228,13 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         # -- plain JSON-safe data only, no live object references, so it round-trips through
         # save_game/load_game exactly like current_block.
         self.pending_downtime = None
+        # Crimes, witnesses and polity records (DM_Law.py, docs/law.md). Before load_scenario()
+        # below, whose first scene roster already runs a presence check.
+        self._init_law_state()
+        # A question put to the player that their next input answers -- today only "attack
+        # someone you never named?" (_request_assault_confirmation). Not saved: a reload simply
+        # drops an unanswered question.
+        self.pending_confirmation = None
         # The player's persisted combat target -- distinct from _get_target_name()'s "first
         # non-player entity" (which stays purely for non-combat interaction resolution, ex:
         # the dungeon's chest or the tavern's innkeeper). Set for real by load_scenario()
@@ -322,6 +332,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         # Published by NLPCore before it classifies anything -- see _on_player_input_received.
         self.event_bus.subscribe("player_input_received", self._on_player_input_received)
         self.event_bus.subscribe("turn_detected", self._on_turn_detected)
+        self.event_bus.subscribe("confirmation_answered", self._on_confirmation_answered)
         self.event_bus.subscribe("item_interaction_detected", self._on_item_interaction_detected)
         self.event_bus.subscribe("dialogue_detected", self._on_dialogue_detected)
         self.event_bus.subscribe("help_detected", self._on_help_detected)
@@ -473,7 +484,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             assaulting = self._apply_target_redirect(explicit_target, input_text, allow_non_hostile=is_attack)
             target_name = self.current_target
             # Whether the victim was only inferred (a pronoun, or whoever the player is talking
-            # to) rather than named -- see ASSAULT_MIN_SCORE.
+            # to) rather than named -- see ASSAULT_CONFIRM_SCORE.
             victim_inferred = False
             if is_attack and not assaulting and self._is_bystander(target_name):
                 # An attack NLPCore matched no name for, with no fight on: someone present it
@@ -493,13 +504,15 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
                         target_name = self.current_target
                         victim_inferred = candidate != literal
                         break
-            if assaulting and victim_inferred and entry.get("score", 1.0) < ASSAULT_MIN_SCORE:
-                # Too unsure a reading to start a fight on -- see ASSAULT_MIN_SCORE.
+            if assaulting and victim_inferred and entry.get("score", 1.0) < ASSAULT_CONFIRM_SCORE:
+                # Too unsure a reading to start a fight on unasked -- see ASSAULT_CONFIRM_SCORE.
                 self.event_bus.publish("log_info", (
-                    f"Declined to assault '{target_name}' on a weak match ({skill_name}, "
-                    f"score {entry.get('score', 0.0):.2f} < {ASSAULT_MIN_SCORE})."
+                    f"Asking before assaulting '{target_name}' on a weak match ({skill_name}, "
+                    f"score {entry.get('score', 0.0):.2f} < {ASSAULT_CONFIRM_SCORE})."
                 ))
                 self.current_target = target_before
+                if not declined_assault:
+                    self._request_assault_confirmation(entry, target_name, input_text)
                 declined_assault = True
                 continue
             engaged_combat_target = True
@@ -514,13 +527,13 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
                 # strength (rules.toml) -- applied before the round check below, so it's this
                 # very turn they fight back.
                 self.nudge_attitude_from_event(target_name, self.player_name, "assaulted", 1.0)
+                # A crime where a law applies, and the mark that makes a later kill murder (DM_Law.py).
+                self.note_assault(self.player_name, target_name)
             self._finish_rolled_outcome(result, skill_name, named_ability, ability, target_name, via_test, input_text)
             player_actions.append(result)
 
         if not player_actions:
-            if declined_assault and not any(entry.get("kind") == "item" for entry in clauses):
-                # Nothing else this turn narrated anything -- same reply as an unmatched input.
-                self.event_bus.publish("action_not_understood", {"input": input_text, "score": 0.0})
+            # A declined assault already asked the player (_request_assault_confirmation).
             return
 
         result = {
@@ -962,7 +975,10 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             effects = []
             loot = test_effects.get("loot")
             if loot and (loot["currency"] or loot["items"]):
-                effects.append(LootEffect(currency=loot["currency"], items=loot["items"]))
+                effects.append(LootEffect(
+                    currency=loot["currency"], items=loot["items"],
+                    currency_text=self.format_currency(loot["currency"]) if loot["currency"] else "",
+                ))
             damage = test_effects.get("damage")
             if damage:
                 # A trap's failed disarm/dodge attempt (ex: dart trap, scythe trap) -- same
@@ -1080,6 +1096,37 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             self.event_bus.publish("log_info", f"Difficulty: {tier['name']} ({tier.get('difficulty', 0)}) for {skill_name}.")
         return int(tier.get("difficulty", 0)), False
 
+    def _request_assault_confirmation(self, entry, target_name, input_text):
+        """!
+        @brief Asks the player before an attack on someone they never named -- see
+            ASSAULT_CONFIRM_SCORE. The clause is kept, aimed at that victim by name, and run as
+            is on a yes (_on_confirmation_answered). NLPCore reads the next input as the answer.
+        """
+        self.pending_confirmation = {
+            "kind": "assault", "input": input_text,
+            "clause": {**entry, "target": target_name, "confirmed": True},
+        }
+        display = self.entities.get(target_name, {}).get("name", target_name)
+        message = f"Attack {display}? (yes/no)"
+        self.event_bus.publish("confirmation_requested", {"kind": "assault", "message": message})
+        self.event_bus.publish("player_notice", {"message": message, "reason": "confirm", "input": input_text})
+
+    def _on_confirmation_answered(self, data):
+        """!
+        @brief The player's answer to the last confirmation_requested (NLPCore's own read of
+            the next input): "yes" runs the stored attack, "no" says so, None (they typed
+            something else instead) just drops the question.
+        """
+        pending, self.pending_confirmation = self.pending_confirmation, None
+        if not pending:
+            return
+        if data.get("answer") == "yes":
+            self._on_turn_detected({"clauses": [pending["clause"]], "input": pending["input"]})
+        elif data.get("answer") == "no":
+            self.event_bus.publish("player_notice", {
+                "message": "You hold off.", "reason": "cancelled", "input": data.get("input", ""),
+            })
+
     def _finish_rolled_outcome(self, result, skill_name, named_ability, ability, target_name, via_test, input_text=None):
         """!
         @brief The single post-roll step for the player's own action: everything that might
@@ -1115,6 +1162,8 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         self._apply_cure_if_hit(result, named_ability, target_name)
         self._apply_teleport_if_hit(result, named_ability)
         self._run_ability_outcome_program(result, skill_name, named_ability, ability, target_name, via_test, input_text)
+        # A spell cast in view, pass or fail -- witnesses may recognize a banned one (DM_Law.py).
+        self.observe_ability_use(self.player_name, named_ability)
         self._attach_defender_details(result, target_name)
 
     def _run_ability_outcome_program(self, result, skill_name, named_ability, ability, target_name, via_test, input_text=None):
@@ -1159,7 +1208,9 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         # op) actually lands on every ally/enemy it caught, not just target_name.
         for program_target in self.resolve_targets(self.player_name, target_name, ability):
             run_program(
-                program, {"actor": self.player_name, "target": program_target, "input": input_text},
+                # "roll" -- this roll's own total, for an op that keeps it (ex: "disguise", whose
+                # quality is what a witness's observation must beat; see DM_Law.py).
+                program, {"actor": self.player_name, "target": program_target, "input": input_text, "roll": result.roll},
                 self.entities, self.rules, self.event_bus,
             )
 
@@ -1632,6 +1683,11 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         def resolved(found, **extra):
             if found:
                 self._run_interact_program(intent, item_name, target_name)
+            # Narration-ready coin text alongside the raw numbers, so LLMCore never has to know
+            # the setting's denominations (see DM_Inventory.py's format_currency).
+            for key in ("price", "amount"):
+                if key in extra:
+                    extra[f"{key}_text"] = self.format_currency(extra[key])
             self.event_bus.publish("item_interaction_resolved", {
                 "intent": intent, "item_name": item_name, "input": input_text, "found": found,
                 # Room-level presence snapshot -- see scenario_loaded's own publish for why

@@ -172,7 +172,14 @@ def _build_item_tool_schema(valid_equip_slots, valid_skill_names=None):
                                 "container/trap, which is always placed in the scene."
                             ),
                         },
-                        "value": {"type": "integer", "description": "Approximate currency value; 0 for a worthless trinket."},
+                        "value": {
+                            "type": "number",
+                            "description": (
+                                "Approximate currency value; 0 for a worthless trinket. When the "
+                                "player is buying it and a price was already quoted, use that "
+                                "price. Fractions are allowed."
+                            ),
+                        },
                         "is_weapon": {"type": "boolean"},
                         "damage_dice": {"type": "integer"},
                         "damage_pips": {"type": "integer"},
@@ -190,7 +197,7 @@ def _build_item_tool_schema(valid_equip_slots, valid_skill_names=None):
                         },
                         "lock_skill": skill_schema,
                         "lock_difficulty": {"type": "integer", "description": "Target number to pick the lock; a moderate lock is around 10-12."},
-                        "contains_currency": {"type": "integer", "description": "Only for subtype 'container' -- how much currency is inside, 0 for none."},
+                        "contains_currency": {"type": "number", "description":"Only for subtype 'container' -- how much currency is inside, 0 for none."},
                         "disarm_skill": skill_schema,
                         "disarm_difficulty": {"type": "integer", "description": "Only for subtype 'trap' -- target number to disarm/avoid it, around 8-10."},
                         "usable": {
@@ -328,6 +335,25 @@ def _call_tool_or_decline(messages, tools, accepted_function_names, call_chat_co
     return function_name, arguments
 
 
+def _currency_amount(raw):
+    """!
+    @brief Reads a model-supplied price/currency amount without losing a fractional one -- a
+        setting may price in a large unit (Pathfinder's equipment.toml stores gp unscaled, so a
+        5 sp dart is 0.5), and the old int() cast turned "eight silver" (0.8) into 0.
+    @param raw The model's own value (number, numeric string, None, or junk).
+    @return A non-negative number: an int when it's whole (so a plain "value = 5" stays
+            exactly what a hand-authored entity would carry), else a float. 0 for anything
+            unreadable or negative.
+    """
+    try:
+        amount = float(raw or 0)
+    except (TypeError, ValueError):
+        return 0
+    if amount != amount or amount <= 0 or amount == float("inf"):
+        return 0
+    return int(amount) if amount.is_integer() else round(amount, 4)
+
+
 def _resolve_test_skill(requested_skill, valid_skill_names, fallback="finesse"):
     """!
     @brief Picks the skill a conjured container/trap's own [entity.test] should gate on --
@@ -351,6 +377,7 @@ def _resolve_test_skill(requested_skill, valid_skill_names, fallback="finesse"):
 
 def generate_ad_hoc_item(
     phrase, intent, scene_description, valid_equip_slots=None, valid_skill_names=None,
+    recent_narration="", pricing_note="",
     call_chat_completion=None, api_url=DEFAULT_API_URL, timeout=DEFAULT_TIMEOUT,
 ):
     """!
@@ -369,6 +396,12 @@ def generate_ad_hoc_item(
     @param valid_equip_slots Forwarded to _build_item_tool_schema.
     @param valid_skill_names Forwarded to _build_item_tool_schema/_resolve_test_skill -- a
         container/trap's own lock/disarm skill.
+    @param recent_narration What the narrator last said. Only folded in for "trade", where it
+        carries the price the seller just quoted ("four coppers") -- without it the model
+        invents its own value and the purchase charges that instead.
+    @param pricing_note The setting's own [currency] pricing_note (rules.toml), saying what unit
+        "value" is in (ex: Pathfinder's gold pieces and their silver/copper fractions). Empty
+        for a setting that authors none.
     @param call_chat_completion The LLM-calling callable to use -- None (the default) resolves
         to this module's own _real_call_chat_completion *at call time*, the same
         patch("resolution.AdHoc_Generation._real_call_chat_completion", fake) seam NPC_Generation.py
@@ -388,6 +421,15 @@ def generate_ad_hoc_item(
     prompt = (
         f"The player, in a tabletop RPG scene, tries to \"{intent}\" something described as: "
         f"\"{phrase}\". Current scene: {scene_description or 'unknown'}.\n"
+    )
+    if intent == "trade" and recent_narration:
+        prompt += (
+            f"The game master last said: \"{recent_narration[-600:]}\"\n"
+            "If a price was quoted there for this item, its value must be that quoted price.\n"
+        )
+    if pricing_note:
+        prompt += f"Pricing: {pricing_note}\n"
+    prompt += (
         "If it's plausible this object could be improvised into the scene, call create_item "
         "with its details. If it's ambient scenery/detail instead, call describe_scenery. "
         "Otherwise call decline."
@@ -427,7 +469,7 @@ def generate_ad_hoc_item(
         "supertype": "object",
         "subtype": subtype,
         "description": description,
-        "value": int(arguments.get("value") or 0),
+        "value": _currency_amount(arguments.get("value")),
         # Tags this as having no static TOML template to re-derive from on a reload -- see
         # DM_Persistence.py's save_game/load_game, which save/restore the full dict for any
         # entity carrying this flag rather than the ordinary hp/inventory/etc. diff.
@@ -451,7 +493,7 @@ def generate_ad_hoc_item(
         entity["equip_slot"] = equip_slot
 
     if subtype == "container":
-        entity["currency"] = int(arguments.get("contains_currency") or 0)
+        entity["currency"] = _currency_amount(arguments.get("contains_currency"))
         active_conditions = {"closed": {"duration": "permanent", "dismiss": None}}
         lock_skill = None
         if arguments.get("locked"):

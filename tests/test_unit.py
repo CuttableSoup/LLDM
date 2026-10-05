@@ -23,6 +23,7 @@ from sentence_transformers import SentenceTransformer
 import dm.DM_Encounters as DM_Encounters
 import resolution.Combat_Resolution as Combat_Resolution
 import resolution.Social_Resolution as Social_Resolution
+import resolution.Law_Resolution as Law_Resolution
 from resolution.Program_Interpreter import evaluate_condition, run_program
 from resolution.Character_Creation import (
     ability_cost,
@@ -39,12 +40,14 @@ from resolution.Character_Creation import (
 )
 from resolution.AdHoc_Generation import (
     NON_HOSTILE_DISPOSITIONS,
+    _currency_amount,
     decide_entity_edit,
     decide_entity_removal,
     generate_ad_hoc_creature,
     generate_ad_hoc_item,
     generate_referenced_npc,
 )
+from resolution.Inventory_Resolution import format_currency
 from gui.Character_Creation_GUI import CharacterCreationDialog
 from resolution.Challenge_Rating import calculate_challenge_rating, calculate_party_challenge_rating, skill_rating
 from resolution.Combat_Simulator import best_offense_skill, run_matchup, simulate_fight
@@ -1104,6 +1107,8 @@ class TestIntentClassification(unittest.TestCase):
         classifier = IntentClassifier(FakeMatcher())
         _processed, events = classifier.classify("Do you ever get tired of all this?")
         self.assertEqual(events[0]["event"], "action_not_understood")
+        # Nothing claimed it -- told to the player out of character (LLMCore's FAILED_ATTEMPT_MESSAGES).
+        self.assertEqual(events[0]["payload"]["reason"], "unmatched")
 
         classifier.set_conversation_partner({"key": "innkeeper", "name": "innkeeper", "aliases": []})
         _processed, events = classifier.classify("Do you ever get tired of all this?")
@@ -1780,7 +1785,16 @@ class TestClarificationResponse(LLMTestCase):
             input="I pick the lock",
         )
         description = self.llm_core._describe_outcome(result)
-        self.assertIn("20 currency", description)
+        self.assertIn("20 coins", description)
+        self.assertNotIn("currency", description)
+
+    def test_describe_outcome_uses_the_loot_effects_own_coin_text(self):
+        result = RolledOutcome(
+            entity="gladstone", skill="finesse", roll=18, difficulty=12, success=True, defender="chest",
+            effects=[LootEffect(currency=1.2, items=[], currency_text="1 gold piece and 2 silver pieces")],
+            input="I pick the lock",
+        )
+        self.assertIn("1 gold piece and 2 silver pieces", self.llm_core._describe_outcome(result))
 
     def test_describe_outcome_mentions_a_successful_summon(self):
         # Without this, a summoning spell's own roll outcome narrates exactly like an ordinary
@@ -4919,12 +4933,123 @@ class TestDeniedItemInteractionNarration(LLMTestCase):
 
     def test_prompt_states_the_real_reason_and_forbids_inventing_more(self):
         self.llm_core.generate_item_interaction_response({
-            "intent": "take", "item_name": "sword", "found": False, "reason": "not_present",
-            "input": "take the sword",
+            "intent": "take", "item_name": "gold", "found": False, "reason": "locked",
+            "container": "chest", "input": "take the gold",
         })
         prompt = self.llm_core.context_window[-1]["content"]
-        self.assertIn("there's no \"sword\" here to take", prompt)
+        self.assertIn("chest is locked shut", prompt)
         self.assertIn("don't invent", prompt)
+
+
+class TestFailedAttempts(LLMTestCase):
+    """!
+    @brief An attempt the engine couldn't resolve is told to the player out of character (a
+        "player_notice") rather than narrated -- nothing enters the context window, so the
+        narrator can't fill the gap with things that didn't happen.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.notices = []
+        self.event_bus.subscribe("player_notice", self.notices.append)
+
+    def test_an_unresolved_action_is_a_notice_not_narration(self):
+        self.event_bus.publish("action_not_understood", {"input": "give me that net", "score": 0.3, "reason": "unresolved_action"})
+        self.assertEqual(self.llm_core.context_window, [])
+        self.assertIn("Not sure what that does", self.notices[0]["message"])
+
+    def test_musing_is_still_acknowledged_in_character(self):
+        self.event_bus.publish("action_not_understood", {"input": "what a day", "score": 0.0, "reason": "musing"})
+        self.assertEqual(self.notices, [])
+        self.assertIn("what a day", self.llm_core.context_window[-1]["content"])
+
+    def test_something_not_here_is_a_notice_naming_it(self):
+        self.llm_core.generate_item_interaction_response({
+            "intent": "take", "item_name": "sword", "found": False, "reason": "not_present", "input": "take the sword",
+        })
+        self.assertEqual(self.llm_core.context_window, [])
+        self.assertEqual(self.notices[0]["message"], "There's no \"sword\" here to take.")
+
+    def test_improvisation_reasons_name_the_phrase(self):
+        self.event_bus.publish("action_not_understood", {
+            "input": "buy a lantern", "score": 0.0, "reason": "no_seller", "phrase": "a lantern",
+        })
+        self.assertEqual(self.notices[0]["message"], "There's no one here to buy \"a lantern\" from.")
+
+    def test_cant_afford_names_the_price_in_coins(self):
+        self.llm_core.generate_item_interaction_response({
+            "intent": "trade", "item_name": "lantern", "found": False, "reason": "cant_afford",
+            "price": 0.7, "price_text": "7 silver pieces", "input": "buy the lantern",
+        })
+        prompt = self.llm_core.context_window[-1]["content"]
+        self.assertIn("can't afford the 7 silver pieces it costs", prompt)
+        self.assertNotIn("currency", prompt)
+
+
+class TestCurrencyNarration(LLMTestCase):
+    """!
+    @brief Money in narration prompts reads as the setting's coins (DMCore's price_text/
+        amount_text), never the internal "currency" field name.
+    """
+
+    def test_a_trade_names_the_price_in_coins(self):
+        self.llm_core.generate_item_interaction_response({
+            "intent": "trade", "item_name": "lantern", "found": True, "container": "shopkeeper",
+            "price": 0.8, "price_text": "8 silver pieces", "input": "buy the lantern",
+        })
+        prompt = self.llm_core.context_window[-1]["content"]
+        self.assertIn("pays 8 silver pieces to shopkeeper", prompt)
+        self.assertNotIn("currency", prompt)
+
+    def test_giving_and_taking_coins_name_the_amount_in_coins(self):
+        for intent, expected in (("give", "gives 3 gold pieces to"), ("take", "takes 3 gold pieces and")):
+            with self.subTest(intent=intent):
+                self.llm_core.generate_item_interaction_response({
+                    "intent": intent, "item_name": "currency", "found": True, "container": "innkeeper",
+                    "amount": 3, "amount_text": "3 gold pieces", "input": f"{intent} coins",
+                })
+                self.assertIn(expected, self.llm_core.context_window[-1]["content"])
+
+    def test_without_coin_text_it_falls_back_to_plain_coins(self):
+        self.llm_core.generate_item_interaction_response({
+            "intent": "trade", "item_name": "lantern", "found": True, "container": "shopkeeper",
+            "price": 5, "input": "buy the lantern",
+        })
+        self.assertIn("pays 5 coins to shopkeeper", self.llm_core.context_window[-1]["content"])
+
+
+class TestFormatCurrency(unittest.TestCase):
+    """!@brief Inventory_Resolution.format_currency -- one number spelled out as a setting's coins."""
+
+    PATHFINDER = [
+        {"name": "gold piece", "worth": 1},
+        {"name": "silver piece", "worth": 0.1},
+        {"name": "copper piece", "worth": 0.01},
+    ]
+
+    def test_breaks_an_amount_into_coins_largest_first(self):
+        for amount, expected in (
+            (0.8, "8 silver pieces"),
+            (0.04, "4 copper pieces"),
+            (1, "1 gold piece"),
+            (15, "15 gold pieces"),
+            (1.24, "1 gold piece, 2 silver pieces and 4 copper pieces"),
+            (2.5, "2 gold pieces and 5 silver pieces"),
+            (0.7000000000000001, "7 silver pieces"),
+            (0, "0 copper pieces"),
+        ):
+            with self.subTest(amount=amount):
+                self.assertEqual(format_currency(amount, self.PATHFINDER), expected)
+
+    def test_order_and_plural_come_from_the_entries(self):
+        coins = [{"name": "penny", "plural": "pence", "worth": 1}, {"name": "shilling", "worth": 12}]
+        self.assertEqual(format_currency(13, coins), "1 shilling and 1 penny")
+        self.assertEqual(format_currency(2, coins), "2 pence")
+
+    def test_no_denominations_reads_as_plain_coins(self):
+        self.assertEqual(format_currency(5), "5 coins")
+        self.assertEqual(format_currency(1), "1 coin")
+        self.assertEqual(format_currency(0.8), "0.8 coins")
 
 
 class TestSpellMaterials(DMTestCase):
@@ -5613,6 +5738,7 @@ class TestUniversalAbilities(DMTestCase):
             {
                 "trip", "sunder", "disarm", "bull rush", "grapple", "pin", "intimidate",
                 "dirty trick", "feint", "escape artist", "sleight of hand", "treat wounds", "charm",
+                "don a disguise", "drop the disguise",
             },
         )
 
@@ -7835,21 +7961,50 @@ class TestAttackingAnyone(DMTestCase):
         # Found by playtest: "use the fire for dramatic effect" (fireball, 0.57) and a remark
         # matched to psionics at 0.30 set a market burning and killed two bystanders.
         # Both fell through to the conversation partner -- the victim was never named.
+        # Now asked rather than refused -- see ASSAULT_CONFIRM_SCORE.
         self._clear_the_fight()
         self.dm_core._set_conversation_partner("thane")
-        not_understood = self._capture("action_not_understood")
+        notices = self._capture("player_notice")
         self.dm_core._on_turn_detected({"clauses": [
             {"kind": "action", "skill": "blades", "score": 0.57},
         ], "input": "use the fire for dramatic effect"})
 
         self.assertFalse(self.dm_core.is_hostile("thane", "gladstone"))
-        self.assertEqual(len(not_understood), 1)
+        self.assertEqual([n["message"] for n in notices], ["Attack thane? (yes/no)"])
+        self.event_bus.publish("confirmation_answered", {"answer": "no", "input": "no"})
+        self.assertFalse(self.dm_core.is_hostile("thane", "gladstone"))
+        self.assertEqual(notices[-1]["message"], "You hold off.")
 
         # Naming the victim is intent enough, even on a modest match ("trip silas", 0.645).
         self.dm_core._on_turn_detected({"clauses": [
             {"kind": "action", "skill": "blades", "target": "thane", "score": 0.6},
         ], "input": "slash thane"})
         self.assertTrue(self.dm_core.is_hostile("thane", "gladstone"))
+
+    def test_a_yes_runs_the_attack_that_was_asked_about(self):
+        # Found by playtest: "let's see what that knife is good for" (0.66) killed a bystander
+        # outright under the old 0.65 bar; "Fight me!" (0.58) was simply refused.
+        self._clear_the_fight()
+        self.dm_core._set_conversation_partner("thane")
+        self.dm_core._on_turn_detected({"clauses": [
+            {"kind": "action", "skill": "blades", "score": 0.66},
+        ], "input": "let's see what this knife is good for"})
+        self.assertFalse(self.dm_core.is_hostile("thane", "gladstone"))
+
+        self.event_bus.publish("confirmation_answered", {"answer": "yes", "input": "yes"})
+        self.assertTrue(self.dm_core.is_hostile("thane", "gladstone"))
+        self.assertIsNone(self.dm_core.pending_confirmation)
+
+    def test_typing_something_else_drops_the_question(self):
+        self._clear_the_fight()
+        self.dm_core._set_conversation_partner("thane")
+        self.dm_core._on_turn_detected({"clauses": [
+            {"kind": "action", "skill": "blades", "score": 0.6},
+        ], "input": "fight me"})
+        self.event_bus.publish("confirmation_answered", {"answer": None, "input": "where's the inn?"})
+        self.assertIsNone(self.dm_core.pending_confirmation)
+        self.event_bus.publish("confirmation_answered", {"answer": "yes", "input": "yes"})
+        self.assertFalse(self.dm_core.is_hostile("thane", "gladstone"))
 
     def test_an_assault_maneuver_counts_as_an_attack_but_a_friendly_one_does_not(self):
         # Found by playtest: "shove over, you lumbering dockworker" matched bull rush, which deals
@@ -9009,6 +9164,49 @@ class TestAdHocGeneration(unittest.TestCase):
         self.assertFalse(result["created"])
         self.assertEqual(result["reason"], "unavailable")
 
+    def _capture_item_prompt(self, **kwargs):
+        prompts = []
+
+        def fake_call(api_url, messages, tools=None, tool_choice=None, timeout=None):
+            prompts.append(messages[-1]["content"])
+            return {"choices": [{"message": {"tool_calls": [{"function": {
+                "name": "create_item",
+                "arguments": json.dumps({"name": "peppers", "description": "Smoked peppers.", "value": 0.04}),
+            }}]}}]}
+
+        result = generate_ad_hoc_item(call_chat_completion=fake_call, **kwargs)
+        return prompts[0], result
+
+    def test_a_trade_prompt_carries_the_quoted_price_and_pricing_note(self):
+        prompt, _ = self._capture_item_prompt(
+            phrase="the smoked peppers", intent="trade", scene_description="A market.",
+            recent_narration="Barnaby offers smoked peppers for four coppers.",
+            pricing_note="value is in gold pieces.",
+        )
+        self.assertIn("four coppers", prompt)
+        self.assertIn("quoted price", prompt)
+        self.assertIn("value is in gold pieces.", prompt)
+
+    def test_only_a_trade_prompt_carries_recent_narration(self):
+        # Anything else ("take the peppers") isn't priced off what someone just said.
+        prompt, _ = self._capture_item_prompt(
+            phrase="the smoked peppers", intent="take", scene_description="A market.",
+            recent_narration="Barnaby offers smoked peppers for four coppers.",
+        )
+        self.assertNotIn("four coppers", prompt)
+        self.assertNotIn("Pricing:", prompt)
+
+    def test_a_fractional_value_survives(self):
+        _, result = self._capture_item_prompt(phrase="peppers", intent="trade", scene_description="A market.")
+        self.assertEqual(result["entity"]["value"], 0.04)
+
+    def test_currency_amounts_read_cleanly(self):
+        self.assertEqual(_currency_amount(5), 5)
+        self.assertIsInstance(_currency_amount(5.0), int)
+        self.assertEqual(_currency_amount("0.8"), 0.8)
+        for junk in (None, "", "lots", -3, float("nan"), float("inf")):
+            self.assertEqual(_currency_amount(junk), 0, junk)
+
     def test_decide_entity_removal_picks_a_real_name(self):
         def fake_call(api_url, messages, tools=None, tool_choice=None, timeout=None):
             return {"choices": [{"message": {"tool_calls": [{"function": {
@@ -9877,6 +10075,54 @@ class TestShopScenario(DMTestCase):
         # denied -- a later "buy the lantern" (once the player can afford it) should find it
         # waiting rather than needing to be improvised a second time.
         self.assertIn("lantern", self.dm_core.entities["shopkeeper"]["inventory"])
+
+    def test_an_improvised_purchase_is_priced_off_the_quote_just_narrated(self):
+        self.dm_core.recent_narration.extend([
+            "The shopkeeper wipes the counter.",
+            "\"Lantern? Nine silver, and it's yours.\"",
+        ])
+        self.dm_core.rules["currency"] = {"pricing_note": "value is in gold pieces."}
+        self.dm_core.entities["gladstone"]["currency"] = 1
+        fake_result = {
+            "created": True, "location": "ground",
+            "entity": {
+                "name": "lantern", "supertype": "object", "subtype": "tool",
+                "description": "A dented tin lantern.", "value": 0.9, "ad_hoc": True,
+            },
+        }
+        with patch("dm.DM_Improvisation.generate_ad_hoc_item", return_value=fake_result) as mock_generate:
+            self.dm_core._on_improvisation_requested({
+                "intent": "trade", "phrase": "a lantern", "input": "I'll take it",
+            })
+
+        kwargs = mock_generate.call_args.kwargs
+        self.assertIn("Nine silver", kwargs["recent_narration"])
+        self.assertIn("wipes the counter", kwargs["recent_narration"])
+        self.assertEqual(kwargs["pricing_note"], "value is in gold pieces.")
+        result = self.item_events[-1]
+        self.assertTrue(result["found"])
+        self.assertEqual(result["price"], 0.9)
+        self.assertEqual(result["price_text"], "0.9 coins")  # debug authors no denominations
+        # Exactly 0.1, not float subtraction's 0.09999999999999998 (Inventory_Resolution._settle).
+        self.assertEqual(self.dm_core.entities["gladstone"]["currency"], 0.1)
+        self.assertIn("lantern", self.dm_core.entities["gladstone"]["inventory"])
+
+    def test_a_non_trade_improvisation_gets_no_narration(self):
+        self.dm_core.recent_narration.append("\"Lantern? Eight silver.\"")
+        with patch("dm.DM_Improvisation.generate_ad_hoc_item", return_value={"created": False}) as mock_generate:
+            self.dm_core._on_improvisation_requested({
+                "intent": "take", "phrase": "a lantern", "input": "grab a lantern",
+            })
+        self.assertEqual(mock_generate.call_args.kwargs["recent_narration"], "")
+
+    def test_pathfinder_authors_a_pricing_note(self):
+        with open(os.path.join("Rules", "Pathfinder", "rules.toml"), "rb") as f:
+            currency = tomllib.load(f)["currency"]
+        self.assertIn("gold pieces", currency["pricing_note"])
+        self.assertEqual(
+            format_currency(1.24, currency["denomination"]),
+            "1 gold piece, 2 silver pieces and 4 copper pieces",
+        )
 
     def test_nothing_to_buy_when_no_target_is_present(self):
         self.dm_core.scenario_entities = ["gladstone"]  # shopkeeper stepped out
@@ -11000,7 +11246,7 @@ class TestItemInteraction(DMTestCase):
 
         result = self.resolved[-1]
         self.assertTrue(result["found"])
-        self.assertEqual(result["description"], "20 currency")
+        self.assertEqual(result["description"], "20 coins")
         self.assertEqual(self.dm_core.entities["chest"]["currency"], 20)
 
     def test_taking_currency_moves_all_of_it(self):
@@ -15064,6 +15310,294 @@ class TestRecentNarrationBuffer(DMTestCase):
                 reloaded.load_game("narration_slot")
 
         self.assertEqual(list(reloaded.recent_narration), ["A merchant argues outside the tavern."])
+
+
+class TestConfirmationAnswers(unittest.TestCase):
+    """!@brief NLPCore reads the input after a yes/no question as the answer (_answer_confirmation)
+        -- exercised without loading NLPCore's models."""
+
+    def _nlp(self):
+        from types import SimpleNamespace
+        bus = EventBus()
+        answers = []
+        bus.subscribe("confirmation_answered", answers.append)
+        nlp = SimpleNamespace(event_bus=bus, _awaiting_confirmation=True)
+        return nlp, answers
+
+    def test_yes_and_no_are_consumed_and_anything_else_drops_the_question(self):
+        from nlp.NLP_Core import NLPCore
+        for text, answer, consumed in (("Yes, do it.", "yes", True), ("no!", "no", True), ("where's the inn?", None, False)):
+            with self.subTest(text=text):
+                nlp, answers = self._nlp()
+                self.assertEqual(NLPCore._answer_confirmation(nlp, text), consumed)
+                self.assertEqual(answers[0]["answer"], answer)
+                self.assertFalse(nlp._awaiting_confirmation)
+
+    def test_nothing_pending_means_nothing_consumed(self):
+        from nlp.NLP_Core import NLPCore
+        nlp, answers = self._nlp()
+        nlp._awaiting_confirmation = False
+        self.assertFalse(NLPCore._answer_confirmation(nlp, "yes"))
+        self.assertEqual(answers, [])
+
+
+class TestLawResolution(unittest.TestCase):
+    """!@brief Law_Resolution.py's pure helpers (docs/law.md)."""
+
+    def test_a_law_matches_by_kind_name_or_tag_and_matchless_laws_cover_everything(self):
+        undead_ban = {"crime": "banned_presence", "match": {"subtypes": ["undead"]}}
+        outlaw_ban = {"crime": "banned_presence", "match": {"names": ["red mask"]}}
+        self.assertTrue(Law_Resolution.law_matches(undead_ban, {"subtype": "undead"}))
+        self.assertFalse(Law_Resolution.law_matches(undead_ban, {"subtype": "humanoid"}))
+        self.assertFalse(Law_Resolution.law_matches(undead_ban, None))
+        self.assertTrue(Law_Resolution.law_matches(outlaw_ban, {"name": "red mask"}))
+        self.assertTrue(Law_Resolution.law_matches({"crime": "theft"}, None))
+        self.assertEqual(
+            Law_Resolution.matching_laws([undead_ban, outlaw_ban, {"crime": "theft"}], "banned_presence", {"subtype": "undead"}),
+            [undead_ban],
+        )
+
+    def test_a_location_law_replaces_the_polity_law_it_shadows_and_adds_the_rest(self):
+        polity = [{"crime": "theft", "fine": 5}, {"crime": "assault", "fine": 10}]
+        location = [{"crime": "theft", "fine": 50}, {"crime": "banned_ability", "fine": 1, "match": {"supertypes": ["spell"]}}]
+        merged = Law_Resolution.merge_laws(polity, location)
+        self.assertEqual([(law["crime"], law["fine"]) for law in merged], [("assault", 10), ("theft", 50), ("banned_ability", 1)])
+
+    def test_fame_and_infamy_add_up_rather_than_cancel(self):
+        signed, magnitude = Law_Resolution.effective_acclaim({"acclaim": 5}, {"acclaim": -5})
+        self.assertEqual((signed, magnitude), (0, 10))
+        self.assertEqual(Law_Resolution.effective_acclaim({}, None), (0, 0))
+
+    def test_recognition_bands(self):
+        bands = [{"min_acclaim": 1, "tier": "difficult"}, {"min_acclaim": 10, "tier": "automatic"}]
+        tiers = [{"name": "difficult", "difficulty": 15}]
+        self.assertIsNone(Law_Resolution.recognition_difficulty(0, bands, tiers))
+        self.assertEqual(Law_Resolution.recognition_difficulty(3, bands, tiers), 15)
+        self.assertEqual(Law_Resolution.recognition_difficulty(12, bands, tiers), 0)
+
+    def test_a_murder_supersedes_the_assault_on_the_same_victim(self):
+        records = {}
+        Law_Resolution.file_report(records, "Crown", "gladstone", {"fine": 10, "acclaim": -2}, {"crime": "assault", "victim": "thane"})
+        record = Law_Resolution.file_report(records, "Crown", "gladstone", {"fine": 100, "acclaim": -6}, {"crime": "murder", "victim": "thane"})
+        self.assertEqual((record["bounty"], record["acclaim"]), (100, -6))
+        self.assertTrue(record["crimes"][0]["superseded"])
+
+
+class TestLaw(DMTestCase):
+    """!
+    @brief DM_Law.py end to end, in debug.toml's general store put under Fantasy's "Test Crown"
+        polity (a test-only fixture carrying every crime kind). The shopkeeper is the usual
+        witness and victim.
+    """
+    start_location = "general_store"
+
+    def setUp(self):
+        super().setUp()
+        self.dm_core.locations[self.dm_core.current_location_key]["polity"] = "Test Crown"
+        self.dm_core.entities["gladstone"]["currency"] = 10
+
+    def _steal(self):
+        self.dm_core._on_item_interaction_detected({"intent": "take", "item_name": "dagger", "input": "steal the dagger"})
+
+    def _add_person(self, name, **fields):
+        entity = {
+            "name": name, "supertype": "creature", "subtype": "humanoid", "max_hp": 10,
+            "languages": ["common"], "attitudes": {"default": [20, 0, 0]}, **fields,
+        }
+        self.dm_core.entities[name] = entity
+        self.dm_core._place_new_entity(name, entity, 1)
+        self.dm_core.scenario_entities.append(name)
+
+    def _record(self, identity="gladstone"):
+        return self.dm_core.legal_records.get("Test Crown", {}).get(identity)
+
+    def test_a_witnessed_theft_is_known_at_once_and_filed_at_the_next_block(self):
+        self._steal()
+        [seen] = self.dm_core.entities["shopkeeper"]["known_crimes"]
+        self.assertEqual((seen["crime"], seen["offender"], seen["victim"]), ("theft", "gladstone", "shopkeeper"))
+        self.assertIsNone(self._record())
+
+        self.dm_core.advance_blocks(1)
+        self.assertEqual((self._record()["bounty"], self._record()["acclaim"]), (5, -1))
+
+    def test_silencing_every_witness_before_time_passes_keeps_the_record_clean(self):
+        self._steal()
+        self.dm_core.apply_damage("shopkeeper", 1000)
+        self.dm_core.advance_blocks(1)
+        self.assertIsNone(self._record())
+
+    def test_an_enforcer_files_what_it_sees_immediately(self):
+        self.dm_core.entities["shopkeeper"]["tags"] = ["law_enforcer"]
+        self._steal()
+        self.assertEqual(self._record()["bounty"], 5)
+        self.assertIn("is wanted in Test Crown", " ".join(self.dm_core.legal_facts_for("shopkeeper")))
+
+    def test_no_polity_means_no_law(self):
+        del self.dm_core.locations[self.dm_core.current_location_key]["polity"]
+        self._steal()
+        self.dm_core.advance_blocks(1)
+        self.assertNotIn("known_crimes", self.dm_core.entities["shopkeeper"])
+        self.assertEqual(self.dm_core.legal_records, {})
+
+    def test_emptying_a_container_is_not_theft(self):
+        self.assertEqual(self.dm_core.report_crime("theft", "gladstone", victim="dagger"), [])
+
+    def test_only_a_fumbled_sleight_of_hand_is_reported(self):
+        maneuver = self.dm_core.entities["sleight of hand"]
+        ctx = {"actor": "gladstone", "target": "shopkeeper"}
+        run_program(maneuver["on_pass"], ctx, self.dm_core.entities, self.dm_core.rules, self.event_bus)
+        self.assertNotIn("known_crimes", self.dm_core.entities["shopkeeper"])
+        run_program(maneuver["on_fail"], ctx, self.dm_core.entities, self.dm_core.rules, self.event_bus)
+        self.assertEqual(self.dm_core.entities["shopkeeper"]["known_crimes"][0]["crime"], "theft")
+
+    def _disguise(self, quality):
+        run_program(
+            self.dm_core.entities["don a disguise"]["on_pass"], {"actor": "gladstone", "roll": quality},
+            self.dm_core.entities, self.dm_core.rules, self.event_bus,
+        )
+
+    def test_a_disguised_theft_is_blamed_on_the_disguise_unless_seen_through(self):
+        self._disguise(30)
+        self._stub_roll_dice(1)  # the shopkeeper's observation can't beat 30
+        self._steal()
+        self.dm_core.advance_blocks(1)
+        disguise = self.dm_core.entities["gladstone"]["disguise"]
+        self.assertIsNone(self._record())
+        self.assertEqual(self._record(disguise["identity"])["bounty"], 5)
+        self.assertIn("Was robbed by a disguised stranger.", self.dm_core.legal_facts_for("shopkeeper"))
+
+        # A fresh disguise is a fresh identity, and this time the witness sees through it.
+        self._disguise(2)
+        self._stub_roll_dice(40)
+        self.dm_core.entities["gladstone"]["inventory"].remove("dagger")
+        self.dm_core.entities["shopkeeper"]["inventory"].append("dagger")
+        self._steal()
+        self.dm_core.advance_blocks(1)
+        self.assertEqual(self._record()["bounty"], 5)
+
+    def test_assault_then_kill_is_murder_charged_once(self):
+        self._add_person("customer")
+        self.dm_core.note_assault("gladstone", "shopkeeper")
+        self.dm_core.calculate_damage("gladstone", "shopkeeper", {"damage_value": {"dice": 0, "pips": 0, "bonus": 1000}})
+        self.assertEqual([seen["crime"] for seen in self.dm_core.entities["customer"]["known_crimes"]], ["assault", "murder"])
+        self.dm_core.advance_blocks(1)
+        self.assertEqual((self._record()["bounty"], self._record()["acclaim"]), (100, -6))
+
+    def test_a_witness_turns_fearful_of_the_offender_but_not_hostile(self):
+        self._add_person("customer")
+        before = self.dm_core.get_attitude("customer", "gladstone")
+        self.dm_core.note_assault("gladstone", "shopkeeper")
+        self.dm_core.calculate_damage("gladstone", "shopkeeper", {"damage_value": {"dice": 0, "pips": 0, "bonus": 1000}})
+        after = self.dm_core.get_attitude("customer", "gladstone")
+        # Assault (0.5) then murder (1.0) -- capped at the action drift cap of 60 per axis.
+        self.assertEqual(after[0] - before[0], -60)
+        self.assertEqual(after[1] - before[1], -60)
+        self.assertFalse(self.dm_core.is_hostile("customer", "gladstone"))
+
+    def test_a_theft_witness_cools_a_little_and_the_victim_gets_no_double_dose(self):
+        self._add_person("customer")
+        victim_before = self.dm_core.get_attitude("shopkeeper", "gladstone")
+        self._steal()
+        self.assertEqual(self.dm_core.get_attitude("customer", "gladstone")[0], 20 - 15)
+        # The victim's own drift is the existing "theft" event alone.
+        victim_drift = self.dm_core.get_attitude("shopkeeper", "gladstone")[0] - victim_before[0]
+        self.assertGreater(victim_drift, -15)
+
+    def test_killing_someone_who_struck_first_is_no_crime(self):
+        self._add_person("customer")
+        self.dm_core.calculate_damage("gladstone", "shopkeeper", {"damage_value": {"dice": 0, "pips": 0, "bonus": 1000}})
+        self.assertNotIn("known_crimes", self.dm_core.entities["customer"])
+
+    def test_attacking_a_bystander_is_an_assault(self):
+        self.dm_core._on_turn_detected({"clauses": [{"kind": "action", "skill": "blades", "target": "shopkeeper"}], "input": "i attack the shopkeeper"})
+        self.assertEqual(self.dm_core.entities["shopkeeper"]["known_crimes"][0]["crime"], "assault")
+        self.assertEqual(self.dm_core.entities["shopkeeper"]["assaulted_by"], ["gladstone"])
+
+    def _cast(self, school):
+        spell = {"name": "bone chill", "supertype": "spell", "subtype": school}
+        self.dm_core.entities["bone chill"] = spell
+        self.dm_core.observe_ability_use("gladstone", spell)
+
+    def test_a_banned_spell_is_a_crime_only_to_a_witness_who_identifies_it(self):
+        self._stub_roll_dice(1)
+        self._cast("necromancy")
+        self.assertNotIn("known_crimes", self.dm_core.entities["shopkeeper"])
+
+        self._stub_roll_dice(40)
+        self._cast("necromancy")
+        [seen] = self.dm_core.entities["shopkeeper"]["known_crimes"]
+        self.assertEqual((seen["crime"], seen["subject"]), ("banned_ability", "bone chill"))
+
+        self._cast("evocation")  # not banned here
+        self.assertEqual(len(self.dm_core.entities["shopkeeper"]["known_crimes"]), 1)
+
+    def test_where_all_magic_is_banned_an_unidentified_spell_still_counts(self):
+        self.dm_core.locations[self.dm_core.current_location_key]["law"] = [
+            {"crime": "banned_ability", "match": {"supertypes": ["spell"]}, "fine": 1, "acclaim": 0},
+        ]
+        self._stub_roll_dice(1)
+        self._cast("evocation")
+        self.assertEqual(self.dm_core.entities["shopkeeper"]["known_crimes"][0]["subject"], "a spell")
+
+    def _bring_undead(self, **fields):
+        self._add_person("bone servant", subtype="undead", is_party=True, **fields)
+
+    def test_an_obvious_undead_companion_is_recognized_once(self):
+        self._bring_undead(acclaim=-20)  # "automatic" band -- anyone recognizes a walking corpse
+        self.dm_core.check_presence()
+        self.dm_core.check_presence()
+        [seen] = self.dm_core.entities["shopkeeper"]["known_crimes"]
+        self.assertEqual((seen["crime"], seen["subject"], seen["offender"]), ("banned_presence", "bone servant", "bone servant"))
+
+    def test_an_unknown_face_is_never_recognized(self):
+        self._bring_undead()  # acclaim 0 -- nobody knows what it is
+        self.dm_core.check_presence()
+        self.assertNotIn("known_crimes", self.dm_core.entities["shopkeeper"])
+
+    def test_a_good_disguise_hides_a_banned_presence(self):
+        self._bring_undead(acclaim=-20)
+        self.dm_core.entities["bone servant"]["disguise"] = {"quality": 30, "alias": "a hooded figure", "identity": "bone servant (disguise 1)"}
+        self._stub_roll_dice(1)
+        self.dm_core.check_presence()
+        self.assertNotIn("known_crimes", self.dm_core.entities["shopkeeper"])
+
+    def test_only_a_witness_carries_the_crime_into_its_persona(self):
+        self._add_person("customer")
+        self._steal()
+        self._add_person("latecomer")
+        self.assertIn("Was robbed by gladstone.", self.dm_core.describe_character("shopkeeper"))
+        self.assertIn("Saw gladstone steal from shopkeeper.", self.dm_core.describe_character("customer"))
+        self.assertNotIn("steal", self.dm_core.describe_character("latecomer"))
+
+    def test_records_and_witness_knowledge_survive_save_and_reload(self):
+        self._disguise(30)
+        self._stub_roll_dice(1)
+        self._steal()
+        self.dm_core.advance_blocks(1)
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("dm.DM_Persistence.PROJECT_ROOT", tmp):
+                self.dm_core.save_game("law_slot")
+                reloaded = DMCore(EventBus(), scenario_name="debug", start_location="general_store", setting="Fantasy")
+                reloaded.load_game("law_slot")
+        self.assertEqual(reloaded.legal_records, self.dm_core.legal_records)
+        self.assertEqual(reloaded.entities["shopkeeper"]["known_crimes"], self.dm_core.entities["shopkeeper"]["known_crimes"])
+        self.assertEqual(reloaded.entities["gladstone"]["disguise"], self.dm_core.entities["gladstone"]["disguise"])
+
+
+class TestCrimeNarration(LLMTestCase):
+    """!@brief The narrator is told exactly who saw a crime, once, on the next narration."""
+
+    def test_the_next_narration_names_the_witnesses_and_only_them(self):
+        self.event_bus.publish("crime_witnessed", {"crime": "theft", "offender": "gladstone", "witnesses": ["shopkeeper"]})
+        self.llm_core.generate_item_interaction_response({
+            "intent": "take", "item_name": "dagger", "found": True, "container": "shopkeeper", "input": "steal the dagger",
+        })
+        self.assertIn("Seen by: shopkeeper. Nobody else present noticed", self.llm_core.context_window[-1]["content"])
+
+        self.llm_core.generate_item_interaction_response({
+            "intent": "take", "item_name": "rope", "found": True, "input": "take the rope",
+        })
+        self.assertNotIn("Seen by", self.llm_core.context_window[-1]["content"])
 
 
 if __name__ == "__main__":

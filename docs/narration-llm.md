@@ -11,8 +11,14 @@ into an actual narrated line, "Summoning" above) and background-fetch plumbing
 - `scenario_loaded` → `generate_scene_intro` — once, from `DMCore.__init__`.
 - `round_resolved` → `generate_round_response` — combat, once per round.
 - `action_resolved` → `generate_response` — non-combat, once per skill use.
-- `action_not_understood` → `generate_clarification_response` — acknowledges input that didn't
-  resolve to any action.
+- `action_not_understood` → `generate_clarification_response` — only for a line with nothing to
+  resolve (`reason` "musing", or no reason): a short in-character acknowledgment. An *attempt* the
+  engine couldn't resolve (`reason` "unresolved_action", "unmatched", "no_seller",
+  "improvisation_declined"/"_unavailable"), and an item denial of `not_present`/`no_recipient`,
+  is never narrated: `_publish_failed_attempt` sends a `player_notice` (`FAILED_ATTEMPT_MESSAGES`)
+  that the GUIs show as a `[System]` line and the player rephrases. Nothing enters the context
+  window and no time passes — found by playtest: an unresolved "I'll buy the lantern" was
+  narrated as the shopkeeper handing it over, which then stood in history as if it happened.
 - `item_interaction_resolved` → `generate_item_interaction_response` — covers examine/take/give/
   trade/open/close/use/equip/unequip/drop, room transitions, and location-to-location travel.
 - `dialogue_resolved` → `generate_npc_dialogue` — a found target routes through

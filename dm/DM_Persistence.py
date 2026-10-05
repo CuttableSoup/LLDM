@@ -3,6 +3,7 @@ import os
 
 import resolution.Combat_Resolution as Combat_Resolution
 from dm.DM_Improvisation import catalog_entry
+from dm.DM_Law import LAW_INSTANCE_FIELDS
 from dm.DM_Types import DMCoreProtocol
 from paths import PROJECT_ROOT
 
@@ -207,6 +208,8 @@ class PersistenceMixin(DMCoreProtocol):
                 # explanation (see docs/downtime.md's "Mounts and conveyance").
                 "mount": entity.get("mount"),
             }
+            # Crime knowledge, assault marks and disguises (DM_Law.py) -- only when present.
+            state.update({field: entity[field] for field in LAW_INSTANCE_FIELDS if field in entity})
             if entity.get("generated"):
                 state["generated"] = True
                 state["skills"] = entity.get("skills", {})
@@ -281,6 +284,9 @@ class PersistenceMixin(DMCoreProtocol):
             "current_block": self.current_block,
             "watch_rotation_index": self.watch_rotation_index,
             "pending_downtime": self.pending_downtime,
+            # Polity records and not-yet-filed witness reports (DM_Law.py).
+            "legal_records": self.legal_records,
+            "pending_reports": self.pending_reports,
             "current_target": self.current_target,
             "conversation_partner": self.conversation_partner,
             "scenario_entities": self.scenario_entities,
@@ -506,6 +512,8 @@ class PersistenceMixin(DMCoreProtocol):
         self.current_block = data.get("current_block", 0)
         self.watch_rotation_index = data.get("watch_rotation_index", 0)
         self.pending_downtime = data.get("pending_downtime")
+        self.legal_records = data.get("legal_records", {})
+        self.pending_reports = data.get("pending_reports", [])
         self.scenario_key = data.get("scenario_key", self.scenario_key)
         self.setting = data.get("setting", self.setting)
         # Must precede load_scenario_definition/load_scenario -- see this method's own
@@ -625,6 +633,11 @@ class PersistenceMixin(DMCoreProtocol):
             entity["current_language"] = state.get("current_language")
             entity["prompt_directive"] = state.get("prompt_directive")
             entity["mount"] = state.get("mount")
+            for field in LAW_INSTANCE_FIELDS:
+                if field in state:
+                    entity[field] = state[field]
+                else:
+                    entity.pop(field, None)
             entity["currency"] = state.get("currency", entity.get("currency", 0))
             entity["exp"] = state.get("exp", entity.get("exp", 0))
             entity["inventory"] = state.get("inventory", entity.get("inventory", []))

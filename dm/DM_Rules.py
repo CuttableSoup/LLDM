@@ -1163,6 +1163,9 @@ class RulesMixin(DMCoreProtocol):
         if (characters, population, scene_name) == self._last_scene_roster:
             return
         self._last_scene_roster = (characters, population, scene_name)
+        # Someone new in view -- or a new scene -- may recognize a banned presence in the party
+        # (DM_Law.py). Each witness/subject pair is only ever checked once.
+        self.check_presence()
 
         entities = []
         for entity_name in self.scenario_entities:

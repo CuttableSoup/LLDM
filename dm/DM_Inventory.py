@@ -28,6 +28,16 @@ class InventoryMixin(DMCoreProtocol):
         """
         return Inventory_Resolution.transfer_currency(self.entities, self.event_bus, from_name, to_name, amount)
 
+    def format_currency(self, amount):
+        """!
+        @brief Spells amount out in this setting's own coins (rules.toml's
+            [[currency.denomination]]) -- see Inventory_Resolution.format_currency.
+        @param amount The amount, in the setting's value unit.
+        @return Narration-ready text, ex: "8 silver pieces".
+        """
+        denominations = self.rules.get("currency", {}).get("denomination", [])
+        return Inventory_Resolution.format_currency(amount, denominations)
+
     def transfer_item(self, from_name, to_name, item_name):
         """!
         @brief Moves one occurrence of an item from one entity's inventory list to another's.
@@ -520,7 +530,7 @@ class InventoryMixin(DMCoreProtocol):
                 resolved(False, reason="not_present")
                 return
             if intent == "examine":
-                resolved(True, description=f"{available} currency", container=target_name)
+                resolved(True, description=self.format_currency(available), container=target_name)
             else:
                 moved = self.transfer_currency(source_name, destination_name)
                 if target_name and source_name != destination_name:
@@ -532,6 +542,8 @@ class InventoryMixin(DMCoreProtocol):
                     self.nudge_attitude_from_event(
                         target_name, self.player_name, event_name, min(1.0, moved / SIGNIFICANT_VALUE),
                     )
+                    if intent == "take":
+                        self.report_crime("theft", self.player_name, victim=target_name)
                 resolved(True, container=target_name, amount=moved)
             return
 
@@ -592,4 +604,7 @@ class InventoryMixin(DMCoreProtocol):
                 event_name = "theft" if intent == "take" else "favor"
                 value = self.entities.get(item_name, {}).get("value", 0)
                 self.nudge_attitude_from_event(container, self.player_name, event_name, min(1.0, value / SIGNIFICANT_VALUE))
+                if intent == "take":
+                    # A crime only where a law applies and someone saw it (DM_Law.py).
+                    self.report_crime("theft", self.player_name, victim=container)
             resolved(True, container=container)
