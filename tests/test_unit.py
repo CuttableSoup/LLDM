@@ -685,7 +685,12 @@ class TestPlayerInputCorpus(unittest.TestCase):
                     # A rules question ("do i need to roll for that?") is talk for ADaM, not the partner.
                     if entry["label"] == "N" and not {"dialogue_detected", "help_detected"} & set(names):
                         talk_missed.append(repr(entry["text"]))
-                    elif entry["label"] == "A" and "dialogue_detected" in names:
+                    # Swallowed means the action was lost to dialogue -- a line split into
+                    # dialogue plus its own turn ("i shout 'get down!' and tackle the stranger")
+                    # kept it.
+                    elif entry["label"] == "A" and "dialogue_detected" in names and not (
+                        {"turn_detected", "item_interaction_detected"} & set(names)
+                    ):
                         actions_swallowed.append(repr(entry["text"]))
                     elif entry["label"] == "S" and rolled:
                         social_skill_rolls.append(entry["text"])
@@ -1187,6 +1192,33 @@ class TestIntentClassification(unittest.TestCase):
         for text in ('I laugh, "Nice try," and shake my head.', 'ask the guard "where is the inn?"'):
             _processed, events = classifier.classify(text)
             self.assertEqual([event["event"] for event in events], ["dialogue_detected"], text)
+
+    def test_described_speech_is_reported_dialogue_and_keeps_the_action_beside_it(self):
+        # Found by playtest: nine of a brawler's forty turns were lines like these, and they came
+        # back not-understood or rolled artistry/reflexes.
+        classifier = IntentClassifier(FakeMatcher(actions={
+            "taunt the vendor about his woodpile.": ("artistry", 0.6),
+            "try to shove them.": ("bull rush", 0.88), "needs reinforcement.": ("strength", 0.3),
+        }))
+        classifier.set_present_entities([{"key": "Bram", "name": "Bram", "subtype": "human", "aliases": []}])
+
+        _processed, events = classifier.classify("Taunt the vendor about his woodpile.")
+        self.assertEqual([event["event"] for event in events], ["dialogue_detected"])
+        self.assertEqual(events[0]["payload"]["utterance"], "You taunt the vendor about his woodpile.")
+
+        _processed, events = classifier.classify("Yells that Bram's net looks flimsy and needs reinforcement.")
+        self.assertEqual([event["event"] for event in events], ["dialogue_detected"])
+        self.assertEqual(events[0]["payload"]["utterance"], "You yell that Bram's net looks flimsy and needs reinforcement.")
+
+        _processed, events = classifier.classify("Shout a challenge, then try to shove them.")
+        self.assertEqual([event["event"] for event in events], ["dialogue_detected", "turn_detected"])
+        self.assertEqual(events[1]["payload"]["clauses"][0]["skill"], "bull rush")
+
+        # Nobody to hear it, or only wondering about it: left as it was.
+        _processed, events = IntentClassifier(FakeMatcher()).classify("Yell for help.")
+        self.assertEqual(events[0]["event"], "action_not_understood")
+        _processed, events = classifier.classify("If I yell at him, will he run?")
+        self.assertEqual(events[0]["payload"]["speech_form"], "verbatim")
 
     def test_following_or_heading_toward_someone_closes_the_distance_but_a_place_is_travel(self):
         # Found by playtest: "i follow her at a respectful distance" and "i'll proceed carefully

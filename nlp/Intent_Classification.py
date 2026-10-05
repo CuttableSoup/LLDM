@@ -872,6 +872,20 @@ for _keywords in (
 ):
     for _phrase in _keywords:
         ITEM_VERB_BASES.update(_verb_forms(_phrase.split()[0]))
+# Verbs of speaking aloud, every inflection mapped back to its base -- a clause opening on one is
+# said, not done ("yell insults at the guard", "taunt the vendor"). See
+# IntentClassifier._split_spoken_clauses. Found by playtest: nine of a brawler's forty turns were
+# lines like these, and they came back not-understood or rolled artistry/reflexes. Verbs that try
+# to get something stay out -- "threaten", "demand", "goad" are social-skill attempts and roll
+# ("demand an audience", player_input_corpus.toml) -- as does "curse" (a spell keyword).
+SPEECH_ACT_VERBS = {}
+for _base in (
+    "yell", "shout", "scream", "holler", "bellow", "whisper", "mutter", "murmur", "taunt", "mock",
+    "jeer", "insult", "heckle", "accuse", "complain", "boast", "brag", "growl",
+    "snarl", "hiss", "snap",
+):
+    SPEECH_ACT_VERBS.update(_verb_forms(_base))
+    SPEECH_ACT_VERBS[_base] = _base
 # Words between a first-person opener and the verb it leads to: "i'm just taking it", "then i grab".
 DECLARED_VERB_FILLER = frozenset({"just", "then", "and", "so", "now", "also", "quickly", "finally", "simply"})
 
@@ -1414,6 +1428,16 @@ class IntentClassifier:
             not explicit_dialogue and not found_exempt and has_listener
             and detect_implicit_speech(processed)
         )
+        if not turn_clauses and has_listener and not speech_quotes(processed):
+            spoken = self._split_spoken_clauses(raw_input, processed)
+            if spoken:
+                if found_exempt and all(event["event"] == "dialogue_detected" for event in spoken):
+                    for event in events:
+                        if event["event"] == "item_interaction_detected":
+                            event["payload"]["quiet"] = True
+                events.extend(spoken)
+                return processed, events
+
         if not turn_clauses and (explicit_dialogue or implicit_dialogue):
             if found_exempt:
                 # The exempt clause(s) just appended above (ex: "advance") are about to share
@@ -1539,6 +1563,68 @@ class IntentClassifier:
         dialogue = self._dialogue_event(speech_text, {"speech_form": "verbatim", "utterance": utterance}, True)
         turn = {"event": "turn_detected", "payload": {"clauses": turn_clauses, "input": action_text}}
         return [dialogue, turn] if speech[0].start() < action[0].start() else [turn, dialogue]
+
+    def _split_spoken_clauses(self, raw_input, processed):
+        """!
+        @brief Speech the player describes rather than quotes -- "yell insults at the guard",
+            "shout a challenge, then try to shove them" -- as reported dialogue ("You yell
+            insults at the guard."), plus a turn for whatever else the line declares, in the
+            order written. A clause is spoken when it opens on SPEECH_ACT_VERBS, and so is
+            everything after a "<verb> that..." clause to the end of its sentence: "yell that
+            his net looks flimsy and needs reinforcement" splits on "and", and "needs
+            reinforcement" is still what was said. The rest is judged like any ordinary turn
+            ("i shout 'get down!' and tackle the stranger" still tackles); if it resolves to
+            nothing on its own, the whole line is left to the ordinary passes, as before this
+            existed. A hypothetical ("if i yell at him, will he run?") is left alone too.
+        @return [event, ...], or None if no clause opens on a speech verb.
+        """
+        clauses = split_action_clauses(processed)
+        spoken, reporting = [], False
+        for clause in clauses:
+            if _opening_verb(clause) in SPEECH_ACT_VERBS:
+                spoken.append(clause)
+                reporting = bool(re.search(r"\bthat\b", clause))
+            elif reporting:
+                spoken.append(clause)
+            if re.search(r"[.!?;]$", clause):
+                reporting = False
+        if not spoken or hypothetical_spans(processed):
+            return None
+
+        original = _original_casing(raw_input, processed)
+
+        def reported(clause):
+            # "You <base verb> <what follows, in the player's casing>." -- through any clauses
+            # that continue it ("...and needs reinforcement"), so no words are dropped.
+            start = processed.find(clause)
+            last = clause
+            for following in spoken[spoken.index(clause) + 1:]:
+                if _opening_verb(following) in SPEECH_ACT_VERBS:
+                    break
+                last = following
+            end = processed.find(last, start) + len(last)
+            words = original[start:end].strip().rstrip(".!").split()
+            verb = _opening_verb(clause)
+            index = next(i for i, word in enumerate(words) if word.lower().strip(",") == verb)
+            return " ".join(["You", SPEECH_ACT_VERBS[verb], *words[index + 1:]]) + "."
+
+        openers = [clause for clause in spoken if _opening_verb(clause) in SPEECH_ACT_VERBS]
+
+        def dialogue(utterance):
+            return self._dialogue_event(processed, {"speech_form": "reported", "utterance": utterance}, False)
+
+        rest = [clause for clause in clauses if clause not in spoken]
+        if not rest:
+            return [dialogue(" ".join(reported(clause) for clause in openers))]
+        action_text = ", ".join(rest)
+        turn_clauses, remaining, _found_exempt, _unmatched = self._classify_item_pass(action_text, [])
+        remaining = [clause for clause in remaining if _opening_verb(clause) not in SPEECH_TAG_VERBS]
+        self._classify_skill_pass(remaining, turn_clauses, action_text)
+        if not turn_clauses:
+            return None
+        said = dialogue(" ".join(reported(clause) for clause in openers))
+        turn = {"event": "turn_detected", "payload": {"clauses": turn_clauses, "input": action_text}}
+        return [said, turn] if clauses.index(spoken[0]) < clauses.index(rest[0]) else [turn, said]
 
     def _split_quoted_speech(self, raw_input, processed):
         """!

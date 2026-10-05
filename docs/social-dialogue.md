@@ -397,7 +397,19 @@ swing a fist at elara' is dialogue for the quoted words plus a turn for the rest
 written. Here the rest is judged like any ordinary turn, with no `MIXED_ACTION_MIN_SCORE` bar,
 since the quotes already mark the talk. The quote's own tag (`SPEECH_TAG_VERBS`: yell, shout,
 snicker…) and any dialogue-keyword clause ('ask the guard "where is the inn?"') are never the
-action. A brawler playtest lost all eleven of its shout-and-attack turns to dialogue before this. A clause that opens
+action. A brawler playtest lost all eleven of its shout-and-attack turns to dialogue before this.
+
+Speech described rather than quoted is dialogue too (`_split_spoken_clauses`): a clause opening on
+a verb of speaking aloud (`SPEECH_ACT_VERBS`: yell, shout, whisper, taunt, mock, insult…) is put to
+the narrator as reported speech ("yell insults at the guard" → "You yell insults at the guard."),
+and everything after a "<verb> that…" clause to the end of its sentence belongs to it ("yell that
+his net looks flimsy and needs reinforcement"). Anything else in the line is judged like an
+ordinary turn ("shout a challenge, then try to shove them" also shoves); if it resolves to
+nothing, the whole line is left to the ordinary passes. Verbs that try to get something
+("threaten", "demand", "goad") stay social-skill rolls. Only with someone to hear it, and never
+for a hypothetical. A brawler playtest had nine of forty turns like these come back not-understood
+or roll artistry/reflexes. The corpus test counts an action as swallowed only if it reached
+dialogue *without* its own turn. A clause that opens
 on a gesture verb (`GESTURE_VERBS`: bow, nod, grin, shrug…) never reaches skill matching at all.
 "(bows head dramatically)" had rolled missiles.
 
