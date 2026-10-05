@@ -125,3 +125,17 @@ xdist, so don't fold it into the same `-n auto` invocation without checking that
 first. A machine sleeping mid-run can look exactly like a hang (no worker output until it
 resumes) -- rule that out before concluding `-n` broke something.
 
+## Long-form playtests
+
+`tools/playtest.py` drives the real pipeline headless with a second LLM playing (see its module
+docstring). Personas: `explorer`, `brawler`, `talker`, `terse`, `chaos`, `gooner`, and `typical` --
+short, plain inputs mixing actions, speech and questions, closer to what people actually type than
+the others. `--mix typical,talker,brawler` shares `--turns` between them in one game, and each
+turn record names its persona. A player that repeats itself (`is_looping`: two of its last four
+inputs sharing 40% of their distinctive words) has its history cut back and is told to do
+something different; a chaos run once spent thirty turns rephrasing one argument. `--replay`
+takes a previous run's `.jsonl`, or a `.txt` of one input per line, so a real player's session
+can be replayed as-is. The harness counts every narration request a turn starts and waits for
+all of them before the next input; without that, a fast fight's narrations were each logged
+against the turn after.
+

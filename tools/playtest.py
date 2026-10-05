@@ -15,8 +15,14 @@
     (reported, exit code 0 unless --strict). Every --save-every turns it saves, reloads and
     re-saves, diffing the two dm_state.json files.
 
+    Every turn the player LLM repeats itself (LOOP_SIMILARITY against its last few inputs), its
+    history is cut back to the latest narration and it's told to do something different -- a
+    chaos run once spent thirty turns rephrasing one argument.
+
     python tools/playtest.py --turns 60 --persona explorer --seed 1
+    python tools/playtest.py --mix typical,talker,brawler --turns 60 --seed 1   (20 turns each)
     python tools/playtest.py --replay Logs/playtest_explorer_1_123.jsonl --seed 1
+    python tools/playtest.py --replay my_session.txt   (a real player's inputs, one per line)
 """
 import argparse
 import atexit
@@ -50,7 +56,23 @@ PERSONAS = {
     "chaos": "Adversarial tester. Use odd phrasing, typos, run-ons, multi-action sentences, "
              "ambiguous targets, items you don't own, and attempts to break the rules.",
     "gooner": "Tries to sleep with the NPCs.  Treats it as a porn game.",
+    "typical": "An ordinary player at a tabletop, not a writer. Short, plain inputs, usually under "
+               "twelve words: what you do ('look around', 'grab the rope', 'attack the guard'), what "
+               "you say to someone (in your own words, sometimes in quotes), or a quick question. "
+               "Mix all three; no stage directions or narration of other people.",
 }
+
+# A player input sharing this much of its distinctive vocabulary (5+ letter words, as a share of
+# the shorter line's) with one of its last LOOP_WINDOW counts as a repeat; LOOP_REPEATS repeats in
+# that window and the player is nudged (see Harness.next_action). Calibrated on past runs: 0.4
+# catches both chaos spirals ("structural weight", "anti-grief annex": 9 and 4 turns) and fires at
+# most once per 40 turns on healthy talker/explorer/brawler runs. Plain word overlap missed them
+# entirely -- rambling lines on one topic share few words overall.
+LOOP_SIMILARITY = 0.4
+LOOP_WINDOW = 4
+LOOP_REPEATS = 2
+LOOP_NUDGE = ("You've been repeating yourself. Drop that line of play entirely and do something "
+              "clearly different, still in character.")
 
 PLAYER_SYSTEM = (
     "You are playing a tabletop RPG character. You see only the narration. Reply with ONE "
@@ -65,8 +87,9 @@ WEAK_KEYWORD_SCORE = 0.35
 MAPPED_SKILL_RE = re.compile(r"Mapped input to action: (\w+) via ([\w ]+?)(?: \"[^\"]*\")? \(Score: ([\d.]+)\)")
 
 
-def ask_player(api_url, model, persona, history, timeout=120):
-    messages = [{"role": "system", "content": PLAYER_SYSTEM.format(persona=persona)}]
+def ask_player(api_url, model, persona, history, timeout=120, nudge=None):
+    system = PLAYER_SYSTEM.format(persona=persona) + (f"\n{nudge}" if nudge else "")
+    messages = [{"role": "system", "content": system}]
     for narration, action in history[-6:]:
         messages.append({"role": "user", "content": narration})
         if action:
@@ -77,6 +100,21 @@ def ask_player(api_url, model, persona, history, timeout=120):
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         text = json.load(resp)["choices"][0]["message"]["content"]
     return text.strip().splitlines()[0].strip() if text.strip() else ""
+
+
+def _topic_words(text):
+    return {word for word in re.findall(r"[a-z']+", text.lower()) if len(word) >= 5}
+
+
+def is_looping(action, previous):
+    """Whether action repeats LOOP_REPEATS of the last LOOP_WINDOW inputs (see LOOP_SIMILARITY)."""
+    words = _topic_words(action)
+    repeats = 0
+    for earlier in previous[-LOOP_WINDOW:]:
+        other = _topic_words(earlier)
+        if words and other and len(words & other) / min(len(words), len(other)) >= LOOP_SIMILARITY:
+            repeats += 1
+    return repeats >= LOOP_REPEATS
 
 
 def load_replay(path):
@@ -280,35 +318,55 @@ class Harness:
 
     # --- main loop -----------------------------------------------------------------------
 
+    def persona_for(self, turn):
+        """The persona playing this turn -- --mix hands over every --turns/len(mix) turns."""
+        if not self.mix:
+            return self.args.persona
+        share = max(1, -(-self.args.turns // len(self.mix)))
+        return self.mix[min((turn - 1) // share, len(self.mix) - 1)]
+
     def next_action(self, turn, history, replay):
-        """Returns (action, baseline_record); action is "" if the player LLM gave nothing."""
+        """
+        Returns (action, baseline_record, nudged); action is "" if the player LLM gave nothing.
+        A repeat of its own recent inputs (is_looping) is asked again with the history cut back
+        to the latest narration and LOOP_NUDGE added; that history cut sticks.
+        """
         if replay is not None:
-            return replay[turn - 1]
+            return (*replay[turn - 1], False)
+        persona_name = self.persona_for(turn)
+        persona = PERSONAS.get(persona_name, persona_name)
+        previous = [action for _narration, action in history if action]
+        nudge = None
         for _attempt in range(3):
-            action = ask_player(self.args.player_url, self.player_model, self.persona, history)
-            if action:
-                return action, None
-        return "", None
+            action = ask_player(self.args.player_url, self.player_model, persona, history, nudge=nudge)
+            if not action:
+                continue
+            if nudge is None and is_looping(action, previous):
+                del history[:-1]
+                nudge = LOOP_NUDGE
+                continue
+            return action, None, nudge is not None
+        return "", None, nudge is not None
 
     def run(self):
         args = self.args
         random.seed(args.seed)  # dice use the global `random`; the LLMs stay nondeterministic
         replay = load_replay(args.replay) if args.replay else None
         turns = len(replay) if replay is not None else args.turns
-        self.persona = PERSONAS.get(args.persona, args.persona)
+        self.mix = [name.strip() for name in args.mix.split(",") if name.strip()] if args.mix else []
 
         os.makedirs(os.path.join(ROOT, "Logs"), exist_ok=True)
-        tag = "replay" if replay is not None else args.persona
+        tag = "replay" if replay is not None else ("mix" if self.mix else args.persona)
         log_path = os.path.join(ROOT, "Logs", f"playtest_{tag}_{args.seed}_{int(time.time())}.jsonl")
         print(f"Turn log:    {log_path}\nSession log: {self.logger._log_file.name}")
 
         intro = self.wait_for_narration(0)
         history = [("\n".join(intro), None)]
-        problem_turns, flag_counts, changed, turn = 0, {}, 0, 0
+        problem_turns, flag_counts, changed, nudges, turn = 0, {}, 0, 0, 0
         with open(log_path, "w", encoding="utf-8") as log:
             for turn in range(1, turns + 1):
                 try:
-                    action, baseline = self.next_action(turn, history, replay)
+                    action, baseline, nudged = self.next_action(turn, history, replay)
                 except Exception as e:  # player LLM down: stop rather than spam empty turns
                     print(f"player LLM failed on turn {turn}: {e}")
                     break
@@ -354,7 +412,12 @@ class Harness:
                         changed += 1
                         flags.append(f"mapping changed: {old[0]}+{old[1]} -> {skills}+{self.turn_intents}")
 
+                if nudged:
+                    nudges += 1
+                    print(f"[turn {turn}] player was looping; nudged")
                 record = {"turn": turn, "input": action, "narration": narration, "seconds": elapsed,
+                          "persona": None if replay is not None else self.persona_for(turn),
+                          "nudged": nudged,
                           "skills": skills, "intents": self.turn_intents,
                           "speech": [{"form": d.get("speech_form"), "implicit": d.get("implicit")}
                                      for d in self.turn_dialogue],
@@ -380,7 +443,8 @@ class Harness:
               f"{self.counts['improvisation_requested']} improvised, "
               f"{self.counts['action_resolved']} resolved, "
               f"{self.counts['item_interaction']} item interactions, "
-              f"{self.counts['dialogue']} dialogue ({self.counts['implicit_dialogue']} implicit).")
+              f"{self.counts['dialogue']} dialogue ({self.counts['implicit_dialogue']} implicit), "
+              f"{nudges} loop nudges.")
         if flag_counts:
             print("Flags: " + ", ".join(f"{k} x{v}" for k, v in sorted(flag_counts.items())))
         if replay is not None:
@@ -394,6 +458,9 @@ def main():
     p.add_argument("--setting", default="Pathfinder")
     p.add_argument("--turns", type=int, default=50)
     p.add_argument("--persona", default="explorer", help=f"one of {list(PERSONAS)} or free text")
+    p.add_argument("--mix", default=None,
+                   help="comma-separated personas sharing --turns in order, one game "
+                        "(ex: typical,talker,brawler); overrides --persona")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--replay", default=None,
                    help="Feed inputs from a previous playtest .jsonl (or a one-per-line .txt) "

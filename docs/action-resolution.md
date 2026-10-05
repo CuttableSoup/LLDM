@@ -66,6 +66,37 @@ Once every action-kind entry has resolved, `DMCore` decides `round_resolved` vs.
 for the whole batch, not once per entry (see "Multiple actions").
 
 
+## Ambiguous input: asking the model
+
+`IntentClassifier`'s rules (opening words, speech verbs, hypotheticals, skill-match scores) decide
+most lines on their own. For the lines they can only guess at, it asks the local model what the
+line mainly is (`_adjudicate` → `IntentMatcher.adjudicate` → `AdHoc_Generation.py`'s
+`adjudicate_player_input`): `action`, `speech`, `game_question` or `musing`. Only with someone
+present, and in three cases:
+
+- **declarative**: the rules called a line talk on its opening words alone, and it has no "?" and
+  doesn't open on a question word ("let's go down that cut-through.", "i'll just grab something
+  useful off it."). An `action` verdict sends it to the ordinary skill/item passes instead.
+- **weak_turn**: every skill clause of the turn scored below `WEAK_TURN_SCORE` (0.6).
+- **not_understood**: nothing else claimed the line.
+
+The model only picks the channel; the existing machinery still does the matching (`speech` →
+dialogue, `game_question` → ADaM, `musing` → the not-understood reply). It's one enum-constrained
+tool call with reasoning off and temperature 0 (at the client's default 0.7 the same line routed
+differently run to run), told what the scene's people, the conversation partner and the latest
+narration (`set_recent_narration`, fed from `llm_response_ready`) are. It answers in about 0.7s,
+on roughly half of all lines. No answer (model unreachable, off-list reply) leaves the rules' call,
+including the "!" rule for unclaimed barked lines. Each verdict is logged ("Adjudicated
+ambiguous input (trigger): verdict"). A persuade/haggle/intimidate attempt counts as `action`,
+and a remark made while talking to someone as `speech` — without saying so, "i'll bargain with
+her over the cost of supper" lost its roll.
+
+Measured on `tests/player_input_corpus.toml` mid-conversation (Pathfinder): talk reaching dialogue
+42/52 → 49/52, with actions (40/49 acted on, 1 swallowed) and social-skill rolls (9/12)
+unchanged. The unit tests stub the call module-wide (`_NO_ADJUDICATION`), so the corpus tests
+measure the rules alone.
+
+
 ## Unopposed checks
 
 A skill use with nothing resisting it — no target, no `[entity.test]` — used to roll against 0

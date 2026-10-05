@@ -202,14 +202,20 @@ class TestEventBus(unittest.TestCase):
 # chat client instead.
 REAL_UNTARGETED_DIFFICULTY = DMCore._untargeted_difficulty
 _UNRATED_DIFFICULTY = patch.object(DMCore, "_untargeted_difficulty", lambda self, skill_name, input_text: (0, False))
+# Likewise asking the model what an ambiguous line is (SentenceTransformerMatcher.adjudicate): every
+# test sees "no answer", so the rules stand -- the corpus tests measure the rules alone.
+# TestInputAdjudication covers the call itself against a stubbed chat client.
+_NO_ADJUDICATION = patch.object(SentenceTransformerMatcher, "adjudicate", lambda self, *args, **kwargs: None)
 
 
 def setUpModule():
     _UNRATED_DIFFICULTY.start()
+    _NO_ADJUDICATION.start()
 
 
 def tearDownModule():
     _UNRATED_DIFFICULTY.stop()
+    _NO_ADJUDICATION.stop()
 
 
 class DMTestCase(unittest.TestCase):
@@ -788,6 +794,13 @@ class FakeMatcher:
     def map_to_destination(self, processed_text):
         return self._destinations.get(processed_text, (None, 0.0))
 
+    # {processed text: verdict} -- set directly by a test; anything unlisted gets no answer.
+    adjudications = {}
+
+    def adjudicate(self, text, present_names=(), partner=None, recent_narration=""):
+        self.adjudicated = getattr(self, "adjudicated", []) + [(text, tuple(present_names), partner, recent_narration)]
+        return self.adjudications.get(text)
+
     def set_present_entities(self, entities):
         pass
 
@@ -1230,6 +1243,61 @@ class TestIntentClassification(unittest.TestCase):
                      "walk toward the fishmonger"):
             _processed, events = classifier.classify(text)
             self.assertEqual(events[0]["payload"].get("intent"), "advance", text)
+
+    def _adjudicating(self, verdicts, **matcher_kwargs):
+        matcher = FakeMatcher(**matcher_kwargs)
+        matcher.adjudications = verdicts
+        classifier = IntentClassifier(matcher)
+        classifier.set_present_entities([{"key": "Finn", "name": "Finn", "subtype": "human", "aliases": []}])
+        return classifier, matcher
+
+    def test_an_opening_word_guess_at_talk_is_checked_with_the_model(self):
+        # Found by playtest: "let's go down that cut-through." went to dialogue on "let's".
+        classifier, matcher = self._adjudicating({
+            "let's go down that cut-through.": "action", "hmm, the tide seems early today.": "musing",
+            "i'm not paying that much.": "speech",
+        }, actions={"let's go down that cut-through.": ("athletics", 0.55)})
+        classifier.set_recent_narration("Finn points toward a narrow alley.")
+
+        _processed, events = classifier.classify("Let's go down that cut-through.")
+        self.assertEqual(events[0]["event"], "turn_detected")
+        self.assertEqual(classifier.last_adjudication, ("action", "declarative"))
+        self.assertEqual(matcher.adjudicated[-1][1:], (("Finn",), None, "Finn points toward a narrow alley."))
+
+        _processed, events = classifier.classify("Hmm, the tide seems early today.")
+        self.assertEqual(events[0]["event"], "action_not_understood")
+        _processed, events = classifier.classify("I'm not paying that much.")
+        self.assertEqual(events[0]["event"], "dialogue_detected")
+
+        # A question stays talk without asking.
+        _processed, events = classifier.classify("Where does it lead?")
+        self.assertEqual(events[0]["event"], "dialogue_detected")
+        self.assertIsNone(classifier.last_adjudication)
+
+    def test_a_weak_turn_or_an_unclaimed_line_is_checked_with_the_model(self):
+        classifier, _matcher = self._adjudicating({
+            "count to three for me finn": "speech", "explain how wounds heal": "game_question",
+        }, actions={"count to three for me finn": ("appraise", 0.54)})
+        _processed, events = classifier.classify("Count to three for me Finn")
+        self.assertEqual(events[0]["event"], "dialogue_detected")
+        self.assertEqual(classifier.last_adjudication, ("speech", "weak_turn"))
+
+        _processed, events = classifier.classify("Explain how wounds heal")
+        self.assertEqual(events[0]["event"], "help_detected")
+        self.assertEqual(classifier.last_adjudication, ("game_question", "not_understood"))
+
+    def test_no_model_answer_leaves_the_rules_call(self):
+        classifier, _matcher = self._adjudicating({}, actions={"count to three for me finn": ("appraise", 0.54)})
+        _processed, events = classifier.classify("Count to three for me Finn")
+        self.assertEqual(events[0]["event"], "turn_detected")
+        _processed, events = classifier.classify("Stay right there!")
+        self.assertEqual(events[0]["event"], "dialogue_detected")  # the "!" rule still applies
+
+        # Nobody present: never asked at all.
+        alone = FakeMatcher()
+        alone.adjudications = {"look around for a place to rest.": "speech"}
+        _processed, events = IntentClassifier(alone).classify("Look around for a place to rest.")
+        self.assertFalse(getattr(alone, "adjudicated", []))
 
     def test_a_barked_line_nothing_else_claims_is_said_to_whoever_hears_it(self):
         # Found by playtest: six of a brawler's fifteen not-understood turns were lines like these.
@@ -7852,6 +7920,40 @@ class TestAttackingAnyone(DMTestCase):
         # Found by playtest: "kick" matched a horse's own innate ability, which the player
         # doesn't own and isn't a skill -- it rolled 0 dice under its own name.
         self.assertEqual(self.dm_core._resolve_action_skill("kick"), ("brawling", None))
+
+
+class TestInputAdjudication(unittest.TestCase):
+    """!
+    @brief AdHoc_Generation.py's adjudicate_player_input -- the one enum-constrained call
+        IntentClassifier makes for a line its rules can only guess at -- against a stubbed chat
+        client. (The classifier's own use of it: TestIntentClassification's adjudication tests.)
+    """
+
+    @staticmethod
+    def _answer(kind):
+        return {"choices": [{"message": {"tool_calls": [{"function": {
+            "name": "classify_input", "arguments": json.dumps({"kind": kind, "reason": "test"}),
+        }}]}}]}
+
+    def test_the_model_picks_one_of_the_kinds_from_the_scene_it_is_given(self):
+        from resolution.AdHoc_Generation import adjudicate_player_input
+        sent = []
+        stub = lambda api_url, messages, **kwargs: (sent.append(messages), self._answer("action"))[1]
+        kind, _reason = adjudicate_player_input(
+            "Let's go down that cut-through.", ["Finn"], "Finn", "Finn points at an alley.", call_chat_completion=stub,
+        )
+        self.assertEqual(kind, "action")
+        prompt = sent[0][-1]["content"]
+        for expected in ("Finn", "talking to Finn", "Finn points at an alley.", "cut-through"):
+            self.assertIn(expected, prompt)
+
+    def test_an_off_list_answer_or_no_model_leaves_the_rules_to_decide(self):
+        from resolution.AdHoc_Generation import adjudicate_player_input
+        self.assertEqual(adjudicate_player_input("x", call_chat_completion=lambda *a, **k: self._answer("attack"))[0], None)
+
+        def unreachable(*args, **kwargs):
+            raise ConnectionError
+        self.assertEqual(adjudicate_player_input("x", call_chat_completion=unreachable), (None, "unavailable"))
 
 
 class TestUntargetedDifficulty(DMTestCase):

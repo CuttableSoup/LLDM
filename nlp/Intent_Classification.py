@@ -573,6 +573,17 @@ ITEM_LOSING_INTENTS = frozenset({"give", "drop", "trade", "use"})
 # travel and walked the player to the shipyard mid-conversation.
 QUESTION_BLOCKED_ROUTES = frozenset({"travel", "rest"})
 
+# A line opening on one of these is a question even without its "?" -- never adjudicated as a
+# possible action (see classify's "declarative" case).
+QUESTION_OPENERS = frozenset({
+    "who", "what", "where", "when", "why", "how", "which", "whose", "what's", "where's", "who's",
+    "how's", "is", "are", "was", "were", "do", "does", "did", "can", "could", "should", "would",
+    "will", "shall", "may", "might", "have", "has",
+})
+# A turn whose every skill clause scored below this is a guess -- with someone present, the model
+# is asked whether the line was an action at all (see IntentClassifier._adjudicate).
+WEAK_TURN_SCORE = 0.6
+
 # Item intents that change what the player has or holds -- never taken from an is_hypothetical
 # sentence (see _classify_item_pass). Read-only ones (examine, lore_check, open) still are.
 HYPOTHETICAL_BLOCKED_INTENTS = ITEM_LOSING_INTENTS | {"take", "equip", "unequip", "craft"}
@@ -610,6 +621,14 @@ class IntentMatcher:
         """!@brief Incrementally registers one ad hoc item's name/description for map_to_item
             (and, if targetable, for map_to_target too)."""
         raise NotImplementedError
+
+    def adjudicate(self, text, present_names=(), partner=None, recent_narration=""):
+        """!
+        @brief What a line the classifier's own rules can only guess at mainly is: "action",
+            "speech", "game_question", "musing", or None (no model to ask, or no usable answer
+            -- the rules then stand). See IntentClassifier._adjudicate.
+        """
+        return None
 
     def map_to_action(self, processed_text):
         """!@brief Returns (skill_name, score); skill_name is None below confidence."""
@@ -1300,6 +1319,9 @@ class IntentClassifier:
         # Whether anyone besides the player is in the scene, as DMCore last published it -- with
         # nobody here, unmarked speech has no listener (see the dialogue gate in classify).
         self.anyone_present = False
+        self.present_names = []
+        self.recent_narration = ""
+        self.last_adjudication = None
 
     def on_rules_loaded(self, data):
         """!@brief Forwards a "rules_loaded" payload to the matcher to build its embeddings."""
@@ -1317,10 +1339,52 @@ class IntentClassifier:
         """!@brief Forwards the current scene's own cast to the matcher's own bank."""
         self.matcher.set_present_entities(entities)
         self.anyone_present = any(entity.get("key") for entity in entities or [])
+        self.present_names = [entity.get("name") or entity.get("key") for entity in entities or [] if entity.get("key")]
+
+    def set_recent_narration(self, text):
+        """!@brief The narrator's latest words, as context for _adjudicate."""
+        self.recent_narration = text or ""
 
     def set_conversation_partner(self, partner):
         """!@brief Records DMCore's current conversation partner ({"key", ...} or None)."""
         self.conversation_partner = partner
+
+    def _adjudicate(self, processed, trigger):
+        """!
+        @brief Asks the matcher's model what a line the rules can only guess at mainly is
+            (IntentMatcher.adjudicate), for three cases, each only with someone present:
+            "declarative" -- the rules called an unquestioning line talk on its opening words
+            ("let's go down that cut-through."); "weak_turn" -- every skill clause scored below
+            WEAK_TURN_SCORE; "not_understood" -- nothing claimed it. The model only picks the
+            channel. Records (verdict, trigger) in last_adjudication for NLPCore's log.
+        @return "action"/"speech"/"game_question"/"musing", or None to leave the rules' call.
+        """
+        adjudicate = getattr(self.matcher, "adjudicate", None)
+        verdict = adjudicate(
+            processed, self.present_names,
+            (self.conversation_partner or {}).get("name"), self.recent_narration,
+        ) if adjudicate else None
+        self.last_adjudication = (verdict, trigger)
+        return verdict
+
+    def _verdict_event(self, verdict, processed, raw_input):
+        """!@brief The event a non-action verdict routes to, or None ("action", or no verdict)."""
+        if verdict == "speech":
+            return self._dialogue_event(processed, frame_speech(raw_input, processed, False), True)
+        if verdict == "game_question":
+            return self._help_event(processed)
+        if verdict == "musing":
+            return {"event": "action_not_understood", "payload": {"input": processed, "score": 0.0}}
+        return None
+
+    @staticmethod
+    def _help_event(processed):
+        return {"event": "help_detected", "payload": {
+            "input": processed,
+            "removal_candidate": detect_removal_intent(processed),
+            "creature_candidate": detect_creature_intent(processed),
+            "edit_candidate": detect_edit_intent(processed),
+        }}
 
     def classify(self, raw_input):
         """!
@@ -1341,6 +1405,7 @@ class IntentClassifier:
         """
         processed = process_input(raw_input)
         events = []
+        self.last_adjudication = None
 
         save_load_intent, slot_name = detect_save_load_intent(processed)
         if save_load_intent:
@@ -1350,12 +1415,7 @@ class IntentClassifier:
         if detect_help_intent(processed) or detect_out_of_character(processed):
             # A question about the game itself reaches ADaM without "adam" said aloud -- see
             # detect_out_of_character.
-            events.append({"event": "help_detected", "payload": {
-                "input": processed,
-                "removal_candidate": detect_removal_intent(processed),
-                "creature_candidate": detect_creature_intent(processed),
-                "edit_candidate": detect_edit_intent(processed),
-            }})
+            events.append(self._help_event(processed))
             return processed, events
 
         if detect_scene_query_intent(processed):
@@ -1428,6 +1488,16 @@ class IntentClassifier:
             not explicit_dialogue and not found_exempt and has_listener
             and detect_implicit_speech(processed)
         )
+        if implicit_dialogue and not turn_clauses and "?" not in processed and _opening_verb(processed) not in QUESTION_OPENERS:
+            # Talk only by its opening words -- ask (see _adjudicate). A question stays talk, with
+            # or without its "?" ("where should i put it"): it almost never declares an action,
+            # and is_hypothetical already covers the rest.
+            verdict = self._adjudicate(processed, "declarative")
+            if verdict == "action":
+                implicit_dialogue = False
+            elif verdict in ("game_question", "musing"):
+                events.append(self._verdict_event(verdict, processed, raw_input))
+                return processed, events
         if not turn_clauses and has_listener and not speech_quotes(processed):
             spoken = self._split_spoken_clauses(raw_input, processed)
             if spoken:
@@ -1468,6 +1538,14 @@ class IntentClassifier:
             remaining_clauses, turn_clauses, processed,
             item_verb_clauses={verb["phrase"] for verb in unmatched_item_verbs},
         )
+        if (
+            turn_clauses and has_listener and not found_exempt and self.last_adjudication is None
+            and all(clause["kind"] == "action" and clause.get("score", 1.0) < WEAK_TURN_SCORE for clause in turn_clauses)
+        ):
+            verdict_event = self._verdict_event(self._adjudicate(processed, "weak_turn"), processed, raw_input)
+            if verdict_event:
+                events.append(verdict_event)
+                return processed, events
 
         self._finalize(processed, turn_clauses, found_exempt, unmatched_item_verbs, best_score, events, raw_input)
         return processed, events
@@ -1837,7 +1915,18 @@ class IntentClassifier:
             }})
             return
 
-        if processed.rstrip().endswith("!") and (self.conversation_partner is not None or self.anyone_present):
+        has_listener = self.conversation_partner is not None or self.anyone_present
+        if has_listener and self.last_adjudication is None:
+            verdict = self._adjudicate(processed, "not_understood")
+            verdict_event = self._verdict_event(verdict, processed, raw_input)
+            if verdict_event:
+                events.append(verdict_event)
+                return
+            if verdict is not None:
+                events.append({"event": "action_not_understood", "payload": {"input": processed, "score": best_score}})
+                return
+
+        if processed.rstrip().endswith("!") and has_listener:
             # Nothing claimed it and someone can hear it: a barked line is said to them. Found by
             # playtest: "stay right there!", "keep your hands up!" and "hey! get back here!" were
             # six of a brawler's fifteen not-understood turns, mid-fight with a listener.

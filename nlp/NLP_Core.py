@@ -16,6 +16,7 @@ import threading
 import numpy as np
 import torch
 from sentence_transformers import SentenceTransformer, util
+from resolution.AdHoc_Generation import adjudicate_player_input
 from transformers import pipeline
 
 from nlp.Intent_Classification import (
@@ -587,6 +588,18 @@ class SentenceTransformerMatcher(IntentMatcher):
                 return name, re.sub(r"\s+", " ", stripped).strip()
         return None, processed_text
 
+    def adjudicate(self, text, present_names=(), partner=None, recent_narration=""):
+        """!
+        @brief The one matcher call that asks the local LLM instead of embeddings -- see
+            IntentMatcher.adjudicate and AdHoc_Generation.py's adjudicate_player_input. A
+            failure is logged and left to the rules (None).
+        """
+        kind, reason = adjudicate_player_input(text, present_names, partner, recent_narration)
+        if kind is None:
+            self.event_bus.publish("log_warning" if reason == "unavailable" else "log_info",
+                                   f"Input adjudication gave no answer ({reason}); the rules stand.")
+        return kind
+
     def map_to_action(self, processed_text):
         """!
         @brief Maps the processed text to a specific skill or action using semantic similarity.
@@ -970,6 +983,8 @@ class NLPCore:
         # DM_Dialogue.py's _set_conversation_partner publishes this whenever who the player is
         # talking to changes -- see IntentClassifier.set_conversation_partner.
         self.event_bus.subscribe("conversation_partner_updated", self._on_conversation_partner_updated)
+        # The narrator's latest words, as context for an ambiguous line (IntentClassifier._adjudicate).
+        self.event_bus.subscribe("llm_response_ready", self._on_llm_response_ready)
 
         self.event_bus.publish("log_info", "NLPCore initialized with SentenceTransformer.")
 
@@ -986,6 +1001,9 @@ class NLPCore:
         self.event_bus.publish("player_input_received", player_input)
         processed, events = self.classifier.classify(player_input)
         self.event_bus.publish("log_info", f"Processing player input: {player_input} -> {processed}")
+        if self.classifier.last_adjudication:
+            verdict, trigger = self.classifier.last_adjudication
+            self.event_bus.publish("log_info", f"Adjudicated ambiguous input ({trigger}): {verdict}.")
         for event in events:
             self.event_bus.publish(event["event"], event["payload"])
 
@@ -1029,6 +1047,11 @@ class NLPCore:
             the bank.
         """
         self.classifier.set_present_entities(data.get("entities", []))
+
+    def _on_llm_response_ready(self, text):
+        """!@brief Keeps the narrator's latest words for _adjudicate (never a System notice)."""
+        if text and not str(text).startswith("System:"):
+            self.classifier.set_recent_narration(str(text))
 
     def _on_conversation_partner_updated(self, data):
         """!

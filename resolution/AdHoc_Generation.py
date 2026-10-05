@@ -274,7 +274,7 @@ def _extract_tool_call(response):
 
 
 def _call_tool_or_decline(messages, tools, accepted_function_names, call_chat_completion, api_url, timeout,
-                          max_tokens=None, reasoning_effort=None):
+                          max_tokens=None, reasoning_effort=None, temperature=None):
     """!
     @brief Shared LLM-calling boilerplate for every function below -- calls
         call_chat_completion, extracts the tool call, and resolves whether the model picked one
@@ -301,6 +301,8 @@ def _call_tool_or_decline(messages, tools, accepted_function_names, call_chat_co
         caller whose call is small enough not to need it.
     @param reasoning_effort Optional, forwarded only when given -- "none" for a quick enum pick
         that gains nothing from hidden reasoning (see LLM_Client.call_chat_completion).
+    @param temperature Optional, forwarded only when given -- 0 for a classification that should
+        answer the same way every time (adjudicate_player_input).
     @return (function_name, arguments) when function_name is in accepted_function_names.
             (None, reason) otherwise -- reason is "unavailable" if call_chat_completion or
             _extract_tool_call raised, else arguments.get("reason", "declined") (guarded for a
@@ -309,6 +311,8 @@ def _call_tool_or_decline(messages, tools, accepted_function_names, call_chat_co
     extra = {"max_tokens": max_tokens} if max_tokens else {}
     if reasoning_effort:
         extra["reasoning_effort"] = reasoning_effort
+    if temperature is not None:
+        extra["temperature"] = temperature
     try:
         response = call_chat_completion(api_url, messages, tools=tools, tool_choice="auto", timeout=timeout, **extra)
         function_name, arguments = _extract_tool_call(response)
@@ -588,6 +592,98 @@ def rate_difficulty(
     if tier not in names:
         return None, "invalid_tier"
     return tier, payload.get("reason", "")
+
+
+# What a player's line mainly is, for IntentClassifier's ambiguous cases -- see
+# adjudicate_player_input. Order matters only for the prompt.
+INPUT_KINDS = {
+    "action": "their character does something in the scene: moves somewhere, fights, takes or "
+              "uses something, searches, tries a skill -- including trying to persuade, haggle "
+              "with, deceive or intimidate someone, which the game rolls dice for",
+    "speech": "words said aloud to someone present, or reported speech (\"I tell him to back "
+              "off\") -- any remark or small talk while they're talking to someone",
+    "game_question": "a question about the game itself -- its rules, dice, mechanics -- not the story",
+    "musing": "thinking aloud or wondering with no one to hear it; neither said to anyone nor an attempt",
+}
+ADJUDICATION_TIMEOUT = 10
+ADJUDICATION_MAX_TOKENS = 128
+
+
+def adjudicate_player_input(
+    text, present_names=(), partner=None, recent_narration="", call_chat_completion=None,
+    api_url=DEFAULT_API_URL, timeout=ADJUDICATION_TIMEOUT,
+):
+    """!
+    @brief Asks the model what a player's line mainly is -- one of INPUT_KINDS -- for the lines
+        IntentClassifier's own rules can only guess at (see its _adjudicate). Only picks the
+        channel; the classifier's ordinary machinery still does the matching. Built like
+        rate_difficulty: one enum-constrained tool call, reasoning off, so it answers in about a
+        second. Found by playtest: "let's go down that cut-through." and "i'll just grab
+        something useful off it." went to dialogue on their opening words, and a growing stack of
+        word-list rules was the only alternative.
+    @param text The player's line, as typed.
+    @param present_names Who else is in the scene, by display name.
+    @param partner Who the player is talking to, or None.
+    @param recent_narration The last thing the narrator said, for context.
+    @param call_chat_completion Injectable for tests; defaults to the module's real client.
+    @return (kind, reason) -- kind is None if the model was unreachable, declined, or answered
+            outside INPUT_KINDS; reason then says why.
+    """
+    call_chat_completion = call_chat_completion or _real_call_chat_completion
+    kind_lines = "\n".join(f"- {kind}: {meaning}" for kind, meaning in INPUT_KINDS.items())
+    context = [f"People here: {', '.join(present_names) or 'no one else'}."]
+    if partner:
+        context.append(f"The player is talking to {partner}.")
+    if recent_narration:
+        context.append(f"The game master last said: \"{recent_narration[-600:]}\"")
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You sort a tabletop RPG player's typed line by what it mainly is, so the game "
+                "can route it. Judge what the player means, not the words it happens to use."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                "\n".join(context) + f"\nThe player typed: \"{text}\"\n"
+                f"What is it mainly?\n{kind_lines}\nCall classify_input."
+            ),
+        },
+    ]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "classify_input",
+                "description": "Says what the player's line mainly is.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "kind": {"type": "string", "enum": list(INPUT_KINDS)},
+                        "reason": {"type": "string"},
+                    },
+                    "required": ["kind"],
+                },
+            },
+        },
+        _decline_tool_schema("Call this only if the line is empty or unreadable."),
+    ]
+    function_name, payload = _call_tool_or_decline(
+        messages, tools, {"classify_input"}, call_chat_completion, api_url, timeout,
+        max_tokens=ADJUDICATION_MAX_TOKENS, reasoning_effort=DIFFICULTY_REASONING,
+        # The same line should route the same way every time -- at the client's default 0.7,
+        # "i'll bargain with her over the cost of supper" came back action on one run, speech
+        # on the next.
+        temperature=0,
+    )
+    if function_name is None:
+        return None, payload
+    kind = str(payload.get("kind", "")).strip().lower()
+    if kind not in INPUT_KINDS:
+        return None, "invalid_kind"
+    return kind, payload.get("reason", "")
 
 
 def decide_entity_removal(
