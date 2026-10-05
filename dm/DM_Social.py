@@ -313,7 +313,10 @@ class SocialMixin(DMCoreProtocol):
         @brief How narration prompts should refer to an entity. A background crowd member's own
             "name" is a job title ("Fishmonger"), not a name -- left bare, the model writes
             "Fishmonger pauses" as if it were his surname -- so it's flagged as unnamed and
-            referred to by role ("the Fishmonger"). Everyone else is just their name.
+            referred to by role ("the Fishmonger"). A narrated person (source = "narration")
+            has a personal name of their own, so is only unnamed if the narrator's name for
+            them is just their occupation -- labelling a narrated "Elara" this way had the
+            model writing "The Elara pauses". Everyone else is just their name.
         @param entity_name The entity's self.entities key.
         @param roster True for the roster form, which spells out the unnamed caveat.
         @return The label to use in a prompt.
@@ -321,6 +324,9 @@ class SocialMixin(DMCoreProtocol):
         entity = self.entities.get(entity_name, {})
         name = entity.get("name", entity_name)
         if not entity.get("background"):
+            return name
+        occupation = entity.get("qualities", {}).get("occupation", "")
+        if entity.get("source") == "narration" and name.lower() != occupation.lower():
             return name
         if not roster:
             return f"the {name}"

@@ -812,7 +812,7 @@ replace_with = "glass vial"                 # Must name another loaded entity; a
 # Descriptive/flavor fields -- purely narrative, read by describe_character for the
 # scenario_loaded roster and every action's own "defender_details" (deliberately excludes
 # mechanical data like skills/dice, see CLAUDE.md's "Social and attitudes").
-languages = [ "varisian" ]                    # Every language this entity understands. Absent
+languages = [ "common", "varisian" ]          # Every language this entity understands. Absent
                                             # entirely defaults to ["common"], same as every
                                             # entity shipped today -- an author only needs to
                                             # narrow this (ex: ["elvish"] alone, no "common")
@@ -822,7 +822,7 @@ languages = [ "varisian" ]                    # Every language this entity under
                                             # fields (apply_character_creation adds the
                                             # player's chosen race's language onto their own
                                             # list at chargen time).
-current_language = "varisian"                 # Player-entity only, runtime state (not authored --
+current_language = "common"                 # Player-entity only, runtime state (not authored --
                                             # never set on a template): whichever one of the
                                             # player's own "languages" is currently being spoken.
                                             # Absent defaults to languages[0] (_current_language,

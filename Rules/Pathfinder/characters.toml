@@ -30,7 +30,7 @@ inventory = [
     "iron filings"
 ]
 
-languages = [ "varisian" ]
+languages = [ "common", "varisian" ]
 memories = [ "A wife at home" ]
 quotes = [ "Hello, world" ]
 
@@ -199,7 +199,7 @@ inventory = [
     "health potion",
 ]
 
-languages = [ "varisian" ]
+languages = [ "common", "varisian" ]
 memories = [ "A brother lost to the Lost Coast" ]
 quotes = [ "Quiet feet, quick hands." ]
 
@@ -257,7 +257,7 @@ inventory = [
     "health potion",
 ]
 
-languages = [ "varisian" ]
+languages = [ "common", "varisian" ]
 memories = [ "A chapel he keeps meaning to return to" ]
 quotes = [ "The light asks only that you try." ]
 

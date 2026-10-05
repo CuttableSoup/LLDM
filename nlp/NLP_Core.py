@@ -980,6 +980,10 @@ class NLPCore:
             why more than one event can come back from a single turn.
         @param player_input The raw string from "user_input_submitted".
         """
+        # Lets DMCore bring the scene up to date first (people the last narration introduced --
+        # see ImprovisationMixin._on_player_input_received); routing reads the present-entity
+        # bank that does.
+        self.event_bus.publish("player_input_received", player_input)
         processed, events = self.classifier.classify(player_input)
         self.event_bus.publish("log_info", f"Processing player input: {player_input} -> {processed}")
         for event in events:

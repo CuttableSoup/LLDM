@@ -8,6 +8,10 @@ Every scenario entity — the player included — has an objective, 1-indexed `b
 the current room's own band line, not a distance-from-player. A freeform location (see
 "Scenarios, locations, and rooms") has no band line of its own at all — everyone in it is
 pinned to an implicit band 1, so advance/retreat there is always a no-op.
+"Follow her"/"go after him" are advance too (there's no follow mechanic; closing the distance is
+what the engine can do), and so is "head/walk/proceed (carefully) toward X" (`TOWARD_PATTERN`)
+unless X matches a real destination, in which case it's travel: "head toward the docks" goes to
+the shipyard, "walk toward the fishmonger" closes on her.
 `get_distance_between(a, b)` is the absolute difference between two band numbers. The player
 moves via `advance_or_retreat(direction)` (`DM_Movement.py`): shifts the player's band by up to
 their `speed` (default 1) toward or away from `current_target`. A creature/ally moves the same

@@ -134,6 +134,12 @@ that cost the player something (`ITEM_LOSING_INTENTS`: give/drop/trade/use) the 
 alone isn't enough — the clause must also name the item (`_clause_names_item`: a word of the name
 in the clause, or a clause word inside a name word, so "the potions"/"the sword" still reach
 "health potion"/"longsword"); otherwise "…might give a clue" hands a potion to a bystander.
+None of the verbs that change what the player holds (`HYPOTHETICAL_BLOCKED_INTENTS`: give, drop,
+trade, use, take, equip, unequip, craft) fire from a sentence that only wonders about the action
+(`is_hypothetical`: it opens on a conditional — "if…", "but if…", "what if…" — or is a question
+other than a permission-style "can/could/may i…?"), and travel doesn't either. A playtest's "but if
+i use a coupon then i only gotta give you the promise of the actual coins next week right?" handed
+the player's whole purse to a bystander. "Can i take the sword?" still takes it.
 
 `DMCore._on_item_interaction_detected` resolves with zero dice rolls:
 - `"equip"`/`"unequip"`/`"drop"` are checked first, since none care about target_name/the

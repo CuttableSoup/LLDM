@@ -160,8 +160,10 @@ no further resolution.
 `_resolve_dialogue_target` searches the input for any present entity's name (whole-word,
 excluding the player). If none is named, it falls back to `_default_listener`: the first person
 present who understands the player's current language, else `_get_target_name()`'s default scene
-target. A playtest's first market vendor spoke only another tongue, so 80 turns of unnamed talk
-came back as gibberish. `_resolve_dialogue` gates on the target being present/alive (`reason: "not_present"`)
+target, never a dead one. A playtest's first market vendor spoke only another tongue, so 80 turns
+of unnamed talk came back as gibberish; another kept talking to the corpse of a bystander killed the
+turn before. `_resolve_dialogue` gates on the target being alive (`reason: "dead"`, said outright so
+the narrator doesn't have the body "gasping for air") and present (`reason: "not_present"`)
 and not an inanimate `"object"` (`reason: "cant_talk"`) — but deliberately **not** on hostility:
 addressing a hostile entity is allowed (shouting mid-fight), and the model is free to read that
 as hostile/dismissive in character rather than being denied outright. A found target's
@@ -231,16 +233,17 @@ just generated/ad-hoc ones.
 
 **Language barriers.** Every entity's own `languages` list (an entity field,
 `entity_schema.toml`, absent entirely defaulting to `["common"]` — same as every entity shipped
-today) is what it understands. The player's own side of the comparison, though, is a single
-persistent choice, not the full list: `DM_Dialogue.py`'s `_current_language()` returns
-`current_language` (a runtime-only player-entity field, absent until the player deliberately
-switches) or, absent that, the first entry of the player's own `languages` — chargen's own
-ordering (`"common"` first, the chosen race's language appended after). This is deliberate: a
-community plausibly converges on one shared tongue, and re-deciding which language is in use on
-every single exchange would be tedious for no narrative payoff, so a bilingual player isn't
-treated as speaking every known language at once just because they know more than one.
-`_detect_language_barrier(target_name)` compares that one active language against
-`target_name`'s own full list; a match resolves as ordinary dialogue. No match resolves
+today) is what it understands. The player is understood if they share any language with the
+target — unless they deliberately chose one: `current_language` (a runtime-only player-entity
+field, absent until the player says "speak in elvish") narrows them to that one tongue, so
+speaking Common so the elvish innkeeper can't follow is still a real choice. Without a choice, a
+bilingual player just talks in whichever of their languages the listener knows. This used to be
+"only the first known language counts", which a playtest broke: the Pathfinder default character
+was made Varisian-first so polity-defaulted townsfolk would understand him, and from then on every
+NPC left on the `"common"` default (authored ones with no `languages`, dialogue-promoted ones)
+answered him in gibberish — no ordering of one list could satisfy both groups.
+`_detect_language_barrier(target_name)` makes that comparison; a match resolves as ordinary
+dialogue. No match resolves
 `{"found": True, "language_barrier": True, "target_language", "nonsense_phrase"}` instead of the
 ordinary persona/attitude reply — the target is still present and willing to react, just unable
 to understand the words, so `nudge_attitude` is deliberately skipped (a sentiment classifier
@@ -252,11 +255,10 @@ branches on `language_barrier` to `_build_language_barrier_prompt`, instructing 
 reply only with invented gibberish styled after `nonsense_phrase` (explicitly told not to reuse
 it verbatim) rather than answering what was actually asked — persona/attitude still ground *tone*
 (a hostile speaker's gibberish should still read as hostile), just never the content. Only the
-player's own side is ever narrowed to one active tongue this way — a target's own multiple known
-languages all still count toward whether *it* understands the player, since there's no equivalent
-"which one is it currently speaking" ambiguity on that side.
+player's own side is ever narrowed to one chosen tongue this way — a target's own multiple known
+languages all still count toward whether *it* understands the player.
 
-Which language is currently active is switched via a new free-standing intent, `speak_language`
+Which language the player has chosen is set via a new free-standing intent, `speak_language`
 (`nlp/Intent_Classification.py`'s `SPEAK_LANGUAGE_KEYWORDS`: "speak in ", "switch to speaking ",
 "start speaking " — phrases, not a bare "speak ", to avoid colliding with the `linguistics`
 skill's own "speak" keyword, same reasoning `DIALOGUE_KEYWORDS`' own "speak to "/"speak with "
@@ -358,7 +360,9 @@ Every change is published as `conversation_partner_updated {"partner": {"key", "
 is set, `classify`'s dialogue gate also accepts `detect_implicit_speech` (`Intent_Classification.py`).
 That check is structural and needs no model call. Any sentence that has a `?`, fails
 `opens_like_an_action` (the `NON_ACTION_OPENERS` list the skill fallbacks already use to spot
-banter, read after stripping a leading vocative like "gareth, "), or opens as an imperative
+banter, read after stripping a leading vocative like "gareth, "; an opening article counts too,
+since "the wall thing i saw before" cast wall of fire and "then the rules are incomplete…" rolled
+psionics into a bystander), or opens as an imperative
 aimed at the speaker ("help me", "come help me", "join us") counts. Social-skill attempts
 ("persuade the captain to lend us his boat") open on their own verb, so they still reach the
 skill pass and roll. Implicit dialogue is skipped when a free-standing intent already claimed a
@@ -368,7 +372,10 @@ still runs whenever anyone besides the player is in the scene (`IntentClassifier
 from `scene_roster_updated`). This lets a conversation *start* without "talk to": the line goes to
 whoever `_resolve_dialogue_target` picks (a name in the input, or the scene's default person).
 Before this, playtests showed 210 turns of talk to NPCs never reaching dialogue once. Only an
-empty scene leaves unmarked talk to the skill pass. An order given by name ("bram, attack the
+empty scene leaves unmarked talk to the skill pass. A line ending in "!" that nothing else
+claims (no item, skill, or route) is said to whoever can hear it rather than coming back
+not-understood: "stay right there!" and "keep your hands up!" were six of a brawler's fifteen
+not-understood turns. An order given by name ("bram, attack the
 goblin") still opens like an action. "i bet …" counts as a remark rather than a wager when the
 next word is a pronoun or determiner (`BET_REMARK_FOLLOWERS`), so it no longer rolls gambling.
 "i'm <verb>ing" is a declared action ("i'm knocking this stall over") unless the verb is stative
@@ -380,7 +387,17 @@ is split by `_split_speech_from_action`. Each sentence is judged on its own by
 plus a `turn_detected` for the rest, in the order written. This only happens when the action
 half resolves to something real: a matched item, or a skill matched at
 `MIXED_ACTION_MIN_SCORE` (0.5) or above. If not ("forget the lumber. let's find a private
-place.", or an item verb naming nothing real), the whole line stays dialogue. A clause that opens
+place.", or an item verb naming nothing real), the whole line stays dialogue. A sentence
+opening on an article or bare interjection (`SPEECH_FRAGMENT_OPENERS`: a/the/no/yeah/sure…) is a
+fragment of the talk and never the action half: "a name, man. you gotta give me a name" had rolled
+appraise on "a name, man.".
+
+Quoted speech beside an action splits the same way (`_split_quoted_speech`): 'i yell "hey!" and
+swing a fist at elara' is dialogue for the quoted words plus a turn for the rest, in the order
+written. Here the rest is judged like any ordinary turn, with no `MIXED_ACTION_MIN_SCORE` bar,
+since the quotes already mark the talk. The quote's own tag (`SPEECH_TAG_VERBS`: yell, shout,
+snicker…) and any dialogue-keyword clause ('ask the guard "where is the inn?"') are never the
+action. A brawler playtest lost all eleven of its shout-and-attack turns to dialogue before this. A clause that opens
 on a gesture verb (`GESTURE_VERBS`: bow, nod, grin, shrug…) never reaches skill matching at all.
 "(bows head dramatically)" had rolled missiles.
 
@@ -392,11 +409,14 @@ dialogue line, and `dialogue_detected` carries the result as `speech_form`/`utte
 passes both through on `dialogue_resolved`):
 
 - `greet`: a dialogue keyword naming someone and nothing else ("talk to the fishmonger"). The
-  prompt has the player approach, and the NPC speaks first.
+  prompt has the player approach, and the NPC speaks first. A keyword with nothing after it at
+  all ("…and how can we tell?") greets no one and stays `verbatim`.
 - `reported`: any other keyword-led line, restated in the second person from the keyword on
   ("ask about the kelp beds" → "You ask about the kelp beds."). A movement clause before the
   keyword is its own quiet intent, so it's left out.
-- `verbatim`: the player's own words, quoted as said: a quoted span (the quote only), implicit
+- `verbatim`: the player's own words, quoted as said: a quoted span (the quote only; a span counts
+  as speech at three or more words or ending in `.!?,` — a bare one- or two-word quote like 'the
+  real "currents"' is a scare quote, see `speech_quotes`), implicit
   speech (see "Conversation partner"), or a keyword aimed back at the speaker ("tell me what you
   know").
 

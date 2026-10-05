@@ -19,7 +19,12 @@ Publishes `help_detected {input}`. A question about the game itself reaches ADaM
 "adam" (`detect_out_of_character`). It needs a game-mechanics term (`OUT_OF_CHARACTER_PATTERN`:
 rulebook, the rules, roll a dice, saving throw, action economy, NPC, GM/DM…) in a line that
 reads as talk (`detect_implicit_speech`), so "roll for initiative against the goblin" still
-rolls. A playtest had 150 turns of rules-lawyering answered by a fisherman in character.
+rolls. A playtest had 150 turns of rules-lawyering answered by a fisherman in character. "The
+rules of <something>" is in-fiction and doesn't count: "what are the rules of the 'beautiful,
+terrible mess'?" went to ADaM mid-conversation and came back as sourcebook text about the Abyss.
+ADaM is told never to mention "the facts"/"the provided lore" it was given (the player can't see
+them) and to say the game has no rule for something instead; a chaos playtest got "There are no
+facts provided regarding…" six times. The harness flags any narration that still does.
 
 `DM_Help.py`'s `HelpMixin._on_help_detected` gathers a fresh snapshot of live state every time
 it fires (no memory of past exchanges — see below) and publishes `help_resolved`: the player's
@@ -103,7 +108,10 @@ editing (`edit_candidate`) — each gated by its own cheap local keyword pre-che
 **Creation.** `Intent_Classification.py` tracks any clause matching `IMPROVISABLE_INTENTS`
 (`examine`/`take`/`give`/`equip`/`unequip`/`use`/`drop`/`trade`) whose `map_to_item` found
 nothing. If the whole turn resolves to nothing at all, the first such candidate is published as
-`improvisation_requested {intent, phrase, input}` instead of `action_not_understood`.
+`improvisation_requested {intent, phrase, input}` instead of `action_not_understood`. Such a clause
+only goes to a skill on a direct match (`MIXED_ACTION_MIN_SCORE`), never a keyword-fallback guess:
+a playtest's "i pick up the damp ledger book", a book the narrator had just described, rolled
+finesse at 0.21 instead of making the book real.
 `ImprovisationMixin._on_improvisation_requested` calls `generate_ad_hoc_item`
 (enum-constrained `subtype`/`equip_slot`/`lock_skill`/`disarm_skill`/`damage_tag`, built from
 real in-use values for reliability with small local models). On decline/failure: publishes

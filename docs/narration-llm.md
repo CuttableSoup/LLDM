@@ -46,6 +46,10 @@ polearm the player never owned, and the player LLM swung it for fifteen turns. `
 addressed entity, grounded in `persona`/`attitude` plus that entity's own presence-filtered
 history, never the standing GM framing.
 
+Every reply has "the user"/"the user's" rewritten to "you"/"your" (`address_player_as_you`)
+before it's shown or stored. The chat API calls the player "user", and one "Finn stares at the
+user" in the history was imitated by nearly every reply for thirty turns.
+
 **Denial-path grounding.** Every trigger above that can fire with *nothing* real to narrate —
 `generate_clarification_response` (no action matched at all), `generate_item_interaction_response`
 's own `"found": false` branch (a locked/absent/unaffordable item), and `generate_npc_dialogue`'s

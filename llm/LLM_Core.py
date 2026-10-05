@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import urllib.request
 import threading
 
@@ -12,6 +13,24 @@ from dm.DM_ActionOutcome import (
 from intents.registry import HANDLERS as FREE_STANDING_INTENT_HANDLERS
 from llm.LLM_Rag import RagIndex
 from paths import PROJECT_ROOT
+
+USER_REFERENCE_PATTERN = re.compile(r"\b(the user)('s)?\b", re.IGNORECASE)
+
+
+def address_player_as_you(text):
+    """!
+    @brief Rewrites the chat API's own word for the player ("the user") as "you". Found by
+        playtest: an NPC once "stares at the user", and every later reply copied it from the
+        history -- 30 turns of it.
+    @param text A model reply.
+    @return text with "the user" -> "you" and "the user's" -> "your", capitalized at a
+        sentence start.
+    """
+    def replace(match):
+        word = "your" if match.group(2) else "you"
+        return word.capitalize() if match.group(1)[0] == "T" else word
+    return USER_REFERENCE_PATTERN.sub(replace, text)
+
 
 def _format_damage_effect(effect, actor):
     return f" {effect.defender} takes {effect.net_damage} damage ({effect.remaining_hp} HP remaining)."
@@ -821,6 +840,7 @@ class LLMCore:
             reason_text = {
                 "no_one_here": "there's no one here to talk to",
                 "not_present": f"{target or 'that'} isn't here to respond",
+                "dead": f"{target or 'that'} is dead",
                 "cant_talk": f"{target or 'that'} isn't something that can hold a conversation",
             }.get(data.get("reason"), "there's no one who can answer that right now")
             prompt = (
@@ -1091,6 +1111,8 @@ class LLMCore:
                 self.event_bus.publish("llm_response_ready", "System: The local LLM returned an empty response.")
                 self.event_bus.publish("llm_debug_updated", {"query": query_text, "response": "[EMPTY]", "label": label})
                 return
+            # Before it's stored, so a slip never reaches the history the next reply imitates.
+            llm_text = address_player_as_you(llm_text)
             if store_in_context:
                 self.context_window.append({"role": "assistant", "content": llm_text, "present": present_entities})
             self.event_bus.publish("llm_response_ready", llm_text)
@@ -1160,7 +1182,7 @@ class LLMCore:
         """
         system_message = (
             f"You are the Game Master, voicing {target} in an ongoing tabletop scene. The "
-            f"player character is \"you\" -- never call them \"the player\"."
+            f"player character is \"you\" -- never call them \"the player\" or \"the user\"."
         )
         if persona:
             system_message += f"\nWho {target} is: {persona}"
@@ -1284,7 +1306,10 @@ class LLMCore:
             "speaking directly to the player as yourself -- never narrating in-fiction events, "
             "never speaking as the Game Master or any character in the scene. Answer the "
             "player's question plainly and concisely, using only the facts given below; never "
-            "invent skills, items, exits, or people that aren't listed.\n\n"
+            "invent skills, items, exits, or people that aren't listed. Never mention \"the "
+            "facts\", \"the data\", \"the provided lore\" or \"the information provided\" -- "
+            "the player can't see them; if something isn't covered, say the game has no rule "
+            "or entry for it, and suggest something they can actually do.\n\n"
             "The game understands free text mapped onto these kinds of actions: skill/ability "
             "actions (ex: \"attack the wolf\", \"cast fireball\"); item actions (examine, "
             "equip/wear, unequip/take off, drop, take, give, trade, open, close, use/drink); "

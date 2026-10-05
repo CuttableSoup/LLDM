@@ -19,7 +19,7 @@
     this shared base. See DM_Core.py's class docstring for how the mixins compose.
 """
 
-from typing import Protocol
+from typing import Any, Protocol
 
 from Event_Bus import EventBus
 
@@ -50,6 +50,8 @@ class DMCoreProtocol(Protocol):
     known_locations: set
     _last_scene_roster: tuple | None
     _pending_population: list
+    _population_in_flight: int
+    _population_done: Any
 
     # Cross-mixin methods -- each actually implemented by exactly one mixin (see that
     # mixin's own file for the real body); declared here once so every other mixin calling

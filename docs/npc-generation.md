@@ -149,8 +149,11 @@ reads the prose and reports the individual people in it. That call overlaps the 
 it only appends to `_pending_population`. When no people come back, its `report` hook logs why —
 a warning if the model was unreachable or replied unusably, info for an ordinary decline — so a
 scene that stays empty is never silent. `_apply_pending_population` then runs on the game
-thread at the top of the next player-input handler, so anyone the narration introduced is
-addressable by the very next thing typed. A batch is dropped if the player left the scene first.
+thread when the next input arrives — on `player_input_received`, which NLPCore publishes before it
+classifies anything, so routing (talk to someone present goes to dialogue) already sees them;
+an extraction still running is waited on, up to `POPULATION_WAIT_SECONDS`. Applying it only in
+DMCore's own handlers was too late: a playtest's first turns of talking to the intro's people were
+routed as nobody-here. A batch is dropped if the player left the scene first.
 
 **What the narrator controls, and what it can't.** `freeform` fields — name, occupation,
 description, race, gender, age, languages, memories, voice — come from the narrator, so the cast
@@ -160,14 +163,17 @@ rating by the same deterministic `fit_skills_to_cr` every generated creature use
 behavior and hostility are never given: the tool schema's disposition enum excludes `"hostile"`
 (a model that returns one anyway is dropped, not defanged), so a narrated person structurally
 cannot fight — a narrated threat extracts to nothing. Languages are clipped to ones the setting
-has, defaulting to the polity's. Nobody is created while a live hostile is present, and nobody is
-duplicated: a narrated name whose every word appears in any existing creature's name (authored
+has, and the local polity's always leads the list — a Sandpoint fishmonger extracted as speaking
+only `common` answered the Varisian-speaking default character in gibberish for a whole playtest.
+Nobody is created while a live hostile is present, and nobody is duplicated: a narrated name whose every word appears in any existing creature's name (authored
 characters included, wherever they are) is skipped, so a narrated "Turch" is never a second Turch
 Sterglus.
 
 The occupation doubles as an alias, so "the fishmonger" resolves to a person with their own name
 (`DM_Dialogue.py`'s literal scan), and `describe_character`/`display_label` refer to a `background`
-entity by role rather than as a name where the entity's own name is a job title.
+entity by role rather than as a name only where the entity's own name is a job title — a
+narrated person's name is a personal one unless it equals their occupation (labelling a narrated
+"Elara" by role had the model writing "The Elara pauses").
 
 **Containment.** A narrated person carries `background = True` (plus `ad_hoc` and `source =
 "narration"`), and is a real, addressable participant, excluded only from the two places that pick

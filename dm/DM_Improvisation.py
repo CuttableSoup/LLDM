@@ -26,6 +26,9 @@ MAX_PROMOTED_PER_SCENE = 3
 # A materialized bystander is a bystander: a fraction of the player's own challenge rating,
 # matching what a background crowd template authors as its own cr_multiplier.
 BYSTANDER_CR_SHARE = 0.25
+# The longest an input waits for a still-running population extraction before being routed
+# against the scene as it stands (a local model's extraction usually takes 5-15s).
+POPULATION_WAIT_SECONDS = 30
 
 
 def catalog_entry(name, entity):
@@ -480,7 +483,30 @@ class ImprovisationMixin(DMCoreProtocol):
         kind, _, intent = (data.get("label") or "").partition(":")
         if not settings["active"] or not ({kind, intent} & set(settings["triggers"])):
             return
-        self._extract_scene_population(data.get("text", ""), settings)
+        with self._population_done:
+            self._population_in_flight += 1
+        try:
+            self._extract_scene_population(data.get("text", ""), settings)
+        finally:
+            with self._population_done:
+                self._population_in_flight -= 1
+                self._population_done.notify_all()
+
+    def _on_player_input_received(self, _player_input):
+        """!
+        @brief Makes the narrator's people real before NLPCore routes the input -- published
+            by NLPCore ahead of classification, because routing reads the present-entity bank
+            (talk to someone present goes to dialogue; to an empty scene, to the skill pass).
+            Applying the queue only in DMCore's own handlers was too late: the intro's people
+            stayed unreal until some input happened to reach one, so a playtest's first turns of
+            talking to them were routed as nobody-here and came back not-understood. An
+            extraction still running (the player answered before it finished) is waited on, up
+            to POPULATION_WAIT_SECONDS.
+        @param _player_input The raw input (unused).
+        """
+        with self._population_done:
+            self._population_done.wait_for(lambda: self._population_in_flight == 0, POPULATION_WAIT_SECONDS)
+        self._apply_pending_population()
 
     def _extract_scene_population(self, text, settings=None):
         """!
@@ -536,7 +562,7 @@ class ImprovisationMixin(DMCoreProtocol):
             by the very next thing the player types. A batch is dropped if the player has since
             left the scene it was narrated in. Each person is dropped rather than duplicated if
             they match anyone the game already knows (see _matches_existing_person), and their
-            languages are clipped to ones the setting actually has.
+            languages are clipped to ones the setting actually has, led by the local polity's.
         """
         while self._pending_population:
             batch = self._pending_population.pop(0)
@@ -550,14 +576,17 @@ class ImprovisationMixin(DMCoreProtocol):
                 )
                 if present_narrated >= budget or self._matches_existing_person(entity["name"]):
                     continue
+                # A local always speaks the local tongue, whatever else the narrator gave them --
+                # a Sandpoint fishmonger extracted as speaking only "common" left a Varisian-
+                # speaking player hearing nothing but gibberish for a whole playtest.
                 languages = [language for language in entity.get("languages", []) if language in known_languages]
+                polity_language = self._current_polity_language()
+                if polity_language:
+                    languages = [polity_language, *(language for language in languages if language != polity_language)]
                 if languages:
                     entity["languages"] = languages
                 else:
                     entity.pop("languages", None)
-                    polity_language = self._current_polity_language()
-                    if polity_language:
-                        entity["languages"] = [polity_language]
                 name = self._unique_entity_key(entity["name"])
                 self._place_and_register_scene_entity(name, entity, insert_front=False, claim_target=False)
                 self.event_bus.publish("item_catalog_updated", {

@@ -204,10 +204,15 @@ class Harness:
         for skill, how, score in self.turn_skills:
             if how == "keyword fallback" and score < WEAK_KEYWORD_SCORE:
                 flags.append(f"weak skill match: {skill} via keyword fallback ({score:.2f})")
+        # ADaM (or anyone) talking about its own prompt. Found by playtest: "There are no facts
+        # provided regarding...", six times in one chaos run.
+        if re.search(r"\b(?:facts|information|data) (?:provided|given)\b|\bprovided (?:facts|information|data|lore)\b",
+                     text, re.IGNORECASE):
+            flags.append("narration mentions its prompt ('facts provided')")
         # Dialogue-only smells: the reply should be someone talking to "you".
         if self.turn_dialogue:
-            if re.search(r"\bthe player\b", text, re.IGNORECASE):
-                flags.append("dialogue says 'the player'")
+            if re.search(r"\bthe (?:player|user)\b", text, re.IGNORECASE):
+                flags.append("dialogue says 'the player'/'the user'")
             if not re.search(r'["\u201c\u201d]', text):
                 flags.append("dialogue reply has no quoted speech")
             if "*(" in text:

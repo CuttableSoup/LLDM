@@ -59,7 +59,14 @@ miss, the victim gets `rules.toml`'s `"assaulted"` `[[attitude_event]]` at full 
 yes-or-no event, unlike `combat_hit`, which scales with damage because it measures how a fight
 already underway is going. `"assaulted"` authors its own `cap` (200) so it can carry anyone past
 `is_hostile`'s -100 (the shared action cap of 60 never could), and the same turn becomes a combat
-round. Being plain attitude, the narrator's own `describe_attitude` sees it, a gift can slowly
+round. Because that can't be taken back, an attack on someone not already hostile whom the input
+never named (the victim only inferred, by pronoun or as the conversation partner) needs a surer
+skill match than an ordinary action: `ASSAULT_MIN_SCORE` (0.65, `DM_Core.py`), not the usual 0.5.
+Below it the clause is dropped, the target left as it was, and (if nothing else in the turn did
+anything) the player gets the not-understood reply. A playtest's "use the fire for dramatic
+effect" (fireball, 0.57) and a remark matched to psionics at 0.30 both fell through to the
+conversation partner, set a market burning and killed two bystanders. Naming the victim is intent
+enough: "trip silas" (0.645) still lands. Being plain attitude, the narrator's own `describe_attitude` sees it, a gift can slowly
 walk it back, and it saves like any other drift. Only someone devoted (100) *and* sweet-talked
 to the talk cap stays above -100 — they take the punch without swinging back. Each combat round,
 `_arm_if_turned_hostile` (`DM_Social.py`) hands `basic_combat_kit` (`AdHoc_Generation.py`, the

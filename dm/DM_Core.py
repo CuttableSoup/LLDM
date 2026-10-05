@@ -2,6 +2,7 @@ import collections
 import copy
 import os
 import re
+import threading
 
 from dm.DM_ActionOutcome import (
     ActionPreventedOutcome, CureEffect, DamageEffect, DefenderDetailsEffect, DispelEffect, LanguageBarrierOutcome,
@@ -67,6 +68,14 @@ PERSON_TARGET_INTENTS = frozenset({"trade", "give"})
 # narration prompts themselves already live on a measured token budget -- see LLM_Core.py's
 # _fit_history/RESPONSE_TOKEN_RESERVE).
 RECENT_NARRATION_TURNS = 3
+# How sure NLPCore's skill match has to be before an attack may land on someone not already
+# hostile whom the input never named -- the victim only inferred, by pronoun or as the
+# conversation partner. Above the ordinary 0.5 bar, since starting a fight can't be taken back.
+# Found by playtest: "use the fire for dramatic effect" (fireball, 0.57) and a keyword-fallback
+# psionics hit (0.30) on a remark both fell through to the conversation partner, set a market
+# burning and killed two bystanders. Naming the victim is intent enough: "trip silas" (0.645)
+# still lands.
+ASSAULT_MIN_SCORE = 0.65
 RECENT_NARRATION_CHARS = 400
 # LLMCore publishes its own failure notices through the same llm_response_ready channel as
 # real narration (a dead Ollama, an empty completion). They describe the engine, not the
@@ -234,6 +243,11 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         # People the narrator put in the scene, extracted on the LLM thread and waiting to be
         # made real on the game thread -- see ImprovisationMixin._apply_pending_population.
         self._pending_population = []
+        # How many extractions are still running on the LLM thread, so the next input can wait
+        # for one rather than be routed against a scene that's about to gain people -- see
+        # ImprovisationMixin._on_player_input_received.
+        self._population_in_flight = 0
+        self._population_done = threading.Condition()
         # The last few narration beats, verbatim, as evidence for NPC promotion (see
         # ImprovisationMixin._attempt_dialogue_promotion) -- what a materialized NPC's own
         # flavor is grounded in, so a merchant the narration just described as arguing outside
@@ -305,6 +319,8 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             "present_entities": list(self.scenario_entities),
             "skip_intro": not publish_intro_narration,
         })
+        # Published by NLPCore before it classifies anything -- see _on_player_input_received.
+        self.event_bus.subscribe("player_input_received", self._on_player_input_received)
         self.event_bus.subscribe("turn_detected", self._on_turn_detected)
         self.event_bus.subscribe("item_interaction_detected", self._on_item_interaction_detected)
         self.event_bus.subscribe("dialogue_detected", self._on_dialogue_detected)
@@ -404,6 +420,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         dice_penalty = max(0, len(clauses) - 1)
 
         player_actions = []
+        declined_assault = False
         # Whether any action-kind clause this turn actually went through target-based
         # resolution, as opposed to every one of them being an item test (which never engages
         # self.current_target at all, and must never trigger a round just because that
@@ -443,6 +460,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             modifier = self._resolve_action_modifier(entry.get("modifier"))
 
             explicit_target = entry.get("target")
+            target_before = self.current_target
             item_result = self._try_item_test_action(explicit_target, skill_name, input_text, dice_penalty)
             if item_result is not None:
                 player_actions.append(item_result)
@@ -454,6 +472,9 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             is_attack = bool(attack_ability and ("damage_value" in attack_ability or attack_ability.get("assault")))
             assaulting = self._apply_target_redirect(explicit_target, input_text, allow_non_hostile=is_attack)
             target_name = self.current_target
+            # Whether the victim was only inferred (a pronoun, or whoever the player is talking
+            # to) rather than named -- see ASSAULT_MIN_SCORE.
+            victim_inferred = False
             if is_attack and not assaulting and self._is_bystander(target_name):
                 # An attack NLPCore matched no name for, with no fight on: someone present it
                 # describes ("pin the merchant's feet" -- a narrated person's occupation is an
@@ -462,14 +483,25 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
                 # (a chest or trap there stays fair game: smashing one is fine).
                 partner = (self.conversation_partner or {}).get("key")
                 target_name = None
-                for candidate in (self._literal_attack_target(input_text), self._pronoun_attack_target(input_text), partner):
+                literal = self._literal_attack_target(input_text)
+                for candidate in (literal, self._pronoun_attack_target(input_text), partner):
                     if not candidate:
                         continue
                     before = self.current_target
                     assaulting = self._apply_target_redirect(candidate, input_text, allow_non_hostile=True)
                     if assaulting or self.current_target != before:
                         target_name = self.current_target
+                        victim_inferred = candidate != literal
                         break
+            if assaulting and victim_inferred and entry.get("score", 1.0) < ASSAULT_MIN_SCORE:
+                # Too unsure a reading to start a fight on -- see ASSAULT_MIN_SCORE.
+                self.event_bus.publish("log_info", (
+                    f"Declined to assault '{target_name}' on a weak match ({skill_name}, "
+                    f"score {entry.get('score', 0.0):.2f} < {ASSAULT_MIN_SCORE})."
+                ))
+                self.current_target = target_before
+                declined_assault = True
+                continue
             engaged_combat_target = True
 
             result, ability, via_test = self._resolve_roll(
@@ -486,6 +518,9 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             player_actions.append(result)
 
         if not player_actions:
+            if declined_assault and not any(entry.get("kind") == "item" for entry in clauses):
+                # Nothing else this turn narrated anything -- same reply as an unmatched input.
+                self.event_bus.publish("action_not_understood", {"input": input_text, "score": 0.0})
             return
 
         result = {

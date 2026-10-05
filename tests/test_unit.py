@@ -7,6 +7,7 @@ import re
 import shutil
 import tempfile
 import threading
+import time
 import tkinter as tk
 import tomllib
 import unittest
@@ -99,9 +100,11 @@ from nlp.Intent_Classification import (
     detect_help_intent,
     detect_implicit_speech,
     detect_item_intent,
+    detect_out_of_character,
     detect_save_load_intent,
     detect_scene_query_intent,
     frame_speech,
+    is_hypothetical,
     normalize_declared_verb,
     process_input,
     split_action_clauses,
@@ -1143,6 +1146,7 @@ class TestIntentClassification(unittest.TestCase):
         classifier = IntentClassifier(FakeMatcher(actions={
             "punch bram.": ("brawling", 0.75), "hit her again!": ("brawling", 0.73),
             "never mind, i'll just take the goods instead!": ("psionics", 0.59),
+            "a name, man.": ("appraise", 0.54),
         }))
         classifier.set_present_entities([{"key": "Bram", "name": "Bram", "subtype": "human", "aliases": []}])
 
@@ -1156,10 +1160,96 @@ class TestIntentClassification(unittest.TestCase):
         self.assertEqual(events[1]["payload"]["utterance"], "You deserve it.")
 
         # An action half that resolves to nothing real leaves the whole line as talk.
+        # A verbless fragment of the talk is never the action half, however it scores (found by
+        # playtest: "a name, man." rolled appraise).
         for text in ("Forget the lumber. Let's find a private place.",
-                     "Stomach for snacks? Never mind, I'll just take the goods instead!"):
+                     "Stomach for snacks? Never mind, I'll just take the goods instead!",
+                     "A name, man. You gotta give me a name, not just a description of a group of guys."):
             _processed, events = classifier.classify(text)
             self.assertEqual([event["event"] for event in events], ["dialogue_detected"], text)
+
+    def test_a_quoted_shout_beside_an_attack_keeps_the_attack(self):
+        # Found by playtest: eleven of a brawler's forty turns paired a shout with an attack, and
+        # every attack was dropped as dialogue.
+        classifier = IntentClassifier(FakeMatcher(actions={
+            "swing a fist at bram's side.": ("brawling", 0.45), "yell": ("intimidation", 0.6),
+            "ask the guard": ("streetwise", 0.6),
+        }))
+        classifier.set_present_entities([{"key": "Bram", "name": "Bram", "subtype": "human", "aliases": []}])
+
+        _processed, events = classifier.classify('I yell "Hey!" and swing a fist at Bram\'s side.')
+        self.assertEqual([event["event"] for event in events], ["dialogue_detected", "turn_detected"])
+        self.assertEqual(events[0]["payload"]["utterance"], "Hey!")
+        # The tag on the quote ("yell") is never an action of its own.
+        self.assertEqual([clause["skill"] for clause in events[1]["payload"]["clauses"]], ["brawling"])
+
+        # Nothing real outside the quotes leaves the line whole.
+        for text in ('I laugh, "Nice try," and shake my head.', 'ask the guard "where is the inn?"'):
+            _processed, events = classifier.classify(text)
+            self.assertEqual([event["event"] for event in events], ["dialogue_detected"], text)
+
+    def test_following_or_heading_toward_someone_closes_the_distance_but_a_place_is_travel(self):
+        # Found by playtest: "i follow her at a respectful distance" and "i'll proceed carefully
+        # toward the wyrmwatch" were not understood; "head toward the docks" must still travel.
+        classifier = IntentClassifier(FakeMatcher(destinations={"head toward the docks": ("shipyard", 0.8)}))
+        _processed, events = classifier.classify("head toward the docks")
+        self.assertEqual((events[0]["payload"]["intent"], events[0]["payload"]["destination"]), ("travel", "shipyard"))
+        for text in ("I follow her at a respectful distance.", "I'll proceed carefully toward the Wyrmwatch.",
+                     "walk toward the fishmonger"):
+            _processed, events = classifier.classify(text)
+            self.assertEqual(events[0]["payload"].get("intent"), "advance", text)
+
+    def test_a_barked_line_nothing_else_claims_is_said_to_whoever_hears_it(self):
+        # Found by playtest: six of a brawler's fifteen not-understood turns were lines like these.
+        classifier = IntentClassifier(FakeMatcher())
+        _processed, events = classifier.classify("Stay right there!")
+        self.assertEqual(events[0]["event"], "action_not_understood")  # nobody to hear it
+
+        classifier.set_present_entities([{"key": "Bram", "name": "Bram", "subtype": "human", "aliases": []}])
+        for text in ("Stay right there!", "Keep your hands up!"):
+            _processed, events = classifier.classify(text)
+            self.assertEqual(events[0]["event"], "dialogue_detected", text)
+            self.assertEqual(events[0]["payload"]["utterance"], text)
+        _processed, events = classifier.classify("Stay right there")
+        self.assertEqual(events[0]["event"], "action_not_understood")
+
+    def test_an_unmatched_item_verb_is_improvised_rather_than_guessed_at(self):
+        # Found by playtest: picking up a book the narrator had just described rolled finesse via
+        # the keyword fallback (0.21) instead of making the book real.
+        classifier = IntentClassifier(FakeMatcher(actions={"pick up the damp ledger book": ("finesse", 0.21)}))
+        _processed, events = classifier.classify("pick up the damp ledger book")
+        self.assertEqual(events[0]["event"], "improvisation_requested")
+
+        classifier = IntentClassifier(FakeMatcher(actions={"pick up the damp ledger book": ("finesse", 0.7)}))
+        _processed, events = classifier.classify("pick up the damp ledger book")
+        self.assertEqual(events[0]["event"], "turn_detected")
+
+    def test_a_hypothetical_never_gives_takes_or_travels(self):
+        # Found by playtest: the first handed the player's whole purse to a bystander, the second
+        # set off travel and the narrator invented a barrier.
+        hypotheticals = (
+            "but if i just use a coupon then i only gotta give you the promise of the actual coins next week right?",
+            "if i promise to give you an empty bucket does that work?",
+            "if i take the proof of the goods can i leave?",
+            "what if i drop my sword?",
+        )
+        matcher = FakeMatcher()
+        matcher.map_to_item = lambda clause: next(
+            ((name, 0.9) for name in ("coin", "bucket", "goods", "sword") if name in clause), (None, 0.0),
+        )
+        classifier = IntentClassifier(matcher)
+        classifier.set_present_entities([{"key": "Bram", "name": "Bram", "subtype": "human", "aliases": []}])
+        for text in hypotheticals:
+            _processed, events = classifier.classify(text)
+            self.assertEqual([event["event"] for event in events], ["dialogue_detected"], text)
+        # The same verbs, declared, still act.
+        for text in ("give bram the coins", "can i take the goods?", "drop my sword"):
+            _processed, events = classifier.classify(text)
+            self.assertEqual(events[0]["event"], "turn_detected", text)
+
+        self.assertFalse(is_hypothetical("can i take the sword?"))
+        self.assertFalse(is_hypothetical("give him the coins."))
+        self.assertTrue(is_hypothetical("should i give him the coins?"))
 
     def test_an_inflected_item_verb_still_reaches_its_intent(self):
         # Found by playtest: "(grabs a nearby loaf of bread)" and "i'm taking all of it" never
@@ -1183,6 +1273,14 @@ class TestIntentClassification(unittest.TestCase):
             self.assertEqual(events[0]["event"], "help_detected", text)
         _processed, events = classifier.classify("roll for initiative against the goblin")
         self.assertEqual(events[0]["event"], "turn_detected")
+
+    def test_the_rules_of_something_in_the_fiction_stay_in_character(self):
+        # Found by playtest: mid-conversation, this went to ADaM, which answered from the
+        # sourcebook ("According to the provided lore, the Abyss...").
+        self.assertFalse(detect_out_of_character(process_input(
+            "No terms, you say? Does the deep have rules? What are the rules of the 'beautiful, terrible mess,' then?"
+        )))
+        self.assertTrue(detect_out_of_character(process_input("is that against the rules?")))
 
     def test_social_skill_attempt_still_rolls_mid_conversation(self):
         classifier = IntentClassifier(FakeMatcher(actions={"persuade him to lower the price": ("charisma", 0.9)}))
@@ -1215,10 +1313,21 @@ class TestIntentClassification(unittest.TestCase):
         )
         # Aimed back at the speaker: direct speech, not "You tell me...".
         self.assertEqual(self._frame("Tell me what you know")["speech_form"], "verbatim")
+        # A keyword with nothing after it greets no one (found by playtest).
+        self.assertEqual(self._frame("A gate, you say? Where does this passage open, and how can we tell?")["speech_form"],
+                         "verbatim")
         self.assertEqual(
             frame_speech("Do you ever get tired?", process_input("Do you ever get tired?"), False),
             {"speech_form": "verbatim", "utterance": "Do you ever get tired?"},
         )
+
+    def test_a_scare_quoted_word_is_not_the_players_spoken_line(self):
+        # Found by playtest: 'ask them what the real "currents" are' was put to an NPC as the
+        # player saying just "currents".
+        framed = self._frame('Maybe I should ask them what the real "currents" are these days.')
+        self.assertNotEqual(framed["utterance"], "currents")
+        self.assertFalse(detect_dialogue_intent(process_input('i search the "abandoned" mill')))
+        self.assertEqual(self._frame('"Hi!"')["utterance"], "Hi!")
 
     def test_dialogue_detected_carries_the_speech_framing(self):
         classifier = IntentClassifier(FakeMatcher())
@@ -1803,6 +1912,16 @@ class TestMultiActionNarration(LLMTestCase):
         self.llm_core._fetch_and_publish(messages, present_entities=None)
         self.assertEqual(sent[-1], [messages[0], messages[-1]])
         self.assertEqual(published, ["The vendor glares."])
+
+    def test_the_user_is_rewritten_as_you_before_it_reaches_the_history(self):
+        # Found by playtest: one "Finn stares at the user" was copied from the history into
+        # nearly every reply after it.
+        self.llm_core._request_completion = lambda data: "Finn stares at the user. The user's coin is short."
+        published = []
+        self.event_bus.subscribe("llm_response_ready", published.append)
+        self.llm_core._fetch_and_publish([{"role": "user", "content": "now"}], present_entities=None)
+        self.assertEqual(published, ["Finn stares at you. Your coin is short."])
+        self.assertEqual(self.llm_core.context_window[-1]["content"], published[0])
 
     def test_three_actions_name_minus_2d(self):
         result = {"actions": [
@@ -4134,6 +4253,21 @@ class TestWorldMapExpansion(DMTestCase):
         self.assertEqual(self.dm_core.display_label("crowd_1"), "the Fishmonger")
         self.assertIn("refer to them only by role", self.dm_core.describe_character("crowd_1"))
 
+    def test_a_narrated_person_with_a_personal_name_is_labelled_by_it(self):
+        # Found by playtest: a narrated "Elara" labelled as unnamed had the model writing
+        # "The Elara pauses" and switching to "The Fishmonger" mid-reply.
+        self.dm_core.entities["Elara"] = {
+            "name": "Elara", "background": True, "source": "narration", "supertype": "creature",
+            "qualities": {"occupation": "Fishmonger"},
+        }
+        self.dm_core.entities["crowd_2"] = {
+            "name": "Fishmonger", "background": True, "source": "narration", "supertype": "creature",
+            "qualities": {"occupation": "fishmonger"},
+        }
+        self.assertEqual(self.dm_core.display_label("Elara"), "Elara")
+        self.assertNotIn("refer to them only by role", self.dm_core.describe_character("Elara"))
+        self.assertEqual(self.dm_core.display_label("crowd_2"), "the Fishmonger")
+
     def test_elf_can_buy_varisian_for_one_xp_at_character_creation(self):
         from resolution.Character_Creation import load_learnable_languages
         self.assertIn("varisian", load_learnable_languages("Rules/Pathfinder"))
@@ -4176,6 +4310,21 @@ class TestWorldMapExpansion(DMTestCase):
         [instance_name] = self.dm_core._instance_entities([{"name": "test_with_lang", "band": 1}])
 
         self.assertEqual(self.dm_core.entities[instance_name]["languages"], ["elvish"])
+
+    def test_a_narrated_local_speaks_the_polity_language_whatever_the_narrator_gave_them(self):
+        # Found by playtest: a Sandpoint fishmonger extracted as speaking only "common" answered
+        # the (Varisian-speaking) default character in gibberish for 27 turns straight.
+        self.dm_core.current_location_key = "magnimar"
+        self.dm_core._pending_population.append({
+            "scene": (self.dm_core.current_location_key, self.dm_core.current_room_key),
+            "people": [{"name": "Elara Fenn", "supertype": "creature", "max_hp": 5, "hp": 5,
+                        "languages": ["common"], "source": "narration", "background": True}],
+        })
+
+        self.dm_core._apply_pending_population()
+
+        self.assertEqual(self.dm_core.entities["Elara Fenn"]["languages"], ["varisian", "common"])
+        self.assertEqual(self.dm_core._detect_language_barrier("Elara Fenn"), (None, None))
 
     def test_magnimars_own_dockhand_speaks_varisian_by_the_polity_default(self):
         self._stub_encounter_roll("nothing")
@@ -7532,6 +7681,26 @@ class TestAttackingAnyone(DMTestCase):
         self.assertTrue(self.dm_core.is_hostile("thane", "gladstone"))
         # Through the attitude itself, so the narrator's own describe_attitude agrees.
         self.assertLessEqual(self.dm_core.get_attitude("thane", "gladstone")[0], -100)
+
+    def test_a_weak_match_never_starts_a_fight(self):
+        # Found by playtest: "use the fire for dramatic effect" (fireball, 0.57) and a remark
+        # matched to psionics at 0.30 set a market burning and killed two bystanders.
+        # Both fell through to the conversation partner -- the victim was never named.
+        self._clear_the_fight()
+        self.dm_core._set_conversation_partner("thane")
+        not_understood = self._capture("action_not_understood")
+        self.dm_core._on_turn_detected({"clauses": [
+            {"kind": "action", "skill": "blades", "score": 0.57},
+        ], "input": "use the fire for dramatic effect"})
+
+        self.assertFalse(self.dm_core.is_hostile("thane", "gladstone"))
+        self.assertEqual(len(not_understood), 1)
+
+        # Naming the victim is intent enough, even on a modest match ("trip silas", 0.645).
+        self.dm_core._on_turn_detected({"clauses": [
+            {"kind": "action", "skill": "blades", "target": "thane", "score": 0.6},
+        ], "input": "slash thane"})
+        self.assertTrue(self.dm_core.is_hostile("thane", "gladstone"))
 
     def test_an_assault_maneuver_counts_as_an_attack_but_a_friendly_one_does_not(self):
         # Found by playtest: "shove over, you lumbering dockworker" matched bull rush, which deals
@@ -11362,7 +11531,16 @@ class TestFreeformDialogue(DMTestCase):
 
         self.assertTrue(dead_result["found"])  # sanity: alive, this would have worked before
         self.assertFalse(result["found"])
-        self.assertEqual(result["reason"], "not_present")
+        # Said outright -- told only "isn't here", the narrator had a corpse gasping for air.
+        self.assertEqual(result["reason"], "dead")
+
+    def test_an_unnamed_remark_never_goes_to_the_dead(self):
+        # Found by playtest: once the bystander being talked to died, every unnamed remark still
+        # went to the corpse through _get_target_name's fallback.
+        for name in list(self.dm_core.scenario_entities):
+            if name != self.dm_core.player_name and not self.dm_core._is_party_member(name):
+                self.dm_core.apply_damage(name, 9999)
+        self.assertIsNone(self.dm_core._default_listener())
 
     def test_object_entity_cannot_be_addressed(self):
         self.dm_core.entities["stone idol"] = {"name": "stone idol", "supertype": "object", "hp": 1}
@@ -11592,12 +11770,20 @@ class TestLanguageBarrier(DMTestCase):
 
         self.assertEqual(self.dm_core.get_attitude("innkeeper", self.dm_core.player_name)[0], before)
 
-    def test_a_bilingual_player_is_not_understood_by_every_known_language_at_once(self):
-        # The gap this feature closes: a bilingual player defaults to speaking only the first
-        # of their own known languages (current_language, DM_Dialogue.py's _current_language),
-        # not "every language they know at once" -- so an elvish-only innkeeper no longer
-        # silently understands a player who never actually switched to Elvish.
+    def test_a_bilingual_player_who_never_chose_a_language_speaks_whichever_is_shared(self):
+        # Found by playtest: under "only the first known language counts", a Varisian-first
+        # default character heard gibberish from every NPC left on the "common" default.
         self.dm_core.entities[self.dm_core.player_name]["languages"] = ["common", "elvish"]
+        self.dm_core.entities["innkeeper"]["languages"] = ["elvish"]
+
+        result = self._talk("i talk to the innkeeper")
+
+        self.assertNotIn("language_barrier", result)
+
+    def test_an_explicitly_chosen_language_is_the_only_one_spoken(self):
+        # "speak in common" so the elvish innkeeper can't follow is still a real choice.
+        self.dm_core.entities[self.dm_core.player_name]["languages"] = ["common", "elvish"]
+        self.dm_core.entities[self.dm_core.player_name]["current_language"] = "common"
         self.dm_core.entities["innkeeper"]["languages"] = ["elvish"]
 
         result = self._talk("i talk to the innkeeper")
@@ -13052,6 +13238,8 @@ class TestAdamNarration(LLMTestCase):
         # General command guidance -- the actual onboarding gap this persona closes.
         self.assertIn("equip/wear", message)
         self.assertIn("save/load", message)
+        # Found by playtest: "There are no facts provided regarding...", six times in one run.
+        self.assertIn("Never mention \"the facts\"", message)
         # The live, dynamic payload.
         self.assertIn("blades: 5D+0", message)
         self.assertIn("fireball: A ball of fire.", message)
@@ -13875,6 +14063,32 @@ class TestNarratedPopulation(DMTestCase):
                 self.dm_core._on_scene_narration_ready({"text": "Marla gutting fish.", "label": label})
             self.assertEqual(called.call_count, 1, label)
             self.dm_core._pending_population.clear()
+
+    def test_queued_people_are_made_real_before_the_next_input_is_routed(self):
+        # Found by playtest: the intro's people stayed unreal until some input happened to reach a
+        # DMCore handler, so the first turns of talking to them were routed as nobody-here.
+        with patch("resolution.AdHoc_Generation._real_call_chat_completion", return_value=self._reply([self._person()])):
+            self.dm_core._extract_scene_population("Marla Venn gutting fish.")
+
+        self.dm_core.event_bus.publish("player_input_received", "how's the catch?")
+
+        self.assertEqual(len(self._crowd()), 1)
+
+    def test_an_input_waits_for_an_extraction_still_running(self):
+        def slow_reply(*_args, **_kwargs):
+            time.sleep(0.5)
+            return self._reply([self._person()])
+
+        with patch("resolution.AdHoc_Generation._real_call_chat_completion", side_effect=slow_reply):
+            worker = threading.Thread(target=self.dm_core._on_scene_narration_ready,
+                                      args=({"text": "Marla gutting fish.", "label": "scenario_intro"},))
+            worker.start()
+            while self.dm_core._population_in_flight == 0 and worker.is_alive():
+                time.sleep(0.01)
+            self.dm_core.event_bus.publish("player_input_received", "how's the catch?")
+            worker.join()
+
+        self.assertEqual(len(self._crowd()), 1)
 
     def test_an_unreachable_extraction_model_is_logged_as_a_warning(self):
         warnings = []

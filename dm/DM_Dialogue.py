@@ -161,7 +161,10 @@ class DialogueMixin(DMCoreProtocol):
                 continue
             if self._detect_language_barrier(name)[0] is None:
                 return name
-        return self._get_target_name(include_background=True, include_objects=False)
+        fallback = self._get_target_name(include_background=True, include_objects=False)
+        # Never the dead: found by playtest, an unnamed remark kept going to the corpse of a
+        # bystander killed the turn before.
+        return fallback if fallback and self.get_current_hp(fallback) > 0 else None
 
     def _resolve_dialogue(self, input_text, sentiments=None, forced_target=None):
         """!
@@ -197,8 +200,9 @@ class DialogueMixin(DMCoreProtocol):
                 or, if _detect_language_barrier finds no language in common, also
                 {"language_barrier": True, "target_language", "nonsense_phrase"} instead of
                 applying sentiments at all; on failure, {"reason"} instead ("no_one_here" if
-                nothing could be resolved at all, "not_present" if the resolved name isn't
-                currently here/alive/noticed, "cant_talk" if it's an inanimate object).
+                nothing could be resolved at all, "dead" if they're here but dead, "not_present" if
+                the resolved name isn't currently here/noticed, "cant_talk" if it's an inanimate
+                object).
         """
         # Resolution method captured alongside target_name itself (rather than just calling
         # _resolve_dialogue_target and re-deriving it after the fact) specifically so it can be
@@ -229,11 +233,11 @@ class DialogueMixin(DMCoreProtocol):
             return {"target": None, "found": False, "reason": "no_one_here"}
         self.event_bus.publish("log_info", f"Resolved dialogue target: '{target_name}' ({resolution}).")
 
-        if (
-            target_name not in self.scenario_entities
-            or self.get_current_hp(target_name) <= 0
-            or self.is_hidden(target_name)
-        ):
+        if target_name in self.scenario_entities and self.get_current_hp(target_name) <= 0:
+            # Said outright: told only "isn't here to respond", the narrator had a corpse
+            # "gasping for air" through thirteen turns of a playtest.
+            return {"target": target_name, "found": False, "reason": "dead"}
+        if target_name not in self.scenario_entities or self.is_hidden(target_name):
             return {"target": target_name, "found": False, "reason": "not_present"}
 
         if self.entities.get(target_name, {}).get("supertype") == "object":
@@ -284,12 +288,12 @@ class DialogueMixin(DMCoreProtocol):
 
     def _shares_language_with(self, target_name):
         """!
-        @brief Whether the player's own _current_language is understood by target_name --
+        @brief Whether target_name understands the player (see _detect_language_barrier) --
             a plain bool wrapper around _detect_language_barrier for callers (ex: DM_Combat.py's
             _ability_requires_language gate) that only need a yes/no, not the narration-facing
             target_language/nonsense_phrase pair.
         @param target_name The entity being checked against.
-        @return True if target_name understands the player's currently-spoken language.
+        @return True if target_name understands the player.
         """
         return self._detect_language_barrier(target_name)[0] is None
 
@@ -319,20 +323,21 @@ class DialogueMixin(DMCoreProtocol):
 
     def _detect_language_barrier(self, target_name):
         """!
-        @brief Whether the player's own _current_language (a single, persistent choice -- not
-            "every language the player knows at once") is understood by target_name at all.
+        @brief Whether the player is understood by target_name at all: in the language they
+            explicitly chose (current_language, a single persistent choice set only by
+            _resolve_language_intent), or, with no choice made, in any language they know.
             Compares against target_name's own full "languages" list (an entity field,
             entity_schema.toml; absent entirely defaults to ["common"], same as every entity
             shipped today, so this never fires against existing data unless an author
-            deliberately narrows an entity's own list, or the player's currently-active language
-            isn't one that entity knows either -- see races.toml's own "language" field and
+            deliberately narrows an entity's own list, or the player knows none of that entity's
+            languages (or chose one it doesn't know) -- see races.toml's own "language" field and
             DM_CharacterCreation.py's apply_character_creation for how a chosen race's language
             lands on the player). Deliberately asymmetric: only the player's side is ever
             narrowed to one active tongue -- a target's own multiple known languages all still
             count toward whether *it* understands the player, since there's no equivalent
             "which one is it currently speaking" ambiguity on that side.
         @param target_name The addressed entity, already confirmed present/alive/animate.
-        @return (None, None) if the player's current language is shared. Otherwise
+        @return (None, None) if a language is shared. Otherwise
                 (target_language, nonsense_phrase): target_language is the first of target's
                 own unshared languages (what a narration prompt names as "the language it
                 spoke"), nonsense_phrase is whichever race in races.toml claims that language
@@ -341,10 +346,15 @@ class DialogueMixin(DMCoreProtocol):
                 language-barrier prompt still works without one, just with no style example to
                 draw from.
         """
-        current_language = self._current_language()
+        player = self.entities.get(self.player_name, {})
+        # Only a language the player explicitly chose ("speak in elvish") narrows them to one
+        # tongue. Otherwise they talk in whichever of theirs the listener knows -- found by
+        # playtest: a Varisian-first default character heard nothing but gibberish from every
+        # NPC left on the "common" default, which no ordering of their own list could fix.
+        spoken = [player["current_language"]] if player.get("current_language") else (player.get("languages") or ["common"])
         target_languages = self.entities.get(target_name, {}).get("languages") or ["common"]
 
-        if current_language in target_languages:
+        if any(language in target_languages for language in spoken):
             return None, None
 
         target_language = target_languages[0]

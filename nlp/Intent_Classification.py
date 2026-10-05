@@ -94,7 +94,20 @@ CLOSE_KEYWORDS = ("close the ", "close it", "shut the ", "shut it")
 # skills.toml keyword list. Deliberately no "close the distance" here even though it's a
 # natural phrasing -- CLOSE_KEYWORDS' "close the " is checked first (see item_intent_gates)
 # and would swallow it as a "close" intent instead.
-ADVANCE_KEYWORDS = ("advance", "move closer", "approach", "move toward", "move in", "step closer")
+# "follow"/"go after" close on someone the same way -- there's no follow mechanic, so closing the
+# distance is what the engine can do. Found by playtest: "i follow her at a respectful distance"
+# was not understood. (A "<verb> toward" phrasing is TOWARD_PATTERN's, below.)
+ADVANCE_KEYWORDS = (
+    "advance", "move closer", "approach", "move toward", "move in", "step closer", "follow", "go after",
+)
+# "head/walk/proceed (carefully) toward X": travel when X is a real destination (checked in
+# classify() before the item pass), else advance (detect_item_intent). Found by playtest: "i'll
+# proceed carefully toward the wyrmwatch" was not understood; "head toward the docks" already
+# reached travel through the semantic router and must keep doing so.
+TOWARD_PATTERN = re.compile(
+    r"\b(?:head|walk|proceed|go|make (?:my|our) way|run|hurry|stride|creep|edge)(?:s|es|ed|ing)?"
+    r"(?:\s+\w+ly)?\s+towards?\b"
+)
 RETREAT_KEYWORDS = ("retreat", "back away", "back off", "fall back", "step back", "withdraw", "move away")
 # Party positioning (see DM_Core._resolve_formation_intent / docs/movement-scenarios.md's
 # "Party formation") --
@@ -199,6 +212,10 @@ NON_ACTION_OPENERS = frozenset({
     "let's", "lets", "we", "we're", "we'll", "we've", "you", "you're", "you've", "your",
     "he", "she", "they", "it", "it's", "its", "this", "that", "these", "those", "there", "here",
     "i'd", "i'm", "im", "i've",
+    # A sentence opening on an article describes something rather than doing it. Found by
+    # playtest: "the wall thing i saw before" cast wall of fire, and "then the rules are
+    # incomplete..." rolled psionics into a bystander.
+    "the", "a", "an",
 })
 # Stripped before the opener is read, so "i'll bargain with her" and a mid-clause sentence
 # starting "i study the pattern" both open on their real verb. process_input only strips a
@@ -206,7 +223,7 @@ NON_ACTION_OPENERS = frozenset({
 FIRST_PERSON_OPENERS = frozenset({"i", "i'll", "ill"})
 # Skipped the same way, since they say nothing about whether what follows is talk or an action:
 # "and also what's the action economy?" opens on "what's", "oh, kick him" on "kick".
-LEADING_FILLER_WORDS = frozenset({"and", "also", "oh", "ok", "okay", "ugh", "hey", "um", "uh", "ah"})
+LEADING_FILLER_WORDS = frozenset({"and", "also", "then", "oh", "ok", "okay", "ugh", "hey", "um", "uh", "ah"})
 # "i bet the rooms here are lovely" is a remark, "bet ten gold on red" a wager. Found by playtest:
 # the idiom rolled gambling seven times in sixty turns. Only the word after "bet" tells them apart.
 # A clause opening on one of these is body language, not an attempt at anything -- never sent to
@@ -222,6 +239,26 @@ GESTURE_VERBS = frozenset({
 # (see IntentClassifier._split_speech_from_action) -- the same bar map_to_action's own direct
 # match uses, so a keyword-fallback hit never takes a turn away from talk.
 MIXED_ACTION_MIN_SCORE = 0.5
+# A clause opening on one of these is only the tag on a quoted line ('i yell "hey!"') -- dropped
+# from the action half when quoted speech is split off (see _split_quoted_speech), so the tag never
+# rolls intimidation or performance beside the real action.
+SPEECH_TAG_VERBS = frozenset({
+    "say", "says", "said", "yell", "yells", "shout", "shouts", "scream", "screams", "cry", "cries",
+    "call", "calls", "roar", "roars", "bellow", "bellows", "snarl", "snarls", "growl", "growls",
+    "hiss", "hisses", "mutter", "mutters", "whisper", "whispers", "snicker", "snickers", "sneer",
+    "sneers", "taunt", "taunts", "exclaim", "exclaims", "add", "adds", "reply", "replies",
+    "saying", "yelling", "shouting", "screaming", "crying", "calling", "roaring", "bellowing",
+    "snarling", "growling", "hissing", "muttering", "whispering", "snickering", "sneering",
+    "taunting", "exclaiming", "adding", "replying",
+}) | GESTURE_VERBS
+# A sentence opening on one of these is a fragment of the talk around it, never the action half
+# of a mixed line (see _split_speech_from_action). Found by playtest: "a name, man. you gotta give
+# me a name" rolled appraise on "a name, man." (articles, the other fragment openers, are already
+# NON_ACTION_OPENERS). Kept out of NON_ACTION_OPENERS, which also gates the skill fallbacks on
+# whole inputs, where "fine, i'll take it" is still an action.
+SPEECH_FRAGMENT_OPENERS = frozenset({
+    "no", "nah", "nope", "yes", "yeah", "yep", "sure", "fine", "right", "okay", "ok",
+})
 # "i'm <verb>ing" words that describe a state rather than declare an action (opens_like_an_action).
 STATIVE_PROGRESSIVES = frozenset({
     "feeling", "thinking", "starving", "wondering", "hoping", "kidding", "joking", "saying",
@@ -253,9 +290,26 @@ def opens_like_an_action(text):
         return verb.endswith("ing") and verb not in STATIVE_PROGRESSIVES
     return not words or words[0] not in NON_ACTION_OPENERS
 
-# A double-quoted span of at least a few characters -- see detect_dialogue_intent. Double quotes
-# only: an apostrophe is a contraction far more often than a quotation mark.
-QUOTED_SPEECH_PATTERN = re.compile(r'"[^"]{2,}"')
+# A double-quoted span of at least a few characters -- see speech_quotes. Double quotes only: an
+# apostrophe is a contraction far more often than a quotation mark.
+QUOTED_SPEECH_PATTERN = re.compile(r'"([^"]{2,})"')
+
+
+def speech_quotes(text):
+    """!
+    @brief The quoted spans in text that read as a spoken line: three or more words, or one
+        ending in sentence punctuation ("Hi!", "Wait."). A shorter bare span is a scare quote or
+        a term: found by playtest, 'ask them what the real "currents" are' was sent to the
+        nearest NPC as the player saying just "currents".
+    @param text Raw or processed input.
+    @return The spoken spans, stripped, in order.
+    """
+    quotes = []
+    for quote in QUOTED_SPEECH_PATTERN.findall(text or ""):
+        quote = quote.strip()
+        if len(quote.split()) >= 3 or re.search(r"[.!?,]$", quote):
+            quotes.append(quote)
+    return quotes
 
 # extract_address_phrase's own three word lists (see that function for why a keyword-shaped
 # mechanism is acceptable here and nowhere else in this file).
@@ -351,7 +405,7 @@ EDIT_KEYWORDS = (
 # to " here -- it would collide with skills.toml's own navigation keyword "travel" (see
 # test_item_and_dialogue_keywords_never_collide_with_a_real_skill_keyword), so "go to "/"head
 # to "/"walk to " cover the same phrasing without that risk.
-TRAVEL_KEYWORDS = ("go to ", "head to ", "walk to ", "enter the ", "go outside", "exit the")
+TRAVEL_KEYWORDS = ("go to ", "head to ", "walk to ", "proceed to ", "enter the ", "go outside", "exit the")
 # Checked separately from TRAVEL_KEYWORDS' own plain substring match -- a bare "leave" collides
 # with axes' own "cleave" skill keyword the same way ADAM_NAME_PATTERN's "adam" would collide
 # with plenty of ordinary words without \b-anchoring; word-boundary matching is what a short,
@@ -519,6 +573,10 @@ ITEM_LOSING_INTENTS = frozenset({"give", "drop", "trade", "use"})
 # travel and walked the player to the shipyard mid-conversation.
 QUESTION_BLOCKED_ROUTES = frozenset({"travel", "rest"})
 
+# Item intents that change what the player has or holds -- never taken from an is_hypothetical
+# sentence (see _classify_item_pass). Read-only ones (examine, lore_check, open) still are.
+HYPOTHETICAL_BLOCKED_INTENTS = ITEM_LOSING_INTENTS | {"take", "equip", "unequip", "craft"}
+
 # A clause pointing back at someone the rest of the input named ("...and start kicking him") --
 # _classify_skill_pass falls back to the whole input's target for these. Personal pronouns only:
 # "it" is as likely a door as a person, and "walk past the guard and kick it" must not hit the guard.
@@ -673,6 +731,40 @@ def process_input(player_input):
     return processed_text
 
 
+# A sentence opening on one of these (after HYPOTHETICAL_LEAD_WORDS) wonders about an action
+# rather than taking it -- see is_hypothetical.
+CONDITIONAL_OPENERS = frozenset({"if", "unless", "suppose", "supposing", "assuming", "whether"})
+HYPOTHETICAL_LEAD_WORDS = LEADING_FILLER_WORDS | {"but", "so", "what", "now", "wait", "well"}
+# A question opening on one of these asks permission the way a player declares an action ("can i
+# take the sword?") -- the one kind of question an item interaction may still come from.
+PERMISSION_OPENERS = frozenset({"can", "could", "may"})
+
+
+def is_hypothetical(sentence):
+    """!
+    @brief Whether a sentence wonders about an action rather than taking it: it opens on a
+        conditional ("if i give you the coins...", "but if...", "what if..."), or it's a question
+        that isn't a permission-style "can i...?". Found by playtest: "but if i use a coupon then
+        i only gotta give you the promise of the actual coins next week right?" handed the
+        player's whole purse to a bystander.
+    @param sentence One processed sentence, its own terminal punctuation included.
+    """
+    words = re.findall(r"[a-z']+", sentence)
+    while words and words[0] in HYPOTHETICAL_LEAD_WORDS and not (words[0] == "what" and words[1:2] != ["if"]):
+        words = words[1:]
+    if words and words[0] in CONDITIONAL_OPENERS:
+        return True
+    return sentence.rstrip().endswith("?") and bool(words) and words[0] not in PERMISSION_OPENERS
+
+
+def hypothetical_spans(processed_text):
+    """!@brief [(start, end)] of every is_hypothetical sentence in processed_text."""
+    return [
+        match.span() for match in re.finditer(r"[^.!?;]+[.!?;]*", processed_text or "")
+        if is_hypothetical(match.group())
+    ]
+
+
 def split_action_clauses(processed_text):
     """!
     @brief Splits processed_text into one or more independent action clauses on
@@ -748,7 +840,7 @@ def detect_item_intent(processed_text):
         return "hitch"
     if _keyword_gate(processed_text, UNHITCH_KEYWORDS):
         return "unhitch"
-    if _keyword_gate(processed_text, ADVANCE_KEYWORDS):
+    if _keyword_gate(processed_text, ADVANCE_KEYWORDS) or TOWARD_PATTERN.search(processed_text):
         return "advance"
     if _keyword_gate(processed_text, RETREAT_KEYWORDS):
         return "retreat"
@@ -865,7 +957,7 @@ def detect_dialogue_intent(processed_text):
         playtest, "kick my opponent until they can't ask questions" went to dialogue on "ask".
     """
     main_clauses = SUBORDINATE_CLAUSE_PATTERN.sub("", processed_text or "")
-    return _keyword_gate(main_clauses, DIALOGUE_KEYWORDS) or bool(QUOTED_SPEECH_PATTERN.search(processed_text or ""))
+    return _keyword_gate(main_clauses, DIALOGUE_KEYWORDS) or bool(speech_quotes(processed_text))
 
 
 # A subordinate clause, up to the next punctuation -- what it says is a condition or a purpose,
@@ -977,6 +1069,14 @@ def extract_address_phrase(processed_text):
     return " ".join(phrase) or None
 
 
+def _opening_verb(clause):
+    """!@brief A clause's first word after any FIRST_PERSON_OPENERS/LEADING_FILLER_WORDS, or ""."""
+    words = [word for word in re.findall(r"[a-z']+", clause)]
+    while words and (words[0] in FIRST_PERSON_OPENERS or words[0] in LEADING_FILLER_WORDS):
+        words = words[1:]
+    return words[0] if words else ""
+
+
 def _original_casing(raw_input, processed_text):
     """!
     @brief The tail of raw_input that processed_text was made from, in the player's own casing
@@ -1008,9 +1108,9 @@ def frame_speech(raw_input, processed_text, explicit):
     @return {"speech_form", "utterance"} -- utterance is None for "greet".
     """
     original = _original_casing(raw_input, processed_text)
-    quotes = re.findall(r'"([^"]{2,})"', original)
+    quotes = speech_quotes(original)
     if quotes:
-        return {"speech_form": "verbatim", "utterance": " ".join(quote.strip() for quote in quotes)}
+        return {"speech_form": "verbatim", "utterance": " ".join(quotes)}
     if not explicit:
         return {"speech_form": "verbatim", "utterance": original}
 
@@ -1024,7 +1124,10 @@ def frame_speech(raw_input, processed_text, explicit):
 
     words = [word.strip(ADDRESS_STRIP_CHARS) for word in processed_text[earliest.end():].split()]
     words = [word for word in words if word]
-    if words and words[0] in ("me", "us"):
+    # Nothing after the keyword names no one to greet: found by playtest, "a gate, you say? where
+    # does this passage open, and how can we tell?" was framed as a bare greeting on "tell", and
+    # the reply ignored the question.
+    if not words or words[0] in ("me", "us"):
         return {"speech_form": "verbatim", "utterance": original}
 
     # Skip past the addressee the same way extract_address_phrase reads it; anything left
@@ -1044,9 +1147,10 @@ def frame_speech(raw_input, processed_text, explicit):
 
 
 # Talk about the game rather than within it -- see detect_out_of_character. Phrases, not bare
-# "roll"/"rules": "roll under the gate" (acrobatics) and "the rules of the guild" are in-fiction.
+# "roll"/"rules": "roll under the gate" (acrobatics) and "the rules of the guild" are in-fiction
+# (found by playtest: "what are the rules of the 'beautiful, terrible mess'?" went to ADaM).
 OUT_OF_CHARACTER_PATTERN = re.compile(
-    r"\b(?:rulebook|rule ?book|the rules|house rules?|game master|dungeon master|gm|dm|npcs?|"
+    r"\b(?:rulebook|rule ?book|the rules(?! of\b)|house rules?|game master|dungeon master|gm|dm|npcs?|"
     r"metagam\w*|game mechanics|mechanics|roll (?:a |the )?dice|roll for|dice rolls?|a dice|"
     r"the dice|d6|d20|saving throws?|bonus actions?|action economy|skill checks?|ability checks?|"
     r"perception checks?|character sheet|hit points|damage chart|turn order|experience points|"
@@ -1261,13 +1365,23 @@ class IntentClassifier:
             }})
             return processed, events
 
-        if detect_travel_intent(processed):
+        # Only from a sentence that isn't is_hypothetical: found by playtest, "if i take the
+        # proof of the goods... can i leave?" set off travel and the narrator invented a barrier.
+        if any(
+            detect_travel_intent(sentence) and not is_hypothetical(sentence)
+            for sentence in re.findall(r"[^.!?;]+[.!?;]*", processed)
+        ):
             # Same tier as the direction check above, but for location-to-location travel.
             # Unlike every other gate here, this one does consult the matcher (for the named
             # destination -- see _travel_event); DMCore still gets the raw input and still
             # resolves the destination literally first, so a None here changes nothing.
             events.append(_travel_event(processed, self.matcher))
             return processed, events
+        if TOWARD_PATTERN.search(processed) and not is_hypothetical(processed):
+            travel = _travel_event(processed, self.matcher)
+            if travel["payload"]["destination"]:
+                events.append(travel)
+                return processed, events
 
         turn_clauses, remaining_clauses, found_exempt, unmatched_item_verbs = self._classify_item_pass(
             processed, events,
@@ -1316,17 +1430,22 @@ class IntentClassifier:
                         event["payload"]["quiet"] = True
             if implicit_dialogue:
                 mixed = self._split_speech_from_action(raw_input, processed)
-                if mixed:
-                    events.extend(mixed)
-                    return processed, events
+            else:
+                mixed = self._split_quoted_speech(raw_input, processed)
+            if mixed:
+                events.extend(mixed)
+                return processed, events
             events.append(self._dialogue_event(
                 processed, frame_speech(raw_input, processed, explicit_dialogue), implicit_dialogue,
             ))
             return processed, events
 
-        best_score = self._classify_skill_pass(remaining_clauses, turn_clauses, processed)
+        best_score = self._classify_skill_pass(
+            remaining_clauses, turn_clauses, processed,
+            item_verb_clauses={verb["phrase"] for verb in unmatched_item_verbs},
+        )
 
-        self._finalize(processed, turn_clauses, found_exempt, unmatched_item_verbs, best_score, events)
+        self._finalize(processed, turn_clauses, found_exempt, unmatched_item_verbs, best_score, events, raw_input)
         return processed, events
 
     def _dialogue_event(self, processed, framing, implicit):
@@ -1394,7 +1513,9 @@ class IntentClassifier:
             sentence = match.group().strip()
             if not sentence:
                 continue
-            (speech if detect_implicit_speech(sentence) else action).append(match)
+            first_word = re.match(r"[a-z']*", sentence).group()
+            is_speech = detect_implicit_speech(sentence) or first_word in SPEECH_FRAGMENT_OPENERS
+            (speech if is_speech else action).append(match)
         if not speech or not action:
             return None
 
@@ -1418,6 +1539,42 @@ class IntentClassifier:
         dialogue = self._dialogue_event(speech_text, {"speech_form": "verbatim", "utterance": utterance}, True)
         turn = {"event": "turn_detected", "payload": {"clauses": turn_clauses, "input": action_text}}
         return [dialogue, turn] if speech[0].start() < action[0].start() else [turn, dialogue]
+
+    def _split_quoted_speech(self, raw_input, processed):
+        """!
+        @brief The quoted-speech counterpart to _split_speech_from_action: 'i yell "hey!" and
+            swing a fist at elara' is dialogue for the quoted words plus a turn for the rest, in
+            the order written. Found by playtest: eleven of a brawler's forty turns paired a
+            shout with an attack, and every attack was dropped as dialogue. Unlike the unmarked
+            split, the text outside the quotes is judged like any ordinary turn (no
+            MIXED_ACTION_MIN_SCORE bar) -- the quotes already mark which part is talk. A clause
+            that's only the tag on the quote (SPEECH_TAG_VERBS) or a dialogue keyword ('ask the
+            guard "where is the inn?"') is never the action.
+        @return [event, ...] for both halves, or None to keep the input whole.
+        """
+        original = _original_casing(raw_input, processed)
+        quotes = speech_quotes(original)
+        first_quote = processed.find('"')
+        if not quotes or first_quote < 0:
+            return None
+        # Each quote becomes a clause break, so 'yell "hey!" and swing' splits around it.
+        action_text = re.sub(r"(?:\s*,)+\s*", ", ", QUOTED_SPEECH_PATTERN.sub(",", processed))
+        action_text = re.sub(r"\s+", " ", action_text).strip(" ,")
+        turn_clauses, remaining, _found_exempt, _unmatched = self._classify_item_pass(action_text, [])
+        remaining = [
+            clause for clause in remaining
+            if not detect_dialogue_intent(clause) and _opening_verb(clause) not in SPEECH_TAG_VERBS
+        ]
+        self._classify_skill_pass(remaining, turn_clauses, action_text)
+        if not turn_clauses:
+            return None
+
+        dialogue = self._dialogue_event(processed, {"speech_form": "verbatim", "utterance": " ".join(quotes)}, False)
+        turn = {"event": "turn_detected", "payload": {"clauses": turn_clauses, "input": action_text}}
+        # Speech first when nothing but its tag comes before the first quote.
+        lead = [word for word in re.findall(r"[a-z']+", processed[:first_quote])
+                if word not in FIRST_PERSON_OPENERS and word not in LEADING_FILLER_WORDS]
+        return [dialogue, turn] if all(word in SPEECH_TAG_VERBS for word in lead) else [turn, dialogue]
 
     def _classify_item_pass(self, processed, events):
         """!
@@ -1444,9 +1601,16 @@ class IntentClassifier:
         remaining_clauses = []
         found_exempt = False
         unmatched_item_verbs = []
+        hypothetical = hypothetical_spans(processed)
+        cursor = 0
 
         for clause in split_action_clauses(processed):
+            start = processed.find(clause, cursor)
+            cursor = start + len(clause)
             clause_intent = detect_item_intent(normalize_declared_verb(clause))
+            if clause_intent in HYPOTHETICAL_BLOCKED_INTENTS and any(a <= start < b for a, b in hypothetical):
+                remaining_clauses.append(clause)
+                continue
             if clause_intent in EXEMPT_ITEM_INTENTS:
                 found_exempt = True
                 events.append({"event": "item_interaction_detected", "payload": {
@@ -1473,13 +1637,18 @@ class IntentClassifier:
 
         return turn_clauses, remaining_clauses, found_exempt, unmatched_item_verbs
 
-    def _classify_skill_pass(self, remaining_clauses, turn_clauses, processed=""):
+    def _classify_skill_pass(self, remaining_clauses, turn_clauses, processed="", item_verb_clauses=frozenset()):
         """!
         @brief Pass 2: skill/ability matching for whatever clauses the item pass didn't
             already claim. Appends matched clauses directly onto turn_clauses.
         @param remaining_clauses The item pass's own leftover clause list.
         @param turn_clauses The item pass's own accumulated list -- matched skill/ability
             entries are appended here directly.
+        @param item_verb_clauses Clauses whose item verb named nothing real (the item pass's
+            unmatched_item_verbs) -- only a direct match (MIXED_ACTION_MIN_SCORE) takes one, so a
+            keyword-fallback guess never beats _finalize's improvisation for it. Found by
+            playtest: "i pick up the damp ledger book" the narrator had just described rolled
+            finesse at 0.21 instead of making the book real.
         @return best_score, the highest confidence score seen across every clause tried, for
             action_not_understood's own payload if nothing else claims the turn.
         """
@@ -1508,7 +1677,7 @@ class IntentClassifier:
                 # "fireball" alone already matches confidently once "empowered" is stripped.
                 clause_skill, clause_score = self.matcher.map_to_action(clause)
             best_score = max(best_score, clause_score)
-            if not clause_skill:
+            if not clause_skill or (clause in item_verb_clauses and clause_score < MIXED_ACTION_MIN_SCORE):
                 continue
             action = {"kind": "action", "skill": clause_skill, "score": clause_score}
             if modifier_name:
@@ -1529,7 +1698,7 @@ class IntentClassifier:
             turn_clauses.append(action)
         return best_score
 
-    def _finalize(self, processed, turn_clauses, found_exempt, unmatched_item_verbs, best_score, events):
+    def _finalize(self, processed, turn_clauses, found_exempt, unmatched_item_verbs, best_score, events, raw_input=""):
         """!
         @brief Decides the turn's final event once both passes have run, in order: a merged
             turn_detected if anything claimed the turn; nothing at all if an exempt clause
@@ -1580,6 +1749,13 @@ class IntentClassifier:
             events.append({"event": "improvisation_requested", "payload": {
                 "intent": candidate["intent"], "phrase": candidate["phrase"], "input": processed,
             }})
+            return
+
+        if processed.rstrip().endswith("!") and (self.conversation_partner is not None or self.anyone_present):
+            # Nothing claimed it and someone can hear it: a barked line is said to them. Found by
+            # playtest: "stay right there!", "keep your hands up!" and "hey! get back here!" were
+            # six of a brawler's fifteen not-understood turns, mid-fight with a listener.
+            events.append(self._dialogue_event(processed, frame_speech(raw_input, processed, False), True))
             return
 
         # Below confidence_threshold on every remaining clause, the item pass found nothing, and
