@@ -88,6 +88,31 @@ disposition = -60
 threat = -60
 familiarity = -20
 
+# Law enforcement (DM_Enforcement.py). "resisted_arrest" goes to every enforcer present when the
+# player resists or flees an arrest, "wanted_dead" to an enforcer who recognizes someone wanted
+# past the polity's kill_on_sight_at. Both carry assaulted's own cap, so they reach is_hostile's
+# -100 and the existing combat machinery takes over. "refused_bribe" is an enforcer turning a
+# bribe down -- insulted, not provoked.
+[[attitude_event]]
+name = "resisted_arrest"
+disposition = -200
+threat = -20
+familiarity = -10
+cap = 200
+
+[[attitude_event]]
+name = "wanted_dead"
+disposition = -200
+threat = -20
+familiarity = 0
+cap = 200
+
+[[attitude_event]]
+name = "refused_bribe"
+disposition = -15
+threat = 0
+familiarity = -5
+
 # Laws (docs/law.md). Which laws apply is a polity's own [[polity.law]] list (polities.toml),
 # plus a location's own [[location.law]]; this table holds what every polity shares:
 #   witness_skill / disguise_skill -- a witness's observation roll must beat a disguise's own
@@ -107,6 +132,14 @@ spell_identify_base = 15
 # How hard witnessing each crime hits a witness's attitude toward the offender -- the
 # "witnessed_crime" [[attitude_event]]'s magnitude (0..1).
 witness_severity = { theft = 0.25, assault = 0.5, murder = 1.0, banned_ability = 0.4, banned_presence = 0.3 }
+# Enforcement (DM_Enforcement.py; docs/law.md "Enforcement"):
+#   jail_blocks_per_unit -- a surrender that can't cover the bounty serves the rest as jail time,
+#     this many blocks per unit of value unpaid (rounded up, at least 1).
+#   bluff_witnessed_modifier -- added to a bluff's difficulty when the enforcer saw the crime.
+#   [[law.bribe]] -- how an offer's share of the bounty shifts a bribe's difficulty (the
+#     highest min_share reached wins); below every band the offer is refused out of hand.
+jail_blocks_per_unit = 0.2
+bluff_witnessed_modifier = 5
 
 [[law.recognition]]
 min_acclaim = 1
@@ -131,6 +164,18 @@ tier = "very easy"
 [[law.recognition]]
 min_acclaim = 20
 tier = "automatic"
+
+[[law.bribe]]
+min_share = 1.0
+modifier = -5
+
+[[law.bribe]]
+min_share = 0.5
+modifier = 0
+
+[[law.bribe]]
+min_share = 0.25
+modifier = 5
 
 # XP award formula -- _award_xp_for_defeat (DM_Combat.py) reads this once per kill, the moment a
 # hostile-to-the-player entity's HP first reaches 0 (calculate_damage's own "previous_hp > 0,

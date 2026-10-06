@@ -16,17 +16,22 @@ import threading
 import numpy as np
 import torch
 from sentence_transformers import SentenceTransformer, util
-from resolution.AdHoc_Generation import adjudicate_player_input
+from resolution.AdHoc_Generation import adjudicate_player_input, classify_arrest_reply
 from transformers import pipeline
 
 from nlp.Intent_Classification import (
     CURRENCY_SYNONYMS,
+    FIRST_PERSON_OPENERS,
     INTENT_PROTOTYPES,
+    LEADING_FILLER_WORDS,
     OTHER_INTENT,
     REFERRING_PRONOUN_PATTERN,
     IntentClassifier,
     IntentMatcher,
+    detect_help_intent,
+    detect_save_load_intent,
     opens_like_an_action,
+    process_input,
 )
 
 # classify_sentiment's own model -- a general-purpose natural-language-inference model, not this
@@ -978,6 +983,10 @@ class NLPCore:
         # first (see _answer_confirmation).
         self.event_bus.subscribe("confirmation_requested", self._on_confirmation_requested)
         self._awaiting_confirmation = False
+        # A guard is waiting on an answer to an arrest (DM_Enforcement.py); the next input is
+        # read as one first (see _answer_arrest). The replies still open, or None.
+        self.event_bus.subscribe("arrest_awaiting", self._on_arrest_awaiting)
+        self._arrest_choices = None
         # DM_Improvisation.py publishes this whenever an ad hoc entity is created or restored
         # from a save -- see SentenceTransformerMatcher.register_item's own docstring.
         self.event_bus.subscribe("item_catalog_updated", self._on_item_catalog_updated)
@@ -1008,7 +1017,16 @@ class NLPCore:
         # see ImprovisationMixin._on_player_input_received); routing reads the present-entity
         # bank that does.
         self.event_bus.publish("player_input_received", player_input)
-        if self._answer_confirmation(player_input):
+        try:
+            self._route_input(player_input)
+        finally:
+            # Everything this input set off has resolved -- DMCore announces an arrest it raised
+            # only now, after the crime itself (DM_Enforcement.py).
+            self.event_bus.publish("player_input_handled", {"input": player_input})
+
+    def _route_input(self, player_input):
+        """!@brief _on_user_input's body: a pending question's answer first, else classification."""
+        if self._answer_confirmation(player_input) or self._answer_arrest(player_input):
             return
         processed, events = self.classifier.classify(player_input)
         self.event_bus.publish("log_info", f"Processing player input: {player_input} -> {processed}")
@@ -1041,6 +1059,41 @@ class NLPCore:
             answer = "no"
         self.event_bus.publish("confirmation_answered", {"answer": answer, "input": player_input})
         return answer is not None
+
+    def _on_arrest_awaiting(self, data):
+        self._arrest_choices = list(data.get("choices") or [])
+
+    def _answer_arrest(self, player_input):
+        """!
+        @brief Reads player_input as the answer to a guard's arrest demand, publishing
+            "arrest_answered". A line opening with one of the offered words ("pay", "bribe him 5
+            gold") is that answer; anything else goes to the model (classify_arrest_reply) --
+            "fine, take me in" is a surrender. A real answer is the whole turn. "other" (or no
+            model) isn't consumed: it's played as an ordinary input, and DMCore judges what it
+            did. Save/load and ADaM lines aren't answers at all and leave the question open.
+        @return True if the input was consumed as the answer.
+        """
+        if not self._arrest_choices:
+            return False
+        processed = process_input(player_input)
+        if detect_save_load_intent(processed)[0] or detect_help_intent(processed):
+            return False
+        choices, self._arrest_choices = self._arrest_choices, None
+        words = re.findall(r"[a-z']+", str(player_input).lower())
+        # "I resist." and "I'll pay" open on the option too. Found by playtest: "I resist." went to the model.
+        while words and (words[0] in FIRST_PERSON_OPENERS or words[0] in LEADING_FILLER_WORDS):
+            words = words[1:]
+        choice = words[0] if words and words[0] in choices else None
+        if choice is None:
+            choice, reason = classify_arrest_reply(player_input, choices=choices)
+            if choice is None:
+                self.event_bus.publish("log_warning" if reason == "unavailable" else "log_info",
+                                       f"Arrest reply gave no answer ({reason}); played as an ordinary input.")
+            else:
+                self.event_bus.publish("log_info", f"Adjudicated arrest reply: {choice}.")
+        choice = choice if choice in choices else "other"
+        self.event_bus.publish("arrest_answered", {"choice": choice, "input": player_input})
+        return choice != "other"
 
     def _on_rules_loaded(self, data):
         """!

@@ -10,12 +10,14 @@
     the offender currently is; LawMixin is what refuses to touch a record from outside.
 """
 
+import math
+
 import resolution.Combat_Resolution as Combat_Resolution
 import resolution.Social_Resolution as Social_Resolution
 from resolution.Inventory_Resolution import _settle
 
 # Every crime kind a [[polity.law]] may name -- DM_Validation.py rejects anything else.
-CRIMES = ("theft", "assault", "murder", "banned_ability", "banned_presence")
+CRIMES = ("theft", "assault", "murder", "banned_ability", "banned_presence", "resisting_arrest")
 
 # A recognition band naming this instead of a difficulty tier means "no roll at all" -- a
 # shambling corpse is recognized by anyone, trained or not (an untrained 0-dice roll would
@@ -167,3 +169,32 @@ def file_report(records, polity, identity, law, crime_line):
     record["acclaim"] += acclaim
     record["crimes"].append({**crime_line, "fine": law.get("fine", 0) or 0, "acclaim": law.get("acclaim", 0) or 0})
     return record
+
+
+def jail_blocks(shortfall, blocks_per_unit):
+    """!
+    @brief How long a surrender that couldn't cover the bounty is served.
+    @param shortfall The bounty left unpaid, in the setting's value unit.
+    @param blocks_per_unit [law].jail_blocks_per_unit.
+    @return Whole blocks -- at least 1 whenever anything is owed, 0 when nothing is.
+    """
+    if shortfall <= 0:
+        return 0
+    return max(1, math.ceil(round(shortfall * (blocks_per_unit or 0), 6)))
+
+
+def bribe_modifier(offer, bounty, bands):
+    """!
+    @brief How an offer's size shifts a bribe's difficulty.
+    @param offer What the player offered.
+    @param bounty What the enforcer was demanding.
+    @param bands [[law.bribe]] entries ({min_share, modifier}) -- the highest min_share the
+        offer reaches (offer / bounty) wins.
+    @return The difficulty modifier, or None when the offer is below every band (refused out of
+            hand -- an insult, not a bribe).
+    """
+    share = offer / bounty if bounty > 0 else float("inf")
+    for band in sorted(bands or [], key=lambda b: b.get("min_share", 0), reverse=True):
+        if share >= band.get("min_share", 0):
+            return band.get("modifier", 0)
+    return None

@@ -81,7 +81,7 @@ def _warm_up_model(timeout=300):
         the old teardown was stranding llama-server children (see stop_ollama), those orphans
         were incidentally keeping the model warm between runs -- so the cold-load cost only
         became visible once the leak was fixed. It lands on the tightest budget in the file:
-        every ad hoc call (AdHoc_Generation.DEFAULT_TIMEOUT) allows 8s, and a cold load is
+        every ad hoc call (the local backend's generation_timeout) allows 12s, and a cold load is
         comfortably more than that, so without this the first real call of a session reports
         "unavailable" and its test skips for a reason that has nothing to do with the model's
         judgment.
@@ -1193,7 +1193,7 @@ class TestReferencedNpcLive(unittest.TestCase):
         can't support the question, so don't pretend to have asked it" posture the
         _ollama_reachable() gate takes one level up. It fires for real: a CPU-bound host (no
         GPU, so ollama's /api/ps reports size_vram far below size) takes ~50-60s per call
-        against the shipped model, well past the 8s DEFAULT_TIMEOUT every ad hoc call uses.
+        against the shipped model, well past the 12s generation_timeout every local ad hoc call uses.
     """
 
     def setUp(self):

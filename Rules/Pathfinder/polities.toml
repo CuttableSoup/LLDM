@@ -11,6 +11,11 @@
 name = "Varisia"
 language = "varisian"
 description = "A rugged, sparsely settled frontier region on Golarion's northwest coast, its scattered towns overshadowed by the ruins of a much older empire."
+# Enforcement (docs/law.md): an enforcer who recognizes someone with at least arrest_at bounty
+# here confronts them; at kill_on_sight_at they attack instead. No polity-wide jail -- each town
+# names its own (a location's "jail", found up its return_to chain). Placeholders, like the fines.
+arrest_at = 1
+kill_on_sight_at = 100
 
 # Laws in force across Varisia (docs/law.md). fine is in gp (value's own unit); acclaim is
 # what a filed report adds to the offender's acclaim here (negative = infamy). Placeholder
@@ -30,3 +35,8 @@ acclaim = -2
 crime = "murder"
 fine = 100
 acclaim = -6
+
+[[polity.law]]
+crime = "resisting_arrest"
+fine = 20
+acclaim = -2

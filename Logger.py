@@ -14,7 +14,7 @@ class Logger:
     """!
     @brief Handles logging messages received from the event bus.
     """
-    def __init__(self, event_bus, debug=False):
+    def __init__(self, event_bus, debug=False, log_name=None):
         """!
         @brief Initializes the logger and subscribes to log events.
         @param event_bus The central event bus instance.
@@ -24,6 +24,9 @@ class Logger:
             Logs/, gitignored, one per process run. False (the default) keeps this class's
             original console-only behavior exactly, so every other Logger(event_bus) call site
             (ex: gui/Textual_Core.py) is unaffected.
+        @param log_name The debug file's name under Logs/, without ".log" -- None for
+            "session_<timestamp>". tools/playtest.py names it after the run, beside its own
+            .jsonl and .txt.
         """
         self.event_bus = event_bus
         self._log_file = None
@@ -31,7 +34,7 @@ class Logger:
             os.makedirs(LOG_DIR, exist_ok=True)
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             self._log_file = open(
-                os.path.join(LOG_DIR, f"session_{timestamp}.log"), "a", encoding="utf-8",
+                os.path.join(LOG_DIR, f"{log_name or 'session_' + timestamp}.log"), "a", encoding="utf-8",
             )
             self.event_bus.subscribe("llm_debug_updated", self.log_llm_debug)
 

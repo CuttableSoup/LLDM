@@ -78,6 +78,11 @@ present, and in three cases:
   doesn't open on a question word ("let's go down that cut-through.", "i'll just grab something
   useful off it."). An `action` verdict sends it to the ordinary skill/item passes instead.
 - **weak_turn**: every skill clause of the turn scored below `WEAK_TURN_SCORE` (0.6).
+- **weak_quoted**: the same, for the action half of a line with quoted speech beside it
+  (`_split_quoted_speech`); anything but `action` keeps the whole line as talk. Found by playtest:
+  "casually reach out, tapping the heavy metal ring on his wrist" beside a quote rolled polearms
+  ("reach") at 0.52. The `speech` kind's own description counts the small gestures that go with
+  words (a smirk, a tap on the arm) as part of speaking.
 - **not_understood**: nothing else claimed the line.
 
 The model only picks the channel; the existing machinery still does the matching (`speech` →

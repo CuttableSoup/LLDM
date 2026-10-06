@@ -332,6 +332,13 @@ ADDRESS_STRIP_CHARS = ".,;:!?\"'"
 # A crowd's worth of adjectives is still one person ("the old man by the fire"); past three
 # words it stops being a way of naming someone and starts being a sentence.
 MAX_ADDRESS_WORDS = 3
+# extract_item_phrase's own word lists -- "of" stays out of the terminators ("a bag of figs").
+ITEM_PHRASE_ARTICLES = ADDRESS_ARTICLES | {"some", "that", "those", "these", "your", "its"}
+ITEM_PHRASE_TERMINATORS = frozenset({
+    "from", "to", "for", "and", "then", "with", "off", "out", "at", "in", "on", "into", "onto",
+    "so", "but", "while", "before", "after", "near", "by", "beside", "behind", "under", "without",
+})
+MAX_ITEM_PHRASE_WORDS = 4
 
 # Reserved persona name for the out-of-character help/guidance channel (see DM_Help.py) -- a
 # fixed, always-available meta-command in the same spirit as save/load, not an in-fiction
@@ -899,6 +906,12 @@ for _keywords in (
 ):
     for _phrase in _keywords:
         ITEM_VERB_BASES.update(_verb_forms(_phrase.split()[0]))
+# The keywords behind each item intent that names an item -- see extract_item_phrase.
+ITEM_INTENT_KEYWORDS = {
+    "examine": EXAMINE_KEYWORDS, "equip": EQUIP_KEYWORDS, "unequip": UNEQUIP_KEYWORDS,
+    "drop": DROP_KEYWORDS, "take": TAKE_KEYWORDS, "give": GIVE_KEYWORDS, "trade": TRADE_KEYWORDS,
+    "use": USE_KEYWORDS, "craft": CRAFT_KEYWORDS,
+}
 # Verbs of speaking aloud, every inflection mapped back to its base -- a clause opening on one is
 # said, not done ("yell insults at the guard", "taunt the vendor"). See
 # IntentClassifier._split_spoken_clauses. Found by playtest: nine of a brawler's forty turns were
@@ -1105,6 +1118,42 @@ def extract_address_phrase(processed_text):
     phrase = []
     for word in words[:MAX_ADDRESS_WORDS]:
         if word in ADDRESS_TERMINATORS:
+            break
+        phrase.append(word)
+    return " ".join(phrase) or None
+
+
+def extract_item_phrase(clause, intent):
+    """!
+    @brief The words the player used for the item an item clause acts on -- "take the belt
+        knife from the stall" -> "belt knife". Carried on the clause so a "not here" notice
+        quotes what the player said, not the catalog item map_to_item settled on (found by
+        playtest: "belt knife" was told There's no "belt pouch" here). Mechanical like
+        extract_address_phrase, and fails closed the same way: None means the notice names the
+        matched item, as before.
+    @param clause One processed clause of player input.
+    @param intent The clause's item intent (detect_item_intent).
+    @return The phrase (1-4 words, articles stripped), or None.
+    """
+    text = normalize_declared_verb(clause)
+    earliest = None
+    for keyword in ITEM_INTENT_KEYWORDS.get(intent, ()):
+        match = re.search(rf"\b{re.escape(keyword.strip())}\b", text)
+        if match and (earliest is None or match.end() < earliest):
+            earliest = match.end()
+    if earliest is None:
+        return None
+    words = [word.strip(ADDRESS_STRIP_CHARS) for word in text[earliest:].split()]
+    words = [word for word in words if word]
+    while words and words[0] in ITEM_PHRASE_ARTICLES:
+        words.pop(0)
+    phrase = []
+    for word in words[:MAX_ITEM_PHRASE_WORDS]:
+        # A trailing participle describes where the item is, not what it is: "a length of rope
+        # lying near the stall" (found by playtest). Not straight after "of": "a bag of shining coins".
+        if word in ITEM_PHRASE_TERMINATORS or (
+            phrase and phrase[-1] != "of" and word.endswith("ing") and len(word) > 4
+        ):
             break
         phrase.append(word)
     return " ".join(phrase) or None
@@ -1414,7 +1463,8 @@ class IntentClassifier:
             item_name = None
         if item_name:
             return {"event": "turn_detected", "payload": {
-                "clauses": [{"kind": "item", "intent": intent, "item_name": item_name}], "input": processed,
+                "clauses": [{"kind": "item", "intent": intent, "item_name": item_name, "phrase": phrase}],
+                "input": processed,
             }}
         return {"event": "improvisation_requested", "payload": {
             "intent": intent, "phrase": phrase, "input": processed,
@@ -1744,8 +1794,15 @@ class IntentClassifier:
             end = processed.find(last, start) + len(last)
             words = original[start:end].strip().rstrip(".!").split()
             verb = _opening_verb(clause)
-            index = next(i for i, word in enumerate(words) if word.lower().strip(",") == verb)
-            return " ".join(["You", SPEECH_ACT_VERBS[verb], *words[index + 1:]]) + "."
+            # Matched on a word's first part: _opening_verb reads "mock" out of "mock-yell", and
+            # the rest of that word is kept ("You mock yell a challenge"). Found by playtest:
+            # "I mock-yell a challenge" matched no whole word and crashed the turn.
+            index = next(
+                (i for i, word in enumerate(words) if re.findall(r"[a-z']+", word.lower())[:1] == [verb]), 0,
+            )
+            leftover = re.sub(rf"^[^a-z']*{re.escape(verb)}\W*", "", words[index].lower()) if words else ""
+            tail = ([words[index][-len(leftover):]] if leftover else []) + words[index + 1:]
+            return " ".join(["You", SPEECH_ACT_VERBS[verb], *tail]) + "."
 
         openers = [clause for clause in spoken if _opening_verb(clause) in SPEECH_ACT_VERBS]
 
@@ -1772,7 +1829,8 @@ class IntentClassifier:
             the order written. Found by playtest: eleven of a brawler's forty turns paired a
             shout with an attack, and every attack was dropped as dialogue. Unlike the unmarked
             split, the text outside the quotes is judged like any ordinary turn (no
-            MIXED_ACTION_MIN_SCORE bar) -- the quotes already mark which part is talk. A clause
+            MIXED_ACTION_MIN_SCORE bar, but the same weak-turn check with the model) -- the
+            quotes already mark which part is talk. A clause
             that's only the tag on the quote (SPEECH_TAG_VERBS) or a dialogue keyword ('ask the
             guard "where is the inn?"') is never the action.
         @return [event, ...] for both halves, or None to keep the input whole.
@@ -1793,6 +1851,15 @@ class IntentClassifier:
         self._classify_skill_pass(remaining, turn_clauses, action_text)
         if not turn_clauses:
             return None
+        # The same check an ordinary weak turn gets (see classify's weak_turn): a skill guessed
+        # below WEAK_TURN_SCORE is put to the model, and anything but "action" keeps the whole
+        # line as talk. Found by playtest: "casually reach out, tapping the heavy metal ring on
+        # his wrist" beside a quote rolled polearms at 0.52 and was narrated as a sword strike.
+        weak = all(clause["kind"] == "action" and clause.get("score", 1.0) < WEAK_TURN_SCORE for clause in turn_clauses)
+        if weak and self.last_adjudication is None:
+            verdict = self._adjudicate(action_text, "weak_quoted")
+            if verdict is not None and verdict != "action":
+                return None
 
         dialogue = self._dialogue_event(processed, {"speech_form": "verbatim", "utterance": " ".join(quotes)}, False)
         turn = {"event": "turn_detected", "payload": {"clauses": turn_clauses, "input": action_text}}
@@ -1850,7 +1917,10 @@ class IntentClassifier:
                 if item_name and clause_intent in ITEM_LOSING_INTENTS and not _clause_names_item(clause, item_name):
                     item_name = None
                 if item_name:
-                    turn_clauses.append({"kind": "item", "intent": clause_intent, "item_name": item_name})
+                    turn_clauses.append({
+                        "kind": "item", "intent": clause_intent, "item_name": item_name,
+                        "phrase": extract_item_phrase(clause, clause_intent),
+                    })
                     continue
                 # A recognized "examine"/"take"/"give"/"trade" verb but no matching item name --
                 # fall through to skill matching below rather than silently dropping it (ex:
@@ -1973,6 +2043,8 @@ class IntentClassifier:
             candidate = unmatched_item_verbs[0]
             events.append({"event": "improvisation_requested", "payload": {
                 "intent": candidate["intent"], "phrase": candidate["phrase"], "input": processed,
+                # The player's words for the item alone, for a notice to quote (extract_item_phrase).
+                "item_phrase": extract_item_phrase(candidate["phrase"], candidate["intent"]),
             }})
             return
 

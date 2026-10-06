@@ -887,10 +887,17 @@ class ValidationMixin(DMCoreProtocol):
         """
         polity_names = {polity.get("name") for polity in self.rules.get("polity", [])}
         for polity in self.rules.get("polity", []):
-            self._check_law_list(f"polity '{polity.get('name')}'", polity.get("law"))
+            label = f"polity '{polity.get('name')}'"
+            self._check_law_list(label, polity.get("law"))
+            # Enforcement thresholds (DM_Enforcement.py). A polity's own "jail" isn't checked:
+            # polities are setting-wide, locations belong to one scenario.
+            for field_name in ("arrest_at", "kill_on_sight_at"):
+                self._check_field_type(label, field_name, polity.get(field_name), (int, float))
         for location_key, location in self.locations.items():
             label = f"location '{location_key}'"
             self._check_law_list(label, location.get("law"))
+            if location.get("jail") is not None and location["jail"] not in self.locations:
+                self._log(label, f"jail {location['jail']!r} names no [[location]].")
             if location.get("polity") is not None and location["polity"] not in polity_names:
                 self._log(label, f"polity {location['polity']!r} names no [[polity]].")
             if location.get("law") and not location.get("polity") and not location.get("grid"):
@@ -904,6 +911,12 @@ class ValidationMixin(DMCoreProtocol):
         for band in (self.rules.get("law") or {}).get("recognition", []):
             if band.get("tier") not in tier_names:
                 self._log("[law]", f"recognition tier {band.get('tier')!r} is not a [[difficulty_tier]] or \"{AUTOMATIC}\".")
+        law_settings = self.rules.get("law") or {}
+        for field_name in ("jail_blocks_per_unit", "bluff_witnessed_modifier"):
+            self._check_field_type("[law]", field_name, law_settings.get(field_name), (int, float))
+        for band in law_settings.get("bribe", []):
+            for field_name in ("min_share", "modifier"):
+                self._check_field_type("[law]", f"bribe {field_name}", band.get(field_name), (int, float))
 
     def _validate_status_shapes(self):
         """!@brief [[status]]'s own "apply" block -- {condition, duration, length, dismiss}."""

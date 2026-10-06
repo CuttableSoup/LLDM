@@ -287,6 +287,8 @@ class PersistenceMixin(DMCoreProtocol):
             # Polity records and not-yet-filed witness reports (DM_Law.py).
             "legal_records": self.legal_records,
             "pending_reports": self.pending_reports,
+            # An open arrest confrontation (DM_Enforcement.py).
+            "pending_arrest": self.pending_arrest,
             "current_target": self.current_target,
             "conversation_partner": self.conversation_partner,
             "scenario_entities": self.scenario_entities,
@@ -353,6 +355,12 @@ class PersistenceMixin(DMCoreProtocol):
             location = self.locations.get(location_key)
             if location is None:
                 continue
+            # Instanced as if standing there, the same as the live path -- a template's default
+            # languages come from the current location's polity (_current_polity_language).
+            # Found by playtest: after a reload, Sandpoint's sheriff and jailer had no
+            # languages, so neither could witness a crime. load_game re-enters the saved
+            # location afterward, which sets this for real.
+            self.current_location_key = location_key
             cache = self.location_runtime.setdefault(location_key, {})
             if kind == "location":
                 if "persistent_names" not in cache:
@@ -388,6 +396,8 @@ class PersistenceMixin(DMCoreProtocol):
             location = self.locations.get(location_key)
             if location is None:
                 continue
+            # See _replay_ordered_instancing -- instanced as if standing there.
+            self.current_location_key = location_key
             cache = self.location_runtime.setdefault(location_key, {})
             cache["persistent_names"] = self._instance_location_persistent_names(
                 location, skip_llm_generation=True,
@@ -514,6 +524,7 @@ class PersistenceMixin(DMCoreProtocol):
         self.pending_downtime = data.get("pending_downtime")
         self.legal_records = data.get("legal_records", {})
         self.pending_reports = data.get("pending_reports", [])
+        self.pending_arrest = data.get("pending_arrest")
         self.scenario_key = data.get("scenario_key", self.scenario_key)
         self.setting = data.get("setting", self.setting)
         # Must precede load_scenario_definition/load_scenario -- see this method's own
@@ -706,6 +717,9 @@ class PersistenceMixin(DMCoreProtocol):
         # the narrator (DM_Rules.py's _publish_scene_roster); the dirty guard lets it through
         # precisely because the prose really did change.
         self._publish_scene_roster()
+        if self.pending_arrest and self.pending_arrest.get("announced"):
+            # The guard is still waiting on an answer -- NLPCore needs to read the next input as one.
+            self._await_arrest_reply()
 
         self.event_bus.publish("log_info", f"Game loaded from slot '{slot_name}'.")
         self.event_bus.publish("game_loaded", {

@@ -27,7 +27,12 @@ ENFORCER_TAG = "law_enforcer"
 # Per-entity law state, round-tripped by DM_Persistence.py exactly as stored: what a witness
 # saw (and which disguises/presences it already checked), who struck a victim first, and a
 # disguise currently worn.
-LAW_INSTANCE_FIELDS = ("known_crimes", "assaulted_by", "disguise", "disguise_count", "disguise_checks", "presence_checks")
+# Also, for an enforcer (DM_Enforcement.py): whom it has already recognized or failed to, and
+# whom a bribe bought it off from.
+LAW_INSTANCE_FIELDS = (
+    "known_crimes", "assaulted_by", "disguise", "disguise_count", "disguise_checks", "presence_checks",
+    "enforcement_checks", "looked_away",
+)
 
 # How a crime reads in a witness's own persona line (legal_facts_for).
 CRIME_PHRASES = {
@@ -60,14 +65,23 @@ class LawMixin(DMCoreProtocol):
     def current_polity(self):
         """!
         @brief The polity whose law applies at the current location: the location's own
-            "polity" field, else whichever world_map region contains its grid point.
+            "polity" field, else whichever world_map region contains its grid point, else the
+            same for the location it returns to (return_to), and so on up.
         @return The polity name, or None (no law applies).
         """
-        location = self.locations.get(self.current_location_key, {})
-        if location.get("polity"):
-            return location["polity"]
-        grid = location.get("grid")
-        return self._resolve_region_polity(grid["x"], grid["y"]) if grid else None
+        key, seen = self.current_location_key, set()
+        while key and key not in seen:
+            # A landmark with neither (a town's shop) is under its town's law. Found by building
+            # enforcement: Sandpoint's garrison, and every other landmark, had none.
+            seen.add(key)
+            location = self.locations.get(key, {})
+            if location.get("polity"):
+                return location["polity"]
+            grid = location.get("grid")
+            if grid:
+                return self._resolve_region_polity(grid["x"], grid["y"])
+            key = location.get("return_to")
+        return None
 
     def current_laws(self):
         """!
@@ -191,8 +205,15 @@ class LawMixin(DMCoreProtocol):
 
         for identity, (line, seen_by) in by_identity.items():
             report = {"polity": polity, "identity": identity, "law": law, "line": line, "witnesses": seen_by}
-            if any(self._is_enforcer(name) for name in seen_by):
+            enforcers = [name for name in seen_by if self._is_enforcer(name)]
+            if enforcers:
                 self._file_report(report)
+                if offender == self.player_name:
+                    # An enforcer who saw it acts on it now (DM_Enforcement.py) -- the first who
+                    # can: one who is the victim is already fighting back.
+                    for enforcer in enforcers:
+                        if self._enforcer_witnessed(enforcer, polity, identity):
+                            break
             else:
                 self.pending_reports.append(report)
 
@@ -240,6 +261,7 @@ class LawMixin(DMCoreProtocol):
         marks = self.entities.get(victim, {}).setdefault("assaulted_by", [])
         if attacker not in marks:
             marks.append(attacker)
+        self.note_arrest_assault(attacker)
         self.report_crime("assault", attacker, victim=victim)
 
     def note_kill(self, killer, victim):
@@ -332,6 +354,7 @@ class LawMixin(DMCoreProtocol):
             skill = self._law_settings().get("disguise_skill", "disguise")
             disguise["quality"] = self.resolve_action(data["entity"], skill, 0)["roll"]
         self.check_presence()
+        self.check_enforcement()
 
     # -- What prompts may say ------------------------------------------------------------
 

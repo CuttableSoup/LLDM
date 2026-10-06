@@ -64,6 +64,8 @@ name = "Magnimar"
 aliases = [ "the City of Monuments" ]
 description = "A sprawling port city of cliffside terraces and salvaged Thassilonian monuments, its harbor crowded with trade ships from up and down the coast."
 grid = { x = 210, y = 0 }
+# Magnimar's prison (magnimar_capital.toml) -- every district inherits it through return_to.
+jail = "the_hells"
 entities = [
     { name = "dockhand", band = 1 },
 ]

@@ -91,7 +91,11 @@ whose `qualities.gender` fits (only when exactly one fits);
 otherwise it has no target at all — never a non-hostile creature left over as `current_target`
 (an object there, like a chest, stays fair game) — and its `RolledOutcome.no_opponent` tells the
 narrator the blow meets only air or objects, rather than letting it invent an opponent (a
-playtest's brawler fought fifty turns of a fight the engine never knew about). Before any of this,
+playtest's brawler fought fifty turns of a fight the engine never knew about). The mirror case,
+a non-attack roll that named nobody and fell on a non-hostile bystander only because they were
+`current_target`, sets `RolledOutcome.incidental_target`: the narrator isn't told who it was
+rolled against, and is told it isn't an attack on anyone (a playtest's gesture, rolled as
+polearms against the sheriff, was narrated as a sword strike). Before any of this,
 the attack has to be recognized at all: `map_to_action` also scores a name-neutral phrasing of the
 input (`_neutralize_names`, `NLP_Core.py`). That phrasing swaps present names, aliases and
 him/her/them for "someone", and turns a parenthesised third-person emote back into the

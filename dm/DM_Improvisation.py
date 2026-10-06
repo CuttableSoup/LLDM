@@ -130,6 +130,9 @@ class ImprovisationMixin(DMCoreProtocol):
         """
         intent = data.get("intent")
         phrase = data.get("phrase", "")
+        # What a notice quotes: the player's words for the item ("glimmering object"), not the
+        # whole clause the model is asked about ("grab the glimmering object without looking").
+        shown_phrase = data.get("item_phrase") or phrase
         input_text = data.get("input", "")
 
         # include_background: "trade" is the one improvisation intent that addresses a person,
@@ -141,7 +144,7 @@ class ImprovisationMixin(DMCoreProtocol):
         )
         if intent in TARGET_CENTRIC_INTENTS and not target_name:
             self.event_bus.publish("action_not_understood", {
-                "input": input_text, "score": 0.0, "reason": "no_seller", "phrase": phrase,
+                "input": input_text, "score": 0.0, "reason": "no_seller", "phrase": shown_phrase,
             })
             return
 
@@ -167,7 +170,7 @@ class ImprovisationMixin(DMCoreProtocol):
             # trying again, unlike a real decline.
             reason = "improvisation_unavailable" if result.get("reason") == "unavailable" else "improvisation_declined"
             self.event_bus.publish("action_not_understood", {
-                "input": input_text, "score": 0.0, "reason": reason, "phrase": phrase, "intent": intent,
+                "input": input_text, "score": 0.0, "reason": reason, "phrase": shown_phrase, "intent": intent,
             })
             return
 

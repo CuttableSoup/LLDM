@@ -3,6 +3,7 @@ import os
 import re
 import urllib.request
 import threading
+from contextlib import contextmanager
 
 from dm.DM_ActionOutcome import (
     ActionPreventedOutcome, CraftEffect, CureEffect, DamageEffect, DefenderDetailsEffect, DispelEffect,
@@ -121,6 +122,10 @@ CONTEXT_TOKEN_BUDGET = 4096
 # completion tokens, and capping at 512 visibly truncated one mid-sentence, so this is that plus
 # real headroom.
 RESPONSE_TOKEN_RESERVE = 900
+# Longest a narration waits for an earlier one to publish first (_publish_in_order). Narration
+# requests carry no timeout of their own, so this is what keeps one hung request from holding
+# every later narration back; a working local model answers in well under it.
+PUBLISH_ORDER_TIMEOUT = 90
 # The narration labels DMCore may extract scene population from -- see _fetch_and_publish. Which of
 # these actually fire is a per-setting choice ([narration_population].triggers). Matched on the
 # label's own kind (before any ":"), so every item_interaction:<intent> qualifies. Every
@@ -204,7 +209,12 @@ def _format_rolled_outcome(outcome, actor):
         # Rated "trivial" (DMCore._untargeted_difficulty) -- no dice at all.
         return f"Skill used: {outcome.skill} - trivial, no roll needed; it simply happens."
     success_word = "succeeds" if outcome.success else "fails"
-    if outcome.opposing_skill:
+    incidental = getattr(outcome, "incidental_target", False)
+    if incidental:
+        # Rolled against whoever was the default target, not anyone the player aimed it at --
+        # naming them invites the narrator to make it an attack on them (DM_ActionOutcome.py).
+        opposition = ""
+    elif outcome.opposing_skill:
         opposition = f" opposed by {outcome.defender}'s {outcome.opposing_skill}"
     elif outcome.defender:
         opposition = f" against {outcome.defender} (no defense)"
@@ -217,6 +227,10 @@ def _format_rolled_outcome(outcome, actor):
     # effect first.
     effects_by_type = {}
     for effect in outcome.effects:
+        if incidental and isinstance(effect, DefenderDetailsEffect):
+            # Describing the bystander would bring back exactly who the line above leaves out.
+            # Found by playtest: still introduced, the sheriff took a shoulder-check.
+            continue
         effects_by_type.setdefault(type(effect), []).append(effect)
     effects_text = "".join(
         _EFFECT_FORMATTERS[effect_type](effect, actor)
@@ -231,6 +245,8 @@ def _format_rolled_outcome(outcome, actor):
         " There is no opponent: nobody here is being fought, so the blow meets only air or "
         "objects -- don't invent anyone being hit." if getattr(outcome, "no_opponent", False) else ""
     )
+    if incidental:
+        no_opponent_text += " It isn't an attack on anyone -- narrate only what the player wrote."
     return (
         f"Skill used: {outcome.skill} "
         f"(rolled {outcome.roll} vs difficulty {outcome.difficulty}{opposition}) "
@@ -301,9 +317,16 @@ class LLMCore:
         self.event_bus.subscribe("load_requested", self._on_load_requested)
         self.event_bus.subscribe("game_load_failed", self.generate_load_failed_response)
         self.event_bus.subscribe("crime_witnessed", self._on_crime_witnessed)
+        self.event_bus.subscribe("arrest_confronted", self.generate_arrest_response)
+        self.event_bus.subscribe("arrest_resolved", self.generate_arrest_response)
         # Who saw a crime this turn (DMCore's DM_Law.py) -- folded into the next narration prompt
         # so the narrator lets only them react, then cleared. See _on_crime_witnessed.
         self._crime_notes = []
+        # Narrations are fetched in parallel but published in the order they were queued -- see
+        # _take_publish_ticket.
+        self._publish_order = threading.Condition()
+        self._tickets_issued = 0
+        self._next_to_publish = 0
 
     def _on_scene_roster_updated(self, data):
         """!
@@ -497,9 +520,12 @@ class LLMCore:
         # handed the player a polearm they don't own, and the player LLM swung it for 15 turns.
         # The skill is which dice were rolled; what happened is what the player wrote.
         gear = action_result.get("player_gear")
+        # The roll stays behind the screen too. Found by playtest: "The successful roll means your
+        # strike connects cleanly".
         fidelity_text = (
             "\nNarrate what the player actually tried, as they wrote it -- the skill only says which "
-            "dice were rolled, so don't name it or turn the attempt into a different action."
+            "dice were rolled, so don't name it or turn the attempt into a different action. Never "
+            "mention dice, rolls, difficulty or checks: tell only what happens in the scene."
         )
         if gear is not None:
             fidelity_text += (
@@ -701,8 +727,9 @@ class LLMCore:
 
         if not data.get("found") and data.get("reason") in ("not_present", "no_recipient"):
             # Nothing in the world said no -- the thing or person simply isn't here. Told out
-            # of character, not narrated (see FAILED_ATTEMPT_MESSAGES).
-            self._publish_failed_attempt(data["reason"], data)
+            # of character, not narrated (see FAILED_ATTEMPT_MESSAGES). Quotes what the player
+            # said ("belt knife"), not the catalog item it was matched to ("belt pouch").
+            self._publish_failed_attempt(data["reason"], {**data, "item_name": data.get("phrase") or item_name})
             return
 
         if not data.get("found"):
@@ -868,6 +895,78 @@ class LLMCore:
                 f"Narrate this brief moment in 1-2 sentences as the Game Master."
             )
         self._queue_narration(prompt, present_entities=data.get("present_entities"), label="encounter")
+
+    def generate_arrest_response(self, data):
+        """!
+        @brief Narrates a guard's arrest -- the demand ("arrest_confronted") or how it ended
+            ("arrest_resolved"), both from DM_Enforcement.py. Every fact (charges, amounts, jail
+            time, who is wanted) comes from the payload, which DMCore built from the polity
+            record; the narrator only voices it. Fleeing is told out of character: the guard
+            is no longer in the scene to narrate.
+        @param data The payload -- {enforcer, polity, addressed_as, amount_text, charges,
+            present_entities} plus "kind" (arrest/repeat/kill_on_sight) or "outcome" (paid,
+            surrendered, bribed, bribe_refused, bluffed, bluff_failed, resisted, fled) and that
+            outcome's own facts.
+        """
+        enforcer = data.get("enforcer") or "the guard"
+        charges = ", ".join(data.get("charges") or []) or "breaking the law"
+        known_as = f" They know you as {data['addressed_as']}." if data.get("addressed_as") else ""
+        outcome = data.get("outcome")
+        if outcome == "fled":
+            self.event_bus.publish("player_notice", {
+                "message": f"You fled from {enforcer}. Resisting arrest is now on your record in {data.get('polity')}.",
+                "reason": "arrest", "input": "",
+            })
+            return
+        if outcome is None:
+            kind = data.get("kind")
+            if kind == "kill_on_sight":
+                beat = (f"{enforcer} recognizes you -- wanted in {data.get('polity')} for {charges} -- "
+                        f"and attacks at once, without offering terms.{known_as}")
+            elif kind == "repeat":
+                beat = (f"{enforcer} repeats the demand, patience running out: {data.get('amount_text')} "
+                        f"for {charges}, or you come along to the cells.")
+            else:
+                seen = " They saw it happen with their own eyes." if data.get("witnessed") else ""
+                # Words, not hands, until the player answers. Found by playtest: the sheriff "places
+                # an authoritative hand on your arm" before the player had said anything.
+                beat = (f"{enforcer} steps in to arrest you for {charges}.{seen}{known_as} They demand "
+                        f"{data.get('amount_text')}, or you come along to the cells. They only tell you "
+                        f"so -- don't narrate them touching, grabbing or restraining you.")
+        elif outcome == "paid":
+            beat = f"You pay {enforcer} the {data.get('paid_text')} owed. The charges are settled."
+        elif outcome == "surrendered":
+            paid = f" They take the {data.get('paid_text')} you have." if data.get("paid") else ""
+            if data.get("blocks"):
+                where = data.get("jail_name") or "custody"
+                beat = (f"You surrender to {enforcer}.{paid} You serve {data.get('hours')} hours in {where} "
+                        f"for the rest, and are released with the charges settled.")
+            else:
+                beat = f"You surrender to {enforcer}.{paid} That covers it; the charges are settled."
+        elif outcome == "bribed":
+            beat = f"{enforcer} pockets your {data.get('offer_text')} and looks the other way."
+        elif outcome == "bribe_refused":
+            beat = f"{enforcer} refuses your offer of {data.get('offer_text')}. The demand stands."
+        elif outcome == "bluffed":
+            beat = f"{enforcer} believes your story and lets you go, thinking they had the wrong person."
+        elif outcome == "bluff_failed":
+            beat = f"{enforcer} doesn't believe a word of it. The demand stands."
+        else:
+            refusal = {
+                "attacked": "You answer with violence instead",
+                "ignored": f"You ignore {enforcer}'s demand once too often",
+            }.get(data.get("how"), "You refuse to submit")
+            # Only the turn toward a fight: whether the guard lands a hand on the player is the
+            # combat round's to decide. Found by playtest: the narrator had the jailer tackle and
+            # pin the player on the spot.
+            beat = (f"{refusal}. {enforcer} turns on you, ready to take you by force. Don't narrate "
+                    f"them grabbing, hitting or restraining you -- the fight hasn't happened yet.")
+        prompt = (
+            f"{beat}\nNarrate this in 1-3 sentences as the Game Master. Say nothing about amounts, "
+            f"charges, jail time or outcomes beyond what is stated here."
+        )
+        # The reply options, shown after this narration rather than ahead of it (DM_Enforcement.py).
+        self._queue_narration(prompt, present_entities=data.get("present_entities"), label="arrest", notice=data.get("notice"))
 
     def generate_npc_dialogue(self, data):
         """!
@@ -1119,7 +1218,44 @@ class LLMCore:
         kept.reverse()
         return kept
 
-    def _fetch_and_publish(self, messages, present_entities, store_in_context=True, label=None):
+    def _take_publish_ticket(self):
+        """!
+        @brief A place in the publishing order, taken on the game thread when a narration is
+            queued. Each fetch runs on its own thread, and a short prompt can come back before a
+            long one queued earlier -- found by playtest: a guard's arrest demand was narrated
+            before the attack it was about. _publish_in_order holds each reply until every
+            earlier ticket has published.
+        """
+        with self._publish_order:
+            ticket = self._tickets_issued
+            self._tickets_issued += 1
+            return ticket
+
+    @contextmanager
+    def _publish_in_order(self, ticket):
+        """!
+        @brief Waits until every earlier ticket has published, then lets this one publish. A
+            reply that never comes back can't hold the rest up for longer than
+            PUBLISH_ORDER_TIMEOUT. ticket None (a direct, unqueued call) publishes at once.
+        """
+        if ticket is None:
+            yield
+            return
+        with self._publish_order:
+            self._publish_order.wait_for(lambda: self._next_to_publish >= ticket, timeout=PUBLISH_ORDER_TIMEOUT)
+        try:
+            yield
+        finally:
+            with self._publish_order:
+                self._next_to_publish = max(self._next_to_publish, ticket + 1)
+                self._publish_order.notify_all()
+
+    def _publish_attached_notice(self, notice):
+        """!@brief A narration's attached out-of-character line (see _fetch_and_publish)."""
+        if notice:
+            self.event_bus.publish("player_notice", {"message": notice, "reason": "attached", "input": ""})
+
+    def _fetch_and_publish(self, messages, present_entities, store_in_context=True, label=None, ticket=None, notice=None):
         """!
         @brief The network call + response handling shared by _queue_narration/_queue_dialogue/
             _queue_adam_response/_queue_scene_query's own background fetch threads --
@@ -1151,6 +1287,11 @@ class LLMCore:
             "Generating ..." log lines by hand -- exactly the confusion that first looked like
             two replies to one query but wasn't. None (unlabeled call sites, ex: a bare
             _fetch_and_publish caller that predates this) just omits the tag.
+        @param ticket This narration's place in the publishing order (_take_publish_ticket);
+            None publishes as soon as the reply arrives.
+        @param notice A "player_notice" message published right after the narration, in the
+            same slot -- and still published if the narration failed, since the player needs it
+            either way.
         """
         data = {"messages": messages, "temperature": 0.7,
                 "max_tokens": RESPONSE_TOKEN_RESERVE}
@@ -1172,6 +1313,14 @@ class LLMCore:
                 # this turn's own prompt only) asks it something different enough to answer.
                 self.event_bus.publish("log_warning", "LLM returned an empty response again; retrying without history.")
                 llm_text = self._request_completion({**data, "messages": [messages[0], messages[-1]]})
+        except Exception as e:
+            with self._publish_in_order(ticket):
+                self.event_bus.publish("log_error", f"LLM connection failed: {e}")
+                self.event_bus.publish("llm_response_ready", f"System: {get_backend().failure_message(e)}")
+                self.event_bus.publish("llm_debug_updated", {"query": query_text, "response": f"[ERROR] {e}", "label": label})
+                self._publish_attached_notice(notice)
+            return
+        with self._publish_in_order(ticket):
             if not llm_text.strip():
                 # Deliberately NOT stored in context_window -- an empty assistant turn is not
                 # something the scene witnessed, and keeping it would spend budget on nothing
@@ -1179,6 +1328,7 @@ class LLMCore:
                 self.event_bus.publish("log_error", "LLM returned an empty response twice; nothing to narrate this turn.")
                 self.event_bus.publish("llm_response_ready", "System: The LLM returned an empty response.")
                 self.event_bus.publish("llm_debug_updated", {"query": query_text, "response": "[EMPTY]", "label": label})
+                self._publish_attached_notice(notice)
                 return
             # Before it's stored, so a slip never reaches the history the next reply imitates.
             llm_text = address_player_as_you(llm_text)
@@ -1186,16 +1336,14 @@ class LLMCore:
                 self.context_window.append({"role": "assistant", "content": llm_text, "present": present_entities})
             self.event_bus.publish("llm_response_ready", llm_text)
             self.event_bus.publish("llm_debug_updated", {"query": query_text, "response": llm_text, "label": label})
-            if label and label.split(":")[0] in SCENE_SETTING_LABELS:
-                # After the narration is already on screen, so extraction (a second, slower model
-                # call) overlaps with the player reading it -- see scene_length_instruction.
-                self.event_bus.publish("scene_narration_ready", {
-                    "text": llm_text, "label": label, "present_entities": present_entities,
-                })
-        except Exception as e:
-            self.event_bus.publish("log_error", f"LLM connection failed: {e}")
-            self.event_bus.publish("llm_response_ready", f"System: {get_backend().failure_message(e)}")
-            self.event_bus.publish("llm_debug_updated", {"query": query_text, "response": f"[ERROR] {e}", "label": label})
+            self._publish_attached_notice(notice)
+        if label and label.split(":")[0] in SCENE_SETTING_LABELS:
+            # After the narration is already on screen, so extraction (a second, slower model
+            # call) overlaps with the player reading it -- see scene_length_instruction. Outside
+            # the publishing order, so it never holds up the next narration.
+            self.event_bus.publish("scene_narration_ready", {
+                "text": llm_text, "label": label, "present_entities": present_entities,
+            })
 
     def _on_crime_witnessed(self, data):
         """!
@@ -1211,7 +1359,7 @@ class LLMCore:
             f"Seen by: {witnesses}. Nobody else present noticed -- only they may react to it."
         )
 
-    def _queue_narration(self, prompt, rag_query=None, present_entities=None, label=None):
+    def _queue_narration(self, prompt, rag_query=None, present_entities=None, label=None, notice=None):
         """!
         @brief Appends a narration prompt to the rolling context window and fetches the LLM's response in the background.
         @param prompt The user-role prompt describing what just happened.
@@ -1231,6 +1379,8 @@ class LLMCore:
             every per-entity dialogue view -- the events that don't carry this yet (ex:
             action_not_understood, game_load_failed) are meta/OOC anyway, nothing an NPC
             should be treated as having "witnessed".
+        @param notice An out-of-character line to show right after this narration, in its
+            publishing slot (ex: an arrest's reply options) -- see _fetch_and_publish.
         """
         if self._crime_notes:
             prompt = prompt + "\n" + "\n".join(self._crime_notes)
@@ -1245,8 +1395,9 @@ class LLMCore:
         def fetch_from_llm():
             messages = [{"role": "system", "content": system_message}] + self._api_messages(
                 self._fit_history(system_message, self.context_window))
-            self._fetch_and_publish(messages, present_entities, label=label)
+            self._fetch_and_publish(messages, present_entities, label=label, ticket=ticket, notice=notice)
 
+        ticket = self._take_publish_ticket()
         threading.Thread(target=fetch_from_llm, daemon=True).start()
 
     def _build_dialogue_system_message(self, target, persona, attitude, rag_query):
@@ -1353,8 +1504,9 @@ class LLMCore:
             history = self._filter_present_history(target_key)
             messages = [{"role": "system", "content": system_message}] + self._api_messages(
                 self._fit_history(system_message, history))
-            self._fetch_and_publish(messages, present_entities, label=label)
+            self._fetch_and_publish(messages, present_entities, label=label, ticket=ticket)
 
+        ticket = self._take_publish_ticket()
         threading.Thread(target=fetch_from_llm, daemon=True).start()
 
     def generate_adam_response(self, data):
@@ -1487,8 +1639,9 @@ class LLMCore:
         messages = [{"role": "system", "content": system_message}, {"role": "user", "content": prompt}]
 
         def fetch_from_llm():
-            self._fetch_and_publish(messages, present_entities=None, store_in_context=False, label=label)
+            self._fetch_and_publish(messages, present_entities=None, store_in_context=False, label=label, ticket=ticket)
 
+        ticket = self._take_publish_ticket()
         threading.Thread(target=fetch_from_llm, daemon=True).start()
 
     def generate_scene_query_response(self, data):
@@ -1579,8 +1732,9 @@ class LLMCore:
         def fetch_from_llm():
             messages = [{"role": "system", "content": system_message}] + self._api_messages(
                 self._fit_history(system_message, self.context_window))
-            self._fetch_and_publish(messages, present_entities, label=label)
+            self._fetch_and_publish(messages, present_entities, label=label, ticket=ticket)
 
+        ticket = self._take_publish_ticket()
         threading.Thread(target=fetch_from_llm, daemon=True).start()
 
     def _save_slot_dir(self, slot_name):

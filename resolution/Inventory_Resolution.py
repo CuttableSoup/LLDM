@@ -14,6 +14,8 @@
     self.event_bus, so no caller anywhere else in the codebase changes at all.
 """
 
+import re
+
 
 def _settle(amount):
     """!
@@ -59,6 +61,35 @@ def format_currency(amount, denominations=()):
     if not parts:
         return f"0 {coins[-1].get('plural') or coins[-1]['name'] + 's'}"
     return parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
+
+
+# "5 gold", "8 sp", "20 silver pieces" -- a number, then a coin named by its first word or its
+# abbreviation (the first letter plus "p"). See parse_currency_amount.
+_AMOUNT_PATTERN = re.compile(r"(\d+(?:\.\d+)?)\s*([a-z]+)?")
+
+
+def parse_currency_amount(text, denominations=()):
+    """!
+    @brief The first sum of money a player's line names, in the setting's value unit -- what a
+        bribe offers ("bribe him with 5 gold"). Mechanical, so money never rests on a model's
+        reading.
+    @param text The player's line.
+    @param denominations The setting's [[currency.denomination]] entries (see format_currency).
+    @return The amount (ex: "8 sp" -> 0.8), or None when no number is named. A bare number, or
+            one followed by a word that names no coin ("5 coins"), is in the value unit.
+    """
+    coins = {}
+    for coin in denominations or []:
+        name = (coin.get("name") or "").lower()
+        if not name or not coin.get("worth"):
+            continue
+        coins[name.split()[0]] = coin["worth"]
+        coins[name.split()[0][0] + "p"] = coin["worth"]
+    for match in _AMOUNT_PATTERN.finditer((text or "").lower()):
+        number, word = float(match.group(1)), match.group(2) or ""
+        worth = coins.get(word) or coins.get(word.rstrip("s")) or 1
+        return _settle(number * worth)
+    return None
 
 
 def transfer_currency(entities, event_bus, from_name, to_name, amount=None):

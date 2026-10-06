@@ -94,7 +94,7 @@ concluding anything about the hardware.** `ollama.exe` runs the model in a separ
 `LLDM.py`'s own `_stop_ollama_if_started` both used to do — leaves that child alive holding
 multiple gigabytes, with no parent left to reap it. One stranded runner per run, until the card is
 full and every later run falls back to CPU, where the shipped model answers in ~50-60s instead of
-~8s: every ad hoc call blows its 8s timeout and every `_LivePipelineTestCase` fails its 30s
+~8s: every ad hoc call blows its 12s timeout and every `_LivePipelineTestCase` fails its 30s
 narration wait. Measured here, a handful of runs left 11 orphaned runners holding 14.9 GB of a
 16 GB card, and the symptom is indistinguishable from "this machine has no usable GPU" —
 `/api/ps` reporting `size_vram` far below `size` is the tell either way. Both shutdown paths now

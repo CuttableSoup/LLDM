@@ -9,6 +9,8 @@ backend = "local"
 
 [local]
 # model = "gemma4"
+# Seconds an improvised item/creature waits for the model before giving up.
+# generation_timeout = 12
 
 [google]
 # The key: prefer the GEMINI_API_KEY environment variable, which wins over this line.

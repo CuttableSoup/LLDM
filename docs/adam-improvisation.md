@@ -92,8 +92,8 @@ ADaM's second capability: improvising the world itself, not just explaining it.
 each an OpenAI-style tool call (`LLM_Client.py`, synchronous, raises on failure) offering a
 primary function plus a shared `decline` escape hatch, `tool_choice="auto"`. Every function
 defaults to declining on any failure — never fabricating an item/creature/removal/edit when the
-LLM is unreachable — on a tighter 8s timeout than NPC generation's 20s (this can fire far more
-often mid-session). `DM_Improvisation.py`'s `ImprovisationMixin` is the DMCore-touching glue.
+LLM is unreachable — on the backend's `generation_timeout` (12s local, 8s online), tighter than
+NPC generation's 20s (this can fire far more often mid-session). `DM_Improvisation.py`'s `ImprovisationMixin` is the DMCore-touching glue.
 
 **Two risk tiers.** (1) **Automatic fallback**, no ADaM address needed (low risk): plain item
 creation, extended to a container/trap (a `generate_ad_hoc_item` subtype carrying its own

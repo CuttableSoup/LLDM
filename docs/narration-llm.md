@@ -77,6 +77,15 @@ Every `_queue_narration`/`_queue_dialogue` call's background fetch also publishe
 `llm_debug_updated {"query", "response"}` alongside `llm_response_ready` — consumed only by
 `GUICore`'s Debug tab, never stored in `context_window` itself.
 
+**Publishing order.** Each fetch runs on its own thread, so a short prompt can come back before a
+longer one queued ahead of it (found by playtest: a guard's arrest demand was narrated before the
+attack it was about). Every queue site takes a ticket on the game thread
+(`_take_publish_ticket`), and `_fetch_and_publish` holds its reply until every earlier ticket has
+published (`_publish_in_order`), so replies — and the assistant turns appended to
+`context_window` — land in the order they were queued. A reply waits at most
+`PUBLISH_ORDER_TIMEOUT` (90s) for an earlier one, so one hung request can't stall the game.
+`scene_narration_ready`'s extraction runs after the ordered part, never holding up the next reply.
+
 
 ## LLM integration
 
@@ -107,7 +116,7 @@ generator's `DEFAULT_API_URL`) and `LLMCore._request_completion` both read it pe
   reasoning off.
 
 Input adjudication waits `adjudication_timeout` (1.5s local, 2.5s online — the network round
-trip). A failed online request tells the player why (`Backend.failure_message`: a free quota
+trip); ad hoc generation waits `generation_timeout` (12s local, where calls take 4–8s; 8s online). A failed online request tells the player why (`Backend.failure_message`: a free quota
 used up, a rejected key, busy models). `sourcebook_grounding = false` keeps RAG excerpts
 (below) out of prompts, since online they reach a third party.
 

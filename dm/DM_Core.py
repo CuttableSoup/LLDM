@@ -14,6 +14,7 @@ from dm.DM_Combat import CombatMixin
 from dm.DM_Crafting import CraftingMixin
 from dm.DM_Dialogue import WORD_BOUNDARY, DialogueMixin
 from dm.DM_Encounters import EncounterMixin
+from dm.DM_Enforcement import EnforcementMixin
 from dm.DM_Help import HelpMixin
 from dm.DM_Improvisation import ImprovisationMixin
 from dm.DM_Inventory import InventoryMixin
@@ -86,7 +87,7 @@ RECENT_NARRATION_CHARS = 400
 NARRATION_SYSTEM_PREFIX = "System: "
 
 
-class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixin, RulesMixin, PersistenceMixin, CharacterCreationMixin, NpcGenerationMixin, DialogueMixin, HelpMixin, ImprovisationMixin, EncounterMixin, SummoningMixin, CraftingMixin, ValidationMixin, TimeMixin, TravelMixin, LawMixin):
+class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixin, RulesMixin, PersistenceMixin, CharacterCreationMixin, NpcGenerationMixin, DialogueMixin, HelpMixin, ImprovisationMixin, EncounterMixin, SummoningMixin, CraftingMixin, ValidationMixin, TimeMixin, TravelMixin, LawMixin, EnforcementMixin):
     """!
     @brief Main class handling the core mechanics of the RPG system. The implementation is
         composed from domain mixins in sibling files -- DM_Rules.py (rules/scenario
@@ -231,6 +232,8 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         # Crimes, witnesses and polity records (DM_Law.py, docs/law.md). Before load_scenario()
         # below, whose first scene roster already runs a presence check.
         self._init_law_state()
+        # What guards do about it (DM_Enforcement.py) -- the open confrontation, if any.
+        self._init_enforcement_state()
         # A question put to the player that their next input answers -- today only "attack
         # someone you never named?" (_request_assault_confirmation). Not saved: a reload simply
         # drops an unanswered question.
@@ -461,6 +464,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
                 # covers the skill/ability portion of the turn.
                 self._on_item_interaction_detected({
                     "intent": entry.get("intent"), "item_name": entry.get("item_name"), "input": input_text,
+                    "phrase": entry.get("phrase"),
                 })
                 continue
 
@@ -522,6 +526,12 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             )
             if is_attack and target_name is None and isinstance(result, RolledOutcome):
                 result.no_opponent = True
+            if not is_attack and explicit_target is None and target_name and self._is_bystander(target_name) \
+                    and isinstance(result, RolledOutcome):
+                # Found by playtest: "casually reach out, tapping the heavy metal ring on his
+                # wrist", said to the jailer, rolled polearms against the sheriff -- the default
+                # target -- and the narrator, told "against Belor Hemlock", wrote a sword strike.
+                result.incidental_target = True
             if assaulting and isinstance(result, RolledOutcome) and not via_test:
                 # Hit or miss, swinging at someone you weren't fighting is "assaulted" at full
                 # strength (rules.toml) -- applied before the round check below, so it's this
@@ -1702,6 +1712,9 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
                 # shares its turn with real dialogue, so LLMCore.generate_item_interaction_
                 # response knows to skip narrating it (see that flag's own module note there).
                 "quiet": data.get("quiet", False),
+                # The player's own words for the item (IntentClassifier's extract_item_phrase),
+                # which a "not here" notice quotes instead of the matched item_name.
+                "phrase": data.get("phrase"),
                 **extra,
             })
             self._publish_party_status()

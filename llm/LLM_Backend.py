@@ -54,6 +54,12 @@ LOCAL_ADJUDICATION_TIMEOUT = 1.5
 OPENROUTER_ADJUDICATION_TIMEOUT = 2.5
 GOOGLE_ADJUDICATION_TIMEOUT = 2.5
 
+# How long an ad hoc generation call (AdHoc_Generation.py's create-an-item/creature/edit tool
+# calls) waits before declining. Local calls took 4-8s in the 2026-10 brawler playtest, so the
+# old shared 8s cut some off ("Couldn't work that out just now"); online ones answer in 1-2s.
+LOCAL_GENERATION_TIMEOUT = 12
+ONLINE_GENERATION_TIMEOUT = 8
+
 
 @dataclass(frozen=True)
 class Backend:
@@ -71,6 +77,7 @@ class Backend:
     fallback_models: tuple = ()
     api_key: str = ""
     adjudication_timeout: float = LOCAL_ADJUDICATION_TIMEOUT
+    generation_timeout: float = LOCAL_GENERATION_TIMEOUT
     sourcebook_grounding: bool = True
 
     @property
@@ -166,6 +173,7 @@ def local_backend(section=None):
     section = section or {}
     return Backend(
         "local", section.get("url", OLLAMA_URL), section.get("model", OLLAMA_MODEL),
+        generation_timeout=section.get("generation_timeout", LOCAL_GENERATION_TIMEOUT),
         sourcebook_grounding=section.get("sourcebook_grounding", True),
     )
 
@@ -183,6 +191,7 @@ def google_backend(section=None, environ=None):
         "google", GOOGLE_URL, section.get("model", GOOGLE_MODEL),
         api_key=environ.get(GOOGLE_KEY_VARIABLE) or section.get("api_key", ""),
         adjudication_timeout=section.get("adjudication_timeout", GOOGLE_ADJUDICATION_TIMEOUT),
+        generation_timeout=section.get("generation_timeout", ONLINE_GENERATION_TIMEOUT),
         sourcebook_grounding=section.get("sourcebook_grounding", True),
     )
 
@@ -200,6 +209,7 @@ def openrouter_backend(section=None, environ=None):
         "openrouter", OPENROUTER_URL, models[0], tuple(models[1:]),
         api_key=environ.get(OPENROUTER_KEY_VARIABLE) or section.get("api_key", ""),
         adjudication_timeout=section.get("adjudication_timeout", OPENROUTER_ADJUDICATION_TIMEOUT),
+        generation_timeout=section.get("generation_timeout", ONLINE_GENERATION_TIMEOUT),
         sourcebook_grounding=section.get("sourcebook_grounding", True),
     )
 

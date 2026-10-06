@@ -3,8 +3,10 @@
     through the event bus (no GUI). Two modes:
 
     Discovery -- a second LLM chooses the player's next action from the narration alone.
-        Findings are for a human to read: Logs/playtest_*.jsonl (one record per turn) beside
-        Logs/session_*.log (every LLM query/response, with "PLAYTEST turn N" boundary markers).
+        Findings are for a human to read, three files per run sharing one name under Logs/:
+        playtest_<persona>_<seed>_<time>.jsonl (one record per turn), .log (every log line and
+        LLM query/response, with "PLAYTEST turn N" boundary markers) and .txt (the game as the
+        player saw it: narration, [System] notices and their own "> " inputs, nothing else).
 
     Replay -- --replay <file> feeds a fixed input list (a previous run's .jsonl, or a .txt with
         one input per line) with no player LLM. A discovery run's inputs become a regression
@@ -25,6 +27,7 @@
     python tools/playtest.py --replay my_session.txt   (a real player's inputs, one per line)
 """
 import argparse
+import textwrap
 import atexit
 import glob
 import json
@@ -78,12 +81,43 @@ LOOP_NUDGE = ("You've been repeating yourself. Drop that line of play entirely a
 PLAYER_SYSTEM = (
     "You are playing a tabletop RPG character. You see only the narration. Reply with ONE "
     "short in-character action or line of speech (under 25 words), nothing else -- no quotes "
-    "around it, no commentary. Personality: {persona}"
+    "around it, no commentary. Lines starting with [System] are the game itself talking to you, "
+    "out of character; if one asks a yes/no question, answer it. Personality: {persona}"
 )
+# Sent on top of PLAYER_SYSTEM when the latest thing the player saw ends with a [System] yes/no
+# question (an unconfirmed attack: "Attack thane? (yes/no)"). Found by playtest: the brawler
+# ignored all four, so a confirmed attack was never exercised.
+CONFIRMATION_NUDGE = ("The game just asked you a yes/no question. Reply with only \"yes\" or \"no\", "
+                      "whichever your character would choose.")
+# The same for a guard's arrest demand ("Reply with one of: pay, surrender, ..."): answered in the
+# character's own words, so the reply reader's model path gets exercised too.
+ARREST_MARKER = "Reply with one of:"
+ARREST_NUDGE = ("A guard is arresting your character and the game listed your options. Answer as "
+                "your character would, in your own words -- pay, surrender, offer a bribe with an "
+                "amount, bluff your way out, or resist.")
 
 # A keyword-fallback skill match below this is reported as a weak match. The fallback itself
 # fires down to NLPCore.keyword_fallback_floor (0.2); this flags the shaky end of that range.
 WEAK_KEYWORD_SCORE = 0.35
+
+# Game mechanics named in narration (heuristic_flags). Specific phrasings only -- "roll" alone is
+# also a barrel rolling or a roll of cloth.
+ROLL_LEAK_PATTERN = re.compile(
+    r"\b(?:(?:successful|failed|good|bad|high|low|lucky|unlucky|your) (?:dice )?rolls?\b"
+    r"|dice (?:roll|rolled|came)|you rolled|rolled (?:a |an )?\d+|difficulty (?:of )?\d+"
+    r"|(?:skill|ability) check|the check (?:succeeds|fails))",
+    re.IGNORECASE,
+)
+
+# The player-view transcript (Harness.run): the game as the player would read it, wrapped to this.
+TRANSCRIPT_WIDTH = 100
+
+
+def transcript_block(text):
+    """One narration or notice as the transcript shows it -- each paragraph wrapped, blank-line separated."""
+    paragraphs = [p.strip() for p in str(text).split("\n") if p.strip()]
+    return "\n\n".join(textwrap.fill(p, TRANSCRIPT_WIDTH) for p in paragraphs)
+
 
 MAPPED_SKILL_RE = re.compile(r"Mapped input to action: (\w+) via ([\w ]+?)(?: \"[^\"]*\")? \(Score: ([\d.]+)\)")
 
@@ -91,11 +125,16 @@ MAPPED_SKILL_RE = re.compile(r"Mapped input to action: (\w+) via ([\w ]+?)(?: \"
 def ask_player(api_url, model, persona, history, timeout=120, nudge=None):
     """api_url/model None: the game's own LLM backend (LLM_Backend.py), key and fallbacks included."""
     system = PLAYER_SYSTEM.format(persona=persona) + (f"\n{nudge}" if nudge else "")
-    messages = [{"role": "system", "content": system}]
+    # Each history entry is (narration, the action that narration answered), so the action goes
+    # first -- the latest narration must be the last thing the player model reads.
+    turns = []
     for narration, action in history[-6:]:
-        messages.append({"role": "user", "content": narration})
         if action:
-            messages.append({"role": "assistant", "content": action})
+            turns.append({"role": "assistant", "content": action})
+        turns.append({"role": "user", "content": narration})
+    if turns[0]["role"] == "assistant":
+        turns = turns[1:]
+    messages = [{"role": "system", "content": system}, *turns]
     # max_tokens: reasoning models spend budget thinking first.
     response = call_chat_completion(api_url, messages, model=model, temperature=0.9, max_tokens=1024, timeout=timeout)
     text = response["choices"][0]["message"]["content"] or ""
@@ -138,14 +177,18 @@ class Harness:
     def __init__(self, args):
         self.args = args
         self.bus = EventBus()
-        # debug=True gives the same Logs/session_<ts>.log LLDM.py writes: every log line plus
-        # each full LLM query/response pair. Constructed first so nothing during boot is missed.
-        self.logger = Logger(self.bus, debug=True)
+        # One base name per run for all three of its files under Logs/: <run_name>.jsonl (turn
+        # records), .txt (the player's view) and .log (the session log).
+        tag = "replay" if args.replay else ("mix" if args.mix else args.persona)
+        self.run_name = f"playtest_{tag}_{args.seed}_{int(time.time())}"
+        # debug=True gives the same session log LLDM.py writes: every log line plus each full
+        # LLM query/response pair. Constructed first so nothing during boot is missed.
+        self.logger = Logger(self.bus, debug=True, log_name=self.run_name)
         self.lock = threading.Lock()
         self.responses = []
         self.counts = {"action_resolved": 0, "action_not_understood": 0, "player_notice": 0,
                        "improvisation_requested": 0, "item_interaction": 0, "dialogue": 0,
-                       "implicit_dialogue": 0}
+                       "implicit_dialogue": 0, "arrest_confronted": 0, "arrest_resolved": 0}
         self.log_errors = []
         self.turn_skills = []   # (skill, how, score) mapped during the current turn
         self.turn_intents = []  # item-interaction intents resolved during the current turn
@@ -159,7 +202,9 @@ class Harness:
         for event, key in (("action_resolved", "action_resolved"),
                            ("action_not_understood", "action_not_understood"),
                            ("improvisation_requested", "improvisation_requested"),
-                           ("dialogue_resolved", "dialogue")):
+                           ("dialogue_resolved", "dialogue"),
+                           ("arrest_confronted", "arrest_confronted"),
+                           ("arrest_resolved", "arrest_resolved")):
             self.bus.subscribe(event, lambda d, k=key: self._count(k))
         self.bus.subscribe("item_interaction_resolved", self._on_item_interaction)
         self.bus.subscribe("dialogue_detected", self._on_dialogue_detected)
@@ -277,6 +322,11 @@ class Harness:
             pattern = rf"\b(?:successful\w*\s+(?:\w+\s+){{0,3}}{skill}|your\s+(?:\w+\s+)?{skill})\b"
             if re.search(pattern, text, re.IGNORECASE):
                 flags.append(f"skill name leaked into narration: '{skill}'")
+        # The dice themselves showing through. Found by playtest: "The successful roll means your
+        # strike connects cleanly".
+        roll_leak = ROLL_LEAK_PATTERN.search(text)
+        if roll_leak:
+            flags.append(f"dice leaked into narration: '{roll_leak.group(0)}'")
         # self.dm.entities, not _all_known_instance_names() -- the latter only covers instances
         # save_game diffs against a TOML template, which narration-driven ad hoc population
         # (DM_Improvisation.py) never registers there (see _collect_ad_hoc_entities).
@@ -345,6 +395,12 @@ class Harness:
         persona = PERSONAS.get(persona_name, persona_name)
         previous = [action for _narration, action in history if action]
         nudge = None
+        question = history[-1][0] if history else ""
+        if "(yes/no)" in question or ARREST_MARKER in question:
+            answer_nudge = CONFIRMATION_NUDGE if "(yes/no)" in question else ARREST_NUDGE
+            action = ask_player(self.args.player_url, self.player_model, persona, history, nudge=answer_nudge)
+            if action:
+                return action, None, False
         for _attempt in range(3):
             action = ask_player(self.args.player_url, self.player_model, persona, history, nudge=nudge)
             if not action:
@@ -365,13 +421,20 @@ class Harness:
 
         os.makedirs(os.path.join(ROOT, "Logs"), exist_ok=True)
         tag = "replay" if replay is not None else ("mix" if self.mix else args.persona)
-        log_path = os.path.join(ROOT, "Logs", f"playtest_{tag}_{args.seed}_{int(time.time())}.jsonl")
-        print(f"Turn log:    {log_path}\nSession log: {self.logger._log_file.name}")
+        log_path = os.path.join(ROOT, "Logs", f"{self.run_name}.jsonl")
+        # What the player would have seen: narration, [System] notices and their own inputs, nothing
+        # else -- for reading a run as a game rather than as data.
+        transcript_path = os.path.join(ROOT, "Logs", f"{self.run_name}.txt")
+        print(f"Turn log:    {log_path}\nTranscript:  {transcript_path}\nSession log: {self.logger._log_file.name}")
 
         intro = self.wait_for_narration(0)
         history = [("\n".join(intro), None)]
         problem_turns, flag_counts, changed, nudges, turn = 0, {}, 0, 0, 0
-        with open(log_path, "w", encoding="utf-8") as log:
+        with open(log_path, "w", encoding="utf-8") as log, open(transcript_path, "w", encoding="utf-8") as transcript:
+            transcript.write(f"{args.scenario} ({args.setting}) -- {tag}, seed {args.seed}, "
+                             f"{time.strftime('%Y-%m-%d %H:%M')}\n{'=' * TRANSCRIPT_WIDTH}\n\n")
+            transcript.write("\n\n".join(transcript_block(text) for text in intro) + "\n")
+            transcript.flush()
             for turn in range(1, turns + 1):
                 try:
                     action, baseline, nudged = self.next_action(turn, history, replay)
@@ -443,6 +506,10 @@ class Harness:
                 for flag in flags:
                     print(f"[turn {turn}] flag: {flag}")
                 history.append(("\n".join(narration) or "(nothing happened)", action))
+                transcript.write(f"\n> {action}\n\n")
+                transcript.write("\n\n".join(transcript_block(text) for text in narration) or "(nothing happened)")
+                transcript.write("\n")
+                transcript.flush()
 
         if not args.keep_saves:
             self.cleanup_saves()
@@ -452,6 +519,8 @@ class Harness:
               f"{self.counts['action_resolved']} resolved, "
               f"{self.counts['item_interaction']} item interactions, "
               f"{self.counts['dialogue']} dialogue ({self.counts['implicit_dialogue']} implicit), "
+              f"{self.counts['arrest_confronted']} arrest demands, "
+              f"{self.counts['arrest_resolved']} arrests resolved, "
               f"{nudges} loop nudges.")
         if flag_counts:
             print("Flags: " + ", ".join(f"{k} x{v}" for k, v in sorted(flag_counts.items())))

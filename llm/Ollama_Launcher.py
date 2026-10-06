@@ -449,7 +449,7 @@ def stop_ollama(process, log=None, run=None):
         Nothing reaps it, because its parent is gone. Each run of anything that starts an Ollama
         this way therefore strands another multi-gigabyte runner, and once they have eaten the
         card the next run silently falls back to CPU -- where the shipped model answers in
-        ~50-60s instead of ~8s, every ad hoc call blows its 8s timeout, and every
+        ~50-60s instead of ~8s, every ad hoc call blows its 12s timeout, and every
         _LivePipelineTestCase in test_integration.py fails on a 30s narration wait. That looks
         exactly like "this machine has no usable GPU", which is the wrong conclusion and an
         expensive one: measured here, a handful of integration runs left 11 orphaned runners

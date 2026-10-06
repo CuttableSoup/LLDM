@@ -20,7 +20,8 @@
     offline pick on any failure), every function here defaults to declining on any failure
     (network error, malformed response, no tool call, timeout) -- never fabricating an item,
     creature, removal, or edit when the LLM is unreachable. This is also why the timeout here
-    (8s, see DEFAULT_TIMEOUT) is tighter than NPC generation's 20s default: an ad hoc item can be
+    (the backend's generation_timeout -- 12s local, 8s online, see LLM_Backend.py) is tighter
+    than NPC generation's 20s default: an ad hoc item can be
     triggered on any unmatched item verb during ordinary play, far more often than NPC
     generation's handful-of-times-per-scene-load pattern, so a bounded, tighter budget matters
     more here.
@@ -36,7 +37,8 @@ from resolution.NPC_Generation import fit_skills_to_cr
 
 # None: the current LLM backend (local Ollama or OpenRouter -- see LLM_Backend.py).
 DEFAULT_API_URL = None
-DEFAULT_TIMEOUT = 8
+# None: the current backend's own generation_timeout (LLM_Backend.py).
+DEFAULT_TIMEOUT = None
 
 # The item-interaction verbs eligible for the ad hoc creation fallback, partitioned by which
 # entity's own inventory a created item actually needs to land in for DM_Core.py's ordinary,
@@ -303,7 +305,8 @@ def _call_tool_or_decline(messages, tools, accepted_function_names, call_chat_co
         call_chat_completion or _real_call_chat_completion itself, at call time, before reaching
         here, preserving the existing patch("resolution.AdHoc_Generation._real_call_chat_completion", ...)
         seam.
-    @param api_url/timeout Forwarded to call_chat_completion.
+    @param api_url/timeout Forwarded to call_chat_completion; a None timeout is the backend's own
+        generation_timeout.
     @param max_tokens Optional completion budget, forwarded only when given -- the reasoning model
         can spend the client's 1024 default on thinking before it ever reaches the tool call
         (finish_reason "length", no tool_calls), which reads as "unavailable". Omitted by every
@@ -317,6 +320,7 @@ def _call_tool_or_decline(messages, tools, accepted_function_names, call_chat_co
             _extract_tool_call raised, else arguments.get("reason", "declined") (guarded for a
             non-dict arguments) for an explicit decline or any unrecognized function name.
     """
+    timeout = timeout or get_backend().generation_timeout
     extra = {"max_tokens": max_tokens} if max_tokens else {}
     if reasoning_effort:
         extra["reasoning_effort"] = reasoning_effort
@@ -645,7 +649,9 @@ INPUT_KINDS = {
               "uses something, searches, tries a skill -- including trying to persuade, haggle "
               "with, deceive or intimidate someone, which the game rolls dice for",
     "speech": "words said aloud to someone present, or reported speech (\"I tell him to back "
-              "off\") -- any remark or small talk while they're talking to someone",
+              "off\") -- any remark or small talk while they're talking to someone, including the "
+              "small gestures that go with the words (a smirk, a tap on the arm, leaning in), "
+              "which attempt nothing on their own",
     "game_question": "a question about the game itself -- its rules, dice, mechanics -- not the story",
     "musing": "thinking aloud or wondering with no one to hear it; neither said to anyone nor an attempt",
 }
@@ -759,6 +765,81 @@ def adjudicate_player_input(
     if kind != "action" or game_action not in GAME_ACTIONS or game_action == "other" or not item:
         game_action = item = None
     return {"kind": kind, "game_action": game_action, "item": item}, ""
+
+
+# How a player can answer a guard's arrest demand (DM_Enforcement.py) -- see
+# classify_arrest_reply. "other" means the line isn't an answer at all.
+ARREST_REPLIES = {
+    "pay": "paying what the guard demands",
+    "surrender": "giving themselves up and going quietly",
+    "bribe": "offering the guard money or a favor to look the other way",
+    "bluff": "lying or talking their way out -- mistaken identity, a false excuse, a cover story",
+    "resist": "refusing, threatening, fighting or running from the guard",
+    "other": "anything else -- a question, small talk, or doing something unrelated",
+}
+
+
+def classify_arrest_reply(
+    text, enforcer="the guard", demand_text="", choices=None, call_chat_completion=None,
+    api_url=DEFAULT_API_URL, timeout=None,
+):
+    """!
+    @brief Asks the model which answer to an arrest a player's line is, when it doesn't open with
+        one of the offered words (NLPCore._answer_arrest) -- "fine, take me in" is a surrender,
+        "you've got the wrong man" a bluff. Built like adjudicate_player_input: one
+        enum-constrained call, reasoning off, temperature 0, waiting the backend's own
+        adjudication_timeout.
+    @param text The player's line, as typed.
+    @param enforcer Who is making the demand, by display name.
+    @param demand_text What they demand, as coin text.
+    @param choices Which ARREST_REPLIES are still open (a bribe or bluff already tried isn't);
+        "other" is always allowed.
+    @return (choice, reason) -- choice is one of choices or "other", with reason ""; or None if
+            the model was unreachable or declined, with reason saying why.
+    """
+    call_chat_completion = call_chat_completion or _real_call_chat_completion
+    timeout = timeout or get_backend().adjudication_timeout
+    allowed = [choice for choice in ARREST_REPLIES if choice == "other" or choice in (choices or ARREST_REPLIES)]
+    lines = "\n".join(f"- {choice}: {ARREST_REPLIES[choice]}" for choice in allowed)
+    demand = f" for {demand_text}" if demand_text else ""
+    messages = [
+        {
+            "role": "system",
+            "content": "You sort how a tabletop RPG player answers a guard who is arresting their character.",
+        },
+        {
+            "role": "user",
+            "content": (
+                f"{enforcer} is arresting the player's character{demand}.\n"
+                f"The player typed: \"{text}\"\nWhich answer is it?\n{lines}\nCall classify_reply."
+            ),
+        },
+    ]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "classify_reply",
+                "description": "Says which answer to the arrest the player's line is.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"answer": {"type": "string", "enum": allowed}},
+                    "required": ["answer"],
+                },
+            },
+        },
+        _decline_tool_schema("Call this only if the line is empty or unreadable."),
+    ]
+    function_name, payload = _call_tool_or_decline(
+        messages, tools, {"classify_reply"}, call_chat_completion, api_url, timeout,
+        max_tokens=ADJUDICATION_MAX_TOKENS, reasoning_effort=DIFFICULTY_REASONING, temperature=0,
+    )
+    if function_name is None:
+        return None, payload
+    answer = str(payload.get("answer", "")).strip().lower()
+    if answer not in allowed:
+        return None, "invalid_answer"
+    return answer, ""
 
 
 def decide_entity_removal(

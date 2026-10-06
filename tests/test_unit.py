@@ -72,6 +72,7 @@ from nlp.Intent_Classification import (
     ADDRESS_TERMINATORS,
     ADVANCE_KEYWORDS,
     extract_address_phrase,
+    extract_item_phrase,
     CLOSE_KEYWORDS,
     CRAFT_KEYWORDS,
     DIALOGUE_KEYWORDS,
@@ -960,7 +961,7 @@ class TestIntentClassification(unittest.TestCase):
         self.assertEqual(len(events), 1)
         clauses = events[0]["payload"]["clauses"]
         self.assertEqual(len(clauses), 2)
-        self.assertEqual(clauses[0], {"kind": "item", "intent": "take", "item_name": "longsword"})
+        self.assertEqual(clauses[0], {"kind": "item", "intent": "take", "item_name": "longsword", "phrase": "longsword"})
         self.assertEqual(clauses[1]["kind"], "action")
         self.assertEqual(clauses[1]["skill"], "blades")
 
@@ -975,7 +976,7 @@ class TestIntentClassification(unittest.TestCase):
         self.assertEqual(events[0]["payload"]["intent"], "retreat")
         self.assertEqual(events[1]["event"], "turn_detected")
         self.assertEqual(
-            events[1]["payload"]["clauses"], [{"kind": "item", "intent": "take", "item_name": "longsword"}],
+            events[1]["payload"]["clauses"], [{"kind": "item", "intent": "take", "item_name": "longsword", "phrase": "longsword"}],
         )
 
     def test_craft_keyword_resolves_to_an_item_kind_clause(self):
@@ -988,7 +989,7 @@ class TestIntentClassification(unittest.TestCase):
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["event"], "turn_detected")
         self.assertEqual(
-            events[0]["payload"]["clauses"], [{"kind": "item", "intent": "craft", "item_name": "iron dagger"}],
+            events[0]["payload"]["clauses"], [{"kind": "item", "intent": "craft", "item_name": "iron dagger", "phrase": "iron dagger"}],
         )
 
     def test_item_verb_still_takes_priority_over_dialogue(self):
@@ -1000,7 +1001,7 @@ class TestIntentClassification(unittest.TestCase):
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["event"], "turn_detected")
         self.assertEqual(
-            events[0]["payload"]["clauses"], [{"kind": "item", "intent": "give", "item_name": "longsword"}],
+            events[0]["payload"]["clauses"], [{"kind": "item", "intent": "give", "item_name": "longsword", "phrase": "longsword"}],
         )
 
     def test_item_losing_verb_needs_the_item_actually_named(self):
@@ -1016,9 +1017,13 @@ class TestIntentClassification(unittest.TestCase):
         _processed, events = classifier.classify(idiom)
         self.assertNotIn("turn_detected", [event["event"] for event in events])
 
-        for text, item in (("give her the potions", "health potion"), ("hand over the sword", "longsword")):
+        for text, item, phrase in (
+            ("give her the potions", "health potion", "potions"), ("hand over the sword", "longsword", "sword"),
+        ):
             _processed, events = classifier.classify(text)
-            self.assertEqual(events[0]["payload"]["clauses"], [{"kind": "item", "intent": "give", "item_name": item}])
+            self.assertEqual(
+                events[0]["payload"]["clauses"], [{"kind": "item", "intent": "give", "item_name": item, "phrase": phrase}],
+            )
 
     def test_a_pronoun_clause_takes_the_whole_inputs_target(self):
         # Found by playtest: the kick matched on "start kicking him", which names nobody.
@@ -1234,6 +1239,10 @@ class TestIntentClassification(unittest.TestCase):
         self.assertEqual([event["event"] for event in events], ["dialogue_detected", "turn_detected"])
         self.assertEqual(events[1]["payload"]["clauses"][0]["skill"], "bull rush")
 
+        # Found by playtest: a hyphenated verb crashed the turn.
+        _processed, events = classifier.classify("I mock-yell a challenge.")
+        self.assertEqual(events[0]["payload"]["utterance"], "You mock yell a challenge.")
+
         # Nobody to hear it, or only wondering about it: left as it was.
         _processed, events = IntentClassifier(FakeMatcher()).classify("Yell for help.")
         self.assertEqual(events[0]["event"], "action_not_understood")
@@ -1281,6 +1290,20 @@ class TestIntentClassification(unittest.TestCase):
         self.assertEqual(events[0]["event"], "dialogue_detected")
         self.assertIsNone(classifier.last_adjudication)
 
+    def test_a_weak_action_beside_a_quote_is_checked_with_the_model(self):
+        # Found by playtest: "reach out, tapping the heavy metal ring on his wrist" beside a quote
+        # rolled polearms at 0.52 and was narrated as a sword strike.
+        line = 'I smirk and reach out, tapping the ring on his wrist. "Maybe I\'ll prove it."'
+        action_text = "smirk and reach out, tapping the ring on his wrist."
+        classifier, _matcher = self._adjudicating({action_text: "speech"}, actions={"reach out": ("polearms", 0.52)})
+        _processed, events = classifier.classify(line)
+        self.assertEqual([event["event"] for event in events], ["dialogue_detected"])
+        self.assertEqual(classifier.last_adjudication, ("speech", "weak_quoted"))
+
+        classifier, _matcher = self._adjudicating({action_text: "action"}, actions={"reach out": ("polearms", 0.52)})
+        _processed, events = classifier.classify(line)
+        self.assertEqual([event["event"] for event in events], ["turn_detected", "dialogue_detected"])
+
     def test_a_weak_turn_or_an_unclaimed_line_is_checked_with_the_model(self):
         classifier, _matcher = self._adjudicating({
             "count to three for me finn": "speech", "explain how wounds heal": "game_question",
@@ -1326,7 +1349,7 @@ class TestIntentClassification(unittest.TestCase):
         # Paying is buying the thing on offer, found in the catalog when it's there.
         _processed, events = classifier.classify("Here are the coppers.")
         self.assertEqual(events[0]["event"], "turn_detected")
-        self.assertEqual(events[0]["payload"]["clauses"], [{"kind": "item", "intent": "trade", "item_name": "smoked peppers"}])
+        self.assertEqual(events[0]["payload"]["clauses"], [{"kind": "item", "intent": "trade", "item_name": "smoked peppers", "phrase": "smoked peppers"}])
 
         # A guessed skill doesn't beat the purchase.
         _processed, events = classifier.classify("Let's get the rope.")
@@ -4970,6 +4993,14 @@ class TestFailedAttempts(LLMTestCase):
         self.assertEqual(self.llm_core.context_window, [])
         self.assertEqual(self.notices[0]["message"], "There's no \"sword\" here to take.")
 
+    def test_something_not_here_is_quoted_in_the_players_words(self):
+        # Found by playtest: "belt knife" matched the catalog's "belt pouch", and the notice named the pouch.
+        self.llm_core.generate_item_interaction_response({
+            "intent": "take", "item_name": "belt pouch", "phrase": "belt knife", "found": False,
+            "reason": "not_present", "input": "take the belt knife",
+        })
+        self.assertEqual(self.notices[0]["message"], "There's no \"belt knife\" here to take.")
+
     def test_improvisation_reasons_name_the_phrase(self):
         self.event_bus.publish("action_not_understood", {
             "input": "buy a lantern", "score": 0.0, "reason": "no_seller", "phrase": "a lantern",
@@ -8021,6 +8052,22 @@ class TestAttackingAnyone(DMTestCase):
             self.dm_core.apply_damage(wolf, 999)
         self.dm_core.current_target = "thane"  # the "first living non-player" leftover
 
+    def test_a_non_attack_that_lands_on_a_bystander_by_default_names_no_target(self):
+        # Found by playtest: a gesture rolled polearms against the default target, and the
+        # narrator, told "against Belor Hemlock", wrote a sword strike on him.
+        resolved = []
+        self.event_bus.subscribe("action_resolved", resolved.append)
+        self._clear_the_fight()
+        self.dm_core._on_turn_detected({"clauses": [{"kind": "action", "skill": "observation"}], "input": "look him over"})
+        [outcome] = resolved[-1]["actions"]
+        self.assertTrue(outcome.incidental_target)
+
+        self.dm_core._on_turn_detected({
+            "clauses": [{"kind": "action", "skill": "observation", "target": "thane"}], "input": "look thane over",
+        })
+        [outcome] = resolved[-1]["actions"]
+        self.assertFalse(outcome.incidental_target)
+
     def test_an_attack_naming_nobody_goes_at_the_conversation_partner(self):
         # Found by playtest: "my turn to hit you!" mid-argument targeted nothing at all.
         self._clear_the_fight()
@@ -8265,6 +8312,21 @@ class TestLLMBackend(unittest.TestCase):
         waits = []
         adjudicate_player_input("x", call_chat_completion=lambda *a, timeout=None, **k: waits.append(timeout))
         self.assertEqual(waits, [LLM_Backend.OPENROUTER_ADJUDICATION_TIMEOUT])
+
+    def test_ad_hoc_generation_waits_longer_locally(self):
+        # Found by playtest: local item generation took 4-8s against an 8s budget.
+        from resolution.AdHoc_Generation import generate_ad_hoc_item
+        self.assertEqual(LLM_Backend.local_backend().generation_timeout, LLM_Backend.LOCAL_GENERATION_TIMEOUT)
+        self.assertEqual(LLM_Backend.local_backend({"generation_timeout": 20}).generation_timeout, 20)
+        for backend, expected in (
+            (LLM_Backend.local_backend(), LLM_Backend.LOCAL_GENERATION_TIMEOUT),
+            (LLM_Backend.google_backend({}, environ={}), LLM_Backend.ONLINE_GENERATION_TIMEOUT),
+            (LLM_Backend.openrouter_backend({}, environ={}), LLM_Backend.ONLINE_GENERATION_TIMEOUT),
+        ):
+            LLM_Backend.set_backend(backend)
+            waits = []
+            generate_ad_hoc_item("a rope", "take", "A dock.", call_chat_completion=lambda *a, timeout=None, **k: waits.append(timeout))
+            self.assertEqual(waits, [expected], backend.name)
 
 
 class TestInputAdjudication(unittest.TestCase):
@@ -9553,6 +9615,17 @@ class TestImprovisation(DMTestCase):
 
         self.assertEqual(len(self.not_understood_events), 1)
         self.assertEqual(self.item_events, [])
+
+    def test_a_decline_quotes_the_item_not_the_whole_clause(self):
+        # Found by playtest: the notice read "grab the glimmering object without looking." isn't something...
+        with patch("dm.DM_Improvisation.generate_ad_hoc_item", return_value=self._fake_creation(created=False)) as generate:
+            self.dm_core._on_improvisation_requested({
+                "intent": "take", "phrase": "grab the glimmering object without looking.",
+                "item_phrase": "glimmering object", "input": "grab the glimmering object without looking.",
+            })
+
+        self.assertEqual(self.not_understood_events[0]["phrase"], "glimmering object")
+        self.assertEqual(generate.call_args.args[0], "grab the glimmering object without looking.")
 
     def test_remove_entity_from_scene_strips_presence_and_prevents_respawn(self):
         self.assertIn("wolf", self.dm_core.scenario_entities)
@@ -14891,6 +14964,26 @@ class TestSceneRosterNarration(LLMTestCase):
         outcome.no_opponent = False
         self.assertNotIn("no opponent", self.llm_core._describe_outcome(outcome))
 
+    def test_an_incidental_target_is_never_named_to_the_narrator(self):
+        outcome = RolledOutcome(
+            entity="gladstone", skill="polearms", roll=6, difficulty=0, success=True,
+            defender="Belor Hemlock", incidental_target=True,
+        )
+        outcome.effects.append(DefenderDetailsEffect(text="Belor Hemlock - Sandpoint's sheriff."))
+        text = self.llm_core._describe_outcome(outcome)
+        self.assertNotIn("Belor", text)
+        self.assertIn("It isn't an attack on anyone", text)
+        outcome.incidental_target = False
+        self.assertIn("against Belor Hemlock (no defense)", self.llm_core._describe_outcome(outcome))
+
+    def test_narration_is_told_to_keep_the_dice_hidden(self):
+        # Found by playtest: "The successful roll means your strike connects cleanly".
+        self.event_bus.publish("action_resolved", {
+            "actions": [RolledOutcome(entity="gladstone", skill="blades", roll=9, difficulty=5, success=True)],
+            "input": "swing at the post", "player_gear": ["longsword"],
+        })
+        self.assertIn("Never mention dice, rolls, difficulty or checks", self.llm_core.context_window[-1]["content"])
+
     def test_a_trivial_check_is_narrated_without_a_roll(self):
         outcome = RolledOutcome(entity="gladstone", skill="observation", roll=0, difficulty=0, success=True, trivial=True)
         text = self.llm_core._describe_outcome(outcome)
@@ -14918,6 +15011,32 @@ class TestSceneRosterNarration(LLMTestCase):
         self.assertIn("The player is at The Fish Market and stays there", pinned)
         self.assertIn("Ways out from here: The Rusty Dragon.", pinned)
         self.assertNotIn("stays there", self.llm_core._build_system_message("", label="item_interaction:travel"))
+
+
+class TestItemPhraseExtraction(unittest.TestCase):
+    """!@brief Intent_Classification.py's extract_item_phrase -- the player's own words for an item,
+        quoted by a "not here" notice. Unrecognized shapes return None (the notice names the item)."""
+
+    def test_it_finds_the_words_after_the_item_verb(self):
+        cases = {
+            ("take the belt knife from the stall", "take"): "belt knife",
+            ("i'll take a bag of figs", "take"): "bag of figs",
+            ("(grabs the rope)", "take"): "rope",
+            ("give her the potions", "give"): "potions",
+            ("buy some smoked peppers for four coppers", "trade"): "smoked peppers",
+            ("drink my healing draught", "use"): "healing draught",
+            ("snatch a length of rope lying near the stall", "take"): "length of rope",
+            ("grab the glimmering object without looking.", "take"): "glimmering object",
+            ("take a bag of shining coins", "take"): "bag of shining coins",
+        }
+        for (clause, intent), expected in cases.items():
+            with self.subTest(clause=clause):
+                self.assertEqual(extract_item_phrase(clause, intent), expected)
+
+    def test_no_verb_or_nothing_after_it_is_none(self):
+        self.assertIsNone(extract_item_phrase("look around", "take"))
+        self.assertIsNone(extract_item_phrase("take the", "take"))
+        self.assertIsNone(extract_item_phrase("take the knife", "open"))
 
 
 class TestAddressPhraseExtraction(unittest.TestCase):
@@ -15582,6 +15701,512 @@ class TestLaw(DMTestCase):
         self.assertEqual(reloaded.legal_records, self.dm_core.legal_records)
         self.assertEqual(reloaded.entities["shopkeeper"]["known_crimes"], self.dm_core.entities["shopkeeper"]["known_crimes"])
         self.assertEqual(reloaded.entities["gladstone"]["disguise"], self.dm_core.entities["gladstone"]["disguise"])
+
+
+class TestEnforcement(DMTestCase):
+    """!
+    @brief DM_Enforcement.py end to end, in the same general store under "Test Crown" TestLaw
+        uses, with a town guard (law_enforcer) standing in it. Theft from the shopkeeper is
+        the usual crime: Test Crown fines it 5.
+    """
+    start_location = "general_store"
+
+    def setUp(self):
+        super().setUp()
+        self.dm_core.locations[self.dm_core.current_location_key]["polity"] = "Test Crown"
+        self.dm_core.entities["gladstone"]["currency"] = 10
+        self.confronted = self._capture("arrest_confronted")
+        self.resolved = self._capture("arrest_resolved")
+        self.awaiting = self._capture("arrest_awaiting")
+        self.notices = self._capture("player_notice")
+
+    def _add_person(self, name, **fields):
+        entity = {
+            "name": name, "supertype": "creature", "subtype": "humanoid", "max_hp": 10,
+            "languages": ["common"], "attitudes": {"default": [20, 0, 0]}, **fields,
+        }
+        self.dm_core.entities[name] = entity
+        self.dm_core._place_new_entity(name, entity, 1)
+        self.dm_core.scenario_entities.append(name)
+
+    def _add_guard(self, name="guard", tags=("law_enforcer",)):
+        self._add_person(name, tags=list(tags), skills={
+            "willpower": {"dice": 2, "pips": 0}, "observation": {"dice": 2, "pips": 0},
+            "streetwise": {"dice": 2, "pips": 0},
+        })
+
+    def _steal(self):
+        self.dm_core._on_item_interaction_detected({"intent": "take", "item_name": "dagger", "input": "steal the dagger"})
+
+    def _record(self, identity="gladstone"):
+        return self.dm_core.legal_records.get("Test Crown", {}).get(identity)
+
+    def _answer(self, choice, text=None):
+        self.event_bus.publish("arrest_answered", {"choice": choice, "input": text or choice})
+
+    def _wanted(self, bounty=5, acclaim=0):
+        Law_Resolution.file_report(
+            self.dm_core.legal_records, "Test Crown", "gladstone", {"fine": bounty, "acclaim": -1},
+            {"crime": "theft", "victim": "shopkeeper", "block": 0},
+        )
+        self.dm_core.entities["gladstone"]["acclaim"] = acclaim
+
+    # -- Starting -----------------------------------------------------------------------
+
+    def test_an_enforcer_who_sees_a_crime_confronts_at_once(self):
+        self._add_guard()
+        self._steal()
+        self.assertEqual(self._record()["bounty"], 5)
+        [demand] = self.confronted
+        self.assertEqual((demand["kind"], demand["witnessed"], demand["amount"]), ("arrest", True, 5))
+        self.assertEqual(demand["charges"], ["theft (shopkeeper)"])
+        self.assertEqual(self.awaiting[-1]["choices"], ["pay", "surrender", "bribe", "bluff", "resist"])
+        # The options ride on the narration, so they're shown after it, not ahead of it.
+        self.assertIn("Reply with one of: pay, surrender, bribe <amount>, bluff, resist.", demand["notice"])
+        self.assertEqual(self.notices, [])
+
+    def test_the_demand_waits_until_the_input_has_resolved(self):
+        self._add_guard()
+        self.event_bus.publish("player_input_received", "steal the dagger")
+        self._steal()
+        self.assertEqual(self.confronted, [])
+        self.event_bus.publish("player_input_handled", {"input": "steal the dagger"})
+        self.assertEqual(len(self.confronted), 1)
+        self.assertTrue(self.dm_core.pending_arrest["announced"])
+
+    def test_a_guard_who_is_the_victim_fights_instead_of_arresting(self):
+        self._add_guard()
+        self.dm_core.nudge_attitude_from_event("guard", "gladstone", "assaulted", 1.0)
+        self.dm_core.note_assault("gladstone", "guard")
+        self.assertIsNone(self.dm_core.pending_arrest)
+        self.assertEqual(self.confronted, [])
+
+    def test_a_wanted_player_is_arrested_only_once_recognized(self):
+        self._wanted(acclaim=0)
+        self._stub_roll_dice(1)  # magnitude 1 is "very difficult" -- the guard's streetwise fails
+        self._add_guard()
+        self.dm_core.check_enforcement()
+        self.assertIsNone(self.dm_core.pending_arrest)
+        self.assertEqual(self.dm_core.entities["guard"]["enforcement_checks"], {"gladstone|": False})
+
+        self._stub_roll_dice(100)  # checked once per guard per identity: no second chance
+        self.dm_core.check_enforcement()
+        self.assertIsNone(self.dm_core.pending_arrest)
+
+        self._add_guard("captain")
+        self.dm_core.check_enforcement()
+        self.assertEqual(self.dm_core.pending_arrest["enforcer"], "captain")
+
+    def test_famous_enough_is_recognized_without_a_roll(self):
+        self._wanted(acclaim=25)
+        self._stub_roll_dice(0)
+        self._add_guard()
+        self.dm_core.check_enforcement()
+        self.assertEqual(self.dm_core.pending_arrest["enforcer"], "guard")
+        self.assertFalse(self.confronted[0]["witnessed"])
+
+    def test_a_disguise_the_guard_cant_see_through_hides_a_wanted_player(self):
+        self._wanted(acclaim=25)
+        run_program(
+            self.dm_core.entities["don a disguise"]["on_pass"], {"actor": "gladstone", "roll": 30},
+            self.dm_core.entities, self.dm_core.rules, self.event_bus,
+        )
+        self._stub_roll_dice(1)  # the guard's observation can't beat 30
+        self._add_guard()
+        self.dm_core.check_enforcement()
+        self.assertIsNone(self.dm_core.pending_arrest)
+
+    def test_past_kill_on_sight_the_guard_attacks_instead(self):
+        self._wanted(bounty=100, acclaim=25)
+        self._add_guard()
+        self.dm_core.check_enforcement()
+        self.assertIsNone(self.dm_core.pending_arrest)
+        self.assertEqual(self.confronted[0]["kind"], "kill_on_sight")
+        self.assertTrue(self.dm_core.is_hostile("guard", "gladstone"))
+
+    def test_below_arrest_at_nobody_bothers(self):
+        self._wanted(bounty=5, acclaim=25)
+        self.dm_core._find_polity("Test Crown")["arrest_at"] = 10
+        self.addCleanup(self.dm_core._find_polity("Test Crown").__setitem__, "arrest_at", 1)
+        self._add_guard()
+        self.dm_core.check_enforcement()
+        self.assertIsNone(self.dm_core.pending_arrest)
+
+    # -- The replies --------------------------------------------------------------------
+
+    def test_paying_settles_the_bounty_and_ends_it(self):
+        self._add_guard()
+        self._steal()
+        self._answer("pay")
+        self.assertEqual(self.dm_core.entities["gladstone"]["currency"], 5)
+        self.assertEqual(self.dm_core.entities["guard"]["currency"], 5)
+        self.assertEqual(self._record()["bounty"], 0)
+        self.assertTrue(all(crime["settled"] for crime in self._record()["crimes"]))
+        self.assertEqual(self._record()["acclaim"], -1)  # acclaim never decays
+        self.assertIsNone(self.dm_core.pending_arrest)
+        self.assertEqual(self.resolved[-1]["outcome"], "paid")
+
+    def test_paying_without_the_money_asks_again(self):
+        self.dm_core.entities["gladstone"]["currency"] = 2
+        self._add_guard()
+        self._steal()
+        self._answer("pay")
+        self.assertIsNotNone(self.dm_core.pending_arrest)
+        self.assertIn("You have 2 coins, not the 5 coins owed.", self.notices[-1]["message"])
+
+    def test_surrendering_short_serves_the_rest_in_jail(self):
+        self.dm_core.locations["debug_hub"]["jail"] = "tavern_floor"
+        self.dm_core.entities["gladstone"]["currency"] = 2
+        self._add_guard()
+        self._steal()
+        block = self.dm_core.current_block
+        self._answer("surrender")
+        # 3 unpaid at 0.2 blocks per unit is 0.6, rounded up to one block.
+        self.assertEqual(self.dm_core.current_block, block + 1)
+        self.assertEqual(self.dm_core.current_location_key, "tavern_floor")
+        self.assertEqual(self.dm_core.entities["gladstone"]["currency"], 0)
+        self.assertEqual(self._record()["bounty"], 0)
+        outcome = self.resolved[-1]
+        self.assertEqual((outcome["outcome"], outcome["blocks"], outcome["jail_name"]), ("surrendered", 1, "The Rusty Tankard"))
+
+    def test_surrendering_with_enough_money_serves_no_time(self):
+        self._add_guard()
+        self._steal()
+        block = self.dm_core.current_block
+        self._answer("surrender")
+        self.assertEqual(self.dm_core.current_block, block)
+        self.assertEqual(self.resolved[-1]["blocks"], 0)
+
+    def test_a_taken_bribe_buys_this_guard_off(self):
+        self._add_guard()
+        self._steal()
+        self._stub_roll_dice(10)  # equal rolls; an offer of the whole bounty eases it by 5
+        self._answer("bribe", "bribe him 5 gold")
+        self.assertIsNone(self.dm_core.pending_arrest)
+        self.assertEqual(self.resolved[-1]["outcome"], "bribed")
+        self.assertEqual(self.dm_core.entities["guard"]["looked_away"], {"gladstone": 5})
+        self.assertEqual(self._record()["bounty"], 5)  # the record itself stands
+        self.dm_core.check_enforcement()
+        self.assertIsNone(self.dm_core.pending_arrest)
+
+    def test_an_incorruptible_guard_refuses_and_the_demand_stands(self):
+        self._add_guard(tags=("law_enforcer", "incorruptible"))
+        self._steal()
+        self._stub_roll_dice(100)
+        self._answer("bribe", "bribe 10 gold")
+        self.assertEqual(self.resolved[-1]["outcome"], "bribe_refused")
+        self.assertIn("Reply with one of: pay, surrender, bluff, resist.", self.resolved[-1]["notice"])
+        self.assertEqual(self.dm_core.entities["gladstone"]["currency"], 10)
+        self.assertEqual(self.awaiting[-1]["choices"], ["pay", "surrender", "bluff", "resist"])
+
+    def test_a_bribe_needs_an_amount_and_the_money(self):
+        self._add_guard()
+        self._steal()
+        self._answer("bribe", "slip him something")
+        self.assertIn("Say how much", self.notices[-1]["message"])
+        self._answer("bribe", "bribe 50 gold")
+        self.assertIn("You only have 10 coins.", self.notices[-1]["message"])
+        self.assertNotIn("bribe", self.dm_core.pending_arrest["tried"])
+
+    def test_a_bluff_is_harder_when_the_guard_saw_it(self):
+        self._add_guard()
+        self._steal()
+        self._stub_roll_dice(10)  # equal rolls, but witnessed adds 5
+        self._answer("bluff")
+        self.assertEqual(self.resolved[-1]["outcome"], "bluff_failed")
+        self.assertIsNotNone(self.dm_core.pending_arrest)
+        self._answer("bluff")
+        self.assertIn("You already tried a bluff.", self.notices[-1]["message"])
+
+    def test_a_good_bluff_means_the_guard_no_longer_knows_them(self):
+        self._wanted(acclaim=25)
+        self._add_guard()
+        self.dm_core.check_enforcement()
+        self._stub_roll_dice(10)
+        self._answer("bluff")
+        self.assertEqual(self.resolved[-1]["outcome"], "bluffed")
+        self.assertFalse(self.dm_core.entities["guard"]["enforcement_checks"]["gladstone|"])
+        self.dm_core.check_enforcement()
+        self.assertIsNone(self.dm_core.pending_arrest)
+
+    def test_resisting_turns_the_guards_hostile_and_is_a_crime(self):
+        self._add_guard()
+        self._add_guard("second guard")
+        self._steal()
+        self._answer("resist")
+        self.assertTrue(self.dm_core.is_hostile("guard", "gladstone"))
+        self.assertTrue(self.dm_core.is_hostile("second guard", "gladstone"))
+        self.assertEqual(self._record()["bounty"], 25)
+        self.assertEqual(self._record()["crimes"][-1]["crime"], "resisting_arrest")
+        self.assertEqual(self.resolved[-1]["outcome"], "resisted")
+
+    def _input(self, text, act):
+        self.event_bus.publish("player_input_received", text)
+        act()
+        self.event_bus.publish("player_input_handled", {"input": text})
+
+    def test_walking_away_is_fleeing(self):
+        self._add_guard()
+        self._steal()
+        self._input("go to the hub", lambda: self.dm_core._enter_location("debug_hub"))
+        self.assertEqual(self.resolved[-1]["outcome"], "fled")
+        self.assertTrue(self.dm_core.is_hostile("guard", "gladstone"))
+        self.assertEqual(self._record()["bounty"], 25)
+
+    def test_attacking_anyone_is_resisting(self):
+        self._add_guard()
+        self._add_person("bystander")
+        self._steal()
+        self._input("punch the bystander", lambda: (
+            self._answer("other", "punch the bystander"), self.dm_core.note_assault("gladstone", "bystander"),
+        ))
+        self.assertEqual(self.resolved[-1]["how"], "attacked")
+
+    def test_carrying_on_twice_is_resisting_but_talk_is_not(self):
+        self._add_guard()
+        self._steal()
+
+        def carry_on():
+            self._answer("other", "look around")
+            self.event_bus.publish("turn_detected", {"clauses": [], "input": "look around"})
+
+        self._input("what's the charge?", lambda: self._answer("other", "what's the charge?"))
+        self.assertEqual(self.dm_core.pending_arrest["strikes"], 0)
+        self._input("look around", carry_on)
+        self.assertEqual((self.dm_core.pending_arrest["strikes"], self.confronted[-1]["kind"]), (1, "repeat"))
+        self._input("look around", carry_on)
+        self.assertEqual(self.resolved[-1]["how"], "ignored")
+
+    def test_an_open_arrest_survives_save_and_reload(self):
+        self._add_guard()
+        self._steal()
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("dm.DM_Persistence.PROJECT_ROOT", tmp):
+                self.dm_core.save_game("arrest_slot")
+                event_bus = EventBus()
+                awaiting = []
+                event_bus.subscribe("arrest_awaiting", awaiting.append)
+                reloaded = DMCore(event_bus, scenario_name="debug", start_location="general_store", setting="Fantasy")
+                reloaded.load_game("arrest_slot")
+        self.assertEqual(reloaded.pending_arrest["enforcer"], "guard")
+        self.assertEqual(awaiting[-1]["choices"], ["pay", "surrender", "bribe", "bluff", "resist"])
+
+    def test_when_the_victim_is_a_guard_another_guard_steps_in(self):
+        self._add_guard()
+        self._add_guard("jailer")
+        self.dm_core.nudge_attitude_from_event("guard", "gladstone", "assaulted", 1.0)
+        self.dm_core.note_assault("gladstone", "guard")
+        self.assertEqual(self.dm_core.pending_arrest["enforcer"], "jailer")
+
+    def test_a_landmark_is_under_its_towns_law(self):
+        del self.dm_core.locations["general_store"]["polity"]
+        self.dm_core.locations["debug_hub"]["polity"] = "Test Crown"
+        self.assertEqual(self.dm_core.current_polity(), "Test Crown")
+
+
+class TestSandpointEnforcement(DMTestCase):
+    """!@brief The shipped Varisia/Sandpoint enforcement data, in the garrison (sheriff + jailer)."""
+    scenario_name = "lost_coast"
+    setting = "Pathfinder"  # lost_coast is Golarion-sourced content, kept isolated under Rules/Pathfinder/
+    start_location = "garrison"
+
+    def test_the_garrison_is_under_varisian_law_and_is_sandpoints_jail(self):
+        self.assertEqual(self.dm_core.current_polity(), "Varisia")
+        self.assertEqual(self.dm_core._jail_location(), "garrison")
+
+    def test_a_reload_keeps_the_guards_able_to_witness(self):
+        # Found by playtest: the reload replay instanced the garrison while standing elsewhere,
+        # so its polity-language default never applied and nobody there could witness a crime.
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("dm.DM_Persistence.PROJECT_ROOT", tmp):
+                self.dm_core.save_game("garrison_slot")
+                self.dm_core.load_game("garrison_slot")
+        self.assertEqual(self.dm_core.entities["Vachedi"]["languages"], ["varisian"])
+        self.dm_core.nudge_attitude_from_event("Belor Hemlock", "gladstone", "assaulted", 1.0)
+        self.dm_core.note_assault("gladstone", "Belor Hemlock")
+        self.assertEqual(self.dm_core.pending_arrest["enforcer"], "Vachedi")
+
+
+class TestEnforcementHelpers(unittest.TestCase):
+    """!@brief Law_Resolution.py's jail/bribe helpers and Inventory_Resolution.py's money parser."""
+
+    def test_jail_time_rounds_up_and_nothing_owed_is_no_time(self):
+        self.assertEqual(Law_Resolution.jail_blocks(3, 0.2), 1)
+        self.assertEqual(Law_Resolution.jail_blocks(10, 0.2), 2)
+        self.assertEqual(Law_Resolution.jail_blocks(11, 0.2), 3)
+        self.assertEqual(Law_Resolution.jail_blocks(0, 0.2), 0)
+
+    def test_a_bigger_bribe_is_easier_and_a_tiny_one_an_insult(self):
+        bands = [{"min_share": 1.0, "modifier": -5}, {"min_share": 0.5, "modifier": 0}, {"min_share": 0.25, "modifier": 5}]
+        self.assertEqual(Law_Resolution.bribe_modifier(10, 10, bands), -5)
+        self.assertEqual(Law_Resolution.bribe_modifier(5, 10, bands), 0)
+        self.assertEqual(Law_Resolution.bribe_modifier(3, 10, bands), 5)
+        self.assertIsNone(Law_Resolution.bribe_modifier(1, 10, bands))
+
+    def test_money_is_read_in_the_settings_coins(self):
+        from resolution.Inventory_Resolution import parse_currency_amount
+        coins = [{"name": "gold piece", "worth": 1}, {"name": "silver piece", "worth": 0.1}, {"name": "copper piece", "worth": 0.01}]
+        for text, amount in (("bribe him with 5 gold", 5), ("8 sp", 0.8), ("20 silver pieces", 2),
+                             ("3 coppers", 0.03), ("5 coins", 5), ("slip him something", None)):
+            with self.subTest(text=text):
+                self.assertEqual(parse_currency_amount(text, coins), amount)
+        self.assertEqual(parse_currency_amount("12 coins"), 12)
+
+
+class TestArrestReplies(unittest.TestCase):
+    """!@brief NLPCore reads the input after an arrest demand as the reply (_answer_arrest) --
+        exercised without loading NLPCore's models."""
+
+    def _nlp(self, choices=("pay", "surrender", "bribe", "bluff", "resist")):
+        from types import SimpleNamespace
+        bus = EventBus()
+        answers = []
+        bus.subscribe("arrest_answered", answers.append)
+        return SimpleNamespace(event_bus=bus, _arrest_choices=list(choices)), answers
+
+    def test_a_reply_opening_with_an_option_is_that_option(self):
+        from nlp.NLP_Core import NLPCore
+        nlp, answers = self._nlp()
+        with patch("nlp.NLP_Core.classify_arrest_reply") as model:
+            self.assertTrue(NLPCore._answer_arrest(nlp, "Bribe him with 5 gold"))
+        model.assert_not_called()
+        self.assertEqual(answers, [{"choice": "bribe", "input": "Bribe him with 5 gold"}])
+        self.assertIsNone(nlp._arrest_choices)
+
+    def test_an_i_before_the_option_still_reads_as_the_option(self):
+        # Found by playtest: "I resist." went to the model.
+        from nlp.NLP_Core import NLPCore
+        for text, choice in (("I resist.", "resist"), ("I'll pay him", "pay"), ("ok, i surrender", "surrender")):
+            with self.subTest(text=text):
+                nlp, answers = self._nlp()
+                with patch("nlp.NLP_Core.classify_arrest_reply") as model:
+                    self.assertTrue(NLPCore._answer_arrest(nlp, text))
+                model.assert_not_called()
+                self.assertEqual(answers[0]["choice"], choice)
+
+    def test_anything_else_asks_the_model(self):
+        from nlp.NLP_Core import NLPCore
+        nlp, answers = self._nlp()
+        with patch("nlp.NLP_Core.classify_arrest_reply", return_value=("surrender", "")):
+            self.assertTrue(NLPCore._answer_arrest(nlp, "fine, take me in"))
+        self.assertEqual(answers[0]["choice"], "surrender")
+
+        nlp, answers = self._nlp()
+        with patch("nlp.NLP_Core.classify_arrest_reply", return_value=(None, "unavailable")):
+            self.assertFalse(NLPCore._answer_arrest(nlp, "what's the charge?"))
+        self.assertEqual(answers[0]["choice"], "other")
+
+    def test_an_option_already_tried_is_not_an_answer(self):
+        from nlp.NLP_Core import NLPCore
+        nlp, answers = self._nlp(choices=("pay", "surrender", "resist"))
+        with patch("nlp.NLP_Core.classify_arrest_reply", return_value=("other", "")):
+            self.assertFalse(NLPCore._answer_arrest(nlp, "bluff again"))
+        self.assertEqual(answers[0]["choice"], "other")
+
+    def test_saving_leaves_the_question_open(self):
+        from nlp.NLP_Core import NLPCore
+        nlp, answers = self._nlp()
+        self.assertFalse(NLPCore._answer_arrest(nlp, "save game1"))
+        self.assertEqual(answers, [])
+        self.assertEqual(nlp._arrest_choices[0], "pay")
+
+
+class TestArrestReplyClassification(unittest.TestCase):
+    """!@brief AdHoc_Generation.py's classify_arrest_reply against a stubbed chat client."""
+
+    def _reply(self, answer):
+        return {"choices": [{"message": {"tool_calls": [{"function": {
+            "name": "classify_reply", "arguments": json.dumps({"answer": answer}),
+        }}]}}]}
+
+    def test_an_offered_answer_comes_back(self):
+        from resolution.AdHoc_Generation import classify_arrest_reply
+        calls = []
+
+        def client(*args, **kwargs):
+            calls.append((args, kwargs))
+            return self._reply("bluff")
+        self.assertEqual(classify_arrest_reply("you've got the wrong man", "Belor", "5 gold pieces", call_chat_completion=client), ("bluff", ""))
+        self.assertIn("Belor is arresting the player's character for 5 gold pieces.", calls[0][0][1][1]["content"])
+
+    def test_an_answer_not_on_offer_is_no_answer(self):
+        from resolution.AdHoc_Generation import classify_arrest_reply
+        result = classify_arrest_reply("x", choices=["pay", "resist"], call_chat_completion=lambda *a, **k: self._reply("bribe"))
+        self.assertEqual(result, (None, "invalid_answer"))
+
+
+class TestNarrationOrder(LLMTestCase):
+    """!@brief Narrations publish in the order they were queued, however fast each reply comes
+        back (LLMCore._take_publish_ticket / _publish_in_order)."""
+
+    def test_a_reply_that_comes_back_first_waits_for_the_one_queued_before_it(self):
+        first, second = self.llm_core._take_publish_ticket(), self.llm_core._take_publish_ticket()
+        published = []
+
+        def publish(ticket, text):
+            with self.llm_core._publish_in_order(ticket):
+                published.append(text)
+
+        later = threading.Thread(target=publish, args=(second, "the guard steps in"))
+        later.start()
+        later.join(timeout=0.3)
+        self.assertEqual(published, [])  # still waiting on the first
+        publish(first, "the attack lands")
+        later.join(timeout=5)
+        self.assertEqual(published, ["the attack lands", "the guard steps in"])
+
+    def test_a_direct_call_with_no_ticket_never_waits(self):
+        self.llm_core._take_publish_ticket()  # an earlier narration that never publishes
+        with self.llm_core._publish_in_order(None):
+            pass
+
+
+class TestArrestNarration(LLMTestCase):
+    """!@brief LLMCore voices arrests from the payload's facts only; fleeing is a notice."""
+
+    def setUp(self):
+        super().setUp()
+        self.notices = []
+        self.event_bus.subscribe("player_notice", self.notices.append)
+
+    def test_the_demand_carries_the_record_facts(self):
+        self.event_bus.publish("arrest_confronted", {
+            "kind": "arrest", "enforcer": "Belor Hemlock", "polity": "Varisia", "addressed_as": None,
+            "amount_text": "5 gold pieces", "charges": ["theft (Ven Vinder)"], "witnessed": True,
+        })
+        prompt = self.llm_core.context_window[-1]["content"]
+        self.assertIn("Belor Hemlock steps in to arrest you for theft (Ven Vinder). They saw it happen", prompt)
+        self.assertIn("They demand 5 gold pieces", prompt)
+
+    def test_resisting_turns_the_guard_on_you_without_deciding_the_fight(self):
+        self.event_bus.publish("arrest_resolved", {"outcome": "resisted", "how": "refused", "enforcer": "Vachedi"})
+        prompt = self.llm_core.context_window[-1]["content"]
+        self.assertIn("You refuse to submit. Vachedi turns on you", prompt)
+        self.assertIn("Don't narrate them grabbing, hitting or restraining you", prompt)
+
+    def test_the_options_come_right_after_the_demand(self):
+        replies = []
+        self.event_bus.subscribe("llm_response_ready", lambda text: replies.append(("narration", text)))
+        self.event_bus.subscribe("player_notice", lambda data: replies.append(("notice", data["message"])))
+        with patch.object(self.llm_core, "_request_completion", return_value="Belor bars the door."):
+            self.llm_core.generate_arrest_response({
+                "kind": "arrest", "enforcer": "Belor Hemlock", "amount_text": "5 gold pieces",
+                "charges": ["theft"], "notice": "Belor Hemlock wants 5 gold pieces. Reply with one of: pay.",
+            })
+            for _ in range(50):
+                if len(replies) == 2:
+                    break
+                time.sleep(0.05)
+        self.assertEqual(replies, [
+            ("narration", "Belor bars the door."),
+            ("notice", "Belor Hemlock wants 5 gold pieces. Reply with one of: pay."),
+        ])
+        self.assertIn("don't narrate them touching, grabbing or restraining you", self.llm_core.context_window[0]["content"])
+
+    def test_fleeing_is_told_out_of_character(self):
+        self.event_bus.publish("arrest_resolved", {"outcome": "fled", "enforcer": "Belor Hemlock", "polity": "Varisia"})
+        self.assertEqual(self.llm_core.context_window, [])
+        self.assertIn("Resisting arrest is now on your record in Varisia.", self.notices[0]["message"])
 
 
 class TestCrimeNarration(LLMTestCase):

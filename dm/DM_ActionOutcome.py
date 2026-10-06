@@ -132,6 +132,10 @@ class RolledOutcome:
     # An unopposed check rated "trivial" (DMCore._untargeted_difficulty) -- no dice were rolled
     # at all; it simply succeeds.
     trivial: bool = False
+    # Not an attack, named no target, and landed on a non-hostile bystander only because they
+    # were the default target -- the narrator isn't told who, so it can't turn the action on
+    # them (see DM_Core.py's _on_turn_detected).
+    incidental_target: bool = False
 
 
 @dataclass
