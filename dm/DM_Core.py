@@ -206,6 +206,8 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         # revisit or a reload. Must be set before load_scenario()/load_scenario_definition()
         # below, both of which call _instance_entities.
         self.removed_entities = set()
+        # True while load_game re-walks the scenario; _resolve_location_encounter skips its rolls.
+        self._restoring_save = False
         self.rules = {}
         self.round_number = 0
         # The block clock (see docs/downtime.md / DM_Time.py) -- a single monotonic counter of

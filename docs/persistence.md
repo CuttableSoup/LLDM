@@ -54,7 +54,9 @@ trusted directly, so `_instance_entities`' own idempotent occurrence-counting re
 identical instance names every time) *before* `load_scenario()`/`_enter_location` ever look at
 `self.location_runtime`, so their own "already cached" check finds it and reuses it. Then jumps
 to the saved `current_location_key`/`current_room_key` if they differ from the scenario's own
-`start_location`. Finally overlays each saved instance's mutable fields; a saved instance with
+`start_location`. Both re-entries run with `_restoring_save` set, which makes
+`_resolve_location_encounter` skip its `on_enter` rolls — before that, every reload could spawn and
+narrate a fresh arrival encounter (a playtest's save → load → save drifted on it). Finally overlays each saved instance's mutable fields; a saved instance with
 no post-reload match is skipped. Publishes `game_loaded` on success (not `scenario_loaded`,
 which would re-narrate an opening scene) or `game_load_failed {"slot", "reason"}` on failure,
 then re-publishes `party_status_changed`.

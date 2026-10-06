@@ -37,7 +37,9 @@ class EncounterMixin(DMCoreProtocol):
             table is falsy (ex: a brand-new location with no [[location.room]] entered before
             any room table exists) or carries no "encounter" list at all.
         """
-        if not table:
+        # A reload re-enters the saved location only to rebuild state; rolling here would spawn
+        # (and narrate) an encounter the player never had.
+        if not table or self._restoring_save:
             return
         for entry in table.get("encounter", []):
             if entry.get("trigger") == "on_enter":

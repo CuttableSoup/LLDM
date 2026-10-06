@@ -10056,6 +10056,41 @@ class TestAmbientEncounter(DMTestCase):
         self.assertEqual(self.dm_core.current_target, "fire elemental")
 
 
+class TestLoadDoesNotRerollArrivalEncounters(DMTestCase):
+    """!
+    @brief load_game re-enters the saved location through _enter_location, which also rolls
+        its "on_enter" encounters -- a reload must rebuild state only, never roll (or narrate)
+        a fresh encounter. Found by a playtest's save -> load -> save drifting when a
+        "Sandpoint Watchman" spawned on the reload. debug.toml's "town_square" carries an
+        "on_enter" table.
+    """
+    start_location = "town_square"
+
+    def test_reloading_a_save_rolls_no_on_enter_encounter(self):
+        slot_name = "test_load_no_reroll_slot"
+        self.addCleanup(shutil.rmtree, self.dm_core._save_slot_dir(slot_name), ignore_errors=True)
+        original = DM_Encounters.resolve_varied_value
+        DM_Encounters.resolve_varied_value = lambda choices: "A street performer juggles knives for scattered coin."
+        self.addCleanup(setattr, DM_Encounters, "resolve_varied_value", original)
+        encounter_events = self._capture("encounter_triggered")
+        self.dm_core.save_game(slot_name)
+
+        self.dm_core.load_game(slot_name)
+
+        self.assertEqual(encounter_events, [])
+
+    def test_entering_the_location_for_real_still_rolls_its_on_enter_encounter(self):
+        original = DM_Encounters.resolve_varied_value
+        DM_Encounters.resolve_varied_value = lambda choices: "A street performer juggles knives for scattered coin."
+        self.addCleanup(setattr, DM_Encounters, "resolve_varied_value", original)
+        encounter_events = self._capture("encounter_triggered")
+
+        self.dm_core._enter_location("town_square")
+
+        self.assertEqual(encounter_events[-1]["description"], "A street performer juggles knives for scattered coin.")
+        self.assertFalse(self.dm_core._restoring_save)
+
+
 class TestReachableEntityNames(DMTestCase):
     """!
     @brief ImprovisationMixin._reachable_entity_names (DM_Improvisation.py) -- the shared

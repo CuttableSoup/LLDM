@@ -582,14 +582,18 @@ class PersistenceMixin(DMCoreProtocol):
         else:
             self._replay_nested_instancing(data.get("location_runtime", {}))
 
-        self.load_scenario(skip_llm_generation=True)
+        self._restoring_save = True
+        try:
+            self.load_scenario(skip_llm_generation=True)
 
-        saved_location_key = data.get("current_location_key")
-        saved_room_key = data.get("current_room_key")
-        if saved_location_key and saved_location_key != self.current_location_key:
-            self._enter_location(saved_location_key, arrival_room=saved_room_key, skip_llm_generation=True)
-        elif saved_room_key and saved_room_key != self.current_room_key:
-            self.enter_room(saved_room_key, skip_llm_generation=True)
+            saved_location_key = data.get("current_location_key")
+            saved_room_key = data.get("current_room_key")
+            if saved_location_key and saved_location_key != self.current_location_key:
+                self._enter_location(saved_location_key, arrival_room=saved_room_key, skip_llm_generation=True)
+            elif saved_room_key and saved_room_key != self.current_room_key:
+                self.enter_room(saved_room_key, skip_llm_generation=True)
+        finally:
+            self._restoring_save = False
 
         saved_ad_hoc_entities = data.get("ad_hoc_entities")
         if saved_ad_hoc_entities:
