@@ -66,6 +66,12 @@ from dm.DM_Social import TALK_ATTITUDE_DRIFT_CAP, ACTION_ATTITUDE_DRIFT_CAP
 from Event_Bus import EventBus
 from gui.GUI_Core import GUICore
 from paths import PROJECT_ROOT
+from resolution.Law_Enforcement import ARREST_CHOICES, STALL_LIMIT, LawEnforcement, LawWorld
+from resolution.Combat_Actions import CombatHooks
+from tests.event_contract import EventContractError, ValidatingEventBus, consumed_keys
+from persistence.slot import (
+    FORMAT_VERSION, VERSION_KEY, FileSlotStore, MemorySlotStore, Persistable, SaveError, restore_all, snapshot_all,
+)
 from nlp.Intent_Classification import (
     ADDRESS_ARTICLES,
     ADDRESS_NON_ADDRESSEES,
@@ -120,8 +126,9 @@ from llm.LLM_Core import (
     CONTEXT_TOKEN_BUDGET,
     RESPONSE_TOKEN_RESERVE,
     LLMCore,
-    _OUTCOME_FORMATTERS,
 )
+from llm import Narration_Prompts
+from llm.Narration_Prompts import _OUTCOME_FORMATTERS, Narration, NarratorState, Notice, Skip
 import llm.LLM_Backend as LLM_Backend
 import llm.Ollama_Launcher as Ollama_Launcher
 from llm.Ollama_Launcher import ensure_ollama_running
@@ -136,6 +143,8 @@ from resolution.NPC_Generation import (
 )
 from gui.Textual_Core import TextualCore
 from textual.widgets import Button, RichLog
+from resolution.World_Context import WorldContext
+import resolution.Combat_Actions as Combat_Actions
 
 
 def _new_tk_root_with_retry(attempts=3, delay=0.5):
@@ -174,7 +183,7 @@ class TestEventBus(unittest.TestCase):
     """
 
     def test_publish_calls_every_subscriber_with_the_message(self):
-        bus = EventBus()
+        bus = ValidatingEventBus()
         received = []
         bus.subscribe("ping", received.append)
         bus.subscribe("ping", received.append)
@@ -183,7 +192,7 @@ class TestEventBus(unittest.TestCase):
 
 
     def test_a_handler_subscribing_mid_dispatch_is_not_invoked_until_the_next_publish(self):
-        bus = EventBus()
+        bus = ValidatingEventBus()
         calls = []
 
         def late_subscriber(message):
@@ -235,7 +244,7 @@ class DMTestCase(unittest.TestCase):
     setting = "Fantasy"
 
     def setUp(self):
-        self.event_bus = EventBus()
+        self.event_bus = ValidatingEventBus()
         self.dm_core = DMCore(
             self.event_bus, scenario_name=self.scenario_name, start_location=self.start_location,
             setting=self.setting,
@@ -286,7 +295,7 @@ class LLMTestCase(unittest.TestCase):
     """Shared setUp for tests that just need a fresh LLMCore with RAG disabled."""
 
     def setUp(self):
-        self.event_bus = EventBus()
+        self.event_bus = ValidatingEventBus()
         # rag_source_dir points at a real directory with no PDFs in it, so RagIndex's
         # background build returns immediately (see LLMCore.__init__'s docstring) instead of
         # every test here kicking off a real, potentially minutes-long index build against
@@ -297,7 +306,7 @@ class LLMTestCase(unittest.TestCase):
 class TestGameBoot(unittest.TestCase):
     def test_boot_and_skill_identification(self):
         # 1. Initialize Event Bus
-        event_bus = EventBus()
+        event_bus = ValidatingEventBus()
 
         # 2. Track turn_detected events
         detected_actions = []
@@ -331,7 +340,7 @@ class TestGameBoot(unittest.TestCase):
         # own embedding model, so this needs no DMCore/rules load at all -- just NLPCore itself,
         # constructed the same way every other real-model test here does rather than
         # instantiating SentenceTransformerMatcher directly.
-        nlp_core = NLPCore(EventBus())
+        nlp_core = NLPCore(ValidatingEventBus())
 
         hostile_label, hostile_score = nlp_core.matcher.classify_sentiment("I hate you and never want to see you again")
         warm_label, warm_score = nlp_core.matcher.classify_sentiment("thank you so much, you have been wonderful and I am truly grateful")
@@ -361,7 +370,7 @@ class TestGameBoot(unittest.TestCase):
         # while still reading as physically threatening -- the deliberately valence-crossed
         # case NLP_Core.py's own module comment names as proof threat isn't just a relabeled
         # copy of disposition (see docs/social-dialogue.md's "Dialogue sentiment").
-        nlp_core = NLPCore(EventBus())
+        nlp_core = NLPCore(ValidatingEventBus())
 
         admiring_but_threatening_label, _score = nlp_core.matcher.classify_threat(
             "your skill with that blade is terrifying, truly the deadliest fighter I've ever seen",
@@ -379,7 +388,7 @@ class TestGameBoot(unittest.TestCase):
     def test_familiarity_classification_reads_something_genuinely_different_from_disposition(self):
         # Same "genuinely separate axis" proof as threat above, for emotional closeness --
         # NLP_Core.py's own module comment names familiarity as the other axis validated this way.
-        nlp_core = NLPCore(EventBus())
+        nlp_core = NLPCore(ValidatingEventBus())
 
         close_label, close_score = nlp_core.matcher.classify_familiarity(
             "I've known you my whole life -- you're like family to me",
@@ -407,7 +416,7 @@ class TestNlpConfidenceThreshold(unittest.TestCase):
     # every test method in this class, not once per method.
     @classmethod
     def setUpClass(cls):
-        cls.event_bus = EventBus()
+        cls.event_bus = ValidatingEventBus()
         cls.nlp_core = NLPCore(cls.event_bus)
         cls.dm_core = DMCore(cls.event_bus)
 
@@ -618,7 +627,7 @@ class TestPlayerInputCorpus(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.event_bus = EventBus()
+        cls.event_bus = ValidatingEventBus()
         cls.nlp_core = NLPCore(cls.event_bus)
         with open(os.path.join(os.path.dirname(__file__), "player_input_corpus.toml"), "rb") as corpus_file:
             cls.corpus = tomllib.load(corpus_file)["input"]
@@ -1776,14 +1785,14 @@ class TestIntentClassification(unittest.TestCase):
 
 class TestClarificationResponse(LLMTestCase):
     def test_unmatched_input_queues_a_clarification_prompt_not_a_dice_roll(self):
-        # _queue_narration appends to context_window synchronously before spawning the
+        # _queue appends to context_window synchronously before spawning the
         # background network fetch, so this is checkable without waiting on (or mocking) LM
         # Studio -- the point here is the prompt shape, not the LLM's actual reply.
         self.event_bus.publish("action_not_understood", {"input": "hey there innkeeper", "score": 0.32})
 
         prompt = self.llm_core.context_window[-1]["content"]
         self.assertIn("hey there innkeeper", prompt)
-        # No roll data (that's _describe_outcome's shape, used by the other narration paths).
+        # No roll data (that's describe_outcome's shape, used by the other narration paths).
         self.assertNotIn("Skill used:", prompt)
         self.assertNotIn("difficulty", prompt)
 
@@ -1798,7 +1807,7 @@ class TestClarificationResponse(LLMTestCase):
         prompt = self.llm_core.context_window[-1]["content"]
         self.assertIn("without inventing", prompt)
 
-    def test_describe_outcome_includes_loot_so_the_llm_isnt_left_guessing(self):
+    def testdescribe_outcome_includes_loot_so_the_llm_isnt_left_guessing(self):
         # Without this, the LLM has no idea what was actually gained and will happily invent
         # contents that don't match the real game state (observed: it narrated a "silver key
         # and leather-bound journal" for a chest that actually just held currency).
@@ -1807,19 +1816,19 @@ class TestClarificationResponse(LLMTestCase):
             success=True, defender="chest", effects=[LootEffect(currency=20, items=[])],
             input="I pick the lock",
         )
-        description = self.llm_core._describe_outcome(result)
+        description = Narration_Prompts.describe_outcome(result)
         self.assertIn("20 coins", description)
         self.assertNotIn("currency", description)
 
-    def test_describe_outcome_uses_the_loot_effects_own_coin_text(self):
+    def testdescribe_outcome_uses_the_loot_effects_own_coin_text(self):
         result = RolledOutcome(
             entity="gladstone", skill="finesse", roll=18, difficulty=12, success=True, defender="chest",
             effects=[LootEffect(currency=1.2, items=[], currency_text="1 gold piece and 2 silver pieces")],
             input="I pick the lock",
         )
-        self.assertIn("1 gold piece and 2 silver pieces", self.llm_core._describe_outcome(result))
+        self.assertIn("1 gold piece and 2 silver pieces", Narration_Prompts.describe_outcome(result))
 
-    def test_describe_outcome_mentions_a_successful_summon(self):
+    def testdescribe_outcome_mentions_a_successful_summon(self):
         # Without this, a summoning spell's own roll outcome narrates exactly like an ordinary
         # no-damage opposed check -- nothing tells the LLM a creature actually appeared.
         result = RolledOutcome(
@@ -1827,7 +1836,7 @@ class TestClarificationResponse(LLMTestCase):
             success=True, effects=[SummonEffect(name="spectral wolf")],
             input="I summon a wolf",
         )
-        description = self.llm_core._describe_outcome(result)
+        description = Narration_Prompts.describe_outcome(result)
         self.assertIn("summons spectral wolf", description)
 
     def test_outcome_formatters_cover_every_actionoutcome_variant(self):
@@ -1836,7 +1845,7 @@ class TestClarificationResponse(LLMTestCase):
         # test instead, the same "one new variant per commit" pattern this table exists to keep
         # up with. MovementOutcome/TransferOutcome are the two deliberate exceptions -- neither
         # carries "input" at all, so neither ever reaches _OUTCOME_FORMATTERS (see
-        # _describe_outcome's own two early-return isinstance checks, ahead of the dict dispatch).
+        # describe_outcome's own two early-return isinstance checks, ahead of the dict dispatch).
         for variant in get_args(ActionOutcome):
             if variant in (MovementOutcome, TransferOutcome):
                 continue
@@ -1846,7 +1855,7 @@ class TestClarificationResponse(LLMTestCase):
 class TestFreeformDialogueNarration(LLMTestCase):
     """!
     @brief LLMCore's own side of DM_Dialogue.py's channel: generate_npc_dialogue, and the
-        presence-tagging/filtering machinery every _queue_narration/_queue_dialogue call now
+        presence-tagging/filtering machinery every _queue/_queue call now
         threads through (see _filter_present_history). Exercised directly against
         "dialogue_resolved" payloads -- no DMCore involved -- the same "prompt shape, not the
         LLM's actual reply" scope TestClarificationResponse already keeps to.
@@ -1900,12 +1909,12 @@ class TestFreeformDialogueNarration(LLMTestCase):
         ):
             with self.subTest(payload=payload):
                 self.assertNotIn("the player", self._speech_prompt(**payload))
-        system = self.llm_core._build_dialogue_system_message("the Fishmonger", "A fishmonger.", "neutral", "")
+        system = Narration_Prompts.dialogue_system_message("the Fishmonger", "A fishmonger.", "neutral", "")
         self.assertIn('never call them "the player"', system)
         self.assertNotIn("only the player", system)
 
     def test_dialogue_system_message_asks_for_speech_in_the_npcs_own_voice(self):
-        system = self.llm_core._build_dialogue_system_message(
+        system = Narration_Prompts.dialogue_system_message(
             "the Fishmonger", "A fishmonger. | Voice: gruff and clipped", "wary", "",
         )
         self.assertIn("Who the Fishmonger is: A fishmonger. | Voice: gruff and clipped", system)
@@ -1963,7 +1972,7 @@ class TestFreeformDialogueNarration(LLMTestCase):
         self.assertIn("invented gibberish", prompt)
 
     def test_language_barrier_prompt_omits_example_when_no_race_claims_the_language(self):
-        prompt = LLMCore._build_language_barrier_prompt(
+        prompt = Narration_Prompts.build_language_barrier_prompt(
             "hello", "stranger", "goblin tongue", None,
         )
         self.assertIn("goblin tongue", prompt)
@@ -1977,7 +1986,7 @@ class TestFreeformDialogueNarration(LLMTestCase):
         return response
 
     def test_dialogue_sends_the_players_actual_question_when_the_label_differs_from_the_key(self):
-        # Regression: _queue_dialogue used to filter history by whichever string phrases the
+        # Regression: _queue used to filter history by whichever string phrases the
         # prompt (data["target_label"], ex: "the Fishmonger") instead of the raw entity key
         # present_entities/_filter_present_history actually tag entries with -- a display
         # label never literally matches a raw key, so fetch_from_llm's own
@@ -2034,7 +2043,7 @@ class TestFreeformDialogueNarration(LLMTestCase):
 
     def test_untagged_entries_are_excluded_from_every_filtered_view(self):
         # A clarification/load-failed prompt (no DMCore scenario_entities to tag it with --
-        # see _queue_narration's own present_entities docstring) must never leak into a
+        # see _queue's own present_entities docstring) must never leak into a
         # specific NPC's own witnessed history just because it's untagged.
         self.llm_core.context_window = [{"role": "user", "content": "no one understood that"}]
 
@@ -2047,7 +2056,7 @@ class TestFreeformDialogueNarration(LLMTestCase):
 
 class TestMultiActionNarration(LLMTestCase):
     """!
-    @brief _describe_player_actions -- the West End Games multi-action penalty's own narration
+    @brief describe_player_actions -- the West End Games multi-action penalty's own narration
         side (see DM_Core.py's own _on_action_detected docstring). A single-action turn
         describes exactly like before this mechanic existed; a multi-action turn also names
         the shared penalty so the model's narration reads as one character splitting their
@@ -2056,7 +2065,7 @@ class TestMultiActionNarration(LLMTestCase):
 
     def test_single_action_has_no_penalty_line(self):
         result = {"actions": [RolledOutcome(entity="gladstone", skill="blades", roll=15, difficulty=10, success=True)]}
-        description = self.llm_core._describe_player_actions(result)
+        description = Narration_Prompts.describe_player_actions(result)
         self.assertNotIn("splitting their attention", description)
         self.assertIn("Skill used: blades", description)
 
@@ -2065,7 +2074,7 @@ class TestMultiActionNarration(LLMTestCase):
             RolledOutcome(entity="gladstone", skill="blades", roll=12, difficulty=10, success=True),
             RolledOutcome(entity="gladstone", skill="finesse", roll=9, difficulty=12, success=False),
         ]}
-        description = self.llm_core._describe_player_actions(result)
+        description = Narration_Prompts.describe_player_actions(result)
         self.assertIn("2 actions this turn", description)
         self.assertIn("-1D", description)
         self.assertIn("Skill used: blades", description)
@@ -2075,7 +2084,7 @@ class TestMultiActionNarration(LLMTestCase):
         # Found by playtest: a behavior-driven turn has no "input", so its bare "Skill used:
         # charisma" line followed the player's own and was narrated as the player's.
         prompts = []
-        self.llm_core._queue_narration = lambda prompt, **_kwargs: prompts.append(prompt)
+        self.llm_core._queue = lambda request: prompts.append(request.prompt)
         self.llm_core.generate_round_response({
             "round": 2,
             "actions": [RolledOutcome(entity="gladstone", skill="brawling", roll=9, difficulty=0, success=True)],
@@ -2115,7 +2124,7 @@ class TestMultiActionNarration(LLMTestCase):
             RolledOutcome(entity="gladstone", skill="finesse", roll=9, difficulty=12, success=False),
             RolledOutcome(entity="gladstone", skill="charisma", roll=9, difficulty=10, success=False),
         ]}
-        description = self.llm_core._describe_player_actions(result)
+        description = Narration_Prompts.describe_player_actions(result)
         self.assertIn("3 actions this turn", description)
         self.assertIn("-2D", description)
 
@@ -2133,10 +2142,10 @@ class TestOpposedResolution(DMTestCase):
             },
         }
 
-        chosen = self.dm_core.get_opposing_skill("blades", "test_defender")
+        chosen = Combat_Resolution.get_opposing_skill(self.dm_core.world, "blades", "test_defender")
         self.assertEqual(chosen, "brawling")
 
-        result = self.dm_core.resolve_opposed_action("gladstone", "blades", "test_defender")
+        result = Combat_Resolution.resolve_opposed_action(self.dm_core.world, "gladstone", "blades", "test_defender")
         self.assertEqual(result["opposing_skill"], "brawling")
         self.assertEqual(result["defender"], "test_defender")
         # 5 dice + 0 pips can only roll between 5 and 30
@@ -2155,36 +2164,36 @@ class TestOpposedResolution(DMTestCase):
             },
         }
 
-        chosen = self.dm_core.get_opposing_skill("blades", "test_defender")
+        chosen = Combat_Resolution.get_opposing_skill(self.dm_core.world, "blades", "test_defender")
         self.assertEqual(chosen, "dodge")
 
 
 class TestDamageCalculation(DMTestCase):
     def test_bonus_resolves_flat_number(self):
-        self.assertEqual(self.dm_core.resolve_bonus("gladstone", 5), 5)
+        self.assertEqual(Combat_Resolution.resolve_bonus(self.dm_core.world, "gladstone", 5), 5)
 
 
     @patch("random.randint", return_value=4)
     def test_damage_value_rolls_dice_and_adds_bonus(self, mock_randint):
         # 2 dice @ 4 each + 1 pip + strength_damage bonus (1) = 10
-        total = self.dm_core.resolve_damage_value(
+        total = Combat_Resolution.resolve_damage_value(self.dm_core.world, 
             "gladstone", {"dice": 2, "pips": 1, "bonus": "user.strength_damage"}
         )
         self.assertEqual(total, 10)
 
 
     def test_apply_damage_subtracts_and_floors_at_zero(self):
-        self.dm_core.apply_damage("gladstone", 10)
-        self.assertEqual(self.dm_core.get_current_hp("gladstone"), 26)
-        self.dm_core.apply_damage("gladstone", 1000)
-        self.assertEqual(self.dm_core.get_current_hp("gladstone"), 0)
+        Combat_Resolution.apply_damage(self.dm_core.world, "gladstone", 10)
+        self.assertEqual(Combat_Resolution.get_current_hp(self.dm_core.world, "gladstone"), 26)
+        Combat_Resolution.apply_damage(self.dm_core.world, "gladstone", 1000)
+        self.assertEqual(Combat_Resolution.get_current_hp(self.dm_core.world, "gladstone"), 0)
 
 
     @patch("random.randint", return_value=3)
     def test_calculate_damage_reduced_by_matching_armor(self, mock_randint):
         # Punch: 0 dice + strength_damage bonus (1), bludgeoning - chain mail resists bludgeoning (2 dice @ 3 each = 6).
         punch = {"damage_value": {"dice": 0, "pips": 0, "bonus": "user.strength_damage"}, "damage_tags": ["bludgeoning"]}
-        result = self.dm_core.calculate_damage("wolf", "gladstone", punch)
+        result = Combat_Actions.calculate_damage(self.dm_core.world, "wolf", "gladstone", punch)
 
         self.assertEqual(result["raw_damage"], 1)
         self.assertEqual(result["reduction"], 6)
@@ -2192,23 +2201,23 @@ class TestDamageCalculation(DMTestCase):
         self.assertEqual(result["remaining_hp"], 36)
 
     def test_fire_elemental_is_immune_to_fire_tag(self):
-        self.assertTrue(self.dm_core.is_immune_to("fire elemental", ["fire"]))
-        self.assertFalse(self.dm_core.is_immune_to("fire elemental", ["slashing"]))
+        self.assertTrue(Combat_Resolution.is_immune_to(self.dm_core.world, "fire elemental", ["fire"]))
+        self.assertFalse(Combat_Resolution.is_immune_to(self.dm_core.world, "fire elemental", ["slashing"]))
         # Immunity is a hard tag match, not a rolled amount -- an entity with no
         # immunity_tags at all (gladstone) is never immune to anything.
-        self.assertFalse(self.dm_core.is_immune_to("gladstone", ["fire"]))
+        self.assertFalse(Combat_Resolution.is_immune_to(self.dm_core.world, "gladstone", ["fire"]))
 
     def test_immunity_tags_any_is_a_wildcard_matching_every_damage_tag(self):
         # "any" (is_immune_to, Combat_Resolution.py) is immune to every damage_tags value,
         # present or future -- no need to enumerate each physical/energy type by hand, or
         # revisit this entity's own list when a new damage_tags value is invented elsewhere.
         self.dm_core.entities["target_dummy"] = {"name": "target_dummy", "immunity_tags": ["any"]}
-        self.assertTrue(self.dm_core.is_immune_to("target_dummy", ["fire"]))
-        self.assertTrue(self.dm_core.is_immune_to("target_dummy", ["slashing"]))
-        self.assertTrue(self.dm_core.is_immune_to("target_dummy", ["a damage type nobody has invented yet"]))
+        self.assertTrue(Combat_Resolution.is_immune_to(self.dm_core.world, "target_dummy", ["fire"]))
+        self.assertTrue(Combat_Resolution.is_immune_to(self.dm_core.world, "target_dummy", ["slashing"]))
+        self.assertTrue(Combat_Resolution.is_immune_to(self.dm_core.world, "target_dummy", ["a damage type nobody has invented yet"]))
         # Also immune to a tagless attack -- an ordinary enumerated immunity_tags list could
         # never match an empty damage_tags, since there's nothing in it to compare against.
-        self.assertTrue(self.dm_core.is_immune_to("target_dummy", []))
+        self.assertTrue(Combat_Resolution.is_immune_to(self.dm_core.world, "target_dummy", []))
 
     def test_damage_tags_any_is_unpreventable_except_by_immunity_tags_any(self):
         # damage_tags = ["any"] needs no special-casing of its own: no real resistance_tags/
@@ -2219,9 +2228,9 @@ class TestDamageCalculation(DMTestCase):
             "name": "armored_dummy", "resistance_value": {"dice": 5, "pips": 0},
             "resistance_tags": ["fire", "slashing", "piercing", "bludgeoning"],
         }
-        self.assertEqual(self.dm_core.get_damage_reduction("armored_dummy", ["any"]), 0)
+        self.assertEqual(Combat_Resolution.get_damage_reduction(self.dm_core.world, "armored_dummy", ["any"]), 0)
         self.dm_core.entities["immune_dummy"] = {"name": "immune_dummy", "immunity_tags": ["any"]}
-        self.assertTrue(self.dm_core.is_immune_to("immune_dummy", ["any"]))
+        self.assertTrue(Combat_Resolution.is_immune_to(self.dm_core.world, "immune_dummy", ["any"]))
 
 
     @patch("random.randint", return_value=4)
@@ -2230,7 +2239,7 @@ class TestDamageCalculation(DMTestCase):
         # negated -- immunity is an absolute block that wins outright, not just a bigger number
         # in the same tug-of-war as resistance/vulnerability.
         hybrid_attack = {"damage_value": {"dice": 4, "pips": 0, "bonus": 0}, "damage_tags": ["fire", "water"]}
-        result = self.dm_core.calculate_damage("gladstone", "fire elemental", hybrid_attack)
+        result = Combat_Actions.calculate_damage(self.dm_core.world, "gladstone", "fire elemental", hybrid_attack)
 
         self.assertEqual(result["vulnerability_bonus"], 0)
         self.assertEqual(result["net_damage"], 0)
@@ -2243,8 +2252,8 @@ class TestDamageCalculation(DMTestCase):
         # reduction entirely, while an otherwise-identical mundane hit still gets reduced.
         self.dm_core.entities["fire elemental"]["resistance_bypass_tags"] = ["magic"]
 
-        self.assertEqual(self.dm_core.get_damage_reduction("fire elemental", ["slashing"]), 6)
-        self.assertEqual(self.dm_core.get_damage_reduction("fire elemental", ["slashing", "magic"]), 0)
+        self.assertEqual(Combat_Resolution.get_damage_reduction(self.dm_core.world, "fire elemental", ["slashing"]), 6)
+        self.assertEqual(Combat_Resolution.get_damage_reduction(self.dm_core.world, "fire elemental", ["slashing", "magic"]), 0)
 
 
     @patch("random.randint", return_value=3)
@@ -2254,8 +2263,8 @@ class TestDamageCalculation(DMTestCase):
         # get_damage_reduction's own resistance_bypass_tags branch above.
         self.dm_core.entities["chain mail"]["armor_bypass_tags"] = ["magic"]
 
-        self.assertEqual(self.dm_core.get_damage_reduction("gladstone", ["bludgeoning"]), 6)
-        self.assertEqual(self.dm_core.get_damage_reduction("gladstone", ["bludgeoning", "magic"]), 0)
+        self.assertEqual(Combat_Resolution.get_damage_reduction(self.dm_core.world, "gladstone", ["bludgeoning"]), 6)
+        self.assertEqual(Combat_Resolution.get_damage_reduction(self.dm_core.world, "gladstone", ["bludgeoning", "magic"]), 0)
 
 
     @patch("random.randint", return_value=3)
@@ -2263,8 +2272,8 @@ class TestDamageCalculation(DMTestCase):
         # creatures.toml's "wraith" is the shipped resistance_bypass_tags example (DR/silver).
         # An ordinary slashing hit is reduced (3D @ 3 each = 9); the same hit tagged "silver"
         # bypasses that reduction entirely, even though "slashing" still matches resistance_tags.
-        self.assertEqual(self.dm_core.get_damage_reduction("wraith", ["slashing"]), 9)
-        self.assertEqual(self.dm_core.get_damage_reduction("wraith", ["slashing", "silver"]), 0)
+        self.assertEqual(Combat_Resolution.get_damage_reduction(self.dm_core.world, "wraith", ["slashing"]), 9)
+        self.assertEqual(Combat_Resolution.get_damage_reduction(self.dm_core.world, "wraith", ["slashing", "silver"]), 0)
 
 
     def test_landing_a_hit_nudges_the_defenders_combat_attitude(self):
@@ -2320,7 +2329,7 @@ class TestDamageCalculation(DMTestCase):
 
 class TestResolveTargets(DMTestCase):
     """!
-    @brief DM_Combat.py's resolve_targets -- the {number, aoe, side} multi-target/area-of-
+    @brief Combat_Actions.py's resolve_targets -- the {number, aoe, side} multi-target/area-of-
         effect mechanic (entity_schema.toml's "targets" field). Arena's default layout puts
         gladstone/thane/wolf/wolf_2 all at band 1 (wolf_2 -- see DM_Rules.py's own
         occurrence-count suffixing), so aoe-radius tests mutate "band" directly.
@@ -2329,38 +2338,38 @@ class TestResolveTargets(DMTestCase):
     def test_no_targets_table_is_just_target_name(self):
         # Every ordinary weapon/most spells -- unchanged single-target behavior.
         ability = {"damage_value": {"dice": 1, "pips": 0, "bonus": 0}, "damage_tags": []}
-        self.assertEqual(self.dm_core.resolve_targets("gladstone", "wolf", ability), ["wolf"])
+        self.assertEqual(Combat_Actions.resolve_targets(self.dm_core.world, "gladstone", "wolf", ability), ["wolf"])
 
     def test_untargeted_ability_resolves_to_a_single_none(self):
         # An ability with no current_target at all still runs its own on_pass/on_fail exactly
         # once, against no one -- resolve_targets never widens a None target.
         ability = {"targets": {"number": 3, "aoe": 5, "side": "all"}}
-        self.assertEqual(self.dm_core.resolve_targets("gladstone", None, ability), [None])
+        self.assertEqual(Combat_Actions.resolve_targets(self.dm_core.world, "gladstone", None, ability), [None])
 
     def test_side_defaults_to_enemies_and_target_is_always_first(self):
         # cleave's own shape: {number = 3, aoe = 0} -- every other hostile sharing wolf's own
         # band (wolf_2), but not thane (an ally).
         ability = {"targets": {"number": 3, "aoe": 0}}
-        result = self.dm_core.resolve_targets("gladstone", "wolf", ability)
+        result = Combat_Actions.resolve_targets(self.dm_core.world, "gladstone", "wolf", ability)
         self.assertEqual(result[0], "wolf")
         self.assertIn("wolf_2", result)
         self.assertNotIn("thane", result)
 
     def test_number_caps_the_combined_list(self):
         ability = {"targets": {"number": 1, "aoe": 0}}
-        self.assertEqual(self.dm_core.resolve_targets("gladstone", "wolf", ability), ["wolf"])
+        self.assertEqual(Combat_Actions.resolve_targets(self.dm_core.world, "gladstone", "wolf", ability), ["wolf"])
 
     def test_side_all_ignores_hostility(self):
         # fireball's own shape -- an indiscriminate blast catches an ally (and even the caster
         # themselves, arena's whole roster sharing band 1) standing in it too.
         ability = {"targets": {"number": 0, "aoe": 0, "side": "all"}}
-        result = self.dm_core.resolve_targets("gladstone", "wolf", ability)
+        result = Combat_Actions.resolve_targets(self.dm_core.world, "gladstone", "wolf", ability)
         self.assertCountEqual(result, ["wolf", "wolf_2", "thane", "gladstone"])
 
     def test_side_allies_excludes_hostiles(self):
         # A Pathfinder-style channeling that only touches allies.
         ability = {"targets": {"number": 0, "aoe": 0, "side": "allies"}}
-        result = self.dm_core.resolve_targets("gladstone", "thane", ability)
+        result = Combat_Actions.resolve_targets(self.dm_core.world, "gladstone", "thane", ability)
         self.assertIn("thane", result)
         self.assertNotIn("wolf", result)
         self.assertNotIn("wolf_2", result)
@@ -2368,19 +2377,19 @@ class TestResolveTargets(DMTestCase):
     def test_aoe_radius_excludes_entities_out_of_band_range(self):
         self.dm_core.entities["wolf_2"]["band"] = 4
         ability = {"targets": {"number": 0, "aoe": 1, "side": "all"}}
-        result = self.dm_core.resolve_targets("gladstone", "wolf", ability)
+        result = Combat_Actions.resolve_targets(self.dm_core.world, "gladstone", "wolf", ability)
         self.assertNotIn("wolf_2", result)
 
     def test_aoe_radius_includes_entities_within_range(self):
         self.dm_core.entities["wolf_2"]["band"] = 2
         ability = {"targets": {"number": 0, "aoe": 1, "side": "all"}}
-        result = self.dm_core.resolve_targets("gladstone", "wolf", ability)
+        result = Combat_Actions.resolve_targets(self.dm_core.world, "gladstone", "wolf", ability)
         self.assertIn("wolf_2", result)
 
     def test_dead_entities_are_never_included(self):
         self.dm_core.entities["wolf_2"]["hp"] = 0
         ability = {"targets": {"number": 0, "aoe": 0, "side": "all"}}
-        result = self.dm_core.resolve_targets("gladstone", "wolf", ability)
+        result = Combat_Actions.resolve_targets(self.dm_core.world, "gladstone", "wolf", ability)
         self.assertNotIn("wolf_2", result)
 
     @patch("random.randint", return_value=3)
@@ -2402,11 +2411,11 @@ class TestResolveTargets(DMTestCase):
         # actually hit "wolf", regardless of aoe/number, or spill onto thane despite sharing
         # gladstone's own band.
         ability = {"targets": {"number": 5, "aoe": 5, "side": "self"}}
-        self.assertEqual(self.dm_core.resolve_targets("gladstone", "wolf", ability), ["gladstone"])
+        self.assertEqual(Combat_Actions.resolve_targets(self.dm_core.world, "gladstone", "wolf", ability), ["gladstone"])
 
     def test_side_self_needs_no_target_at_all(self):
         ability = {"targets": {"side": "self"}}
-        self.assertEqual(self.dm_core.resolve_targets("gladstone", None, ability), ["gladstone"])
+        self.assertEqual(Combat_Actions.resolve_targets(self.dm_core.world, "gladstone", None, ability), ["gladstone"])
 
     @patch("random.randint", return_value=3)
     def test_apply_damage_if_hit_applies_a_self_only_ability_with_no_target(self, mock_randint):
@@ -2570,8 +2579,8 @@ class TestActionDrivenAttitudeDrift(DMTestCase):
         # A dead (or never-conscious) entity isn't aware of a theft, a gift, or anything else --
         # same reasoning that makes a killing blow's own "combat_hit" nudge a no-op too, since
         # the target's HP is already 0 by the time _apply_damage_if_hit gets around to it.
-        self.dm_core.apply_damage("innkeeper", 9999)
-        self.assertEqual(self.dm_core.get_current_hp("innkeeper"), 0)
+        Combat_Resolution.apply_damage(self.dm_core.world, "innkeeper", 9999)
+        self.assertEqual(Combat_Resolution.get_current_hp(self.dm_core.world, "innkeeper"), 0)
 
         self.dm_core.nudge_attitude_from_event("innkeeper", self.dm_core.player_name, "favor", 1.0)
 
@@ -2588,15 +2597,15 @@ class TestMultipleActions(DMTestCase):
 
     def test_resolve_action_dice_penalty_reduces_the_pool_not_the_pips(self):
         with patch("random.randint", return_value=3):
-            full = self.dm_core.resolve_action("gladstone", "blades")  # 5D+0
-            penalized = self.dm_core.resolve_action("gladstone", "blades", dice_penalty=2)  # 3D+0
+            full = Combat_Resolution.resolve_action(self.dm_core.world, "gladstone", "blades")  # 5D+0
+            penalized = Combat_Resolution.resolve_action(self.dm_core.world, "gladstone", "blades", dice_penalty=2)  # 3D+0
 
         self.assertEqual(full["roll"], 15)
         self.assertEqual(penalized["roll"], 9)
 
     def test_resolve_action_dice_penalty_floors_at_zero_dice(self):
         with patch("random.randint", return_value=3):
-            result = self.dm_core.resolve_action("gladstone", "charisma", dice_penalty=99)  # 2D+0
+            result = Combat_Resolution.resolve_action(self.dm_core.world, "gladstone", "charisma", dice_penalty=99)  # 2D+0
 
         self.assertEqual(result["roll"], 0)
 
@@ -2605,8 +2614,8 @@ class TestMultipleActions(DMTestCase):
             "name": "test_defender", "skills": {"dodge": {"dice": 6, "pips": 0}},
         }
         with patch("random.randint", return_value=3):
-            unpenalized = self.dm_core.resolve_opposed_action("gladstone", "blades", "test_defender")
-            penalized = self.dm_core.resolve_opposed_action(
+            unpenalized = Combat_Resolution.resolve_opposed_action(self.dm_core.world, "gladstone", "blades", "test_defender")
+            penalized = Combat_Resolution.resolve_opposed_action(self.dm_core.world, 
                 "gladstone", "blades", "test_defender", dice_penalty=2,
             )
 
@@ -2763,13 +2772,13 @@ class TestCombatLoop(DMTestCase):
 
     def test_find_attack_ability_prefers_equipped_weapon(self):
         # Gladstone has a longsword equipped in rhand, which uses the "blades" skill.
-        ability = self.dm_core.find_attack_ability("gladstone", "blades")
+        ability = Combat_Actions.find_attack_ability(self.dm_core.world, "gladstone", "blades")
         assert ability is not None
         self.assertEqual(ability["name"], "longsword")
 
     def test_find_attack_ability_falls_back_to_innate_ability(self):
         # No equipped weapon uses "brawling", so the innate "punch" ability should be found instead.
-        ability = self.dm_core.find_attack_ability("gladstone", "brawling")
+        ability = Combat_Actions.find_attack_ability(self.dm_core.world, "gladstone", "brawling")
         assert ability is not None
         self.assertEqual(ability["name"], "punch")
 
@@ -2778,7 +2787,7 @@ class TestCombatLoop(DMTestCase):
         # cleave's skill is ["blades", "axes"]; gladstone has "blades" (5 dice) and no "axes"
         # entry at all, so "blades" must be the one selected.
         cleave = self.dm_core.entities["cleave"]
-        self.assertEqual(self.dm_core.select_ability_skill("gladstone", cleave), "blades")
+        self.assertEqual(Combat_Actions.select_ability_skill(self.dm_core.world, "gladstone", cleave), "blades")
 
 
     def test_missed_attack_does_not_apply_damage(self):
@@ -2791,7 +2800,7 @@ class TestCombatLoop(DMTestCase):
         self.assertFalse(action.success)
         self.assertFalse(any(isinstance(effect, DamageEffect) for effect in action.effects))
         self.assertEqual(result["round"], 1)
-        self.assertEqual(self.dm_core.get_current_hp("wolf"), 16)
+        self.assertEqual(Combat_Resolution.get_current_hp(self.dm_core.world, "wolf"), 16)
 
     def test_successful_attack_applies_damage_to_the_target(self):
         # Give the player an opponent with no matching opposing skill, so the attack auto-succeeds (difficulty 0).
@@ -2810,7 +2819,7 @@ class TestCombatLoop(DMTestCase):
         self.assertEqual(damage.defender, "practice_dummy")
         self.assertGreater(damage.net_damage, 0)
         self.assertEqual(
-            self.dm_core.get_current_hp("practice_dummy"),
+            Combat_Resolution.get_current_hp(self.dm_core.world, "practice_dummy"),
             20 - damage.net_damage,
         )
 
@@ -2825,8 +2834,8 @@ class TestMovementAndRange(DMTestCase):
         self.dm_core.entities["gladstone"]["band"] = 2
         self.dm_core.entities["wolf"]["band"] = 4
         self.dm_core.entities["wolf_2"]["band"] = 1
-        self.assertEqual(self.dm_core.get_distance_between("gladstone", "wolf"), 2)
-        self.assertEqual(self.dm_core.get_distance_between("wolf", "wolf_2"), 3)
+        self.assertEqual(Combat_Resolution.get_distance_between(self.dm_core.world, "gladstone", "wolf"), 2)
+        self.assertEqual(Combat_Resolution.get_distance_between(self.dm_core.world, "wolf", "wolf_2"), 3)
 
     # --- move_entity: floor, and enclosed-vs-open ceiling ----------------------------------
 
@@ -2836,7 +2845,7 @@ class TestMovementAndRange(DMTestCase):
 
 
     def test_move_entity_is_unbounded_when_not_enclosed(self):
-        field = DMCore(EventBus(), scenario_name="debug", start_location="field_grounds")  # bands=6, enclosed=false
+        field = DMCore(ValidatingEventBus(), scenario_name="debug", start_location="field_grounds")  # bands=6, enclosed=false
         field.entities["wolf"]["band"] = 6
         self.assertEqual(field.move_entity("wolf", 20), 26)  # no ceiling at all -- can flee
 
@@ -2849,7 +2858,7 @@ class TestMovementAndRange(DMTestCase):
 
         self.dm_core.advance_or_retreat("advance")
 
-        self.assertEqual(self.dm_core.get_band("gladstone"), 2)  # moved one band toward wolf
+        self.assertEqual(Combat_Resolution.get_band(self.dm_core.world, "gladstone"), 2)  # moved one band toward wolf
 
     # --- is_in_range -------------------------------------------------------------------
 
@@ -2869,7 +2878,7 @@ class TestMovementAndRange(DMTestCase):
             with self.subTest(item=item_name, band=band):
                 ability = self.dm_core.entities[item_name]
                 self.dm_core.entities["wolf"]["band"] = band
-                self.assertEqual(self.dm_core.is_in_range("gladstone", "wolf", ability), expected)
+                self.assertEqual(Combat_Actions.is_in_range(self.dm_core.world, "gladstone", "wolf", ability), expected)
 
     # --- integration through _on_action_detected / resolve_behavior_action ---------------
 
@@ -2888,17 +2897,17 @@ class TestMovementAndRange(DMTestCase):
         # maneuvers.toml's "charm" is language_dependent = true, "intimidate" isn't.
         charm = self.dm_core.entities["charm"]
         intimidate = self.dm_core.entities["intimidate"]
-        self.assertTrue(self.dm_core._ability_requires_language("charisma", charm))
-        self.assertFalse(self.dm_core._ability_requires_language("intimidation", intimidate))
+        self.assertTrue(Combat_Actions._ability_requires_language(self.dm_core.world, "charisma", charm))
+        self.assertFalse(Combat_Actions._ability_requires_language(self.dm_core.world, "intimidation", intimidate))
 
     def test_ability_requires_language_falls_back_to_the_skills_own_abilities_list(self):
         # A bare "charisma" use (no named ability -- ex: "persuade the guard") still finds
         # charm's own flag via skills.toml's charisma -> ["charm"], the same skill-declared
         # universal-ability list find_attack_ability deliberately never scans itself.
-        self.assertTrue(self.dm_core._ability_requires_language("charisma", None))
-        self.assertFalse(self.dm_core._ability_requires_language("intimidation", None))
+        self.assertTrue(Combat_Actions._ability_requires_language(self.dm_core.world, "charisma", None))
+        self.assertFalse(Combat_Actions._ability_requires_language(self.dm_core.world, "intimidation", None))
         # An unrelated skill with no such abilities list at all is simply False, not an error.
-        self.assertFalse(self.dm_core._ability_requires_language("blades", None))
+        self.assertFalse(Combat_Actions._ability_requires_language(self.dm_core.world, "blades", None))
 
     def test_language_gated_ability_against_a_no_shared_language_target_is_denied_without_a_roll(self):
         self.dm_core.entities["wolf"]["band"] = 1  # charm's own range defaults to 0 (melee)
@@ -2930,27 +2939,27 @@ class TestMediumAccess(DMTestCase):
 
     def test_a_ground_defender_is_always_reachable(self):
         longsword = self.dm_core.entities["longsword"]
-        self.assertTrue(self.dm_core.has_medium_access("gladstone", "wolf", longsword))
+        self.assertTrue(Combat_Actions.has_medium_access(self.dm_core.world, "gladstone", "wolf", longsword))
 
     def test_melee_cannot_reach_a_different_medium_defender(self):
         longsword = self.dm_core.entities["longsword"]
         self.dm_core.entities["wolf"]["medium"] = "air"
-        self.assertFalse(self.dm_core.has_medium_access("gladstone", "wolf", longsword))
+        self.assertFalse(Combat_Actions.has_medium_access(self.dm_core.world, "gladstone", "wolf", longsword))
 
     def test_matching_medium_attacker_reaches_the_defender(self):
         longsword = self.dm_core.entities["longsword"]
         self.dm_core.entities["wolf"]["medium"] = "air"
         self.dm_core.entities["gladstone"]["medium"] = "air"
-        self.assertTrue(self.dm_core.has_medium_access("gladstone", "wolf", longsword))
+        self.assertTrue(Combat_Actions.has_medium_access(self.dm_core.world, "gladstone", "wolf", longsword))
 
     def test_a_ranged_ability_reaches_any_medium_regardless(self):
         fireball = self.dm_core.entities["fireball"]
         self.dm_core.entities["wolf"]["medium"] = "air"
-        self.assertTrue(self.dm_core.has_medium_access("gladstone", "wolf", fireball))
+        self.assertTrue(Combat_Actions.has_medium_access(self.dm_core.world, "gladstone", "wolf", fireball))
 
     def test_no_ability_at_all_always_reaches(self):
         self.dm_core.entities["wolf"]["medium"] = "air"
-        self.assertTrue(self.dm_core.has_medium_access("gladstone", "wolf", None))
+        self.assertTrue(Combat_Actions.has_medium_access(self.dm_core.world, "gladstone", "wolf", None))
 
     def test_player_melee_attack_on_an_airborne_target_is_denied_without_a_roll(self):
         self.dm_core.entities["wolf"]["band"] = 1  # in band range -- only medium blocks it
@@ -2977,7 +2986,7 @@ class TestMediumAccess(DMTestCase):
         # fallback (see TestMovementAndRange), but a medium mismatch can never be fixed by
         # closing band distance, so the entity simply doesn't act instead.
         self.dm_core.entities["gladstone"]["medium"] = "air"
-        self.assertIsNone(self.dm_core.resolve_behavior_action("wolf", "gladstone"))
+        self.assertIsNone(Combat_Actions.resolve_behavior_action(self.dm_core.world, "wolf", "gladstone"))
 
 
 class TestTeleport(DMTestCase):
@@ -2995,7 +3004,7 @@ class TestTeleport(DMTestCase):
 
         self.dm_core._apply_teleport_if_hit(result, ability)
 
-        self.assertEqual(self.dm_core.get_band("gladstone"), 3)
+        self.assertEqual(Combat_Resolution.get_band(self.dm_core.world, "gladstone"), 3)
         effects = [e for e in result.effects if isinstance(e, TeleportEffect)]
         self.assertEqual(len(effects), 1)
         self.assertEqual(effects[0].band, 3)
@@ -3007,7 +3016,7 @@ class TestTeleport(DMTestCase):
 
         self.dm_core._apply_teleport_if_hit(result, ability)
 
-        self.assertEqual(self.dm_core.get_band("gladstone"), 4)  # arena_grounds' own ceiling
+        self.assertEqual(Combat_Resolution.get_band(self.dm_core.world, "gladstone"), 4)  # arena_grounds' own ceiling
 
     def test_teleport_to_location_moves_the_player_to_a_different_location(self):
         ability = {"name": "teleport", "teleport_to_location": {"location": "crypt"}}
@@ -3027,7 +3036,7 @@ class TestTeleport(DMTestCase):
 
         self.dm_core._apply_teleport_if_hit(result, ability)
 
-        self.assertEqual(self.dm_core.get_band("gladstone"), 1)  # unchanged
+        self.assertEqual(Combat_Resolution.get_band(self.dm_core.world, "gladstone"), 1)  # unchanged
         self.assertEqual(result.effects, [])
 
     def test_no_effect_with_no_named_ability(self):
@@ -3047,7 +3056,7 @@ class TestTeleport(DMTestCase):
         self.dm_core._finish_rolled_outcome(result, "arcane", dimension_door, ability, None, via_test)
 
         self.assertTrue(result.success)
-        self.assertEqual(self.dm_core.get_band("gladstone"), 3)
+        self.assertEqual(Combat_Resolution.get_band(self.dm_core.world, "gladstone"), 3)
         self.assertTrue(any(isinstance(e, TeleportEffect) for e in result.effects))
 
 
@@ -3082,7 +3091,7 @@ class TestMount(DMTestCase):
             "intent": "mount", "item_name": None, "input": "i mount the horse",
         })
 
-        self.assertEqual(self.dm_core.get_band("gladstone"), 3)
+        self.assertEqual(Combat_Resolution.get_band(self.dm_core.world, "gladstone"), 3)
 
     def test_mount_denied_when_no_present_entity_is_named(self):
         self.dm_core._on_item_interaction_detected({
@@ -3094,7 +3103,7 @@ class TestMount(DMTestCase):
 
     def test_mount_denied_against_a_downed_target(self):
         self._add_horse()
-        self.dm_core.apply_damage("horse", 999)
+        Combat_Resolution.apply_damage(self.dm_core.world, "horse", 999)
 
         self.dm_core._on_item_interaction_detected({
             "intent": "mount", "item_name": None, "input": "i mount the horse",
@@ -3143,7 +3152,7 @@ class TestMount(DMTestCase):
         # by any means, just unwinds the relationship, no bespoke penalty or lingering block).
         self._add_horse()
         self.dm_core.entities["gladstone"]["mount"] = "horse"
-        self.dm_core.apply_damage("horse", 999)
+        Combat_Resolution.apply_damage(self.dm_core.world, "horse", 999)
         [name] = self.dm_core._instance_entities([{"name": "horse", "band": 1}])
         self.dm_core.scenario_entities.append(name)
 
@@ -3199,8 +3208,8 @@ class TestMount(DMTestCase):
 
         self.dm_core.advance_or_retreat("advance")
 
-        self.assertEqual(self.dm_core.get_band("gladstone"), 2)
-        self.assertEqual(self.dm_core.get_band("horse"), 2)  # dragged along, no separate check
+        self.assertEqual(Combat_Resolution.get_band(self.dm_core.world, "gladstone"), 2)
+        self.assertEqual(Combat_Resolution.get_band(self.dm_core.world, "horse"), 2)  # dragged along, no separate check
 
     def test_a_mounts_own_retreat_behavior_carries_its_rider_along(self):
         # The reverse direction from advance_or_retreat: the horse moves under its own
@@ -3213,8 +3222,8 @@ class TestMount(DMTestCase):
 
         self.dm_core.move_toward_or_away("horse", "wolf", "retreat")
 
-        self.assertEqual(self.dm_core.get_band("horse"), 3)
-        self.assertEqual(self.dm_core.get_band("gladstone"), 3)
+        self.assertEqual(Combat_Resolution.get_band(self.dm_core.world, "horse"), 3)
+        self.assertEqual(Combat_Resolution.get_band(self.dm_core.world, "gladstone"), 3)
 
     def test_mount_round_trips_through_save_and_load(self):
         slot_name = "test_mount_round_trip_slot"
@@ -3242,7 +3251,7 @@ class TestMount(DMTestCase):
         result = self.resolved[-1]
         self.assertFalse(result["found"])
         self.assertEqual(result["reason"], "mount_overloaded")
-        self.assertEqual(self.dm_core.get_band("gladstone"), 1)  # never moved
+        self.assertEqual(Combat_Resolution.get_band(self.dm_core.world, "gladstone"), 1)  # never moved
 
     def test_advance_is_allowed_again_once_the_overload_clears(self):
         self._add_horse()
@@ -3258,7 +3267,7 @@ class TestMount(DMTestCase):
 
         result = self.resolved[-1]
         self.assertTrue(result["found"])
-        self.assertEqual(self.dm_core.get_band("gladstone"), 2)
+        self.assertEqual(Combat_Resolution.get_band(self.dm_core.world, "gladstone"), 2)
 
 
 class TestHitch(DMTestCase):
@@ -3347,7 +3356,7 @@ class TestHitch(DMTestCase):
     def test_hitch_denied_against_a_downed_puller(self):
         self._add_horse()
         self._add_cart()
-        self.dm_core.apply_damage("horse", 999)
+        Combat_Resolution.apply_damage(self.dm_core.world, "horse", 999)
 
         self.dm_core._on_item_interaction_detected({
             "intent": "hitch", "item_name": None, "input": "i hitch the horse to the cart",
@@ -3499,7 +3508,7 @@ class TestLoreCheck(DMTestCase):
         self.assertEqual(result["target"], name)
         self.assertEqual(result["skill"], "survival")
         self.assertEqual(result["revealed"], ["fire"])
-        self.assertTrue(self.dm_core.is_identified(name))
+        self.assertTrue(Combat_Actions.is_identified(self.dm_core.world, name))
 
     def test_lore_check_success_against_a_target_with_no_tags_reveals_nothing(self):
         self._stub_roll_dice(999)
@@ -3520,11 +3529,11 @@ class TestLoreCheck(DMTestCase):
         result = self.resolved[-1]
         self.assertFalse(result["found"])
         self.assertEqual(result["reason"], "check_failed")
-        self.assertFalse(self.dm_core.is_identified(name))
+        self.assertFalse(Combat_Actions.is_identified(self.dm_core.world, name))
 
     def test_lore_check_already_identified_skips_the_roll_entirely(self):
         name = self._add_spider()
-        self.dm_core.apply_condition(name, "identified", duration="permanent")
+        Combat_Resolution.apply_condition(self.dm_core.world, name, "identified", duration="permanent")
         self._stub_roll_dice(0)  # would fail any real roll -- proves no roll is attempted
         self.dm_core._on_item_interaction_detected({
             "intent": "lore_check", "item_name": None, "input": f"what do you know about the {name}",
@@ -3576,22 +3585,22 @@ class TestDowntime(DMTestCase):
         # makes every roll_dice call return 10 regardless of dice/pips actually passed, so this
         # only has to prove the roll happened and landed, not re-derive the D6 dice math.
         self._stub_roll_dice(10)
-        self.dm_core.apply_damage("gladstone", 20)  # 36 max_hp -> 16 current
-        self.assertEqual(self.dm_core.get_current_hp("gladstone"), 16)
+        Combat_Resolution.apply_damage(self.dm_core.world, "gladstone", 20)  # 36 max_hp -> 16 current
+        self.assertEqual(Combat_Resolution.get_current_hp(self.dm_core.world, "gladstone"), 16)
 
         result = self.dm_core.rest(2)
 
         self.assertEqual(self.dm_core.current_block, 2)  # advanced by blocks spent
         self.assertEqual(result["healed"]["gladstone"], {"healed": 10, "remaining_hp": 26})
-        self.assertEqual(self.dm_core.get_current_hp("gladstone"), 26)
+        self.assertEqual(Combat_Resolution.get_current_hp(self.dm_core.world, "gladstone"), 26)
         # arena's wolf is hostile, not is_party -- never healed by a party rest.
         self.assertNotIn("wolf", result["healed"])
         self.assertEqual(result["time"], self.dm_core.get_time_state())
 
     def test_rest_never_heals_a_dead_party_member(self):
         self._stub_roll_dice(10)
-        self.dm_core.apply_damage("gladstone", 999)
-        self.assertEqual(self.dm_core.get_current_hp("gladstone"), 0)
+        Combat_Resolution.apply_damage(self.dm_core.world, "gladstone", 999)
+        self.assertEqual(Combat_Resolution.get_current_hp(self.dm_core.world, "gladstone"), 0)
 
         result = self.dm_core.rest()
 
@@ -3890,7 +3899,7 @@ class TestGridTravel(DMTestCase):
 
     def test_party_travel_speed_ignores_a_dead_mount_and_falls_back_to_default(self):
         self._add_horse()
-        self.dm_core.apply_damage("horse", 999)
+        Combat_Resolution.apply_damage(self.dm_core.world, "horse", 999)
         self.dm_core.entities["gladstone"]["mount"] = "horse"
 
         self.assertEqual(self.dm_core._party_travel_speed(), 24)  # rules.toml's own default_speed
@@ -3911,7 +3920,7 @@ class TestGridTravel(DMTestCase):
         self.assertEqual(self.dm_core.current_location_key, "border_stones")
         self.assertIn("horse", self.dm_core.scenario_entities)
         self.assertEqual(self.dm_core.entities["gladstone"]["mount"], "horse")
-        self.assertEqual(self.dm_core.get_band("horse"), self.dm_core.get_band("gladstone"))
+        self.assertEqual(Combat_Resolution.get_band(self.dm_core.world, "horse"), Combat_Resolution.get_band(self.dm_core.world, "gladstone"))
 
     def test_grid_travel_denied_while_the_mount_is_overloaded(self):
         self._add_horse()
@@ -3961,7 +3970,7 @@ class TestGridTravel(DMTestCase):
             "intent": "travel", "item_name": None, "input": "i travel to the border stones",
         })
 
-        self.assertTrue(self.dm_core.has_condition("gladstone", "surprised"))
+        self.assertTrue(Combat_Resolution.has_condition(self.dm_core.world, "gladstone", "surprised"))
         self.assertEqual(self.dm_core.watch_rotation_index, 0)  # nobody to rotate to -- no roll
 
     def test_night_watch_never_rolled_against_a_daytime_encounter(self):
@@ -3972,7 +3981,7 @@ class TestGridTravel(DMTestCase):
             "intent": "travel", "item_name": None, "input": "i travel to the border stones",
         })
 
-        self.assertFalse(self.dm_core.has_condition("gladstone", "surprised"))
+        self.assertFalse(Combat_Resolution.has_condition(self.dm_core.world, "gladstone", "surprised"))
 
     def test_night_watch_never_rolled_against_a_non_hostile_night_encounter(self):
         self._stub_encounter_roll("nothing")
@@ -3982,7 +3991,7 @@ class TestGridTravel(DMTestCase):
             "intent": "travel", "item_name": None, "input": "i travel to the border stones",
         })
 
-        self.assertFalse(self.dm_core.has_condition("gladstone", "surprised"))
+        self.assertFalse(Combat_Resolution.has_condition(self.dm_core.world, "gladstone", "surprised"))
         self.assertEqual(self.dm_core.watch_rotation_index, 0)
 
     def test_night_watch_with_a_party_surprises_everyone_on_a_failed_observation_roll(self):
@@ -3995,8 +4004,8 @@ class TestGridTravel(DMTestCase):
             "intent": "travel", "item_name": None, "input": "i travel to the border stones",
         })
 
-        self.assertTrue(self.dm_core.has_condition("gladstone", "surprised"))
-        self.assertTrue(self.dm_core.has_condition("thane", "surprised"))
+        self.assertTrue(Combat_Resolution.has_condition(self.dm_core.world, "gladstone", "surprised"))
+        self.assertTrue(Combat_Resolution.has_condition(self.dm_core.world, "thane", "surprised"))
         self.assertEqual(self.dm_core.watch_rotation_index, 1)
 
     def test_night_watch_with_a_party_applies_no_condition_on_a_successful_watch(self):
@@ -4009,8 +4018,8 @@ class TestGridTravel(DMTestCase):
             "intent": "travel", "item_name": None, "input": "i travel to the border stones",
         })
 
-        self.assertFalse(self.dm_core.has_condition("gladstone", "surprised"))
-        self.assertFalse(self.dm_core.has_condition("thane", "surprised"))
+        self.assertFalse(Combat_Resolution.has_condition(self.dm_core.world, "gladstone", "surprised"))
+        self.assertFalse(Combat_Resolution.has_condition(self.dm_core.world, "thane", "surprised"))
         self.assertEqual(self.dm_core.watch_rotation_index, 1)  # still advances on a pass
 
     def test_night_watch_rotation_advances_through_the_party_across_hostile_nights(self):
@@ -4018,14 +4027,16 @@ class TestGridTravel(DMTestCase):
         self._stub_encounter_roll("wild boar")
         self._stub_roll_dice(99)
         watchers = []
-        original_resolve_action = self.dm_core.resolve_action
+        original_resolve_action = Combat_Resolution.resolve_action
 
-        def spy(entity_name, skill_name, difficulty=0, dice_penalty=0):
+        def spy(ctx, entity_name, skill_name, difficulty=0, dice_penalty=0, skill_divisor=1):
             if skill_name == "observation":
                 watchers.append(entity_name)
-            return original_resolve_action(entity_name, skill_name, difficulty, dice_penalty)
+            return original_resolve_action(ctx, entity_name, skill_name, difficulty, dice_penalty, skill_divisor)
 
-        self.dm_core.resolve_action = spy
+        patcher = patch.object(Combat_Resolution, "resolve_action", spy)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.dm_core.current_block = 2  # night
 
         self.dm_core._on_item_interaction_detected({
@@ -4034,7 +4045,7 @@ class TestGridTravel(DMTestCase):
         # Travel now pauses on a hostile block (docs/downtime.md's "Pausing for a fight")
         # instead of arriving inline -- clear the ambush and let the trip actually complete
         # before issuing the second one, the same way a real fight would resolve it.
-        self.dm_core.apply_damage("wild boar", 999)
+        Combat_Resolution.apply_damage(self.dm_core.world, "wild boar", 999)
         self.dm_core._resume_pending_downtime()
         self.dm_core.current_block = 5  # next night block (5 % 3 == 2)
         self.dm_core._on_item_interaction_detected({
@@ -4053,7 +4064,7 @@ class TestGridTravel(DMTestCase):
         self.dm_core.rest(1)
 
         self.assertIn("wild boar", self.dm_core.scenario_entities)
-        self.assertTrue(self.dm_core.has_condition("gladstone", "surprised"))  # solo -- always caught
+        self.assertTrue(Combat_Resolution.has_condition(self.dm_core.world, "gladstone", "surprised"))  # solo -- always caught
 
     def test_rest_rolls_the_day_table_by_day_and_night_table_by_night(self):
         calls = self._stub_encounter_roll("nothing")
@@ -4070,7 +4081,7 @@ class TestGridTravel(DMTestCase):
     def test_rest_healing_is_unaffected_by_a_hostile_night_block(self):
         self._stub_encounter_roll("wild boar")
         self._stub_roll_dice(10)
-        self.dm_core.apply_damage("gladstone", 20)  # 36 max_hp -> 16 current
+        Combat_Resolution.apply_damage(self.dm_core.world, "gladstone", 20)  # 36 max_hp -> 16 current
         self.dm_core.current_block = 2  # night -- rolls the hostile encounter and pauses
 
         paused = self.dm_core.rest(1)
@@ -4079,7 +4090,7 @@ class TestGridTravel(DMTestCase):
         # Clearing the ambush and letting the rest actually finish -- healing is one
         # aggregate roll computed only once the rest completes, never gated on whatever the
         # per-block environment rolls turned up along the way.
-        self.dm_core.apply_damage("wild boar", 999)
+        Combat_Resolution.apply_damage(self.dm_core.world, "wild boar", 999)
         result = self.dm_core._advance_pending_rest()
 
         # gladstone's own fortitude is {dice: 2, pips: 0} (characters.toml).
@@ -4117,8 +4128,8 @@ class TestGridTravel(DMTestCase):
 
     def test_hostile_travel_preserves_a_partys_live_hp_and_conditions_across_the_site_swap(self):
         self._add_party_member("thane")
-        self.dm_core.apply_damage("thane", 4)
-        self.dm_core.apply_condition("thane", "wounded", duration="permanent", dismiss="")
+        Combat_Resolution.apply_damage(self.dm_core.world, "thane", 4)
+        Combat_Resolution.apply_condition(self.dm_core.world, "thane", "wounded", duration="permanent", dismiss="")
         self._stub_encounter_roll("wild boar")
 
         self.dm_core._on_item_interaction_detected({
@@ -4129,8 +4140,8 @@ class TestGridTravel(DMTestCase):
         # its live hp/condition from before the ambush survived the site swap intact.
         self.assertIn("thane", self.dm_core.scenario_entities)
         self.assertNotIn("thane_2", self.dm_core.entities)
-        self.assertEqual(self.dm_core.get_current_hp("thane"), 6)  # 10 - 4
-        self.assertTrue(self.dm_core.has_condition("thane", "wounded"))
+        self.assertEqual(Combat_Resolution.get_current_hp(self.dm_core.world, "thane"), 6)  # 10 - 4
+        self.assertTrue(Combat_Resolution.has_condition(self.dm_core.world, "thane", "wounded"))
 
     def test_travel_resumes_automatically_once_the_hostile_dies_in_combat(self):
         self._stub_encounter_roll("wild boar")
@@ -4140,7 +4151,7 @@ class TestGridTravel(DMTestCase):
         })
         self.assertIsNotNone(self.dm_core.pending_downtime)
 
-        self.dm_core.apply_damage("wild boar", 999)
+        Combat_Resolution.apply_damage(self.dm_core.world, "wild boar", 999)
         self.dm_core._resolve_combat_round({"actions": []})  # the ordinary per-turn hook
 
         self.assertIsNone(self.dm_core.pending_downtime)
@@ -4183,7 +4194,7 @@ class TestGridTravel(DMTestCase):
         self.dm_core._on_item_interaction_detected({
             "intent": "travel", "item_name": None, "input": "i travel to the border stones",
         })
-        self.dm_core.apply_damage("wild boar", 999)  # dead, but _resolve_combat_round never ran
+        Combat_Resolution.apply_damage(self.dm_core.world, "wild boar", 999)  # dead, but _resolve_combat_round never ran
         self._stub_encounter_roll("nothing")  # the fresh trip's own block should roll clean
         resolved_events = self._capture("item_interaction_resolved")
 
@@ -4209,10 +4220,10 @@ class TestGridTravel(DMTestCase):
         self.dm_core._on_item_interaction_detected({
             "intent": "travel", "item_name": None, "input": "i travel to the border stones",
         })
-        self.dm_core.apply_damage("wild boar", 5)
+        Combat_Resolution.apply_damage(self.dm_core.world, "wild boar", 5)
         self.dm_core.save_game(slot)
 
-        fresh_dm = DMCore(EventBus(), scenario_name="debug", start_location="trailhead")
+        fresh_dm = DMCore(ValidatingEventBus(), scenario_name="debug", start_location="trailhead")
         fresh_dm.load_game(slot)
 
         # current_location_key resolves to a real, non-empty location (not {}) -- the
@@ -4223,10 +4234,10 @@ class TestGridTravel(DMTestCase):
         self.assertEqual(fresh_dm.pending_downtime["kind"], "travel")
         # The hostile's own live hp survived reload (ad_hoc = True -- DM_Encounters.py).
         self.assertIn("wild boar", fresh_dm.scenario_entities)
-        self.assertEqual(fresh_dm.get_current_hp("wild boar"), fresh_dm.entities["wild boar"]["max_hp"] - 5)
+        self.assertEqual(Combat_Resolution.get_current_hp(fresh_dm.world, "wild boar"), fresh_dm.entities["wild boar"]["max_hp"] - 5)
 
         # Resolving the fight after reload still auto-resumes travel correctly.
-        fresh_dm.apply_damage("wild boar", 999)
+        Combat_Resolution.apply_damage(fresh_dm.world, "wild boar", 999)
         fresh_dm._resolve_combat_round({"actions": []})
         self.assertIsNone(fresh_dm.pending_downtime)
         self.assertEqual(fresh_dm.current_location_key, "border_stones")
@@ -4240,13 +4251,13 @@ class TestGridTravel(DMTestCase):
         self.dm_core.rest(2)
         self.dm_core.save_game(slot)
 
-        fresh_dm = DMCore(EventBus(), scenario_name="debug", start_location="trailhead")
+        fresh_dm = DMCore(ValidatingEventBus(), scenario_name="debug", start_location="trailhead")
         fresh_dm.load_game(slot)
 
         self.assertIsNotNone(fresh_dm.pending_downtime)
         self.assertEqual(fresh_dm.pending_downtime, {"kind": "rest", "blocks_total": 2, "blocks_done": 1})
 
-        fresh_dm.apply_damage("wild boar", 999)
+        Combat_Resolution.apply_damage(fresh_dm.world, "wild boar", 999)
         self._stub_encounter_roll("nothing")  # the remaining block rolls clean this time
         result = fresh_dm._advance_pending_rest()
         self.assertFalse(result["interrupted"])
@@ -4266,7 +4277,7 @@ class TestGridTravel(DMTestCase):
         })
         self.dm_core.save_game(slot)
 
-        fresh_dm = DMCore(EventBus(), scenario_name="debug", start_location="trailhead")
+        fresh_dm = DMCore(ValidatingEventBus(), scenario_name="debug", start_location="trailhead")
         fresh_dm.load_game(slot)
 
         # load_game's own load_scenario_definition/load_scenario re-derivation has no way to
@@ -4286,7 +4297,7 @@ class TestGridTravel(DMTestCase):
         self.dm_core.watch_rotation_index = 3
         self.dm_core.save_game(slot)
 
-        fresh_dm = DMCore(EventBus(), scenario_name="debug", start_location="trailhead")
+        fresh_dm = DMCore(ValidatingEventBus(), scenario_name="debug", start_location="trailhead")
         fresh_dm.load_game(slot)
 
         self.assertEqual(fresh_dm.watch_rotation_index, 3)
@@ -5163,7 +5174,7 @@ class TestEntityBehavior(DMTestCase):
 
     def test_choose_behavior_matches_while_the_entity_is_alive(self):
         # debug.toml's wolf: a single behavior, "always bite while hp_per_remain >= 0.01".
-        behavior = self.dm_core.choose_behavior("wolf")
+        behavior = Combat_Actions.choose_behavior(self.dm_core.world, "wolf")
         assert behavior is not None
         self.assertEqual(behavior["action"], "bite")
 
@@ -5186,11 +5197,11 @@ class TestEntityBehavior(DMTestCase):
         self.dm_core.entities["archer_dummy"]["band"] = 4
         self.dm_core.entities["gladstone"]["band"] = 1
 
-        behavior = self.dm_core.choose_behavior("archer_dummy", "gladstone")
+        behavior = Combat_Actions.choose_behavior(self.dm_core.world, "archer_dummy", "gladstone")
         self.assertEqual(behavior["action"], "shoot")
 
         self.dm_core.entities["archer_dummy"]["band"] = 1
-        behavior = self.dm_core.choose_behavior("archer_dummy", "gladstone")
+        behavior = Combat_Actions.choose_behavior(self.dm_core.world, "archer_dummy", "gladstone")
         self.assertEqual(behavior["action"], "punch")
 
 
@@ -5209,10 +5220,10 @@ class TestEntityBehavior(DMTestCase):
                 },
             ],
         }
-        self.assertIsNone(self.dm_core.choose_behavior("paralyzed_dummy"))
+        self.assertIsNone(Combat_Actions.choose_behavior(self.dm_core.world, "paralyzed_dummy"))
 
         del self.dm_core.entities["paralyzed_dummy"]["active_conditions"]["paralyzed"]
-        behavior = self.dm_core.choose_behavior("paralyzed_dummy")
+        behavior = Combat_Actions.choose_behavior(self.dm_core.world, "paralyzed_dummy")
         self.assertEqual(behavior["action"], "bite")
 
 
@@ -5230,17 +5241,17 @@ class TestEntityBehavior(DMTestCase):
                 {"requirements": [], "action": "bite"},
             ],
         }
-        self.assertEqual(self.dm_core.choose_behavior("predator_dummy", "gladstone")["action"], "bite")
+        self.assertEqual(Combat_Actions.choose_behavior(self.dm_core.world, "predator_dummy", "gladstone")["action"], "bite")
 
-        self.dm_core.apply_condition("gladstone", "stunned", duration="rounds", length=1, dismiss="")
+        Combat_Resolution.apply_condition(self.dm_core.world, "gladstone", "stunned", duration="rounds", length=1, dismiss="")
         self.assertEqual(
-            self.dm_core.choose_behavior("predator_dummy", "gladstone")["action"], "finishing_blow",
+            Combat_Actions.choose_behavior(self.dm_core.world, "predator_dummy", "gladstone")["action"], "finishing_blow",
         )
 
         # No opponent_name at all -- resolves to None, same as distance_to_target with no
         # opponent, never accidentally matching a status requirement (which never passes one).
         self.assertIsNone(
-            self.dm_core.get_comparable_value("predator_dummy", "opponent_has_condition:stunned"),
+            Combat_Resolution.get_comparable_value(self.dm_core.world, "predator_dummy", "opponent_has_condition:stunned"),
         )
 
 
@@ -5249,22 +5260,22 @@ class TestEntityBehavior(DMTestCase):
         # entries share a "not warded" gate, so a holy ward suppresses its turn entirely rather
         # than just its preferred attack (choose_behavior returns None, same as an entity with
         # no behavior list at all).
-        self.assertEqual(self.dm_core.choose_behavior("wraith", "gladstone")["action"], "chilling claw")
+        self.assertEqual(Combat_Actions.choose_behavior(self.dm_core.world, "wraith", "gladstone")["action"], "chilling claw")
 
         self.dm_core.entities["wraith"]["active_conditions"] = {
             "warded": {"duration": "scene", "dismiss": ""},
         }
-        self.assertIsNone(self.dm_core.choose_behavior("wraith", "gladstone"))
+        self.assertIsNone(Combat_Actions.choose_behavior(self.dm_core.world, "wraith", "gladstone"))
 
 
     def test_wraith_prefers_life_drain_against_a_wounded_target(self):
         # creatures.toml's "wraith" is the shipped opponent_has_condition example -- it favors
         # draining an already-wounded target over its plain claw, checked ahead of the fallback
         # attack in declaration order.
-        self.assertEqual(self.dm_core.choose_behavior("wraith", "gladstone")["action"], "chilling claw")
+        self.assertEqual(Combat_Actions.choose_behavior(self.dm_core.world, "wraith", "gladstone")["action"], "chilling claw")
 
-        self.dm_core.apply_condition("gladstone", "wounded", duration="permanent", dismiss="")
-        self.assertEqual(self.dm_core.choose_behavior("wraith", "gladstone")["action"], "life drain")
+        Combat_Resolution.apply_condition(self.dm_core.world, "gladstone", "wounded", duration="permanent", dismiss="")
+        self.assertEqual(Combat_Actions.choose_behavior(self.dm_core.world, "wraith", "gladstone")["action"], "life drain")
 
 
     def test_resolve_behavior_action_strikes_back_and_applies_damage(self):
@@ -5274,7 +5285,7 @@ class TestEntityBehavior(DMTestCase):
         self.dm_core.entities["target_dummy"] = {"name": "target_dummy", "max_hp": 20, "skills": {}}
 
         with patch("random.randint", return_value=4):
-            result = self.dm_core.resolve_behavior_action("wolf", "target_dummy")
+            result = Combat_Actions.resolve_behavior_action(self.dm_core.world, "wolf", "target_dummy")
 
         assert result is not None
         self.assertTrue(result.success)
@@ -5284,7 +5295,7 @@ class TestEntityBehavior(DMTestCase):
         damage = damage_effects[0]
         self.assertGreater(damage.net_damage, 0)
         self.assertEqual(
-            self.dm_core.get_current_hp("target_dummy"),
+            Combat_Resolution.get_current_hp(self.dm_core.world, "target_dummy"),
             20 - damage.net_damage,
         )
 
@@ -5300,7 +5311,7 @@ class TestEntityBehavior(DMTestCase):
         }
 
         with patch("random.randint", return_value=4):
-            result = self.dm_core.resolve_behavior_action("wolf", "target_dummy")
+            result = Combat_Actions.resolve_behavior_action(self.dm_core.world, "wolf", "target_dummy")
 
         assert result is not None
         self.assertTrue(result.success)
@@ -5329,7 +5340,7 @@ class TestEntityBehavior(DMTestCase):
         }
 
         with patch("random.randint", return_value=4):
-            result = self.dm_core.resolve_behavior_action("wolf", "target_dummy")
+            result = Combat_Actions.resolve_behavior_action(self.dm_core.world, "wolf", "target_dummy")
 
         assert result is not None
         damage_effects = [effect for effect in result.effects if isinstance(effect, DamageEffect)]
@@ -5346,12 +5357,12 @@ class TestEntityBehavior(DMTestCase):
         # still pools it in at the same untrained 0D/0 pips resolve_action defaults missing
         # skills to, so the pool is just dodge's own 6D (observation contributes nothing).
         with patch("random.randint", return_value=4):
-            initiative = self.dm_core.roll_initiative("wolf")
+            initiative = Combat_Actions.roll_initiative(self.dm_core.world, "wolf")
         self.assertEqual(initiative, 24)
 
 
     def test_current_target_advances_to_next_hostile_when_current_dies(self):
-        self.dm_core.apply_damage("wolf", 999)
+        Combat_Resolution.apply_damage(self.dm_core.world, "wolf", 999)
         with patch("random.randint", return_value=1):
             self.dm_core._on_turn_detected({"clauses": [{"kind": "action", "skill": "athletics"}], "input": "I reposition"})
         self.assertEqual(self.dm_core.current_target, "wolf_2")
@@ -5359,7 +5370,7 @@ class TestEntityBehavior(DMTestCase):
 
 class TestTransferBehavior(DMTestCase):
     """!
-    @brief [[entity.behavior]]'s own "steal"/"gift" action (DM_Combat.py's TRANSFER_ACTIONS/
+    @brief [[entity.behavior]]'s own "steal"/"gift" action (Combat_Actions.py's TRANSFER_ACTIONS/
         _resolve_transfer_behavior) -- an NPC autonomously moving an item or currency, the
         same "theft"/"favor" attitude nudge DM_Inventory.py's player-driven "take"/"give"
         already fires, just entity-initiated. creatures.toml's "pickpocket" is the shipped
@@ -5373,7 +5384,7 @@ class TestTransferBehavior(DMTestCase):
         ]
 
     def test_steal_moves_a_named_item_from_target_to_actor(self):
-        result = self.dm_core.resolve_behavior_action("wolf", "gladstone")
+        result = Combat_Actions.resolve_behavior_action(self.dm_core.world, "wolf", "gladstone")
 
         self.assertIsInstance(result, TransferOutcome)
         self.assertEqual(result.direction, "steal")
@@ -5385,7 +5396,7 @@ class TestTransferBehavior(DMTestCase):
         # gladstone's own attitudes table (characters.toml) starts at a flat [0, 0, 0] default.
         base_familiarity = self.dm_core.get_attitude("gladstone", "wolf")[2]
 
-        self.dm_core.resolve_behavior_action("wolf", "gladstone")
+        Combat_Actions.resolve_behavior_action(self.dm_core.world, "wolf", "gladstone")
 
         # health potion's own TOML value against SIGNIFICANT_VALUE (25) -- "theft" fires on
         # gladstone's own attitude *toward* wolf, the thief, not the reverse.
@@ -5400,7 +5411,7 @@ class TestTransferBehavior(DMTestCase):
         ]
         self.dm_core.entities["wolf"]["inventory"] = ["longsword"]
 
-        result = self.dm_core.resolve_behavior_action("wolf", "gladstone")
+        result = Combat_Actions.resolve_behavior_action(self.dm_core.world, "wolf", "gladstone")
 
         self.assertEqual(result.direction, "gift")
         self.assertIn("longsword", self.dm_core.entities["gladstone"]["inventory"])
@@ -5410,7 +5421,7 @@ class TestTransferBehavior(DMTestCase):
         self.dm_core.entities["wolf"]["behavior"] = [
             {"requirements": [], "action": "steal", "item": "iron dagger"},
         ]
-        self.assertIsNone(self.dm_core.resolve_behavior_action("wolf", "gladstone"))
+        self.assertIsNone(Combat_Actions.resolve_behavior_action(self.dm_core.world, "wolf", "gladstone"))
 
     def test_steal_currency_moves_a_capped_amount_via_the_reserved_sentinel(self):
         self.dm_core.entities["wolf"]["behavior"] = [
@@ -5418,7 +5429,7 @@ class TestTransferBehavior(DMTestCase):
         ]
         self.dm_core.entities["gladstone"]["currency"] = 100
 
-        result = self.dm_core.resolve_behavior_action("wolf", "gladstone")
+        result = Combat_Actions.resolve_behavior_action(self.dm_core.world, "wolf", "gladstone")
 
         self.assertEqual(result.item_name, "currency")
         self.assertEqual(self.dm_core.entities["gladstone"]["currency"], 90)
@@ -5429,19 +5440,19 @@ class TestTransferBehavior(DMTestCase):
             {"requirements": [], "action": "steal", "item": "currency"},
         ]
         self.dm_core.entities["gladstone"]["currency"] = 0
-        self.assertIsNone(self.dm_core.resolve_behavior_action("wolf", "gladstone"))
+        self.assertIsNone(Combat_Actions.resolve_behavior_action(self.dm_core.world, "wolf", "gladstone"))
 
     def test_pickpocket_steals_a_modest_sum_then_flees_once_actually_hit(self):
         [name] = self.dm_core._instance_entities([{"name": "pickpocket", "band": 1}])
         self.dm_core.scenario_entities.append(name)
         self.dm_core.entities["gladstone"]["currency"] = 100
 
-        result = self.dm_core.resolve_behavior_action(name, "gladstone")
+        result = Combat_Actions.resolve_behavior_action(self.dm_core.world, name, "gladstone")
         self.assertIsInstance(result, TransferOutcome)
         self.assertEqual(self.dm_core.entities["gladstone"]["currency"], 90)
 
-        self.dm_core.apply_damage(name, 1)  # any hit at all crosses its own 0.90 threshold
-        fled = self.dm_core.resolve_behavior_action(name, "gladstone")
+        Combat_Resolution.apply_damage(self.dm_core.world, name, 1)  # any hit at all crosses its own 0.90 threshold
+        fled = Combat_Actions.resolve_behavior_action(self.dm_core.world, name, "gladstone")
         self.assertIsInstance(fled, MovementOutcome)
         self.assertEqual(fled.direction, "retreat")
 
@@ -5474,88 +5485,88 @@ class TestRoundUpkeep(DMTestCase):
     def test_calculate_damage_records_recent_damage_tags_on_the_defender(self):
         fireball = {"damage_value": {"dice": 2, "pips": 0, "bonus": 0}, "damage_tags": ["fire"]}
         with patch("random.randint", return_value=3):
-            self.dm_core.calculate_damage("gladstone", "troll", fireball)
+            Combat_Actions.calculate_damage(self.dm_core.world, "gladstone", "troll", fireball)
         self.assertIn("fire", self.dm_core.entities["troll"]["recent_damage_tags"])
 
     @patch("random.randint", return_value=3)
     def test_apply_round_upkeep_heals_and_clears_recent_damage_tags(self, mock_randint):
-        self.dm_core.apply_damage("troll", 10)  # 40 -> 30
+        Combat_Resolution.apply_damage(self.dm_core.world, "troll", 10)  # 40 -> 30
         self.dm_core.entities["troll"]["recent_damage_tags"] = {"slashing"}
 
         self.dm_core.apply_round_upkeep("troll")
 
-        self.assertEqual(self.dm_core.get_current_hp("troll"), 36)  # 30 + (2D @ 3 each = 6)
+        self.assertEqual(Combat_Resolution.get_current_hp(self.dm_core.world, "troll"), 36)  # 30 + (2D @ 3 each = 6)
         self.assertEqual(self.dm_core.entities["troll"]["recent_damage_tags"], set())
 
     @patch("random.randint", return_value=3)
     def test_apply_round_upkeep_suppressed_by_a_matching_fire_tag(self, mock_randint):
-        self.dm_core.apply_damage("troll", 10)  # 40 -> 30
+        Combat_Resolution.apply_damage(self.dm_core.world, "troll", 10)  # 40 -> 30
         self.dm_core.entities["troll"]["recent_damage_tags"] = {"fire"}
 
         self.dm_core.apply_round_upkeep("troll")
 
-        self.assertEqual(self.dm_core.get_current_hp("troll"), 30)  # no heal this round
+        self.assertEqual(Combat_Resolution.get_current_hp(self.dm_core.world, "troll"), 30)  # no heal this round
         self.assertEqual(self.dm_core.entities["troll"]["recent_damage_tags"], set())
 
     def test_run_round_upkeep_skips_dead_entities(self):
-        self.dm_core.apply_damage("troll", 999)
+        Combat_Resolution.apply_damage(self.dm_core.world, "troll", 999)
         self.dm_core.run_round_upkeep()
-        self.assertEqual(self.dm_core.get_current_hp("troll"), 0)
+        self.assertEqual(Combat_Resolution.get_current_hp(self.dm_core.world, "troll"), 0)
 
     def test_run_round_upkeep_expires_surprised_after_one_round(self):
         # Night watch applies "surprised" with duration="rounds", length=1 -- run_round_upkeep's
         # own generic condition tick (Combat_Resolution.tick_condition_durations) is what
         # actually expires it. See docs/downtime.md's "Night watch and surprise".
-        self.dm_core.apply_condition("gladstone", "surprised", duration="rounds", length=1, dismiss="")
+        Combat_Resolution.apply_condition(self.dm_core.world, "gladstone", "surprised", duration="rounds", length=1, dismiss="")
         self.dm_core.run_round_upkeep()
-        self.assertFalse(self.dm_core.has_condition("gladstone", "surprised"))
+        self.assertFalse(Combat_Resolution.has_condition(self.dm_core.world, "gladstone", "surprised"))
 
     @patch("random.randint", return_value=3)
     def test_resolve_combat_round_regenerates_the_troll_unless_burned_this_round(self, mock_randint):
         # _resolve_combat_round is the real per-round entry point (DM_Core.py) -- confirms the
         # hook is actually wired in, not just directly callable.
-        self.dm_core.apply_damage("troll", 10)  # 40 -> 30, no fire tag recorded
+        Combat_Resolution.apply_damage(self.dm_core.world, "troll", 10)  # 40 -> 30, no fire tag recorded
         self.dm_core._resolve_combat_round({"actions": []})
-        self.assertEqual(self.dm_core.get_current_hp("troll"), 36)  # healed 2D @ 3 = 6
+        self.assertEqual(Combat_Resolution.get_current_hp(self.dm_core.world, "troll"), 36)  # healed 2D @ 3 = 6
 
-        self.dm_core.apply_damage("troll", 10)  # 36 -> 26
+        Combat_Resolution.apply_damage(self.dm_core.world, "troll", 10)  # 36 -> 26
         self.dm_core.entities["troll"]["recent_damage_tags"] = {"fire"}
         self.dm_core._resolve_combat_round({"actions": []})
-        self.assertEqual(self.dm_core.get_current_hp("troll"), 26)  # suppressed this round
+        self.assertEqual(Combat_Resolution.get_current_hp(self.dm_core.world, "troll"), 26)  # suppressed this round
 
     @patch("random.randint", return_value=3)
     def test_apply_downtime_upkeep_scales_the_roll_by_blocks_spent(self, mock_randint):
         # One aggregate roll over the whole span, not one per block -- 2D * 3 blocks = 6D @ 3
         # each = 18, matching rest()'s own fortitude-scaling precedent.
-        self.dm_core.apply_damage("troll", 30)  # 40 -> 10
+        Combat_Resolution.apply_damage(self.dm_core.world, "troll", 30)  # 40 -> 10
         self.dm_core.apply_downtime_upkeep(3)
-        self.assertEqual(self.dm_core.get_current_hp("troll"), 28)  # 10 + 18
+        self.assertEqual(Combat_Resolution.get_current_hp(self.dm_core.world, "troll"), 28)  # 10 + 18
 
     def test_apply_downtime_upkeep_is_a_no_op_for_zero_blocks(self):
-        self.dm_core.apply_damage("troll", 30)
+        Combat_Resolution.apply_damage(self.dm_core.world, "troll", 30)
         self.dm_core.apply_downtime_upkeep(0)
-        self.assertEqual(self.dm_core.get_current_hp("troll"), 10)
+        self.assertEqual(Combat_Resolution.get_current_hp(self.dm_core.world, "troll"), 10)
 
     @patch("random.randint", return_value=3)
     def test_apply_downtime_upkeep_is_still_suppressed_by_a_matching_recent_damage_tag(self, mock_randint):
-        self.dm_core.apply_damage("troll", 30)
+        Combat_Resolution.apply_damage(self.dm_core.world, "troll", 30)
         self.dm_core.entities["troll"]["recent_damage_tags"] = {"fire"}
         self.dm_core.apply_downtime_upkeep(3)
-        self.assertEqual(self.dm_core.get_current_hp("troll"), 10)  # no heal at all
+        self.assertEqual(Combat_Resolution.get_current_hp(self.dm_core.world, "troll"), 10)  # no heal at all
 
     @patch("random.randint", return_value=3)
     def test_resting_regenerates_the_troll_alongside_the_partys_own_fortitude_healing(self, mock_randint):
         # The real entry point (DM_Time.py's rest -> _finish_pending_rest), not
         # apply_downtime_upkeep called directly -- confirms the hook is actually wired in.
-        self.dm_core.apply_damage("gladstone", 10)
-        self.dm_core.apply_damage("troll", 30)  # 40 -> 10, not a party member
+        Combat_Resolution.apply_damage(self.dm_core.world, "gladstone", 10)
+        Combat_Resolution.apply_damage(self.dm_core.world, "troll", 30)  # 40 -> 10, not a party member
 
         result = self.dm_core.rest(2)
 
         self.assertFalse(result["interrupted"])
         self.assertIn("gladstone", result["healed"])  # party's own fortitude healing
         self.assertNotIn("troll", result["healed"])  # not a party member, no fortitude entry
-        self.assertEqual(self.dm_core.get_current_hp("troll"), 22)  # 10 + (2D*2 blocks @ 3 = 12)
+        self.assertEqual(Combat_Resolution.get_current_hp(self.dm_core.world, "troll"), 22)  # 10 + (2D*2 blocks @ 3 = 12)
 
 
 class TestProgramInterpreter(unittest.TestCase):
@@ -5565,7 +5576,7 @@ class TestProgramInterpreter(unittest.TestCase):
     """
 
     def setUp(self):
-        self.event_bus = EventBus()
+        self.event_bus = ValidatingEventBus()
         self.rules = {"attitude_event": [
             {"name": "intimidated", "disposition": -10, "threat": -25, "familiarity": -5},
         ]}
@@ -5747,7 +5758,7 @@ class TestUniversalAbilities(DMTestCase):
     """!
     @brief Universal (untrained) abilities -- maneuvers.toml's trip/sunder/disarm (listed under
         athletics' own "abilities" field) and intimidate (under intimidation's), plus
-        resolve_named_ability's own skill-list fallback (DM_Combat.py).
+        resolve_named_ability's own skill-list fallback (Combat_Actions.py).
     """
 
     def test_athletics_lists_its_own_cmb_style_maneuvers(self):
@@ -5779,7 +5790,7 @@ class TestUniversalAbilities(DMTestCase):
         }
         self.assertNotIn("trip", owned_names)
 
-        ability = self.dm_core.resolve_named_ability("gladstone", "trip")
+        ability = Combat_Actions.resolve_named_ability(self.dm_core.world, "gladstone", "trip")
 
         self.assertIsNotNone(ability)
         self.assertEqual(ability["name"], "trip")
@@ -5787,11 +5798,11 @@ class TestUniversalAbilities(DMTestCase):
     def test_resolve_named_ability_still_prefers_an_owned_ability_over_a_universal_one(self):
         # gladstone's own "punch" is an owned innate ability -- not universal at all -- confirms
         # the ownership check still runs first (unaffected by the universal fallback).
-        ability = self.dm_core.resolve_named_ability("gladstone", "punch")
+        ability = Combat_Actions.resolve_named_ability(self.dm_core.world, "gladstone", "punch")
         self.assertIsNotNone(ability)
 
     def test_resolve_named_ability_returns_none_for_a_name_matching_nothing(self):
-        self.assertIsNone(self.dm_core.resolve_named_ability("gladstone", "not_a_real_ability_name"))
+        self.assertIsNone(Combat_Actions.resolve_named_ability(self.dm_core.world, "gladstone", "not_a_real_ability_name"))
 
     def test_a_universal_ability_defaults_to_melee_range(self):
         # trip/sunder each write range = 0 explicitly; is_in_range's own unconditional
@@ -5819,15 +5830,15 @@ class TestCombatTrickAndMetamagicModifiers(DMTestCase):
         # gladstone's blades is 5D+0 (rating 15) -- power attack's skill_divisor = 2 halves that
         # rating to 7.5, floored back to {dice, pips} via the same dice*3+pips scale (2D+1).
         with patch("random.randint", return_value=3):
-            full = self.dm_core.resolve_action("gladstone", "blades")
-            halved = self.dm_core.resolve_action("gladstone", "blades", skill_divisor=2)
+            full = Combat_Resolution.resolve_action(self.dm_core.world, "gladstone", "blades")
+            halved = Combat_Resolution.resolve_action(self.dm_core.world, "gladstone", "blades", skill_divisor=2)
 
         self.assertEqual(full["roll"], 15)   # 5D @ 3 = 15
         self.assertEqual(halved["roll"], 7)  # 2D+1 @ 3 = 7
 
     def test_skill_divisor_of_one_is_a_no_op(self):
         with patch("random.randint", return_value=3):
-            result = self.dm_core.resolve_action("gladstone", "blades", skill_divisor=1)
+            result = Combat_Resolution.resolve_action(self.dm_core.world, "gladstone", "blades", skill_divisor=1)
         self.assertEqual(result["roll"], 15)
 
     def test_resolve_opposed_action_skill_divisor_never_touches_the_defenders_roll(self):
@@ -5835,8 +5846,8 @@ class TestCombatTrickAndMetamagicModifiers(DMTestCase):
             "name": "test_defender", "skills": {"dodge": {"dice": 6, "pips": 0}},
         }
         with patch("random.randint", return_value=3):
-            unmodified = self.dm_core.resolve_opposed_action("gladstone", "blades", "test_defender")
-            halved = self.dm_core.resolve_opposed_action(
+            unmodified = Combat_Resolution.resolve_opposed_action(self.dm_core.world, "gladstone", "blades", "test_defender")
+            halved = Combat_Resolution.resolve_opposed_action(self.dm_core.world, 
                 "gladstone", "blades", "test_defender", skill_divisor=2,
             )
 
@@ -5850,14 +5861,14 @@ class TestCombatTrickAndMetamagicModifiers(DMTestCase):
     def test_power_attack_and_empowered_are_owned_by_gladstone_not_universal(self):
         self.assertNotIn("power attack", self.dm_core.universal_abilities)
         self.assertNotIn("empowered", self.dm_core.universal_abilities)
-        self.assertIsNotNone(self.dm_core.resolve_named_ability("gladstone", "power attack"))
-        self.assertIsNotNone(self.dm_core.resolve_named_ability("gladstone", "empowered"))
+        self.assertIsNotNone(Combat_Actions.resolve_named_ability(self.dm_core.world, "gladstone", "power attack"))
+        self.assertIsNotNone(Combat_Actions.resolve_named_ability(self.dm_core.world, "gladstone", "empowered"))
 
     def test_an_entity_that_never_trained_it_cannot_resolve_it_at_all(self):
         # wolf owns no abilities list entry named "power attack", and it's not universal either
         # (unlike "trip"/"cleave") -- resolve_named_ability must come back empty, the same
         # "untrained" outcome an unowned, non-universal named ability always has.
-        self.assertIsNone(self.dm_core.resolve_named_ability("wolf", "power attack"))
+        self.assertIsNone(Combat_Actions.resolve_named_ability(self.dm_core.world, "wolf", "power attack"))
 
     # --- _resolve_action_modifier: the clause-level lookup _on_turn_detected uses -----------
 
@@ -5874,14 +5885,14 @@ class TestCombatTrickAndMetamagicModifiers(DMTestCase):
         # "empowered" only applies_to supertypes = ["spell"] -- aimed at a weapon strike
         # (longsword, supertype "object"/subtype "weapon"), it should never actually fire.
         longsword = self.dm_core.entities["longsword"]
-        empowered = self.dm_core.resolve_named_ability("gladstone", "empowered")
+        empowered = Combat_Actions.resolve_named_ability(self.dm_core.world, "gladstone", "empowered")
 
         self.assertFalse(Combat_Resolution.matches_supertype_or_subtype(longsword, empowered["applies_to"]))
 
     def test_apply_ability_modifier_never_mutates_the_shared_entity(self):
         longsword = self.dm_core.entities["longsword"]
         original_damage_value = dict(longsword["damage_value"])
-        power_attack = self.dm_core.resolve_named_ability("gladstone", "power attack")
+        power_attack = Combat_Actions.resolve_named_ability(self.dm_core.world, "gladstone", "power attack")
 
         modified = self.dm_core._apply_ability_modifier(longsword, power_attack)
 
@@ -5891,7 +5902,7 @@ class TestCombatTrickAndMetamagicModifiers(DMTestCase):
 
     def test_apply_ability_modifier_adds_damage_bonus_dice(self):
         longsword = self.dm_core.entities["longsword"]
-        power_attack = self.dm_core.resolve_named_ability("gladstone", "power attack")
+        power_attack = Combat_Actions.resolve_named_ability(self.dm_core.world, "gladstone", "power attack")
 
         modified = self.dm_core._apply_ability_modifier(longsword, power_attack)
 
@@ -5900,7 +5911,7 @@ class TestCombatTrickAndMetamagicModifiers(DMTestCase):
 
     def test_apply_ability_modifier_applies_damage_multiplier(self):
         fireball = self.dm_core.entities["fireball"]
-        empowered = self.dm_core.resolve_named_ability("gladstone", "empowered")
+        empowered = Combat_Actions.resolve_named_ability(self.dm_core.world, "gladstone", "empowered")
 
         modified = self.dm_core._apply_ability_modifier(fireball, empowered)
 
@@ -5911,7 +5922,7 @@ class TestCombatTrickAndMetamagicModifiers(DMTestCase):
         # has anything to act on, so the copy comes back with no "damage_value" key either,
         # same "wrong shape wastes it" precedent a mismatched applies_to already has.
         dispel_magic = self.dm_core.entities["dispel magic"]
-        empowered = self.dm_core.resolve_named_ability("gladstone", "empowered")
+        empowered = Combat_Actions.resolve_named_ability(self.dm_core.world, "gladstone", "empowered")
 
         modified = self.dm_core._apply_ability_modifier(dispel_magic, empowered)
 
@@ -6403,7 +6414,7 @@ class TestOnInteractProgram(DMTestCase):
         self.assertIn("cursed", self.dm_core.entities["gladstone"]["active_conditions"])
 
     def test_equipping_an_already_identified_cursed_dagger_does_not_curse_the_wearer(self):
-        self.dm_core.apply_condition("cursed dagger", "identified", duration="permanent", dismiss="")
+        Combat_Resolution.apply_condition(self.dm_core.world, "cursed dagger", "identified", duration="permanent", dismiss="")
 
         self.dm_core._on_item_interaction_detected({"intent": "equip", "item_name": "cursed dagger", "input": "I equip the cursed dagger"})
 
@@ -6432,20 +6443,20 @@ class TestOnDamageProgram(DMTestCase):
         )
 
     def test_dropping_below_half_hp_enrages_the_troll(self):
-        self.dm_core.apply_damage("troll", 21, actor_name="gladstone")  # 40 -> 19, 47.5%
+        Combat_Resolution.apply_damage(self.dm_core.world, "troll", 21, actor_name="gladstone")  # 40 -> 19, 47.5%
 
         self.assertIn("enraged", self.dm_core.entities["troll"]["active_conditions"])
 
     def test_staying_above_half_hp_does_not_enrage_the_troll(self):
-        self.dm_core.apply_damage("troll", 5, actor_name="gladstone")  # 40 -> 35
+        Combat_Resolution.apply_damage(self.dm_core.world, "troll", 5, actor_name="gladstone")  # 40 -> 35
 
         self.assertNotIn("enraged", self.dm_core.entities["troll"].get("active_conditions", {}))
 
     def test_enraged_is_not_re_applied_once_already_active(self):
-        self.dm_core.apply_damage("troll", 21, actor_name="gladstone")
+        Combat_Resolution.apply_damage(self.dm_core.world, "troll", 21, actor_name="gladstone")
         self.dm_core.entities["troll"]["active_conditions"]["enraged"]["duration"] = "marker"
 
-        self.dm_core.apply_damage("troll", 1, actor_name="gladstone")
+        Combat_Resolution.apply_damage(self.dm_core.world, "troll", 1, actor_name="gladstone")
 
         # Still the same marker -- apply_condition would have overwritten it with a fresh
         # {"duration": "rounds", "length": 5, ...} entry if the condition step had fired again.
@@ -6510,7 +6521,7 @@ class TestSummoning(DMTestCase):
         self.assertEqual(name, "spectral wolf")
         self.assertIn("spectral wolf", self.dm_core.scenario_entities)
         entity = self.dm_core.entities["spectral wolf"]
-        self.assertEqual(entity["band"], self.dm_core.get_band("gladstone"))
+        self.assertEqual(entity["band"], Combat_Resolution.get_band(self.dm_core.world, "gladstone"))
         self.assertTrue(entity["ad_hoc"])
         self.assertEqual(entity["summon_expires_in"], 3)
         self.assertFalse(self.dm_core.is_hostile("spectral wolf", self.dm_core.player_name))
@@ -6550,12 +6561,12 @@ class TestSummoning(DMTestCase):
         self.dm_core._instance_entities([{"name": "troll", "band": 1}])
         self.dm_core.scenario_entities.append("troll")
         self.assertEqual(self.dm_core.scenario_entities, ["gladstone", "spectral wolf", "troll"])
-        self.dm_core.apply_damage("troll", 10)
+        Combat_Resolution.apply_damage(self.dm_core.world, "troll", 10)
 
         self.dm_core.run_round_upkeep()
 
         self.assertNotIn("spectral wolf", self.dm_core.scenario_entities)
-        self.assertGreater(self.dm_core.get_current_hp("troll"), 30)  # still healed this round
+        self.assertGreater(Combat_Resolution.get_current_hp(self.dm_core.world, "troll"), 30)  # still healed this round
 
     def test_apply_summon_if_hit_with_no_current_target_auto_succeeds(self):
         # Empty entities list -- _instance_location_persistent_names' own "guarantee" fallback
@@ -6600,7 +6611,7 @@ class TestSummoning(DMTestCase):
 
 class TestCreateSpawn(DMTestCase):
     """!
-    @brief create_spawn (an ability field) + DM_Combat.py's own calculate_damage death-hook +
+    @brief create_spawn (an ability field) + Combat_Actions.py's own calculate_damage death-hook +
         DM_Summoning.py's _advance_pending_spawn -- the Pathfinder Wight/Shadow "kills become
         one of us" shape: a real kill stashes a pending-spawn record on the corpse, ticked down
         once per round (even for a dead entity) until it instances a new, permanent entity at
@@ -6617,14 +6628,14 @@ class TestCreateSpawn(DMTestCase):
             "damage_value": {"dice": 10, "pips": 0, "bonus": 0}, "damage_tags": [],
             "create_spawn": {"name": "coyote", "delay_rounds": 2, "requirements": requirements or []},
         }
-        self.dm_core.calculate_damage("gladstone", target_name, ability)
+        Combat_Actions.calculate_damage(self.dm_core.world, "gladstone", target_name, ability)
 
     def test_a_real_kill_matching_requirements_stashes_a_pending_spawn_on_the_corpse(self):
         requirements = [{"field": "subtype", "operator": "==", "value": "humanoid"}]
         self._kill_with_create_spawn("pickpocket", requirements)
-        self.assertEqual(self.dm_core.get_current_hp("pickpocket"), 0)
+        self.assertEqual(Combat_Resolution.get_current_hp(self.dm_core.world, "pickpocket"), 0)
         pending = self.dm_core.entities["pickpocket"]["pending_spawn"]
-        self.assertEqual(pending, {"name": "coyote", "band": self.dm_core.get_band("pickpocket"), "rounds_remaining": 2})
+        self.assertEqual(pending, {"name": "coyote", "band": Combat_Resolution.get_band(self.dm_core.world, "pickpocket"), "rounds_remaining": 2})
 
     def test_a_kill_not_matching_requirements_stashes_nothing(self):
         requirements = [{"field": "subtype", "operator": "==", "value": "humanoid"}]
@@ -6640,7 +6651,7 @@ class TestCreateSpawn(DMTestCase):
             "damage_value": {"dice": 0, "pips": 0, "bonus": 0}, "damage_tags": [],
             "create_spawn": {"name": "coyote", "delay_rounds": 2},
         }
-        self.dm_core.calculate_damage("gladstone", "pickpocket", ability)
+        Combat_Actions.calculate_damage(self.dm_core.world, "gladstone", "pickpocket", ability)
         self.assertNotIn("pending_spawn", self.dm_core.entities["pickpocket"])
 
     def test_pending_spawn_ticks_down_and_instances_a_new_permanent_entity(self):
@@ -6654,7 +6665,7 @@ class TestCreateSpawn(DMTestCase):
         self.assertNotIn("pending_spawn", self.dm_core.entities["pickpocket"])
         self.assertIn("coyote", self.dm_core.scenario_entities)
         coyote = self.dm_core.entities["coyote"]
-        self.assertEqual(coyote["band"], self.dm_core.get_band("pickpocket"))
+        self.assertEqual(coyote["band"], Combat_Resolution.get_band(self.dm_core.world, "pickpocket"))
         self.assertTrue(coyote["ad_hoc"])
         self.assertNotIn("summon_expires_in", coyote)  # permanent, unlike an ordinary summon
 
@@ -6663,14 +6674,14 @@ class TestCreateSpawn(DMTestCase):
         # ordinary "if hp <= 0: continue" gate -- _advance_pending_spawn is deliberately called
         # before that check.
         self._kill_with_create_spawn("pickpocket")
-        self.assertEqual(self.dm_core.get_current_hp("pickpocket"), 0)
+        self.assertEqual(Combat_Resolution.get_current_hp(self.dm_core.world, "pickpocket"), 0)
         self.dm_core.run_round_upkeep()
         self.dm_core.run_round_upkeep()
         self.assertIn("coyote", self.dm_core.scenario_entities)
 
     def test_ability_with_no_create_spawn_stashes_nothing(self):
         ability = {"damage_value": {"dice": 10, "pips": 0, "bonus": 0}, "damage_tags": []}
-        self.dm_core.calculate_damage("gladstone", "pickpocket", ability)
+        Combat_Actions.calculate_damage(self.dm_core.world, "gladstone", "pickpocket", ability)
         self.assertNotIn("pending_spawn", self.dm_core.entities["pickpocket"])
 
 
@@ -6756,10 +6767,10 @@ class TestCureConditionType(DMTestCase):
 
     def setUp(self):
         super().setUp()
-        self.dm_core.apply_condition("gladstone", "filth fever", duration="permanent", dismiss="")
+        Combat_Resolution.apply_condition(self.dm_core.world, "gladstone", "filth fever", duration="permanent", dismiss="")
 
     def test_matches_supertype_or_subtype_matches_the_condition_catalogs_own_classification(self):
-        filth_fever = Combat_Resolution._find_condition_def(self.dm_core.rules, "filth fever")
+        filth_fever = Combat_Resolution._find_condition_def(self.dm_core.world, "filth fever")
         self.assertTrue(Combat_Resolution.matches_supertype_or_subtype(filth_fever, {"subtypes": ["disease"]}))
         self.assertTrue(Combat_Resolution.matches_supertype_or_subtype(filth_fever, {"supertypes": ["affliction"]}))
         self.assertFalse(Combat_Resolution.matches_supertype_or_subtype(filth_fever, {"subtypes": ["curse"]}))
@@ -6768,7 +6779,7 @@ class TestCureConditionType(DMTestCase):
         ability = {"cure": {"subtypes": ["disease"]}}
         result = RolledOutcome(entity="gladstone", skill="miracles", roll=10, difficulty=0, success=True)
         self.dm_core._apply_cure_if_hit(result, ability, "gladstone")
-        self.assertFalse(self.dm_core.has_condition("gladstone", "filth fever"))
+        self.assertFalse(Combat_Resolution.has_condition(self.dm_core.world, "gladstone", "filth fever"))
         self.assertEqual([e.conditions for e in result.effects if isinstance(e, CureEffect)], [["filth fever"]])
 
     def test_apply_cure_if_hit_ignores_a_non_matching_condition(self):
@@ -6777,14 +6788,14 @@ class TestCureConditionType(DMTestCase):
         ability = {"cure": {"subtypes": ["curse"]}}
         result = RolledOutcome(entity="gladstone", skill="miracles", roll=10, difficulty=0, success=True)
         self.dm_core._apply_cure_if_hit(result, ability, "gladstone")
-        self.assertTrue(self.dm_core.has_condition("gladstone", "filth fever"))
+        self.assertTrue(Combat_Resolution.has_condition(self.dm_core.world, "gladstone", "filth fever"))
         self.assertEqual([e.conditions for e in result.effects if isinstance(e, CureEffect)], [[]])
 
     def test_apply_cure_if_hit_does_nothing_on_a_failed_roll(self):
         ability = {"cure": {"subtypes": ["disease"]}}
         result = RolledOutcome(entity="gladstone", skill="miracles", roll=1, difficulty=10, success=False)
         self.dm_core._apply_cure_if_hit(result, ability, "gladstone")
-        self.assertTrue(self.dm_core.has_condition("gladstone", "filth fever"))
+        self.assertTrue(Combat_Resolution.has_condition(self.dm_core.world, "gladstone", "filth fever"))
         self.assertEqual(result.effects, [])
 
     def test_casting_cure_disease_end_to_end_cures_filth_fever(self):
@@ -6794,7 +6805,7 @@ class TestCureConditionType(DMTestCase):
         self.dm_core._on_turn_detected({
             "clauses": [{"kind": "action", "skill": "cure disease"}], "input": "I cure gladstone's disease",
         })
-        self.assertFalse(self.dm_core.has_condition("gladstone", "filth fever"))
+        self.assertFalse(Combat_Resolution.has_condition(self.dm_core.world, "gladstone", "filth fever"))
         action = resolved[-1]["actions"][0]
         self.assertEqual([e.conditions for e in action.effects if isinstance(e, CureEffect)], [["filth fever"]])
 
@@ -6817,10 +6828,10 @@ class TestBandit(DMTestCase):
     def test_favors_the_bow_at_a_distance(self):
         # Starting gap is 4 -- exactly the short bow's own range, so it's both "not adjacent"
         # (distance_to_target > 0, the behavior's own requirement) and actually reachable.
-        behavior = self.dm_core.choose_behavior("bandit", "gladstone")
+        behavior = Combat_Actions.choose_behavior(self.dm_core.world, "bandit", "gladstone")
         self.assertEqual(behavior["action"], "short bow")
 
-        turn = self.dm_core.resolve_behavior_action("bandit", "gladstone")
+        turn = Combat_Actions.resolve_behavior_action(self.dm_core.world, "bandit", "gladstone")
         self.assertEqual(turn.skill, "missiles")
         self.assertNotIsInstance(turn, MovementOutcome)
 
@@ -6828,23 +6839,23 @@ class TestBandit(DMTestCase):
 class TestStatusEvaluation(DMTestCase):
     def test_hp_per_remain_requirement_matches_current_percentage(self):
         # gladstone: max_hp 36. At 18 hp (50%) the "wounded" status (0.40-0.59) should match.
-        self.dm_core.apply_damage("gladstone", 18)
-        matched_names = [s["name"] for s in self.dm_core.get_applicable_statuses("gladstone", "on_damage")]
+        Combat_Resolution.apply_damage(self.dm_core.world, "gladstone", 18)
+        matched_names = [s["name"] for s in Combat_Resolution.get_applicable_statuses(self.dm_core.world, "gladstone", "on_damage")]
         self.assertIn("wounded", matched_names)
         self.assertNotIn("severe", matched_names)
 
 
     def test_apply_damage_auto_applies_matching_condition(self):
-        self.dm_core.apply_damage("gladstone", 18)  # -> 50% hp -> "wounded"
+        Combat_Resolution.apply_damage(self.dm_core.world, "gladstone", 18)  # -> 50% hp -> "wounded"
         self.assertIn("wounded", self.dm_core.entities["gladstone"]["active_conditions"])
 
 
     def test_dead_condition_is_not_auto_dismissed_by_healing(self):
         # "dead"'s apply block sets dismiss = "resurrection", so simple healing must not
         # revive it via the same automatic sweep that clears "wounded"/"stunned"/etc.
-        self.dm_core.apply_damage("gladstone", 36)  # 0% -> dead
+        Combat_Resolution.apply_damage(self.dm_core.world, "gladstone", 36)  # 0% -> dead
         self.assertIn("dead", self.dm_core.entities["gladstone"]["active_conditions"])
-        self.dm_core.apply_healing("gladstone", 999)
+        Combat_Resolution.apply_healing(self.dm_core.world, "gladstone", 999)
         self.assertIn("dead", self.dm_core.entities["gladstone"]["active_conditions"])
 
 
@@ -6858,15 +6869,15 @@ class TestRequirementsEngine(DMTestCase):
     def test_between_matches_the_same_wound_tier_the_old_two_requirement_form_did(self):
         # gladstone: max_hp 36. rules.toml's "wounded" tier is now authored as a single
         # between = [0.40, 0.59] requirement instead of two chained >=/<= ones.
-        self.dm_core.apply_damage("gladstone", 18)  # -> 50% hp
-        matched_names = [s["name"] for s in self.dm_core.get_applicable_statuses("gladstone", "on_damage")]
+        Combat_Resolution.apply_damage(self.dm_core.world, "gladstone", 18)  # -> 50% hp
+        matched_names = [s["name"] for s in Combat_Resolution.get_applicable_statuses(self.dm_core.world, "gladstone", "on_damage")]
         self.assertIn("wounded", matched_names)
         self.assertNotIn("severe", matched_names)
 
     def test_between_is_inclusive_at_both_ends(self):
         entities = {"gladstone": {"hp": 5, "max_hp": 10}}
         requirements = [{"field": "hp_per_remain", "operator": "between", "value": [0.5, 0.5]}]
-        self.assertTrue(Combat_Resolution.entity_matches_requirements(entities, self.event_bus, "gladstone", requirements))
+        self.assertTrue(Combat_Resolution.entity_matches_requirements(WorldContext(entities=entities, event_bus=self.event_bus), "gladstone", requirements))
 
     def test_any_matches_if_either_branch_holds(self):
         entities = {"gladstone": {"hp": 10, "max_hp": 10, "active_conditions": {"prone": {}}}}
@@ -6874,7 +6885,7 @@ class TestRequirementsEngine(DMTestCase):
             {"field": "has_condition:paralyzed", "operator": "==", "value": True},
             {"field": "has_condition:prone", "operator": "==", "value": True},
         ]}]
-        self.assertTrue(Combat_Resolution.entity_matches_requirements(entities, self.event_bus, "gladstone", requirements))
+        self.assertTrue(Combat_Resolution.entity_matches_requirements(WorldContext(entities=entities, event_bus=self.event_bus), "gladstone", requirements))
 
     def test_none_fails_when_any_branch_holds(self):
         entities = {"gladstone": {"hp": 10, "max_hp": 10, "active_conditions": {"prone": {}}}}
@@ -6882,7 +6893,7 @@ class TestRequirementsEngine(DMTestCase):
             {"field": "has_condition:paralyzed", "operator": "==", "value": True},
             {"field": "has_condition:prone", "operator": "==", "value": True},
         ]}]
-        self.assertFalse(Combat_Resolution.entity_matches_requirements(entities, self.event_bus, "gladstone", requirements))
+        self.assertFalse(Combat_Resolution.entity_matches_requirements(WorldContext(entities=entities, event_bus=self.event_bus), "gladstone", requirements))
 
     def test_all_and_any_nest_inside_each_other(self):
         entities = {"gladstone": {"hp": 3, "max_hp": 10, "active_conditions": {"shaken": {}}}}
@@ -6893,9 +6904,9 @@ class TestRequirementsEngine(DMTestCase):
                 {"field": "has_condition:frightened", "operator": "==", "value": True},
             ]},
         ]}]
-        self.assertTrue(Combat_Resolution.entity_matches_requirements(entities, self.event_bus, "gladstone", requirements))
+        self.assertTrue(Combat_Resolution.entity_matches_requirements(WorldContext(entities=entities, event_bus=self.event_bus), "gladstone", requirements))
         entities["gladstone"]["hp"] = 9  # 90% -- fails the "all" branch's own hp_per_remain check now
-        self.assertFalse(Combat_Resolution.entity_matches_requirements(entities, self.event_bus, "gladstone", requirements))
+        self.assertFalse(Combat_Resolution.entity_matches_requirements(WorldContext(entities=entities, event_bus=self.event_bus), "gladstone", requirements))
 
     def test_between_evaluates_in_a_program_if_step(self):
         entities = {"gladstone": {"hp": 5, "max_hp": 10}}
@@ -6925,47 +6936,47 @@ class TestRequirementsEngine(DMTestCase):
 class TestConditionModifiers(DMTestCase):
     """!
     @brief get_condition_modifier (DM_Status.py) and its use in resolve_action/
-        resolve_opposed_action (DM_Combat.py) -- a [[condition]] entry's own modifier now
+        resolve_opposed_action (Combat_Resolution.py) -- a [[condition]] entry's own modifier now
         actually costs dice/pips/bonus, not just narration (see CLAUDE.md's "Status and
         conditions").
     """
 
     def test_get_condition_modifier_sums_matching_active_conditions(self):
         # rules.toml's own "wounded" [[condition]] entry is {dice: -1, pips: 0, bonus: 0}.
-        self.dm_core.apply_condition("gladstone", "wounded", duration="permanent", dismiss="")
+        Combat_Resolution.apply_condition(self.dm_core.world, "gladstone", "wounded", duration="permanent", dismiss="")
         self.assertEqual(
-            self.dm_core.get_condition_modifier("gladstone"),
+            Combat_Resolution.get_condition_modifier(self.dm_core.world, "gladstone"),
             {"dice": -1, "pips": 0, "bonus": 0},
         )
 
     def test_get_condition_modifier_sums_the_surprised_condition(self):
         # rules.toml's own "surprised" [[condition]] entry is {dice: -2, pips: 0, bonus: 0} --
         # heavier than "wounded"'s -1, per docs/downtime.md's "Night watch and surprise".
-        self.dm_core.apply_condition("gladstone", "surprised", duration="rounds", length=1, dismiss="")
+        Combat_Resolution.apply_condition(self.dm_core.world, "gladstone", "surprised", duration="rounds", length=1, dismiss="")
         self.assertEqual(
-            self.dm_core.get_condition_modifier("gladstone"),
+            Combat_Resolution.get_condition_modifier(self.dm_core.world, "gladstone"),
             {"dice": -2, "pips": 0, "bonus": 0},
         )
 
     def test_get_condition_modifier_ignores_conditions_with_no_rules_entry(self):
         # "hidden" is a plain presence flag (see items.toml's dart trap) with no [[condition]]
         # entry of its own -- it must not silently contribute a modifier.
-        self.dm_core.apply_condition("gladstone", "hidden", duration="permanent", dismiss="")
+        Combat_Resolution.apply_condition(self.dm_core.world, "gladstone", "hidden", duration="permanent", dismiss="")
         self.assertEqual(
-            self.dm_core.get_condition_modifier("gladstone"),
+            Combat_Resolution.get_condition_modifier(self.dm_core.world, "gladstone"),
             {"dice": 0, "pips": 0, "bonus": 0},
         )
 
     def test_get_condition_modifier_applies_only_to_the_scoped_skill(self):
         # rules.toml's own "dazzled" now authors applies_to = ["observation"] -- Pathfinder's
         # Dazzled is sight-only, not a blanket penalty.
-        self.dm_core.apply_condition("gladstone", "dazzled", duration="permanent", dismiss="")
+        Combat_Resolution.apply_condition(self.dm_core.world, "gladstone", "dazzled", duration="permanent", dismiss="")
         self.assertEqual(
-            self.dm_core.get_condition_modifier("gladstone", "observation"),
+            Combat_Resolution.get_condition_modifier(self.dm_core.world, "gladstone", "observation"),
             {"dice": -1, "pips": 0, "bonus": 0},
         )
         self.assertEqual(
-            self.dm_core.get_condition_modifier("gladstone", "blades"),
+            Combat_Resolution.get_condition_modifier(self.dm_core.world, "gladstone", "blades"),
             {"dice": 0, "pips": 0, "bonus": 0},
         )
 
@@ -6973,36 +6984,36 @@ class TestConditionModifiers(DMTestCase):
         # No skill context at all (skill_name=None, the default) can't match an "applies_to"
         # list -- same "can't match without a value" precedent distance_to_target already
         # follows with no opponent_name.
-        self.dm_core.apply_condition("gladstone", "dazzled", duration="permanent", dismiss="")
+        Combat_Resolution.apply_condition(self.dm_core.world, "gladstone", "dazzled", duration="permanent", dismiss="")
         self.assertEqual(
-            self.dm_core.get_condition_modifier("gladstone"),
+            Combat_Resolution.get_condition_modifier(self.dm_core.world, "gladstone"),
             {"dice": 0, "pips": 0, "bonus": 0},
         )
 
     def test_get_condition_modifier_unscoped_condition_still_applies_regardless_of_skill(self):
         # "wounded" authors no applies_to at all -- it must still apply globally, the
         # pre-existing behavior for every condition that doesn't opt into scoping.
-        self.dm_core.apply_condition("gladstone", "wounded", duration="permanent", dismiss="")
+        Combat_Resolution.apply_condition(self.dm_core.world, "gladstone", "wounded", duration="permanent", dismiss="")
         self.assertEqual(
-            self.dm_core.get_condition_modifier("gladstone", "observation"),
+            Combat_Resolution.get_condition_modifier(self.dm_core.world, "gladstone", "observation"),
             {"dice": -1, "pips": 0, "bonus": 0},
         )
 
     def test_resolve_action_scoped_condition_only_penalizes_the_named_skill(self):
         # gladstone's observation: 2D+0; blades: 5D+0. "dazzled" (applies_to = ["observation"])
         # must cost a die on the former but leave the latter untouched.
-        self.dm_core.apply_condition("gladstone", "dazzled", duration="permanent", dismiss="")
+        Combat_Resolution.apply_condition(self.dm_core.world, "gladstone", "dazzled", duration="permanent", dismiss="")
         with patch("random.randint", return_value=3):
-            observation_result = self.dm_core.resolve_action("gladstone", "observation")
-            blades_result = self.dm_core.resolve_action("gladstone", "blades")
+            observation_result = Combat_Resolution.resolve_action(self.dm_core.world, "gladstone", "observation")
+            blades_result = Combat_Resolution.resolve_action(self.dm_core.world, "gladstone", "blades")
         self.assertEqual(observation_result["roll"], 3)   # (2 - 1) * 3
         self.assertEqual(blades_result["roll"], 15)       # 5 * 3, unpenalized
 
     def test_resolve_action_folds_condition_dice_penalty_into_the_roll(self):
         # gladstone's blades: 5D+0. "wounded" is -1D, same floor-at-zero rule dice_penalty uses.
-        self.dm_core.apply_condition("gladstone", "wounded", duration="permanent", dismiss="")
+        Combat_Resolution.apply_condition(self.dm_core.world, "gladstone", "wounded", duration="permanent", dismiss="")
         with patch("random.randint", return_value=3):
-            result = self.dm_core.resolve_action("gladstone", "blades")
+            result = Combat_Resolution.resolve_action(self.dm_core.world, "gladstone", "blades")
         self.assertEqual(result["roll"], 12)  # (5 - 1) * 3
 
     def test_resolve_opposed_action_applies_the_defenders_own_condition_modifier(self):
@@ -7012,9 +7023,9 @@ class TestConditionModifiers(DMTestCase):
         self.dm_core.entities["test_defender"] = {
             "name": "test_defender", "skills": {"dodge": {"dice": 6, "pips": 0}},
         }
-        self.dm_core.apply_condition("test_defender", "stunned", duration="rounds", length=1, dismiss="")
+        Combat_Resolution.apply_condition(self.dm_core.world, "test_defender", "stunned", duration="rounds", length=1, dismiss="")
         with patch("random.randint", return_value=3):
-            result = self.dm_core.resolve_opposed_action("gladstone", "blades", "test_defender")
+            result = Combat_Resolution.resolve_opposed_action(self.dm_core.world, "gladstone", "blades", "test_defender")
         self.assertEqual(result["difficulty"], 15)  # (6 - 1) * 3
 
 
@@ -7034,7 +7045,7 @@ class TestOnHitCondition(DMTestCase):
         self.dm_core.rules.setdefault("condition", []).append(
             {"name": "bleeding", "upkeep_damage": {"dice": 1, "pips": 0, "bonus": 0}}
         )
-        self.dm_core.calculate_damage("gladstone", "wolf", ability)
+        Combat_Actions.calculate_damage(self.dm_core.world, "gladstone", "wolf", ability)
         self.assertIn("bleeding", self.dm_core.entities["wolf"]["active_conditions"])
 
     def test_chance_below_100_can_fail_to_apply(self):
@@ -7044,7 +7055,7 @@ class TestOnHitCondition(DMTestCase):
             "on_hit_condition": {"condition": "bleeding", "chance": 1},
         }
         with patch("random.randint", return_value=99):
-            self.dm_core.calculate_damage("gladstone", "wolf", ability)
+            Combat_Actions.calculate_damage(self.dm_core.world, "gladstone", "wolf", ability)
         self.assertNotIn("bleeding", self.dm_core.entities["wolf"].get("active_conditions", {}))
 
     def test_immune_defender_never_gains_the_condition(self):
@@ -7056,12 +7067,12 @@ class TestOnHitCondition(DMTestCase):
             "damage_tags": ["slashing"],
             "on_hit_condition": {"condition": "bleeding"},
         }
-        self.dm_core.calculate_damage("gladstone", "wolf", ability)
+        Combat_Actions.calculate_damage(self.dm_core.world, "gladstone", "wolf", ability)
         self.assertNotIn("bleeding", self.dm_core.entities["wolf"].get("active_conditions", {}))
 
     def test_ability_with_no_on_hit_condition_is_unaffected(self):
         ability = {"damage_value": {"dice": 0, "pips": 0, "bonus": 0}, "damage_tags": []}
-        self.dm_core.calculate_damage("gladstone", "wolf", ability)
+        Combat_Actions.calculate_damage(self.dm_core.world, "gladstone", "wolf", ability)
         self.assertEqual(self.dm_core.entities["wolf"].get("active_conditions", {}), {})
 
 
@@ -7079,7 +7090,7 @@ class TestDamageBonusVs(DMTestCase):
             "damage_tags": [],
             "damage_bonus_vs": {"supertypes": ["undead"], "value": {"dice": 0, "pips": 0, "bonus": 5}},
         }
-        result = self.dm_core.calculate_damage("gladstone", "wolf", ability)
+        result = Combat_Actions.calculate_damage(self.dm_core.world, "gladstone", "wolf", ability)
         self.assertEqual(result["bonus_vs"], 5)
         self.assertEqual(result["net_damage"], 5)
 
@@ -7090,7 +7101,7 @@ class TestDamageBonusVs(DMTestCase):
             "damage_tags": [],
             "damage_bonus_vs": {"supertypes": ["undead"], "value": {"dice": 0, "pips": 0, "bonus": 5}},
         }
-        result = self.dm_core.calculate_damage("gladstone", "wolf", ability)
+        result = Combat_Actions.calculate_damage(self.dm_core.world, "gladstone", "wolf", ability)
         self.assertEqual(result["bonus_vs"], 0)
 
 
@@ -7109,7 +7120,7 @@ class TestDamageBonusIfCondition(DMTestCase):
             "damage_tags": [],
             "damage_bonus_if_condition": {"condition": "flat_footed", "value": {"dice": 0, "pips": 0, "bonus": 5}},
         }
-        result = self.dm_core.calculate_damage("gladstone", "wolf", ability)
+        result = Combat_Actions.calculate_damage(self.dm_core.world, "gladstone", "wolf", ability)
         self.assertEqual(result["bonus_if_condition"], 5)
         self.assertEqual(result["net_damage"], 5)
 
@@ -7119,7 +7130,7 @@ class TestDamageBonusIfCondition(DMTestCase):
             "damage_tags": [],
             "damage_bonus_if_condition": {"condition": "flat_footed", "value": {"dice": 0, "pips": 0, "bonus": 5}},
         }
-        result = self.dm_core.calculate_damage("gladstone", "wolf", ability)
+        result = Combat_Actions.calculate_damage(self.dm_core.world, "gladstone", "wolf", ability)
         self.assertEqual(result["bonus_if_condition"], 0)
 
     def test_immune_defender_never_gets_the_bonus(self):
@@ -7130,7 +7141,7 @@ class TestDamageBonusIfCondition(DMTestCase):
             "damage_tags": ["slashing"],
             "damage_bonus_if_condition": {"condition": "flat_footed", "value": {"dice": 0, "pips": 0, "bonus": 5}},
         }
-        result = self.dm_core.calculate_damage("gladstone", "wolf", ability)
+        result = Combat_Actions.calculate_damage(self.dm_core.world, "gladstone", "wolf", ability)
         self.assertEqual(result["bonus_if_condition"], 0)
         self.assertEqual(result["net_damage"], 0)
 
@@ -7152,21 +7163,21 @@ class TestConditionImmunity(DMTestCase):
 
     def test_matching_subtype_blocks_the_condition_entirely(self):
         self.dm_core.entities["wolf"]["immune_conditions"] = {"subtypes": ["charm"]}
-        self.dm_core.apply_condition("wolf", "charmed", duration="permanent")
+        Combat_Resolution.apply_condition(self.dm_core.world, "wolf", "charmed", duration="permanent")
         self.assertNotIn("charmed", self.dm_core.entities["wolf"].get("active_conditions", {}))
 
     def test_matching_supertype_blocks_the_condition_entirely(self):
         self.dm_core.entities["wolf"]["immune_conditions"] = {"supertypes": ["affliction"]}
-        self.dm_core.apply_condition("wolf", "charmed", duration="permanent")
+        Combat_Resolution.apply_condition(self.dm_core.world, "wolf", "charmed", duration="permanent")
         self.assertNotIn("charmed", self.dm_core.entities["wolf"].get("active_conditions", {}))
 
     def test_non_matching_immune_conditions_still_lets_it_land(self):
         self.dm_core.entities["wolf"]["immune_conditions"] = {"subtypes": ["sleep"]}
-        self.dm_core.apply_condition("wolf", "charmed", duration="permanent")
+        Combat_Resolution.apply_condition(self.dm_core.world, "wolf", "charmed", duration="permanent")
         self.assertIn("charmed", self.dm_core.entities["wolf"]["active_conditions"])
 
     def test_no_immune_conditions_field_is_unaffected(self):
-        self.dm_core.apply_condition("wolf", "charmed", duration="permanent")
+        Combat_Resolution.apply_condition(self.dm_core.world, "wolf", "charmed", duration="permanent")
         self.assertIn("charmed", self.dm_core.entities["wolf"]["active_conditions"])
 
 
@@ -7187,20 +7198,20 @@ class TestEquippedSkillBonus(DMTestCase):
 
     def test_get_equipped_skill_bonus_sums_a_matching_worn_item(self):
         self.assertEqual(
-            self.dm_core.get_equipped_skill_bonus("gladstone", "observation"),
+            Combat_Resolution.get_equipped_skill_bonus(self.dm_core.world, "gladstone", "observation"),
             {"dice": 1, "pips": 0},
         )
 
     def test_get_equipped_skill_bonus_ignores_a_non_matching_skill(self):
         self.assertEqual(
-            self.dm_core.get_equipped_skill_bonus("gladstone", "blades"),
+            Combat_Resolution.get_equipped_skill_bonus(self.dm_core.world, "gladstone", "blades"),
             {"dice": 0, "pips": 0},
         )
 
     def test_resolve_action_folds_the_worn_bonus_into_the_roll(self):
         # gladstone's observation is 2D+0; the ring adds +1D.
         with patch("random.randint", return_value=3):
-            result = self.dm_core.resolve_action("gladstone", "observation")
+            result = Combat_Resolution.resolve_action(self.dm_core.world, "gladstone", "observation")
         self.assertEqual(result["roll"], 9)  # (2 + 1) * 3
 
     def test_resolve_opposed_action_folds_the_defenders_own_worn_bonus(self):
@@ -7210,7 +7221,7 @@ class TestEquippedSkillBonus(DMTestCase):
         }
         self.dm_core.entities["ring of observation"]["equipped_skill_bonus"] = {"skill": "dodge", "dice": 2, "pips": 0}
         with patch("random.randint", return_value=3):
-            result = self.dm_core.resolve_opposed_action("gladstone", "blades", "test_defender")
+            result = Combat_Resolution.resolve_opposed_action(self.dm_core.world, "gladstone", "blades", "test_defender")
         self.assertEqual(result["difficulty"], 12)  # (2 + 2) * 3
 
 
@@ -7233,7 +7244,7 @@ class TestDestroyEquipped(DMTestCase):
             "damage_value": {"dice": 0, "pips": 0, "bonus": 0}, "damage_tags": [],
             "destroy_equipped": {"slot": "rhand", "chance": 100},
         }
-        self.dm_core.calculate_damage("gladstone", "wolf", ability)
+        Combat_Actions.calculate_damage(self.dm_core.world, "gladstone", "wolf", ability)
         self.assertNotIn("rhand", self.dm_core.entities["wolf"]["equipped"])
         self.assertNotIn("rusty shortsword", self.dm_core.entities["wolf"]["inventory"])
 
@@ -7243,7 +7254,7 @@ class TestDestroyEquipped(DMTestCase):
             "destroy_equipped": {"slot": "rhand", "chance": 1},
         }
         with patch("random.randint", return_value=99):
-            self.dm_core.calculate_damage("gladstone", "wolf", ability)
+            Combat_Actions.calculate_damage(self.dm_core.world, "gladstone", "wolf", ability)
         self.assertEqual(self.dm_core.entities["wolf"]["equipped"]["rhand"], "rusty shortsword")
 
     def test_empty_slot_is_a_harmless_no_op(self):
@@ -7252,12 +7263,12 @@ class TestDestroyEquipped(DMTestCase):
             "damage_value": {"dice": 0, "pips": 0, "bonus": 0}, "damage_tags": [],
             "destroy_equipped": {"slot": "rhand", "chance": 100},
         }
-        self.dm_core.calculate_damage("gladstone", "wolf", ability)
+        Combat_Actions.calculate_damage(self.dm_core.world, "gladstone", "wolf", ability)
         self.assertIn("rusty shortsword", self.dm_core.entities["wolf"]["inventory"])
 
     def test_ability_with_no_destroy_equipped_is_unaffected(self):
         ability = {"damage_value": {"dice": 0, "pips": 0, "bonus": 0}, "damage_tags": []}
-        self.dm_core.calculate_damage("gladstone", "wolf", ability)
+        Combat_Actions.calculate_damage(self.dm_core.world, "gladstone", "wolf", ability)
         self.assertEqual(self.dm_core.entities["wolf"]["equipped"]["rhand"], "rusty shortsword")
 
     def test_disarm_maneuvers_program_op_destroys_the_equipped_item(self):
@@ -7290,20 +7301,20 @@ class TestAbilityCooldown(DMTestCase):
         ]
 
     def test_ability_ready_is_true_before_first_use(self):
-        self.assertTrue(self.dm_core.get_comparable_value("wolf", "ability_ready:howl"))
+        self.assertTrue(Combat_Resolution.get_comparable_value(self.dm_core.world, "wolf", "ability_ready:howl"))
 
     def test_using_the_ability_sets_its_cooldown(self):
-        self.dm_core.resolve_behavior_action("wolf", "gladstone")
+        Combat_Actions.resolve_behavior_action(self.dm_core.world, "wolf", "gladstone")
         self.assertEqual(self.dm_core.entities["wolf"]["ability_cooldowns"]["howl"], 2)
-        self.assertFalse(self.dm_core.get_comparable_value("wolf", "ability_ready:howl"))
+        self.assertFalse(Combat_Resolution.get_comparable_value(self.dm_core.world, "wolf", "ability_ready:howl"))
 
     def test_run_round_upkeep_ticks_the_cooldown_down_to_zero_and_removes_it(self):
-        self.dm_core.resolve_behavior_action("wolf", "gladstone")
+        Combat_Actions.resolve_behavior_action(self.dm_core.world, "wolf", "gladstone")
         self.dm_core.run_round_upkeep()
         self.assertEqual(self.dm_core.entities["wolf"]["ability_cooldowns"]["howl"], 1)
         self.dm_core.run_round_upkeep()
         self.assertNotIn("howl", self.dm_core.entities["wolf"].get("ability_cooldowns", {}))
-        self.assertTrue(self.dm_core.get_comparable_value("wolf", "ability_ready:howl"))
+        self.assertTrue(Combat_Resolution.get_comparable_value(self.dm_core.world, "wolf", "ability_ready:howl"))
 
     def test_a_behavior_entry_can_gate_off_while_the_ability_is_on_cooldown(self):
         self.dm_core.entities["wolf"]["behavior"] = [
@@ -7317,7 +7328,7 @@ class TestAbilityCooldown(DMTestCase):
             {"requirements": [{"field": "hp_per_remain", "operator": ">=", "value": 0.01}], "action": "bite"},
         ]
         self.dm_core.entities["wolf"]["ability_cooldowns"] = {"howl": 2}
-        behavior = self.dm_core.choose_behavior("wolf", "gladstone")
+        behavior = Combat_Actions.choose_behavior(self.dm_core.world, "wolf", "gladstone")
         self.assertEqual(behavior["action"], "bite")
 
 
@@ -7341,23 +7352,23 @@ class TestProximityStatuses(DMTestCase):
         # "wolf_2" (debug.toml's second wolf, same band as "wolf") has no [entity.attitudes]
         # table of its own -- is_hostile treats it as hostile unconditionally, same as "wolf",
         # so it passes the status's own side = "enemies" filter relative to the actor.
-        self.dm_core.evaluate_proximity_statuses("wolf", "on_action")
+        Combat_Actions.evaluate_proximity_statuses(self.dm_core.world, "wolf", "on_action")
         self.assertIn("shaken", self.dm_core.entities["wolf_2"]["active_conditions"])
 
     def test_never_applies_the_condition_to_the_actor_itself(self):
-        self.dm_core.evaluate_proximity_statuses("wolf", "on_action")
+        Combat_Actions.evaluate_proximity_statuses(self.dm_core.world, "wolf", "on_action")
         self.assertNotIn("shaken", self.dm_core.entities["wolf"].get("active_conditions", {}))
 
     def test_out_of_radius_entity_is_unaffected(self):
         self.dm_core.rules["status"][-1]["apply"]["radius"] = 0
         self.dm_core.entities["wolf_2"]["band"] = 5
         self.dm_core.entities["wolf"]["band"] = 1
-        self.dm_core.evaluate_proximity_statuses("wolf", "on_action")
+        Combat_Actions.evaluate_proximity_statuses(self.dm_core.world, "wolf", "on_action")
         self.assertNotIn("shaken", self.dm_core.entities["wolf_2"].get("active_conditions", {}))
 
     def test_actor_not_matching_requirements_applies_nothing(self):
         self.dm_core.entities["wolf"]["subtype"] = "elemental"
-        self.dm_core.evaluate_proximity_statuses("wolf", "on_action")
+        Combat_Actions.evaluate_proximity_statuses(self.dm_core.world, "wolf", "on_action")
         self.assertNotIn("shaken", self.dm_core.entities["wolf_2"].get("active_conditions", {}))
 
     def test_resolve_behavior_action_fires_on_action_statuses_on_a_landed_hit(self):
@@ -7369,7 +7380,7 @@ class TestProximityStatuses(DMTestCase):
         self.dm_core.entities["target_dummy"] = {"name": "target_dummy", "max_hp": 20, "skills": {}}
         self.dm_core.scenario_entities.append("target_dummy")
         with patch("random.randint", return_value=4):
-            self.dm_core.resolve_behavior_action("wolf", "target_dummy")
+            Combat_Actions.resolve_behavior_action(self.dm_core.world, "wolf", "target_dummy")
         self.assertIn("shaken", self.dm_core.entities["target_dummy"]["active_conditions"])
 
 
@@ -7395,16 +7406,16 @@ class TestPersistentTerrainHazards(DMTestCase):
         self.dm_core.scenario_entities.append("flame wall")
 
     def test_applies_burning_to_a_co_band_entity(self):
-        self.dm_core.evaluate_proximity_statuses("flame wall", "on_round")
+        Combat_Actions.evaluate_proximity_statuses(self.dm_core.world, "flame wall", "on_round")
         self.assertIn("burning", self.dm_core.entities["gladstone"]["active_conditions"])
 
     def test_never_applies_burning_to_the_wall_itself(self):
-        self.dm_core.evaluate_proximity_statuses("flame wall", "on_round")
+        Combat_Actions.evaluate_proximity_statuses(self.dm_core.world, "flame wall", "on_round")
         self.assertNotIn("burning", self.dm_core.entities["flame wall"].get("active_conditions", {}))
 
     def test_an_entity_outside_the_walls_band_is_unaffected(self):
         self.dm_core.entities["gladstone"]["band"] = 3
-        self.dm_core.evaluate_proximity_statuses("flame wall", "on_round")
+        Combat_Actions.evaluate_proximity_statuses(self.dm_core.world, "flame wall", "on_round")
         self.assertNotIn("burning", self.dm_core.entities["gladstone"].get("active_conditions", {}))
 
     def test_burning_lapses_once_the_entity_leaves_and_is_not_refreshed(self):
@@ -7412,21 +7423,21 @@ class TestPersistentTerrainHazards(DMTestCase):
         # outlasts the round it was granted in -- stepping out before the ordinary
         # tick_condition_durations sweep runs again means it's never refreshed, so it lapses on
         # its own rather than lingering as a debuff for having merely walked through once.
-        self.dm_core.evaluate_proximity_statuses("flame wall", "on_round")
+        Combat_Actions.evaluate_proximity_statuses(self.dm_core.world, "flame wall", "on_round")
         self.assertIn("burning", self.dm_core.entities["gladstone"]["active_conditions"])
         self.dm_core.entities["gladstone"]["band"] = 3
-        Combat_Resolution.tick_condition_durations(self.dm_core.entities, self.event_bus, "gladstone", "rounds")
-        self.dm_core.evaluate_proximity_statuses("flame wall", "on_round")
+        Combat_Resolution.tick_condition_durations(WorldContext(entities=self.dm_core.entities, event_bus=self.event_bus), "gladstone", "rounds")
+        Combat_Actions.evaluate_proximity_statuses(self.dm_core.world, "flame wall", "on_round")
         self.assertNotIn("burning", self.dm_core.entities["gladstone"].get("active_conditions", {}))
 
     def test_run_round_upkeep_deals_real_damage_over_two_rounds_while_standing_in_the_fire(self):
         # "burning"'s own upkeep_damage (dice=2, pips=0) always rolls at least 2, so two full
         # rounds standing in it guarantees at least one real damage tick regardless of which
         # order scenario_entities happens to process gladstone/the wall in this round.
-        start_hp = self.dm_core.get_current_hp("gladstone")
+        start_hp = Combat_Resolution.get_current_hp(self.dm_core.world, "gladstone")
         self.dm_core.run_round_upkeep()
         self.dm_core.run_round_upkeep()
-        self.assertLess(self.dm_core.get_current_hp("gladstone"), start_hp)
+        self.assertLess(Combat_Resolution.get_current_hp(self.dm_core.world, "gladstone"), start_hp)
 
     def test_summon_places_a_flame_wall_like_any_other_summoned_entity(self):
         # _summon_creature (DM_Summoning.py) never cared what kind of entity it was placing --
@@ -7449,9 +7460,9 @@ class TestPersistentTerrainHazards(DMTestCase):
         # a player could just attack and destroy the hazard for free. A generic weapon hit
         # (any damage_tags at all) should net zero damage against it.
         sword_swing = {"damage_value": {"dice": 3, "pips": 0, "bonus": 0}, "damage_tags": ["slashing"]}
-        result = self.dm_core.calculate_damage("gladstone", "flame wall", sword_swing)
+        result = Combat_Actions.calculate_damage(self.dm_core.world, "gladstone", "flame wall", sword_swing)
         self.assertEqual(result["net_damage"], 0)
-        self.assertEqual(self.dm_core.get_current_hp("flame wall"), 20)
+        self.assertEqual(Combat_Resolution.get_current_hp(self.dm_core.world, "flame wall"), 20)
 
 
 class TestDelayedTriggeredMagic(DMTestCase):
@@ -7487,13 +7498,13 @@ class TestDelayedTriggeredMagic(DMTestCase):
         self.assertNotIn("shaken", self.dm_core.entities["gladstone"].get("active_conditions", {}))
 
     def test_self_dismiss_spends_the_glyph_the_first_time_it_catches_someone(self):
-        self.assertTrue(self.dm_core.has_condition("warding glyph", "armed"))
+        self.assertTrue(Combat_Resolution.has_condition(self.dm_core.world, "warding glyph", "armed"))
         self.dm_core._evaluate_arrival_statuses()
-        self.assertFalse(self.dm_core.has_condition("warding glyph", "armed"))
+        self.assertFalse(Combat_Resolution.has_condition(self.dm_core.world, "warding glyph", "armed"))
 
     def test_a_spent_glyph_never_triggers_again(self):
         self.dm_core._evaluate_arrival_statuses()  # spends it -- gladstone is shaken once
-        self.dm_core.dismiss_condition("gladstone", "shaken")
+        Combat_Resolution.dismiss_condition(self.dm_core.world, "gladstone", "shaken")
         self.dm_core._evaluate_arrival_statuses()  # armed is gone -- requirements no longer match
         self.assertNotIn("shaken", self.dm_core.entities["gladstone"].get("active_conditions", {}))
 
@@ -7502,7 +7513,7 @@ class TestDelayedTriggeredMagic(DMTestCase):
         # rather than being wasted on an empty room.
         self.dm_core.entities["gladstone"]["band"] = 3
         self.dm_core._evaluate_arrival_statuses()
-        self.assertTrue(self.dm_core.has_condition("warding glyph", "armed"))
+        self.assertTrue(Combat_Resolution.has_condition(self.dm_core.world, "warding glyph", "armed"))
 
     def test_a_freshly_applied_upkeep_damage_condition_is_resolved_immediately(self):
         # "warding glyph blast" applies "burning" (upkeep_damage), which would otherwise just
@@ -7511,9 +7522,9 @@ class TestDelayedTriggeredMagic(DMTestCase):
         # walking into a room. _evaluate_arrival_statuses resolves one implicit round of upkeep
         # immediately instead, which is what makes a real damage-dealing "Blast" glyph shape
         # possible by reusing "burning" directly, no new field needed.
-        start_hp = self.dm_core.get_current_hp("gladstone")
+        start_hp = Combat_Resolution.get_current_hp(self.dm_core.world, "gladstone")
         self.dm_core._evaluate_arrival_statuses()
-        self.assertLess(self.dm_core.get_current_hp("gladstone"), start_hp)
+        self.assertLess(Combat_Resolution.get_current_hp(self.dm_core.world, "gladstone"), start_hp)
 
     def test_a_one_round_blast_condition_is_dismissed_in_the_same_call(self):
         # "burning" is authored duration = "rounds"/length = 1 specifically so the same implicit
@@ -7546,7 +7557,7 @@ class TestDelayedTriggeredMagicWiring(DMTestCase):
 
     def test_entering_a_location_with_the_glyph_already_present_triggers_it(self):
         self.assertIn("shaken", self.dm_core.entities["gladstone"]["active_conditions"])
-        self.assertFalse(self.dm_core.has_condition("warding glyph", "armed"))
+        self.assertFalse(Combat_Resolution.has_condition(self.dm_core.world, "warding glyph", "armed"))
 
 
 class TestConcealment(DMTestCase):
@@ -7565,30 +7576,30 @@ class TestConcealment(DMTestCase):
         # targets just that roll.
         self.dm_core.entities["test_attacker"] = {"name": "test_attacker", "skills": {"blades": {"dice": 0, "pips": 5}}}
         self.dm_core.entities["test_defender"] = {"name": "test_defender", "skills": {}}
-        self.dm_core.apply_condition("test_defender", "invisible", duration="permanent", dismiss="")
+        Combat_Resolution.apply_condition(self.dm_core.world, "test_defender", "invisible", duration="permanent", dismiss="")
 
     def test_get_concealment_reads_the_active_conditions_own_miss_chance(self):
-        self.assertEqual(self.dm_core.get_concealment("test_defender"), 50)
+        self.assertEqual(Combat_Resolution.get_concealment(self.dm_core.world, "test_defender"), 50)
 
     def test_get_concealment_is_zero_with_no_matching_condition(self):
-        self.assertEqual(self.dm_core.get_concealment("test_attacker"), 0)
+        self.assertEqual(Combat_Resolution.get_concealment(self.dm_core.world, "test_attacker"), 0)
 
     def test_a_roll_under_the_miss_chance_forces_an_otherwise_successful_hit_to_miss(self):
         with patch("random.randint", return_value=50):
-            result = self.dm_core.resolve_opposed_action("test_attacker", "blades", "test_defender")
+            result = Combat_Resolution.resolve_opposed_action(self.dm_core.world, "test_attacker", "blades", "test_defender")
         self.assertFalse(result["success"])
         self.assertTrue(result["concealed_miss"])
 
     def test_a_roll_over_the_miss_chance_leaves_the_hit_untouched(self):
         with patch("random.randint", return_value=51):
-            result = self.dm_core.resolve_opposed_action("test_attacker", "blades", "test_defender")
+            result = Combat_Resolution.resolve_opposed_action(self.dm_core.world, "test_attacker", "blades", "test_defender")
         self.assertTrue(result["success"])
         self.assertNotIn("concealed_miss", result)
 
     def test_ignores_concealment_bypasses_the_check_entirely(self):
         ability = {"skill": "blades", "ignores_concealment": True}
         with patch("random.randint", return_value=1):  # would otherwise definitely trigger a miss
-            result = self.dm_core.resolve_opposed_action("test_attacker", "blades", "test_defender", ability=ability)
+            result = Combat_Resolution.resolve_opposed_action(self.dm_core.world, "test_attacker", "blades", "test_defender", ability=ability)
         self.assertTrue(result["success"])
 
 
@@ -7607,29 +7618,29 @@ class TestStatDrain(DMTestCase):
 
     def test_applying_the_condition_permanently_drains_the_named_skill(self):
         # gladstone's athletics is 2D+2.
-        self.dm_core.apply_condition("gladstone", "energy drained", duration="permanent", dismiss="")
+        Combat_Resolution.apply_condition(self.dm_core.world, "gladstone", "energy drained", duration="permanent", dismiss="")
         self.assertEqual(self.dm_core.entities["gladstone"]["skills"]["athletics"], {"dice": 1, "pips": 1})
 
     def test_dismissing_the_condition_restores_the_exact_drained_amount(self):
-        self.dm_core.apply_condition("gladstone", "energy drained", duration="permanent", dismiss="")
-        self.dm_core.dismiss_condition("gladstone", "energy drained")
+        Combat_Resolution.apply_condition(self.dm_core.world, "gladstone", "energy drained", duration="permanent", dismiss="")
+        Combat_Resolution.dismiss_condition(self.dm_core.world, "gladstone", "energy drained")
         self.assertEqual(self.dm_core.entities["gladstone"]["skills"]["athletics"], {"dice": 2, "pips": 2})
 
     def test_drain_is_clamped_and_does_not_go_below_zero(self):
         self.dm_core.rules["condition"][-1]["drain"] = {"skill": "athletics", "dice": 10, "pips": 10}
-        self.dm_core.apply_condition("gladstone", "energy drained", duration="permanent", dismiss="")
+        Combat_Resolution.apply_condition(self.dm_core.world, "gladstone", "energy drained", duration="permanent", dismiss="")
         self.assertEqual(self.dm_core.entities["gladstone"]["skills"]["athletics"], {"dice": 0, "pips": 0})
-        self.dm_core.dismiss_condition("gladstone", "energy drained")
+        Combat_Resolution.dismiss_condition(self.dm_core.world, "gladstone", "energy drained")
         # Restores only what was actually removed (2D+2), not the nominal 10D+10.
         self.assertEqual(self.dm_core.entities["gladstone"]["skills"]["athletics"], {"dice": 2, "pips": 2})
 
     def test_reapplying_an_already_active_condition_does_not_double_drain(self):
-        self.dm_core.apply_condition("gladstone", "energy drained", duration="permanent", dismiss="")
-        self.dm_core.apply_condition("gladstone", "energy drained", duration="permanent", dismiss="")
+        Combat_Resolution.apply_condition(self.dm_core.world, "gladstone", "energy drained", duration="permanent", dismiss="")
+        Combat_Resolution.apply_condition(self.dm_core.world, "gladstone", "energy drained", duration="permanent", dismiss="")
         self.assertEqual(self.dm_core.entities["gladstone"]["skills"]["athletics"], {"dice": 1, "pips": 1})
 
     def test_condition_with_no_drain_field_is_unaffected(self):
-        self.dm_core.apply_condition("gladstone", "wounded", duration="permanent", dismiss="")
+        Combat_Resolution.apply_condition(self.dm_core.world, "gladstone", "wounded", duration="permanent", dismiss="")
         self.assertEqual(self.dm_core.entities["gladstone"]["skills"]["athletics"], {"dice": 2, "pips": 2})
 
 
@@ -7643,7 +7654,7 @@ class TestFormOverride(DMTestCase):
     """
 
     def test_applying_the_condition_overrides_the_form_fields(self):
-        self.dm_core.apply_condition("gladstone", "polymorphed", duration="permanent", dismiss="")
+        Combat_Resolution.apply_condition(self.dm_core.world, "gladstone", "polymorphed", duration="permanent", dismiss="")
         gladstone = self.dm_core.entities["gladstone"]
         self.assertEqual(gladstone["name"], "coyote")
         self.assertEqual(gladstone["supertype"], "creature")
@@ -7656,13 +7667,13 @@ class TestFormOverride(DMTestCase):
         gladstone = self.dm_core.entities["gladstone"]
         original_inventory = list(gladstone["inventory"])
         original_equipped = dict(gladstone["equipped"])
-        original_hp = self.dm_core.get_current_hp("gladstone")
+        original_hp = Combat_Resolution.get_current_hp(self.dm_core.world, "gladstone")
 
-        self.dm_core.apply_condition("gladstone", "polymorphed", duration="permanent", dismiss="")
+        Combat_Resolution.apply_condition(self.dm_core.world, "gladstone", "polymorphed", duration="permanent", dismiss="")
 
         self.assertEqual(gladstone["inventory"], original_inventory)
         self.assertEqual(gladstone["equipped"], original_equipped)
-        self.assertEqual(self.dm_core.get_current_hp("gladstone"), original_hp)
+        self.assertEqual(Combat_Resolution.get_current_hp(self.dm_core.world, "gladstone"), original_hp)
 
     def test_dismissing_restores_the_exact_pre_transform_fields(self):
         gladstone = self.dm_core.entities["gladstone"]
@@ -7673,8 +7684,8 @@ class TestFormOverride(DMTestCase):
         original_skills = copy.deepcopy(gladstone["skills"])
         original_abilities = copy.deepcopy(gladstone["abilities"])
 
-        self.dm_core.apply_condition("gladstone", "polymorphed", duration="permanent", dismiss="")
-        self.dm_core.dismiss_condition("gladstone", "polymorphed")
+        Combat_Resolution.apply_condition(self.dm_core.world, "gladstone", "polymorphed", duration="permanent", dismiss="")
+        Combat_Resolution.dismiss_condition(self.dm_core.world, "gladstone", "polymorphed")
 
         self.assertEqual(gladstone["name"], original_name)
         self.assertEqual(gladstone["supertype"], original_supertype)
@@ -7684,21 +7695,21 @@ class TestFormOverride(DMTestCase):
         self.assertEqual(gladstone["abilities"], original_abilities)
 
     def test_reapplying_an_already_active_form_does_not_resnapshot(self):
-        self.dm_core.apply_condition("gladstone", "polymorphed", duration="permanent", dismiss="")
+        Combat_Resolution.apply_condition(self.dm_core.world, "gladstone", "polymorphed", duration="permanent", dismiss="")
         # Mutate the live (already-coyote) skills the way an intervening drain/damage might --
         # a re-snapshot on refresh would clobber this back to the coyote's own base value.
         self.dm_core.entities["gladstone"]["skills"]["brawling"] = {"dice": 1, "pips": 0}
-        self.dm_core.apply_condition("gladstone", "polymorphed", duration="permanent", length=5, dismiss="")
+        Combat_Resolution.apply_condition(self.dm_core.world, "gladstone", "polymorphed", duration="permanent", length=5, dismiss="")
         self.assertEqual(self.dm_core.entities["gladstone"]["skills"]["brawling"], {"dice": 1, "pips": 0})
 
     def test_condition_with_no_form_field_is_unaffected(self):
-        self.dm_core.apply_condition("gladstone", "wounded", duration="permanent", dismiss="")
+        Combat_Resolution.apply_condition(self.dm_core.world, "gladstone", "wounded", duration="permanent", dismiss="")
         self.assertEqual(self.dm_core.entities["gladstone"]["name"], "gladstone")
 
     def test_form_override_survives_save_and_load(self):
         slot_name = "test_form_override_round_trip_slot"
         self.addCleanup(shutil.rmtree, self.dm_core._save_slot_dir(slot_name), ignore_errors=True)
-        self.dm_core.apply_condition("gladstone", "polymorphed", duration="permanent", dismiss="")
+        Combat_Resolution.apply_condition(self.dm_core.world, "gladstone", "polymorphed", duration="permanent", dismiss="")
 
         self.dm_core.save_game(slot_name)
         self.dm_core.load_game(slot_name)
@@ -7708,12 +7719,12 @@ class TestFormOverride(DMTestCase):
         self.assertEqual(gladstone["max_hp"], 10)
         self.assertIn("polymorphed", gladstone["active_conditions"])
 
-        self.dm_core.dismiss_condition("gladstone", "polymorphed")
+        Combat_Resolution.dismiss_condition(self.dm_core.world, "gladstone", "polymorphed")
         self.assertEqual(self.dm_core.entities["gladstone"]["name"], "gladstone")
 
     def test_break_enchantment_cures_polymorph_by_kind(self):
-        self.dm_core.apply_condition("gladstone", "polymorphed", duration="permanent", dismiss="")
-        self.dm_core.cure_conditions("gladstone", {"subtypes": ["transmutation"]})
+        Combat_Resolution.apply_condition(self.dm_core.world, "gladstone", "polymorphed", duration="permanent", dismiss="")
+        Combat_Resolution.dismiss_matching_conditions(self.dm_core.world, "gladstone", {"subtypes": ["transmutation"]})
         self.assertEqual(self.dm_core.entities["gladstone"]["name"], "gladstone")
         self.assertNotIn("polymorphed", self.dm_core.entities["gladstone"]["active_conditions"])
 
@@ -7743,24 +7754,24 @@ class TestPeriodicTest(DMTestCase):
         })
 
     def test_no_test_is_rolled_before_onset_elapses(self):
-        self.dm_core.apply_condition("gladstone", "test toxin", duration="permanent", dismiss="")
+        Combat_Resolution.apply_condition(self.dm_core.world, "gladstone", "test toxin", duration="permanent", dismiss="")
         self._stub_roll_dice(1)  # would fail against difficulty 12 if a save were actually rolled
         self.dm_core.run_round_upkeep()  # onset: 2 -> 1, no test yet
         self.assertEqual(self.dm_core.entities["gladstone"]["skills"]["finesse"], {"dice": 3, "pips": 0})
 
     def test_the_first_save_rolls_the_round_onset_elapses(self):
-        self.dm_core.apply_condition("gladstone", "test toxin", duration="permanent", dismiss="")
+        Combat_Resolution.apply_condition(self.dm_core.world, "gladstone", "test toxin", duration="permanent", dismiss="")
         self._stub_roll_dice(1)
         self.dm_core.run_round_upkeep()
         self.dm_core.run_round_upkeep()  # onset: 1 -> 0, first save rolled and fails
         self.assertEqual(self.dm_core.entities["gladstone"]["skills"]["finesse"], {"dice": 2, "pips": 0})
 
     def test_a_failed_save_resets_consecutive_successes(self):
-        self.dm_core.apply_condition("gladstone", "test toxin", duration="permanent", dismiss="")
+        Combat_Resolution.apply_condition(self.dm_core.world, "gladstone", "test toxin", duration="permanent", dismiss="")
         self._stub_roll_dice(15)  # beats difficulty 12
         self.dm_core.run_round_upkeep()
         self.dm_core.run_round_upkeep()  # save #1 passes
-        periodic = self.dm_core.get_active_conditions("gladstone")["test toxin"]["_periodic"]
+        periodic = Combat_Resolution.get_active_conditions(self.dm_core.world, "gladstone")["test toxin"]["_periodic"]
         self.assertEqual(periodic["successes"], 1)
         self._stub_roll_dice(1)
         self.dm_core.run_round_upkeep()  # save #2 fails
@@ -7768,29 +7779,29 @@ class TestPeriodicTest(DMTestCase):
         self.assertEqual(self.dm_core.entities["gladstone"]["skills"]["finesse"], {"dice": 2, "pips": 0})
 
     def test_cure_after_successes_consecutive_passes_auto_dismisses(self):
-        self.dm_core.apply_condition("gladstone", "test toxin", duration="permanent", dismiss="")
+        Combat_Resolution.apply_condition(self.dm_core.world, "gladstone", "test toxin", duration="permanent", dismiss="")
         self._stub_roll_dice(15)
         self.dm_core.run_round_upkeep()  # onset: 2 -> 1
         self.dm_core.run_round_upkeep()  # onset elapses, save #1 passes
-        self.assertTrue(self.dm_core.has_condition("gladstone", "test toxin"))
+        self.assertTrue(Combat_Resolution.has_condition(self.dm_core.world, "gladstone", "test toxin"))
         self.dm_core.run_round_upkeep()  # interval elapses, save #2 passes -- cured
-        self.assertFalse(self.dm_core.has_condition("gladstone", "test toxin"))
+        self.assertFalse(Combat_Resolution.has_condition(self.dm_core.world, "gladstone", "test toxin"))
 
     def test_dismissing_restores_the_total_accumulated_drain_across_multiple_failures(self):
-        self.dm_core.apply_condition("gladstone", "test toxin", duration="permanent", dismiss="")
+        Combat_Resolution.apply_condition(self.dm_core.world, "gladstone", "test toxin", duration="permanent", dismiss="")
         self._stub_roll_dice(1)  # every save fails
         self.dm_core.run_round_upkeep()
         self.dm_core.run_round_upkeep()  # save #1 fails -- finesse 3 -> 2
         self.dm_core.run_round_upkeep()  # save #2 fails -- finesse 2 -> 1
         self.assertEqual(self.dm_core.entities["gladstone"]["skills"]["finesse"], {"dice": 1, "pips": 0})
-        self.dm_core.dismiss_condition("gladstone", "test toxin")
+        Combat_Resolution.dismiss_condition(self.dm_core.world, "gladstone", "test toxin")
         self.assertEqual(self.dm_core.entities["gladstone"]["skills"]["finesse"], {"dice": 3, "pips": 0})
 
     def test_a_days_denominated_onset_and_interval_convert_through_the_block_clock(self):
         # blocks_per_day is 3 (rules.toml) -- one day of onset is 3 blocks.
         self.dm_core.rules["condition"][-1]["periodic_test"]["onset"] = {"unit": "days", "length": 1}
         self.dm_core.rules["condition"][-1]["periodic_test"]["interval"] = {"unit": "days", "length": 1}
-        self.dm_core.apply_condition("gladstone", "test toxin", duration="permanent", dismiss="")
+        Combat_Resolution.apply_condition(self.dm_core.world, "gladstone", "test toxin", duration="permanent", dismiss="")
         self._stub_roll_dice(1)
         self.dm_core.advance_blocks(2)
         self.assertEqual(self.dm_core.entities["gladstone"]["skills"]["finesse"], {"dice": 3, "pips": 0})
@@ -7798,7 +7809,7 @@ class TestPeriodicTest(DMTestCase):
         self.assertEqual(self.dm_core.entities["gladstone"]["skills"]["finesse"], {"dice": 2, "pips": 0})
 
     def test_a_condition_with_no_periodic_test_field_is_unaffected(self):
-        self.dm_core.apply_condition("gladstone", "wounded", duration="permanent", dismiss="")
+        Combat_Resolution.apply_condition(self.dm_core.world, "gladstone", "wounded", duration="permanent", dismiss="")
         self.dm_core.run_round_upkeep()
         self.dm_core.run_round_upkeep()
         self.assertEqual(self.dm_core.entities["gladstone"]["skills"]["finesse"], {"dice": 3, "pips": 0})
@@ -7812,29 +7823,29 @@ class TestForcedActionTargetOverride(DMTestCase):
     """
 
     def test_resolve_override_target_is_none_with_no_matching_condition(self):
-        self.assertIsNone(self.dm_core.resolve_override_target("wolf", ["gladstone", "thane"]))
+        self.assertIsNone(Combat_Resolution.resolve_override_target(self.dm_core.world, "wolf", ["gladstone", "thane"]))
 
     def test_random_override_picks_from_the_given_candidates(self):
         self.dm_core.rules.setdefault("condition", []).append({"name": "confused", "override_target": "random"})
-        self.dm_core.apply_condition("wolf", "confused", duration="permanent", dismiss="")
+        Combat_Resolution.apply_condition(self.dm_core.world, "wolf", "confused", duration="permanent", dismiss="")
         with patch("random.choice", return_value="thane"):
-            self.assertEqual(self.dm_core.resolve_override_target("wolf", ["gladstone", "thane"]), "thane")
+            self.assertEqual(Combat_Resolution.resolve_override_target(self.dm_core.world, "wolf", ["gladstone", "thane"]), "thane")
 
     def test_random_override_with_no_candidates_returns_none(self):
         self.dm_core.rules.setdefault("condition", []).append({"name": "confused", "override_target": "random"})
-        self.dm_core.apply_condition("wolf", "confused", duration="permanent", dismiss="")
-        self.assertIsNone(self.dm_core.resolve_override_target("wolf", []))
+        Combat_Resolution.apply_condition(self.dm_core.world, "wolf", "confused", duration="permanent", dismiss="")
+        self.assertIsNone(Combat_Resolution.resolve_override_target(self.dm_core.world, "wolf", []))
 
     def test_a_literal_override_resolves_to_a_real_living_entity(self):
         self.dm_core.rules.setdefault("condition", []).append({"name": "dominated", "override_target": "thane"})
-        self.dm_core.apply_condition("wolf", "dominated", duration="permanent", dismiss="")
-        self.assertEqual(self.dm_core.resolve_override_target("wolf", []), "thane")
+        Combat_Resolution.apply_condition(self.dm_core.world, "wolf", "dominated", duration="permanent", dismiss="")
+        self.assertEqual(Combat_Resolution.resolve_override_target(self.dm_core.world, "wolf", []), "thane")
 
     def test_a_literal_override_naming_a_dead_entity_resolves_to_none(self):
         self.dm_core.entities["thane"]["hp"] = 0
         self.dm_core.rules.setdefault("condition", []).append({"name": "dominated", "override_target": "thane"})
-        self.dm_core.apply_condition("wolf", "dominated", duration="permanent", dismiss="")
-        self.assertIsNone(self.dm_core.resolve_override_target("wolf", []))
+        Combat_Resolution.apply_condition(self.dm_core.world, "wolf", "dominated", duration="permanent", dismiss="")
+        self.assertIsNone(Combat_Resolution.resolve_override_target(self.dm_core.world, "wolf", []))
 
     def test_resolve_behavior_action_attacks_the_overridden_target_instead(self):
         # wolf is normally acting against "gladstone" this turn -- "dominated" redirects it to
@@ -7843,15 +7854,15 @@ class TestForcedActionTargetOverride(DMTestCase):
         self.dm_core.entities["target_dummy"] = {"name": "target_dummy", "max_hp": 20, "skills": {}}
         self.dm_core.scenario_entities.append("target_dummy")
         self.dm_core.rules.setdefault("condition", []).append({"name": "dominated", "override_target": "target_dummy"})
-        self.dm_core.apply_condition("wolf", "dominated", duration="permanent", dismiss="")
+        Combat_Resolution.apply_condition(self.dm_core.world, "wolf", "dominated", duration="permanent", dismiss="")
         with patch("random.randint", return_value=4):
-            result = self.dm_core.resolve_behavior_action("wolf", "gladstone")
+            result = Combat_Actions.resolve_behavior_action(self.dm_core.world, "wolf", "gladstone")
         assert result is not None
         self.assertTrue(result.success)
         self.assertEqual(result.defender, "target_dummy")
-        self.assertLess(self.dm_core.get_current_hp("target_dummy"), 20)
+        self.assertLess(Combat_Resolution.get_current_hp(self.dm_core.world, "target_dummy"), 20)
         self.assertEqual(
-            self.dm_core.get_current_hp("gladstone"), self.dm_core.entities["gladstone"]["max_hp"],
+            Combat_Resolution.get_current_hp(self.dm_core.world, "gladstone"), self.dm_core.entities["gladstone"]["max_hp"],
         )
 
 
@@ -7866,16 +7877,16 @@ class TestSkillGroups(DMTestCase):
     def test_a_defined_group_name_expands_to_its_member_skills(self):
         # rules.toml's own shipped "strength" group.
         self.assertEqual(
-            self.dm_core.get_skill_group_members("strength"),
+            Combat_Resolution.get_skill_group_members(self.dm_core.world, "strength"),
             ["strength", "athletics", "blades", "axes", "brawling"],
         )
 
     def test_an_undefined_name_passes_through_as_a_literal_skill(self):
-        self.assertEqual(self.dm_core.get_skill_group_members("observation"), ["observation"])
+        self.assertEqual(Combat_Resolution.get_skill_group_members(self.dm_core.world, "observation"), ["observation"])
 
     def test_a_list_mixing_a_group_and_a_literal_skill_expands_each_entry(self):
         self.assertEqual(
-            self.dm_core.get_skill_group_members(["dexterity", "observation"]),
+            Combat_Resolution.get_skill_group_members(self.dm_core.world, ["dexterity", "observation"]),
             ["finesse", "acrobatics", "dodge", "escape", "observation"],
         )
 
@@ -7883,14 +7894,14 @@ class TestSkillGroups(DMTestCase):
         self.dm_core.rules.setdefault("condition", []).append(
             {"name": "weakened", "modifier": {"dice": -1, "pips": 0, "bonus": 0}, "applies_to": ["strength"]}
         )
-        self.dm_core.apply_condition("gladstone", "weakened", duration="permanent", dismiss="")
+        Combat_Resolution.apply_condition(self.dm_core.world, "gladstone", "weakened", duration="permanent", dismiss="")
         # "blades" is in the "strength" group -- penalized; "observation" isn't -- untouched.
         self.assertEqual(
-            self.dm_core.get_condition_modifier("gladstone", "blades"),
+            Combat_Resolution.get_condition_modifier(self.dm_core.world, "gladstone", "blades"),
             {"dice": -1, "pips": 0, "bonus": 0},
         )
         self.assertEqual(
-            self.dm_core.get_condition_modifier("gladstone", "observation"),
+            Combat_Resolution.get_condition_modifier(self.dm_core.world, "gladstone", "observation"),
             {"dice": 0, "pips": 0, "bonus": 0},
         )
 
@@ -7902,15 +7913,15 @@ class TestSkillGroups(DMTestCase):
         self.dm_core.entities["gladstone"]["equipped"]["belt"] = "belt of giant strength"
         # "blades"/"athletics" are in the "strength" group -- buffed; "observation" isn't.
         self.assertEqual(
-            self.dm_core.get_equipped_skill_bonus("gladstone", "blades"),
+            Combat_Resolution.get_equipped_skill_bonus(self.dm_core.world, "gladstone", "blades"),
             {"dice": 1, "pips": 0},
         )
         self.assertEqual(
-            self.dm_core.get_equipped_skill_bonus("gladstone", "athletics"),
+            Combat_Resolution.get_equipped_skill_bonus(self.dm_core.world, "gladstone", "athletics"),
             {"dice": 1, "pips": 0},
         )
         self.assertEqual(
-            self.dm_core.get_equipped_skill_bonus("gladstone", "observation"),
+            Combat_Resolution.get_equipped_skill_bonus(self.dm_core.world, "gladstone", "observation"),
             {"dice": 0, "pips": 0},
         )
 
@@ -7924,21 +7935,21 @@ class TestActionPrevented(DMTestCase):
     """
 
     def test_is_action_prevented_true_once_a_prevents_action_condition_is_active(self):
-        self.dm_core.apply_condition("gladstone", "pinned", duration="permanent", dismiss="")
-        self.assertTrue(self.dm_core.is_action_prevented("gladstone"))
+        Combat_Resolution.apply_condition(self.dm_core.world, "gladstone", "pinned", duration="permanent", dismiss="")
+        self.assertTrue(Combat_Actions.is_action_prevented(self.dm_core.world, "gladstone"))
 
     def test_is_action_prevented_false_for_an_ordinary_dice_penalty_condition(self):
         # "wounded" is a real [[condition]] entry (a modifier), but never authors
         # prevents_action -- only carrying a penalty must not also block acting outright.
-        self.dm_core.apply_condition("gladstone", "wounded", duration="permanent", dismiss="")
-        self.assertFalse(self.dm_core.is_action_prevented("gladstone"))
+        Combat_Resolution.apply_condition(self.dm_core.world, "gladstone", "wounded", duration="permanent", dismiss="")
+        self.assertFalse(Combat_Actions.is_action_prevented(self.dm_core.world, "gladstone"))
 
     def test_is_action_prevented_false_with_no_conditions_at_all(self):
-        self.assertFalse(self.dm_core.is_action_prevented("gladstone"))
+        self.assertFalse(Combat_Actions.is_action_prevented(self.dm_core.world, "gladstone"))
 
     def test_players_own_turn_is_denied_outright_with_no_roll_while_pinned(self):
         round_events = self._capture("round_resolved")
-        self.dm_core.apply_condition("gladstone", "pinned", duration="permanent", dismiss="")
+        Combat_Resolution.apply_condition(self.dm_core.world, "gladstone", "pinned", duration="permanent", dismiss="")
 
         self.dm_core._on_turn_detected({"clauses": [{"kind": "action", "skill": "blades"}], "input": "I attack the wolf"})
 
@@ -7950,8 +7961,8 @@ class TestActionPrevented(DMTestCase):
         # wolf's own [[entity.behavior]] would otherwise resolve "bite" against gladstone --
         # pinned pre-empts that entirely, the same "doesn't act" outcome an entity with no
         # matching behavior at all already gets.
-        self.dm_core.apply_condition("wolf", "pinned", duration="permanent", dismiss="")
-        self.assertIsNone(self.dm_core.resolve_behavior_action("wolf", "gladstone"))
+        Combat_Resolution.apply_condition(self.dm_core.world, "wolf", "pinned", duration="permanent", dismiss="")
+        self.assertIsNone(Combat_Actions.resolve_behavior_action(self.dm_core.world, "wolf", "gladstone"))
 
     def test_pin_maneuver_actually_stops_its_target_from_acting_next(self):
         # End-to-end: pin lands on an already-grappled target, and the resulting "pinned"
@@ -7964,8 +7975,8 @@ class TestActionPrevented(DMTestCase):
         self.dm_core._run_ability_outcome_program(result, "athletics", None, pin, "wolf", via_test=False)
 
         self.assertIn("pinned", self.dm_core.entities["wolf"]["active_conditions"])
-        self.assertTrue(self.dm_core.is_action_prevented("wolf"))
-        self.assertIsNone(self.dm_core.resolve_behavior_action("wolf", "gladstone"))
+        self.assertTrue(Combat_Actions.is_action_prevented(self.dm_core.world, "wolf"))
+        self.assertIsNone(Combat_Actions.resolve_behavior_action(self.dm_core.world, "wolf", "gladstone"))
 
 
 class TestAttackingAnyone(DMTestCase):
@@ -8049,7 +8060,7 @@ class TestAttackingAnyone(DMTestCase):
 
     def _clear_the_fight(self):
         for wolf in ("wolf", "wolf_2"):
-            self.dm_core.apply_damage(wolf, 999)
+            Combat_Resolution.apply_damage(self.dm_core.world, wolf, 999)
         self.dm_core.current_target = "thane"  # the "first living non-player" leftover
 
     def test_a_non_attack_that_lands_on_a_bystander_by_default_names_no_target(self):
@@ -8108,7 +8119,7 @@ class TestAttackingAnyone(DMTestCase):
         resolved = []
         self.event_bus.subscribe("action_resolved", resolved.append)
         self._clear_the_fight()
-        thane_hp = self.dm_core.get_current_hp("thane")
+        thane_hp = Combat_Resolution.get_current_hp(self.dm_core.world, "thane")
         self._stub_roll_dice(20)
 
         self.dm_core._on_turn_detected({"clauses": [{"kind": "action", "skill": "blades"}], "input": "strike them until they drop!"})
@@ -8116,7 +8127,7 @@ class TestAttackingAnyone(DMTestCase):
         [outcome] = resolved[-1]["actions"]
         self.assertTrue(outcome.no_opponent)
         self.assertIsNone(outcome.defender)
-        self.assertEqual(self.dm_core.get_current_hp("thane"), thane_hp)
+        self.assertEqual(Combat_Resolution.get_current_hp(self.dm_core.world, "thane"), thane_hp)
         self.assertFalse(self.dm_core.is_hostile("thane", "gladstone"))
 
     def test_a_non_attack_skill_never_redirects_to_a_non_hostile_creature(self):
@@ -8135,7 +8146,7 @@ class TestAttackingAnyone(DMTestCase):
         self.dm_core.nudge_attitude_from_event("thane", "gladstone", "assaulted", 1.0)
         self.dm_core.save_game(slot)
 
-        fresh_dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds")
+        fresh_dm = DMCore(ValidatingEventBus(), scenario_name="debug", start_location="arena_grounds")
         fresh_dm.load_game(slot)
         fresh_dm.entities["thane"].pop("behavior")  # re-instanced from the template, which has one
         fresh_dm._resolve_combat_round({"actions": []})
@@ -8303,7 +8314,7 @@ class TestLLMBackend(unittest.TestCase):
 
     def test_sourcebook_excerpts_and_the_adjudication_wait_follow_the_backend(self):
         index = SimpleNamespace(query=lambda query: [({"source": "Book", "page": 3, "text": "Lore."}, 0.9)])
-        core = SimpleNamespace(rag_index=index, event_bus=EventBus())
+        core = SimpleNamespace(rag_index=index, event_bus=ValidatingEventBus())
         self.assertIn("Lore.", LLMCore.perform_rag(core, "q"))
         LLM_Backend.set_backend(LLM_Backend.openrouter_backend({"sourcebook_grounding": False}, environ={}))
         self.assertEqual(LLMCore.perform_rag(core, "q"), "")
@@ -8513,12 +8524,12 @@ class TestMultiInstanceTargeting(DMTestCase):
     def test_wounded_redirects_to_the_instance_actually_below_the_cutoff(self):
         # wolf max_hp 16; 11 damage -> 5/16 = 0.3125, under the 0.40 "wounded" cutoff. wolf_2
         # stays undamaged, so only wolf itself qualifies as "the wounded wolf" here.
-        self.dm_core.apply_damage("wolf", 11)
+        Combat_Resolution.apply_damage(self.dm_core.world, "wolf", 11)
         self.dm_core._apply_target_redirect("wolf", "I attack the wounded wolf")
         self.assertEqual(self.dm_core.current_target, "wolf")
 
     def test_healthy_redirects_away_from_the_wounded_instance(self):
-        self.dm_core.apply_damage("wolf", 11)  # wolf: 5/16, under the cutoff; wolf_2: full
+        Combat_Resolution.apply_damage(self.dm_core.world, "wolf", 11)  # wolf: 5/16, under the cutoff; wolf_2: full
         self.dm_core._apply_target_redirect("wolf", "I attack the healthy wolf")
         self.assertEqual(self.dm_core.current_target, "wolf_2")
 
@@ -8735,7 +8746,7 @@ class TestCombatSimulator(unittest.TestCase):
             "a": {"name": "a", "skills": {}, "max_hp": 10},
             "b": {"name": "b", "skills": {}, "max_hp": 10},
         }
-        outcome = simulate_fight(entities, {}, SIM_SKILLS_CATALOG, "a", "b", EventBus(), max_rounds=5)
+        outcome = simulate_fight(entities, {}, SIM_SKILLS_CATALOG, "a", "b", ValidatingEventBus(), max_rounds=5)
         self.assertTrue(outcome["timeout"])
         self.assertIsNone(outcome["winner"])
         self.assertEqual(outcome["rounds"], 5)
@@ -8772,7 +8783,7 @@ class TestCombatSimulator(unittest.TestCase):
 
 class TestChallengeRatingDMCoreIntegration(DMTestCase):
     """!
-    @brief get_challenge_rating/get_party_challenge_rating (DM_Combat.py) against debug.toml's
+    @brief get_challenge_rating/get_party_challenge_rating (Combat_Actions.py) against debug.toml's
         real gladstone/thane/wolf data -- confirms the DMCore-side glue (finding each entity's
         best offense package, its own combat_role-tagged defense/save skills, filtering the
         party by is_player/is_party) feeds Challenge_Rating.py's pure math the right numbers,
@@ -8786,30 +8797,30 @@ class TestChallengeRatingDMCoreIntegration(DMTestCase):
         # even though the longsword's own *skill* is rated higher on its own. offense_side=21.
         # survival_side: dodge 5D=15 + save (fortitude/reflexes/willpower all 2D=6 each -> avg
         # 6) + hp (36//3=12) -> 33. CR = round(2*sqrt(21*33)) = round(2*26.32) = 53.
-        self.assertEqual(self.dm_core.get_challenge_rating("gladstone"), 53)
+        self.assertEqual(Combat_Actions.get_challenge_rating(self.dm_core.world, "gladstone"), 53)
 
     def test_thane_rating_uses_his_own_best_offense_package(self):
         # offense_side: one of his 4D=12 combat skills + shortsword strike's own 2D=6 -> 18.
         # survival_side: dodge 3D=9 + save (fortitude 3D=9, reflexes/willpower 2D=6 each -> avg
         # 7) + hp (24//3=8) -> 24. CR = round(2*sqrt(18*24)) = round(2*20.78) = 42.
-        self.assertEqual(self.dm_core.get_challenge_rating("thane"), 42)
+        self.assertEqual(Combat_Actions.get_challenge_rating(self.dm_core.world, "thane"), 42)
 
     def test_wolf_rating_uses_its_own_bite(self):
         # offense_side: brawling 5D=15 + bite's own 1D=3 -> 18. survival_side: dodge 6D=18 +
         # save (fortitude/reflexes/willpower all 2D=6 each -> avg 6) + hp (16//3=5) -> 29.
         # CR = round(2*sqrt(18*29)) = round(2*22.85) = 46.
-        self.assertEqual(self.dm_core.get_challenge_rating("wolf"), 46)
+        self.assertEqual(Combat_Actions.get_challenge_rating(self.dm_core.world, "wolf"), 46)
 
     def test_unknown_entity_rates_zero(self):
-        self.assertEqual(self.dm_core.get_challenge_rating("nobody"), 0)
+        self.assertEqual(Combat_Actions.get_challenge_rating(self.dm_core.world, "nobody"), 0)
 
     def test_party_rating_sums_gladstone_and_thane_but_not_the_wolves(self):
-        self.assertEqual(self.dm_core.get_party_challenge_rating(), 53 + 42)
+        self.assertEqual(Combat_Actions.get_party_challenge_rating(self.dm_core.world), 53 + 42)
 
 
 class TestXpAward(DMTestCase):
     """!
-    @brief _award_xp_for_defeat (DM_Combat.py), triggered from calculate_damage the moment a
+    @brief _award_xp_for_defeat (Combat_Actions.py), triggered from calculate_damage the moment a
         hostile entity's HP first reaches 0 -- debug.toml's own gladstone (is_player, starts
         with exp = 100)/thane (is_party, no authored "exp" -- starts at the implicit 0) and its
         first wolf (hostile by default, challenge rating 46 -- TestChallengeRatingDMCoreIntegration).
@@ -8821,13 +8832,13 @@ class TestXpAward(DMTestCase):
     def _deal_five_damage(self, attacker="gladstone", defender="wolf"):
         # Untagged, so nothing on the defender's own resistance/armor ever reduces it -- keeps
         # every test's own net_damage a fixed, known 5 regardless of which entity is targeted.
-        self.dm_core.calculate_damage(attacker, defender, {"damage_value": {"dice": 0, "pips": 0, "bonus": 5}, "damage_tags": []})
+        Combat_Actions.calculate_damage(self.dm_core.world, attacker, defender, {"damage_value": {"dice": 0, "pips": 0, "bonus": 5}, "damage_tags": []})
 
     def test_defeating_a_hostile_entity_awards_its_challenge_rating_as_xp_by_default(self):
         self._drop_the_wolf_to_one_hp()
         self._deal_five_damage()
 
-        self.assertEqual(self.dm_core.get_current_hp("wolf"), 0)
+        self.assertEqual(Combat_Resolution.get_current_hp(self.dm_core.world, "wolf"), 0)
         self.assertEqual(self.dm_core.entities["gladstone"]["exp"], 10 + 46)
         self.assertEqual(self.dm_core.entities["thane"]["exp"], 46)
 
@@ -8922,7 +8933,7 @@ class TestNpcGeneration(unittest.TestCase):
 
     @staticmethod
     def _cr_from_skills(skills, max_hp, catalog=FAKE_SKILLS_CATALOG):
-        """Mirrors DM_Combat.py's get_challenge_rating, minus the resistance/immunity/
+        """Mirrors Combat_Actions.py's get_challenge_rating, minus the resistance/immunity/
         vulnerability/equipped-weapon glue these pure skill-only fixtures never model -- the
         same "just a dict" resolution get_challenge_rating does against a live entity's own
         skills, applied here against a bare {skill_name: {"dice","pips"}} table instead."""
@@ -9577,7 +9588,7 @@ class TestImprovisation(DMTestCase):
             "skills": {"poison": {"dice": 2, "pips": 0}},
         })
         self._stub_roll_dice(7)
-        starting_hp = self.dm_core.get_current_hp("gladstone")
+        starting_hp = Combat_Resolution.get_current_hp(self.dm_core.world, "gladstone")
 
         with patch("dm.DM_Improvisation.generate_ad_hoc_item", return_value=entity):
             self.dm_core._on_improvisation_requested({
@@ -9587,7 +9598,7 @@ class TestImprovisation(DMTestCase):
         result = self.item_events[-1]
         self.assertTrue(result["found"])
         self.assertEqual(result["poisoned"], 7)
-        self.assertEqual(self.dm_core.get_current_hp("gladstone"), starting_hp - 7)
+        self.assertEqual(Combat_Resolution.get_current_hp(self.dm_core.world, "gladstone"), starting_hp - 7)
 
     def test_inventory_placement_examine_resolves_through_the_ordinary_pipeline(self):
         # Placement (place_new_item) and narration both go through the same redispatch every
@@ -9800,7 +9811,7 @@ class TestImprovisation(DMTestCase):
             "ad_hoc": True,
         }
         fake_result = {"created": True, "entity": entity, "location": "ground"}
-        starting_hp = self.dm_core.get_current_hp("gladstone")
+        starting_hp = Combat_Resolution.get_current_hp(self.dm_core.world, "gladstone")
         self.dm_core.current_target = None  # no fight engaged -- see the container test's own note
 
         with patch("dm.DM_Improvisation.generate_ad_hoc_item", return_value=fake_result):
@@ -9821,7 +9832,7 @@ class TestImprovisation(DMTestCase):
             })
 
         self.assertTrue(self.dm_core.entities["spike trap"]["active_conditions"].get("triggered"))
-        self.assertLess(self.dm_core.get_current_hp("gladstone"), starting_hp)
+        self.assertLess(Combat_Resolution.get_current_hp(self.dm_core.world, "gladstone"), starting_hp)
 
     def _fake_hostile_creature(self, name="cave rat"):
         entity = {
@@ -9848,7 +9859,7 @@ class TestImprovisation(DMTestCase):
         self.assertIn("cave rat", self.dm_core.scenario_entities)
         self.assertTrue(self.dm_core.is_hostile("cave rat", self.dm_core.player_name))
         self.assertEqual(self.dm_core.current_target, "cave rat")
-        self.assertEqual(self.dm_core.get_band("cave rat"), self.dm_core.get_band("gladstone"))
+        self.assertEqual(Combat_Resolution.get_band(self.dm_core.world, "cave rat"), Combat_Resolution.get_band(self.dm_core.world, "gladstone"))
 
     def test_attempt_creature_conjuring_does_not_steal_target_from_an_engaged_fight(self):
         self.dm_core.current_target = "wolf"  # already engaged with a live hostile
@@ -9944,7 +9955,7 @@ class TestImprovisation(DMTestCase):
                 "intent": "examine", "phrase": "a crate", "input": "examine the old crate",
             })
 
-        self.assertEqual(self.dm_core.get_band("old crate"), 3)
+        self.assertEqual(Combat_Resolution.get_band(self.dm_core.world, "old crate"), 3)
 
 
 class TestPlaceNewEntity(DMTestCase):
@@ -10011,8 +10022,8 @@ class TestAmbientEncounter(DMTestCase):
     def _kill_both_wolves(self):
         # arena's own room lists "wolf" twice (see TestScenarioLoading) -- both have to be
         # down for _any_hostile_present to actually go false.
-        self.dm_core.apply_damage("wolf", 999)
-        self.dm_core.apply_damage("wolf_2", 999)
+        Combat_Resolution.apply_damage(self.dm_core.world, "wolf", 999)
+        Combat_Resolution.apply_damage(self.dm_core.world, "wolf_2", 999)
 
     def test_ambient_encounter_fires_on_an_ordinary_turn_and_narrates_a_flavor_beat(self):
         self._set_room_encounter("ambient", [{"a distant howl echoes off the stone": 100}])
@@ -10361,8 +10372,8 @@ class TestNpcGenerationDMCoreIntegration(DMTestCase):
         # module default, since its own template doesn't override it), so it should
         # land in a generous but bounded band around gladstone's own real CR, not some
         # unrelated fixed number.
-        npc_cr = self.dm_core.get_challenge_rating("generated_stranger")
-        player_cr = self.dm_core.get_challenge_rating(self.dm_core.player_name)
+        npc_cr = Combat_Actions.get_challenge_rating(self.dm_core.world, "generated_stranger")
+        player_cr = Combat_Actions.get_challenge_rating(self.dm_core.world, self.dm_core.player_name)
         self.assertLess(abs(npc_cr - player_cr), player_cr * 0.5)
 
     def test_describe_character_surfaces_the_generated_name_not_the_template_key(self):
@@ -10417,7 +10428,7 @@ class TestNpcGenerationDMCoreIntegration(DMTestCase):
         # "Scenarios and rooms"), self.entities here has no "vault_specter_stub" at all -- only
         # self.entity_templates does, proving the lookup itself is what's isolated, not just
         # that this particular scenario never happens to collide.
-        dm = DMCore(EventBus(), scenario_name="debug", start_location="vault")
+        dm = DMCore(ValidatingEventBus(), scenario_name="debug", start_location="vault")
         self.assertIn("vault_specter_stub", dm.entity_templates)
         self.assertNotIn("vault_specter_stub", dm.entities)
 
@@ -10464,7 +10475,7 @@ class TestAmbientEncounterSkipsLlmGeneration(DMTestCase):
         original = DM_Encounters.resolve_varied_value
         DM_Encounters.resolve_varied_value = lambda choices: "vault_specter_stub"
         self.addCleanup(setattr, DM_Encounters, "resolve_varied_value", original)
-        self.dm_core.apply_damage("vault sentinel", 999)  # clear the room so ambient can fire
+        Combat_Resolution.apply_damage(self.dm_core.world, "vault sentinel", 999)  # clear the room so ambient can fire
 
         with patch("resolution.NPC_Generation._real_call_chat_completion", side_effect=fail_if_called):
             self.dm_core._on_turn_detected({
@@ -10485,7 +10496,7 @@ class TestCharacterCreationDMCoreIntegration(DMTestCase):
             "race": "elf",
             "allocation": {"arcane": 5, "stealth": 5, "observation": 5},
         }
-        dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds", character=character)
+        dm = DMCore(ValidatingEventBus(), scenario_name="debug", start_location="arena_grounds", character=character)
         self.assertEqual(dm.entities["gladstone"]["skills"]["arcane"], {"dice": 8, "pips": 0})
         self.assertEqual(dm.entities["gladstone"]["skills"]["strength"], {"dice": 1, "pips": 0})
         # A skill the character sheet never touches still exists, at the elf's own baseline --
@@ -10498,7 +10509,7 @@ class TestCharacterCreationDMCoreIntegration(DMTestCase):
             "race": "elf",
             "allocation": {"arcane": 5, "stealth": 5, "observation": 5},
         }
-        dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds", character=character)
+        dm = DMCore(ValidatingEventBus(), scenario_name="debug", start_location="arena_grounds", character=character)
         self.assertEqual(dm.entities["gladstone"]["languages"], ["common", "elvish"])
 
     def test_human_character_gains_no_new_language_since_common_is_already_there(self):
@@ -10506,7 +10517,7 @@ class TestCharacterCreationDMCoreIntegration(DMTestCase):
             "race": "human",
             "allocation": {"arcane": 5, "stealth": 5, "observation": 5},
         }
-        dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds", character=character)
+        dm = DMCore(ValidatingEventBus(), scenario_name="debug", start_location="arena_grounds", character=character)
         self.assertEqual(dm.entities["gladstone"]["languages"], ["common"])
 
     def test_pip_spend_trains_a_skill_further_using_the_players_own_starting_exp(self):
@@ -10515,7 +10526,7 @@ class TestCharacterCreationDMCoreIntegration(DMTestCase):
             "allocation": {"arcane": 5, "stealth": 5, "observation": 5},
             "pip_spend": ["arcane"],
         }
-        dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds", character=character)
+        dm = DMCore(ValidatingEventBus(), scenario_name="debug", start_location="arena_grounds", character=character)
         # arcane: 3 baseline + 5 allocated = 8D -- one more pip costs 8 XP, gladstone starts
         # at exp = 10 (characters.toml).
         self.assertEqual(dm.entities["gladstone"]["skills"]["arcane"], {"dice": 8, "pips": 1})
@@ -10525,14 +10536,14 @@ class TestCharacterCreationDMCoreIntegration(DMTestCase):
         # "allocation" absent entirely -- pip_spend still trains gladstone's own hand-authored
         # skills directly (characters.toml's own blades = 5D).
         character = {"pip_spend": ["blades"]}
-        dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds", character=character)
+        dm = DMCore(ValidatingEventBus(), scenario_name="debug", start_location="arena_grounds", character=character)
         self.assertEqual(dm.entities["gladstone"]["skills"]["blades"], {"dice": 5, "pips": 1})
         self.assertEqual(dm.entities["gladstone"]["exp"], 10 - 5)
 
     def test_pip_spend_rejected_on_insufficient_exp_leaves_skills_and_exp_untouched(self):
         # Far more pips than gladstone's own 10 starting exp can ever cover.
         character = {"pip_spend": ["blades"] * 30}
-        event_bus = EventBus()
+        event_bus = ValidatingEventBus()
         errors = []
         event_bus.subscribe("log_error", errors.append)
 
@@ -10555,7 +10566,7 @@ class TestAbilityPurchase(unittest.TestCase):
 
     def _boot(self, character, event_bus=None):
         return DMCore(
-            event_bus or EventBus(), scenario_name="debug", start_location="arena_grounds",
+            event_bus or ValidatingEventBus(), scenario_name="debug", start_location="arena_grounds",
             character=character,
         )
 
@@ -10594,7 +10605,7 @@ class TestAbilityPurchase(unittest.TestCase):
     def test_training_and_abilities_share_one_balance(self):
         # arcane is 8D, so one pip costs 8; three 1-xp abilities would need 11 of the 10 xp.
         errors = []
-        event_bus = EventBus()
+        event_bus = ValidatingEventBus()
         event_bus.subscribe("log_error", errors.append)
         dm = self._boot(
             {**self.ELF, "pip_spend": ["arcane"], "abilities": ["fireball", "splash flow", "arc lance"]},
@@ -10607,7 +10618,7 @@ class TestAbilityPurchase(unittest.TestCase):
 
     def test_an_unknown_ability_is_rejected_and_costs_nothing(self):
         errors = []
-        event_bus = EventBus()
+        event_bus = ValidatingEventBus()
         event_bus.subscribe("log_error", errors.append)
         dm = self._boot({**self.ELF, "abilities": ["fireball", "not a spell"]}, event_bus)
         self.assertEqual(dm.entities["gladstone"]["abilities"], [])
@@ -10650,7 +10661,7 @@ class TestDefaultPlayerCharacters(unittest.TestCase):
         self.assertEqual(list_available_characters("NoSuchSetting"), [])
 
     def test_template_picks_that_character_and_drops_the_other_candidates(self):
-        dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds",
+        dm = DMCore(ValidatingEventBus(), scenario_name="debug", start_location="arena_grounds",
                     character={"template": "iona"})
         self.assertEqual(dm.player_name, "iona")
         self.assertEqual(dm.entities["iona"]["skills"]["arcane"], {"dice": 7, "pips": 0})
@@ -10659,16 +10670,16 @@ class TestDefaultPlayerCharacters(unittest.TestCase):
             self.assertNotIn(other, dm.entities)
 
     def test_no_template_keeps_the_first_authored_player(self):
-        dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds")
+        dm = DMCore(ValidatingEventBus(), scenario_name="debug", start_location="arena_grounds")
         self.assertEqual(dm.player_name, "gladstone")
         self.assertNotIn("iona", dm.entities)
 
     def test_zombie_default_boots(self):
-        dm = DMCore(EventBus(), scenario_name="rooftop", setting="Zombie", character={"template": "cole"})
+        dm = DMCore(ValidatingEventBus(), scenario_name="rooftop", setting="Zombie", character={"template": "cole"})
         self.assertEqual(dm.player_name, "cole")
 
     def test_chosen_default_survives_save_and_load(self):
-        dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds",
+        dm = DMCore(ValidatingEventBus(), scenario_name="debug", start_location="arena_grounds",
                     character={"template": "vesper", "name": "Wren"})
         slot_name = "test_default_character_round_trip_slot"
         self.addCleanup(shutil.rmtree, dm._save_slot_dir(slot_name), ignore_errors=True)
@@ -10699,7 +10710,7 @@ class TestCharacterCreationRename(unittest.TestCase):
             "allocation": {"arcane": 5, "stealth": 5, "observation": 5},
             "name": "Aria",
         }
-        dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds", character=character)
+        dm = DMCore(ValidatingEventBus(), scenario_name="debug", start_location="arena_grounds", character=character)
 
         self.assertEqual(dm.player_name, "Aria")
         self.assertNotIn("gladstone", dm.entities)  # re-keyed away, not left behind
@@ -10713,7 +10724,7 @@ class TestCharacterCreationRename(unittest.TestCase):
 
     def test_renaming_to_an_existing_entitys_name_is_rejected_but_skills_still_apply(self):
         errors = []
-        bus = EventBus()
+        bus = ValidatingEventBus()
         bus.subscribe("log_error", errors.append)
         character = {
             "race": "elf",
@@ -10739,7 +10750,7 @@ class TestCharacterCreationRename(unittest.TestCase):
         # the scenario's own entities hadn't been loaded into self.entities yet at the point
         # the rename's collision check ran.
         errors = []
-        bus = EventBus()
+        bus = ValidatingEventBus()
         bus.subscribe("log_error", errors.append)
         character = {
             "race": "elf",
@@ -10763,7 +10774,7 @@ class TestCharacterCreationRename(unittest.TestCase):
             "allocation": {"arcane": 5, "stealth": 5, "observation": 5},
             "name": "Aria",
         }
-        dm = DMCore(EventBus(), scenario_name="debug", start_location="crypt", character=character)
+        dm = DMCore(ValidatingEventBus(), scenario_name="debug", start_location="crypt", character=character)
 
         anne_overrides = dm.entities["anne"]["attitudes"]["name"]
         self.assertNotIn({"gladstone": [100, 100, 100]}, anne_overrides)
@@ -10774,7 +10785,7 @@ class TestCharacterCreationRename(unittest.TestCase):
         # LLDM.py's CLI quick-boot path (a scenario + a bare character name, no interactive
         # point-buy) passes exactly this shape -- {"name": ...} with no "race"/"allocation" at
         # all -- so the skill/race override step must be skippable independently of the rename.
-        dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds", character={"name": "Aria"})
+        dm = DMCore(ValidatingEventBus(), scenario_name="debug", start_location="arena_grounds", character={"name": "Aria"})
 
         self.assertEqual(dm.player_name, "Aria")
         self.assertNotIn("gladstone", dm.entities)
@@ -10788,7 +10799,7 @@ class TestCharacterCreationRename(unittest.TestCase):
         # afterward, so _enter_location's own self.entities[self.player_name]["band"] = 1
         # raised a bare KeyError on the saved, renamed name the moment a renamed character's
         # save was ever reloaded.
-        dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds", character={"name": "Aria"})
+        dm = DMCore(ValidatingEventBus(), scenario_name="debug", start_location="arena_grounds", character={"name": "Aria"})
         slot_name = "test_renamed_character_round_trip_slot"
         self.addCleanup(shutil.rmtree, dm._save_slot_dir(slot_name), ignore_errors=True)
 
@@ -10809,7 +10820,7 @@ class TestCharacterCreationRename(unittest.TestCase):
         character = {
             "race": "elf", "allocation": {"arcane": 5, "stealth": 5, "observation": 5}, "name": "Aria",
         }
-        dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds", character=character)
+        dm = DMCore(ValidatingEventBus(), scenario_name="debug", start_location="arena_grounds", character=character)
         slot_name = "test_customized_character_round_trip_slot"
         self.addCleanup(shutil.rmtree, dm._save_slot_dir(slot_name), ignore_errors=True)
         built_skills = dict(dm.entities["Aria"]["skills"])
@@ -10826,7 +10837,7 @@ class TestCharacterCreationRename(unittest.TestCase):
         # No character= at all -- the ordinary "no chargen ran" boot path (every test/scenario
         # that doesn't pass character) must keep working exactly as before: the template's own
         # hand-authored skills round-trip unchanged, nothing new to break.
-        dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds")
+        dm = DMCore(ValidatingEventBus(), scenario_name="debug", start_location="arena_grounds")
         slot_name = "test_default_character_round_trip_slot"
         self.addCleanup(shutil.rmtree, dm._save_slot_dir(slot_name), ignore_errors=True)
         original_skills = dict(dm.entities["gladstone"]["skills"])
@@ -10872,7 +10883,7 @@ class TestZombieArchetypeCharacterCreation(unittest.TestCase):
             "race": "Ex-Military",
             "allocation": {"firearms": 5, "athletics": 5, "fortitude": 5},
         }
-        dm = DMCore(EventBus(), scenario_name="rooftop", setting="Zombie", character=character)
+        dm = DMCore(ValidatingEventBus(), scenario_name="rooftop", setting="Zombie", character=character)
 
         player = dm.entities[dm.player_name]
         # Replaced outright, not appended onto riley's own hand-authored characters.toml
@@ -10886,7 +10897,7 @@ class TestZombieArchetypeCharacterCreation(unittest.TestCase):
         # starting_equipped item names as unresolvable, or any other referential-integrity
         # regression from this real, non-Fantasy chargen path.
         errors = []
-        bus = EventBus()
+        bus = ValidatingEventBus()
         bus.subscribe("log_error", errors.append)
         character = {"race": "Medic", "allocation": {"medicine": 5, "charisma": 5, "observation": 5}}
         DMCore(bus, scenario_name="rooftop", setting="Zombie", character=character)
@@ -10896,7 +10907,7 @@ class TestZombieArchetypeCharacterCreation(unittest.TestCase):
         # No Rules/Fantasy/races.toml race authors "starting_items" -- confirms the new
         # field is purely additive and doesn't change existing Fantasy chargen behavior.
         character = {"race": "elf", "allocation": {"arcane": 5, "stealth": 5, "observation": 5}}
-        dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds", character=character)
+        dm = DMCore(ValidatingEventBus(), scenario_name="debug", start_location="arena_grounds", character=character)
         # characters.toml's own hand-authored gladstone starting gear, untouched.
         self.assertIn("longsword", dm.entities["gladstone"]["inventory"])
 
@@ -10915,14 +10926,14 @@ class TestScenarioLocalEntities(unittest.TestCase):
     """
 
     def test_scenario_local_entity_is_loaded_and_instanced(self):
-        dm = DMCore(EventBus(), scenario_name="debug", start_location="vault")
+        dm = DMCore(ValidatingEventBus(), scenario_name="debug", start_location="vault")
 
         self.assertEqual(dm.entities["vault sentinel"]["max_hp"], 10)
         self.assertEqual(dm.entities["vault sentinel"]["supertype"], "creature")
         self.assertIn("vault sentinel", dm.scenario_entities)
 
     def test_scenario_local_entity_template_is_loaded(self):
-        dm = DMCore(EventBus(), scenario_name="debug", start_location="vault")
+        dm = DMCore(ValidatingEventBus(), scenario_name="debug", start_location="vault")
 
         self.assertEqual(dm.entity_templates["vault_specter_stub"]["subtype"], "undead")
         # A stub template -- never instanced (not referenced by [scenario]/[[room]] entities),
@@ -11290,7 +11301,7 @@ class TestItemInteraction(DMTestCase):
     def test_examine_surfaces_revealed_tags_once_identified(self):
         self._unlock_the_chest()
         self._open_the_chest()
-        self.dm_core.apply_condition("cursed dagger", "identified", duration="permanent", dismiss="")
+        Combat_Resolution.apply_condition(self.dm_core.world, "cursed dagger", "identified", duration="permanent", dismiss="")
 
         self.dm_core._on_item_interaction_detected({
             "intent": "examine", "item_name": "cursed dagger", "input": "I examine the cursed dagger",
@@ -11381,8 +11392,8 @@ class TestItemTargetedSkillCheck(DMTestCase):
         super().setUp()
         self.action_events = self._capture("action_resolved")
         self.round_events = self._capture("round_resolved")
-        self.dm_core.dismiss_condition("chest", "locked")
-        self.dm_core.dismiss_condition("chest", "closed")
+        Combat_Resolution.dismiss_condition(self.dm_core.world, "chest", "locked")
+        Combat_Resolution.dismiss_condition(self.dm_core.world, "chest", "closed")
 
     def _check_the_dagger(self, roll_result):
         self._stub_roll_dice(roll_result)
@@ -11408,7 +11419,7 @@ class TestItemTargetedSkillCheck(DMTestCase):
         reveal_effects = [effect for effect in result.effects if isinstance(effect, RevealEffect)]
         self.assertEqual(len(reveal_effects), 1)
         self.assertEqual(reveal_effects[0].tags, ["cursed"])
-        self.assertTrue(self.dm_core.is_identified("cursed dagger"))
+        self.assertTrue(Combat_Actions.is_identified(self.dm_core.world, "cursed dagger"))
 
 
 class TestOpenClose(DMTestCase):
@@ -11563,7 +11574,7 @@ class TestBulk(DMTestCase):
     def test_get_carrying_capacity_drops_a_dead_puller_from_the_sum(self):
         first = self._add_horse()
         second = self._add_horse()
-        self.dm_core.apply_damage(second, 999)
+        Combat_Resolution.apply_damage(self.dm_core.world, second, 999)
         self.dm_core.entities["cart"] = {
             "name": "cart", "supertype": "object", "description": "A rickety cart.",
             "max_hp": 20, "mount": [first, second],
@@ -11672,7 +11683,7 @@ class TestGiveAndTrade(DMTestCase):
         # still moves (transfer_item doesn't care about HP), but no attitude nudge registers,
         # since nudge_attitude_from_event itself gates on the target actually being alive.
         self.dm_core.entities["innkeeper"].setdefault("inventory", []).append("cursed dagger")
-        self.dm_core.apply_damage("innkeeper", 9999)
+        Combat_Resolution.apply_damage(self.dm_core.world, "innkeeper", 9999)
 
         self.dm_core._on_item_interaction_detected({
             "intent": "take", "item_name": "cursed dagger", "input": "I take the innkeeper's cursed dagger",
@@ -11686,8 +11697,8 @@ class TestGiveAndTrade(DMTestCase):
         # debug.toml's chest holds "cursed dagger" (value = 5); tavern's innkeeper has
         # neither, so build an ad-hoc scenario reusing the chest as a "shop" for this test.
         self._load_ad_hoc_scenario([{"name": "gladstone", "band": 1}, {"name": "chest", "band": 1}])
-        self.dm_core.dismiss_condition("chest", "locked")
-        self.dm_core.dismiss_condition("chest", "closed")
+        Combat_Resolution.dismiss_condition(self.dm_core.world, "chest", "locked")
+        Combat_Resolution.dismiss_condition(self.dm_core.world, "chest", "closed")
         starting_currency = self.dm_core.entities["gladstone"]["currency"]
 
         self.dm_core._on_item_interaction_detected({
@@ -11722,8 +11733,8 @@ class TestGiveAndTrade(DMTestCase):
 
     def test_trade_declines_when_player_cant_afford_it(self):
         self._load_ad_hoc_scenario([{"name": "gladstone", "band": 1}, {"name": "chest", "band": 1}])
-        self.dm_core.dismiss_condition("chest", "locked")
-        self.dm_core.dismiss_condition("chest", "closed")
+        Combat_Resolution.dismiss_condition(self.dm_core.world, "chest", "locked")
+        Combat_Resolution.dismiss_condition(self.dm_core.world, "chest", "closed")
         self.dm_core.entities["gladstone"]["currency"] = 0
 
         self.dm_core._on_item_interaction_detected({
@@ -11750,7 +11761,7 @@ class TestUseItem(DMTestCase):
         return self.resolved[-1]
 
     def test_using_heals_and_consumes_exactly_one(self):
-        self.dm_core.apply_damage("gladstone", 20)  # 36 -> 16
+        Combat_Resolution.apply_damage(self.dm_core.world, "gladstone", 20)  # 36 -> 16
         starting_count = self.dm_core.entities["gladstone"]["inventory"].count("health potion")
 
         # roll_dice is stubbed to return roll_result directly (same convention
@@ -11760,7 +11771,7 @@ class TestUseItem(DMTestCase):
 
         self.assertTrue(result["found"])
         self.assertEqual(result["healed"], 6)
-        self.assertEqual(self.dm_core.get_current_hp("gladstone"), 22)
+        self.assertEqual(Combat_Resolution.get_current_hp(self.dm_core.world, "gladstone"), 22)
         self.assertEqual(result["remaining_hp"], 22)
         self.assertEqual(
             self.dm_core.entities["gladstone"]["inventory"].count("health potion"),
@@ -11792,14 +11803,14 @@ class TestUseItem(DMTestCase):
             "skills": {"poison": {"dice": 2, "pips": 0}},
         }
         self.dm_core.entities["gladstone"]["inventory"].append("nasty brew")
-        starting_hp = self.dm_core.get_current_hp("gladstone")
+        starting_hp = Combat_Resolution.get_current_hp(self.dm_core.world, "gladstone")
 
         result = self._use(item_name="nasty brew", roll_result=7)
 
         self.assertTrue(result["found"])
         self.assertEqual(result["healed"], 0)
         self.assertEqual(result["poisoned"], 7)
-        self.assertEqual(self.dm_core.get_current_hp("gladstone"), starting_hp - 7)
+        self.assertEqual(Combat_Resolution.get_current_hp(self.dm_core.world, "gladstone"), starting_hp - 7)
         self.assertEqual(result["remaining_hp"], starting_hp - 7)
         self.assertNotIn("nasty brew", self.dm_core.entities["gladstone"]["inventory"])
 
@@ -11813,12 +11824,12 @@ class TestUseItem(DMTestCase):
             "skills": {"poison": {"dice": 3, "pips": 0}},
         }
         self.dm_core.entities["gladstone"]["inventory"].append("toxic vial")
-        starting_hp = self.dm_core.get_current_hp("gladstone")
+        starting_hp = Combat_Resolution.get_current_hp(self.dm_core.world, "gladstone")
 
         result = self._use(item_name="toxic vial", roll_result=10)
 
         self.assertEqual(result["poisoned"], 0)
-        self.assertEqual(self.dm_core.get_current_hp("gladstone"), starting_hp)
+        self.assertEqual(Combat_Resolution.get_current_hp(self.dm_core.world, "gladstone"), starting_hp)
 
 
 class TestCrafting(DMTestCase):
@@ -11906,13 +11917,15 @@ class TestCrafting(DMTestCase):
     def test_dice_penalty_from_a_multi_clause_turn_reaches_the_craft_roll(self):
         self._place_forge()
         seen_dice_penalties = []
-        original_resolve_action = self.dm_core.resolve_action
+        original_resolve_action = Combat_Resolution.resolve_action
 
-        def spy_resolve_action(entity_name, skill_name, difficulty=0, dice_penalty=0):
+        def spy_resolve_action(ctx, entity_name, skill_name, difficulty=0, dice_penalty=0, skill_divisor=1):
             seen_dice_penalties.append(dice_penalty)
-            return original_resolve_action(entity_name, skill_name, difficulty, dice_penalty=dice_penalty)
+            return original_resolve_action(ctx, entity_name, skill_name, difficulty, dice_penalty=dice_penalty)
 
-        self.dm_core.resolve_action = spy_resolve_action
+        patcher = patch.object(Combat_Resolution, "resolve_action", spy_resolve_action)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
         self._craft(
             roll_result=99,
@@ -12222,7 +12235,7 @@ class TestFreeformDialogue(DMTestCase):
 
     def test_absent_or_dead_target_is_denied(self):
         dead_result = self._talk("i talk to the innkeeper")
-        self.dm_core.apply_damage("innkeeper", 9999)
+        Combat_Resolution.apply_damage(self.dm_core.world, "innkeeper", 9999)
 
         result = self._talk("i talk to the innkeeper")
 
@@ -12236,7 +12249,7 @@ class TestFreeformDialogue(DMTestCase):
         # went to the corpse through _get_target_name's fallback.
         for name in list(self.dm_core.scenario_entities):
             if name != self.dm_core.player_name and not self.dm_core._is_party_member(name):
-                self.dm_core.apply_damage(name, 9999)
+                Combat_Resolution.apply_damage(self.dm_core.world, name, 9999)
         self.assertIsNone(self.dm_core._default_listener())
 
     def test_object_entity_cannot_be_addressed(self):
@@ -12312,7 +12325,7 @@ class TestFreeformDialogue(DMTestCase):
     def test_dead_partner_ends_the_conversation(self):
         self._add_second_speaker()
         self._talk("i talk to thane")
-        self.dm_core.apply_damage("thane", 9999)
+        Combat_Resolution.apply_damage(self.dm_core.world, "thane", 9999)
 
         result = self._talk("are you all right")
 
@@ -12595,7 +12608,7 @@ class TestHelpChannel(DMTestCase):
         result = self._ask()
         self.assertTrue(any(entry.startswith("dagger:") for entry in result["ground_items"]))
 
-        self.dm_core.apply_condition("dagger", "hidden")
+        Combat_Resolution.apply_condition(self.dm_core.world, "dagger", "hidden")
         result = self._ask()
         self.assertFalse(any(entry.startswith("dagger:") for entry in result["ground_items"]))
 
@@ -12753,7 +12766,7 @@ class TestValidation(DMTestCase):
         for setting in ("Fantasy", "Zombie", "Pathfinder"):
             for scenario_key, _name, _description in list_available_scenarios(setting):
                 errors = []
-                bus = EventBus()
+                bus = ValidatingEventBus()
                 bus.subscribe("log_error", errors.append)
                 DMCore(bus, scenario_name=scenario_key, setting=setting)
                 self.assertEqual(errors, [], f"{setting}/{scenario_key} produced validation errors: {errors}")
@@ -13167,15 +13180,15 @@ class TestSaveLoad(DMTestCase):
 
     def test_load_restores_saved_state_over_further_changes(self):
         slot = self._track("test_load_restores_state")
-        self.dm_core.apply_damage("wolf", 10)  # wolf at 6/16
+        Combat_Resolution.apply_damage(self.dm_core.world, "wolf", 10)  # wolf at 6/16
         self.dm_core.save_game(slot)
 
-        self.dm_core.apply_damage("wolf", 6)  # wolf now at 0/16, diverged further from the save
-        self.assertEqual(self.dm_core.get_current_hp("wolf"), 0)
+        Combat_Resolution.apply_damage(self.dm_core.world, "wolf", 6)  # wolf now at 0/16, diverged further from the save
+        self.assertEqual(Combat_Resolution.get_current_hp(self.dm_core.world, "wolf"), 0)
 
         self.dm_core.load_game(slot)
 
-        self.assertEqual(self.dm_core.get_current_hp("wolf"), 6)
+        self.assertEqual(Combat_Resolution.get_current_hp(self.dm_core.world, "wolf"), 6)
 
 
     def test_slot_name_cannot_escape_the_saves_directory(self):
@@ -13197,7 +13210,7 @@ class TestSaveLoad(DMTestCase):
         self.assertEqual(self.dm_core.entities["gladstone"]["equipped"], {"chest": "chain mail"})
         self.dm_core.save_game(slot)
 
-        fresh_dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds")  # boots with the template default
+        fresh_dm = DMCore(ValidatingEventBus(), scenario_name="debug", start_location="arena_grounds")  # boots with the template default
         fresh_dm.load_game(slot)
 
         self.assertEqual(fresh_dm.entities["gladstone"]["equipped"], {"chest": "chain mail"})
@@ -13207,12 +13220,12 @@ class TestSaveLoad(DMTestCase):
     def test_accumulated_exp_round_trips_through_save_load(self):
         # gladstone starts at exp = 10 (characters.toml) -- without saving "exp" as its own
         # per-instance field, a reload would silently reset any XP _award_xp_for_defeat
-        # (DM_Combat.py) accumulated back down to that static template value.
+        # (Combat_Actions.py) accumulated back down to that static template value.
         slot = self._track("test_exp_round_trip")
         self.dm_core.entities["gladstone"]["exp"] += 21  # as if a wolf had just been defeated
         self.dm_core.save_game(slot)
 
-        fresh_dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds")  # boots with the template default
+        fresh_dm = DMCore(ValidatingEventBus(), scenario_name="debug", start_location="arena_grounds")  # boots with the template default
         self.assertEqual(fresh_dm.entities["gladstone"]["exp"], 10)
         fresh_dm.load_game(slot)
 
@@ -13227,7 +13240,7 @@ class TestSaveLoad(DMTestCase):
         self.assertEqual(self.dm_core.current_block, 2)
         self.dm_core.save_game(slot)
 
-        fresh_dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds")  # boots at current_block = 0
+        fresh_dm = DMCore(ValidatingEventBus(), scenario_name="debug", start_location="arena_grounds")  # boots at current_block = 0
         self.assertEqual(fresh_dm.current_block, 0)
         fresh_dm.load_game(slot)
 
@@ -13245,7 +13258,7 @@ class TestSaveLoad(DMTestCase):
         self.assertIn("health potion", self.dm_core._current_ground_items())
         self.dm_core.save_game(slot)
 
-        fresh_dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds")  # boots with an empty ground list
+        fresh_dm = DMCore(ValidatingEventBus(), scenario_name="debug", start_location="arena_grounds")  # boots with an empty ground list
         self.assertEqual(fresh_dm._current_ground_items(), [])
         fresh_dm.load_game(slot)
 
@@ -13263,7 +13276,7 @@ class TestSaveLoad(DMTestCase):
         self.dm_core.entities["wolf"]["edited"] = True
         self.dm_core.save_game(slot)
 
-        fresh_dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds")  # boots with the template's own description
+        fresh_dm = DMCore(ValidatingEventBus(), scenario_name="debug", start_location="arena_grounds")  # boots with the template's own description
         fresh_dm.load_game(slot)
 
         self.assertEqual(fresh_dm.entities["wolf"]["description"], "A scarred, one-eyed wolf.")
@@ -13283,7 +13296,7 @@ class TestSaveLoad(DMTestCase):
         self.dm_core._current_ground_items().append("stone")
         self.dm_core.save_game(slot)
 
-        fresh_dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds")
+        fresh_dm = DMCore(ValidatingEventBus(), scenario_name="debug", start_location="arena_grounds")
         self.assertNotIn("stone", fresh_dm.entities)
         fresh_dm.load_game(slot)
 
@@ -13313,15 +13326,15 @@ class TestSaveLoad(DMTestCase):
         # every *other* ad hoc entity (ex: the ground-item "stone" above) already round-trips.
         slot = self._track("test_ad_hoc_scene_participant_round_trip")
         name = self.dm_core._summon_creature({"name": "spectral wolf", "duration": 3})
-        self.dm_core.apply_damage(name, 5)  # 16 -> 11
+        Combat_Resolution.apply_damage(self.dm_core.world, name, 5)  # 16 -> 11
         self.dm_core.save_game(slot)
 
-        fresh_dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds")
+        fresh_dm = DMCore(ValidatingEventBus(), scenario_name="debug", start_location="arena_grounds")
         self.assertNotIn(name, fresh_dm.scenario_entities)
         fresh_dm.load_game(slot)
 
         self.assertIn(name, fresh_dm.scenario_entities)
-        self.assertEqual(fresh_dm.get_current_hp(name), 11)
+        self.assertEqual(Combat_Resolution.get_current_hp(fresh_dm.world, name), 11)
         self.assertEqual(fresh_dm.entities[name]["summon_expires_in"], 3)
         self.assertFalse(fresh_dm.is_hostile(name, fresh_dm.player_name))
 
@@ -13331,7 +13344,7 @@ class TestSaveLoad(DMTestCase):
         self.assertNotIn("wolf", self.dm_core.scenario_entities)
         self.dm_core.save_game(slot)
 
-        fresh_dm = DMCore(EventBus(), scenario_name="debug", start_location="arena_grounds")  # boots with "wolf" freshly instanced
+        fresh_dm = DMCore(ValidatingEventBus(), scenario_name="debug", start_location="arena_grounds")  # boots with "wolf" freshly instanced
         self.assertIn("wolf", fresh_dm.scenario_entities)
         fresh_dm.load_game(slot)
 
@@ -13379,26 +13392,26 @@ class TestMultiRoomDungeon(DMTestCase):
         # thane (follow_offset = 0) walks abreast; anne (follow_offset = -1) trails one band
         # behind -- both snap back into formation the moment the player's own band changes
         # (_apply_party_formation, DM_Movement.py), not just at scenario load.
-        self.assertEqual(self.dm_core.get_band("gladstone"), 1)
-        self.assertEqual(self.dm_core.get_band("thane"), 1)
-        self.assertEqual(self.dm_core.get_band("anne"), 1)  # -1 clamped to the floor
+        self.assertEqual(Combat_Resolution.get_band(self.dm_core.world, "gladstone"), 1)
+        self.assertEqual(Combat_Resolution.get_band(self.dm_core.world, "thane"), 1)
+        self.assertEqual(Combat_Resolution.get_band(self.dm_core.world, "anne"), 1)  # -1 clamped to the floor
 
         self.dm_core.advance_or_retreat("advance")  # entrance is 2 bands -- room to actually move
 
-        self.assertEqual(self.dm_core.get_band("gladstone"), 2)
-        self.assertEqual(self.dm_core.get_band("thane"), 2)  # walks abreast
-        self.assertEqual(self.dm_core.get_band("anne"), 1)  # one band behind, no longer clamped
+        self.assertEqual(Combat_Resolution.get_band(self.dm_core.world, "gladstone"), 2)
+        self.assertEqual(Combat_Resolution.get_band(self.dm_core.world, "thane"), 2)  # walks abreast
+        self.assertEqual(Combat_Resolution.get_band(self.dm_core.world, "anne"), 1)  # one band behind, no longer clamped
 
         self.dm_core.advance_or_retreat("retreat")
 
-        self.assertEqual(self.dm_core.get_band("gladstone"), 1)
-        self.assertEqual(self.dm_core.get_band("thane"), 1)
-        self.assertEqual(self.dm_core.get_band("anne"), 1)
+        self.assertEqual(Combat_Resolution.get_band(self.dm_core.world, "gladstone"), 1)
+        self.assertEqual(Combat_Resolution.get_band(self.dm_core.world, "thane"), 1)
+        self.assertEqual(Combat_Resolution.get_band(self.dm_core.world, "anne"), 1)
 
 
     def test_hidden_trap_fails_its_notice_roll_and_stays_out_of_the_roster(self):
         with patch("random.randint", return_value=1):  # observation 1D=1, under difficulty 4
-            dm = DMCore(EventBus(), scenario_name="debug", start_location="crypt")
+            dm = DMCore(ValidatingEventBus(), scenario_name="debug", start_location="crypt")
         self.assertTrue(dm.is_hidden("dart trap"))
         roster_text = " ".join(dm._describe_scenario_characters())
         self.assertNotIn("dart trap", roster_text)
@@ -13433,7 +13446,7 @@ class TestMultiRoomDungeon(DMTestCase):
         self.assertEqual(self.dm_core.entities["gladstone"]["exp"], gladstone_exp_after_the_disarm)
 
     def test_failed_disarm_damages_the_player_and_arms_blocks_further_attempts(self):
-        starting_hp = self.dm_core.get_current_hp("gladstone")
+        starting_hp = Combat_Resolution.get_current_hp(self.dm_core.world, "gladstone")
         with patch("random.randint", return_value=1):  # finesse 3d1=3, well under difficulty 9
             self.dm_core._on_turn_detected({"clauses": [{"kind": "action", "skill": "finesse"}], "input": "I try to disarm the trap"})
 
@@ -13445,24 +13458,24 @@ class TestMultiRoomDungeon(DMTestCase):
         damage_effects = [effect for effect in result.effects if isinstance(effect, DamageEffect)]
         self.assertEqual(len(damage_effects), 1)
         self.assertEqual(damage_effects[0].net_damage, 1)
-        self.assertEqual(self.dm_core.get_current_hp("gladstone"), starting_hp - 1)
+        self.assertEqual(Combat_Resolution.get_current_hp(self.dm_core.world, "gladstone"), starting_hp - 1)
         self.assertIn("triggered", self.dm_core.entities["dart trap"]["active_conditions"])
         self.assertIn("armed", self.dm_core.entities["dart trap"]["active_conditions"])  # fail never dismisses it
 
         # blocks_if_condition="triggered" -- a repeat attempt must fall through to the normal
         # opposed path (difficulty 0, no HP loss) instead of rolling and re-damaging again.
-        hp_after_first_hit = self.dm_core.get_current_hp("gladstone")
+        hp_after_first_hit = Combat_Resolution.get_current_hp(self.dm_core.world, "gladstone")
         with patch("random.randint", return_value=6):
             self.dm_core._on_turn_detected({"clauses": [{"kind": "action", "skill": "finesse"}], "input": "I try again"})
         self.assertEqual(self.action_events[-1]["actions"][0].difficulty, 0)
-        self.assertEqual(self.dm_core.get_current_hp("gladstone"), hp_after_first_hit)
+        self.assertEqual(Combat_Resolution.get_current_hp(self.dm_core.world, "gladstone"), hp_after_first_hit)
 
 
     def test_forward_succeeds_once_the_player_reaches_the_exit_band(self):
         with patch("random.randint", return_value=6):
             self.dm_core._on_turn_detected({"clauses": [{"kind": "action", "skill": "finesse"}], "input": "I disarm the trap"})
         self.dm_core.advance_or_retreat("advance")  # band 1 -> 2, toward the trap/exit
-        self.assertEqual(self.dm_core.get_band("gladstone"), 2)
+        self.assertEqual(Combat_Resolution.get_band(self.dm_core.world, "gladstone"), 2)
 
         result = self._move("forward")
 
@@ -13471,7 +13484,7 @@ class TestMultiRoomDungeon(DMTestCase):
         self.assertEqual(self.dm_core.current_room_key, "hall_of_webs")
         self.assertEqual(self.dm_core.scenario_entities, ["gladstone", "thane", "anne", "giant spider"])
         self.assertEqual(self.dm_core.current_target, "giant spider")
-        self.assertEqual(self.dm_core.get_band("gladstone"), 1)  # this exit's own arrival_band
+        self.assertEqual(Combat_Resolution.get_band(self.dm_core.world, "gladstone"), 1)  # this exit's own arrival_band
 
     def test_move_blocked_while_a_hostile_creature_is_still_alive(self):
         self.dm_core.enter_room("hall_of_webs")  # spider present, still alive
@@ -13488,13 +13501,13 @@ class TestMultiRoomDungeon(DMTestCase):
         # Kill the spider, move on, then come back -- the same dead spider should still be
         # dead, not a freshly-instanced, full-HP one.
         self.dm_core.enter_room("hall_of_webs")
-        self.dm_core.apply_damage("giant spider", 999)
+        Combat_Resolution.apply_damage(self.dm_core.world, "giant spider", 999)
         self._move("forward")  # -> guard_chamber
 
         self._move("back")  # -> back to hall_of_webs
 
         self.assertEqual(self.dm_core.current_room_key, "hall_of_webs")
-        self.assertEqual(self.dm_core.get_current_hp("giant spider"), 0)
+        self.assertEqual(Combat_Resolution.get_current_hp(self.dm_core.world, "giant spider"), 0)
         # current_target re-falls-back past the dead spider since nothing else is hostile/alive.
         self.assertNotEqual(self.dm_core.current_target, "giant spider")
 
@@ -13511,7 +13524,7 @@ class TestRoomLevelPresenceScoping(unittest.TestCase):
     """
 
     def setUp(self):
-        self.event_bus = EventBus()
+        self.event_bus = ValidatingEventBus()
         # LLMCore must exist (and be subscribed) before DMCore's own __init__ publishes its
         # first "scenario_loaded" -- same ordering TestGameBoot already requires for NLPCore's
         # "rules_loaded" subscription, for the exact same reason.
@@ -13565,16 +13578,16 @@ class TestMultiRoomSaveLoad(DMTestCase):
     def test_save_load_resumes_in_the_room_it_was_saved_in(self):
         slot = self._track("test_crypt_resume_room")
         self.dm_core.enter_room("hall_of_webs")
-        self.dm_core.apply_damage("giant spider", 5)
+        Combat_Resolution.apply_damage(self.dm_core.world, "giant spider", 5)
         self.dm_core.save_game(slot)
 
-        fresh_bus = EventBus()
+        fresh_bus = ValidatingEventBus()
         fresh_dm = DMCore(fresh_bus, scenario_name="debug", start_location="crypt")  # boots back at "entrance"
         fresh_dm.load_game(slot)
 
         self.assertEqual(fresh_dm.current_room_key, "hall_of_webs")
         self.assertEqual(fresh_dm.scenario_entities, ["gladstone", "thane", "anne", "giant spider"])
-        self.assertEqual(fresh_dm.get_current_hp("giant spider"), 9)
+        self.assertEqual(Combat_Resolution.get_current_hp(fresh_dm.world, "giant spider"), 9)
 
 
     def test_dropped_items_round_trip_per_room(self):
@@ -13590,7 +13603,7 @@ class TestMultiRoomSaveLoad(DMTestCase):
         self.dm_core.enter_room("hall_of_webs")
         self.dm_core.save_game(slot)
 
-        fresh_dm = DMCore(EventBus(), scenario_name="debug", start_location="crypt")  # boots back at "entrance"
+        fresh_dm = DMCore(ValidatingEventBus(), scenario_name="debug", start_location="crypt")  # boots back at "entrance"
         fresh_dm.load_game(slot)
 
         self.assertEqual(fresh_dm.rooms["entrance"].get("ground"), ["health potion"])
@@ -13623,8 +13636,8 @@ class TestDuplicateEntityNamesAcrossRooms(DMTestCase):
     def test_second_rooms_duplicate_name_disambiguates_instead_of_colliding(self):
         self.dm_core.enter_room("hall_of_webs")
         self.assertIn("giant spider", self.dm_core.entities)
-        self.dm_core.apply_damage("giant spider", 9)  # 14 max_hp -> 5, so an overwrite is detectable
-        self.assertEqual(self.dm_core.get_current_hp("giant spider"), 5)
+        Combat_Resolution.apply_damage(self.dm_core.world, "giant spider", 9)  # 14 max_hp -> 5, so an overwrite is detectable
+        self.assertEqual(Combat_Resolution.get_current_hp(self.dm_core.world, "giant spider"), 5)
 
         self._inject_colliding_room()
         self.dm_core.enter_room("ambush_nook")
@@ -13633,18 +13646,18 @@ class TestDuplicateEntityNamesAcrossRooms(DMTestCase):
         self.assertIn("giant spider_2", self.dm_core.entities)
         # The second instance is a fresh, full-HP copy of the template -- not the first's own
         # wounded dict reused/aliased.
-        self.assertEqual(self.dm_core.get_current_hp("giant spider_2"), 14)
+        self.assertEqual(Combat_Resolution.get_current_hp(self.dm_core.world, "giant spider_2"), 14)
         # The critical assertion: the first spider's live, wounded state must survive
         # untouched -- before this fix, the second room's own instancing overwrote
         # self.entities["giant spider"] outright.
-        self.assertEqual(self.dm_core.get_current_hp("giant spider"), 5)
+        self.assertEqual(Combat_Resolution.get_current_hp(self.dm_core.world, "giant spider"), 5)
 
     def test_save_then_load_restores_both_disambiguated_instances_correctly(self):
         self.dm_core.enter_room("hall_of_webs")
-        self.dm_core.apply_damage("giant spider", 9)
+        Combat_Resolution.apply_damage(self.dm_core.world, "giant spider", 9)
         self._inject_colliding_room()
         self.dm_core.enter_room("ambush_nook")
-        self.dm_core.apply_damage("giant spider_2", 3)
+        Combat_Resolution.apply_damage(self.dm_core.world, "giant spider_2", 3)
 
         slot_name = "test_crypt_duplicate_name_slot"
         slot_dir = self.dm_core._save_slot_dir(slot_name)
@@ -13655,7 +13668,7 @@ class TestDuplicateEntityNamesAcrossRooms(DMTestCase):
         # would otherwise wipe the injected "ambush_nook" room -- re-inject it the moment
         # self.locations exists again, exactly where load_game itself populates it, before the
         # location_runtime replay loop (which needs it present) runs.
-        fresh_dm = DMCore(EventBus(), scenario_name="debug", start_location="crypt")
+        fresh_dm = DMCore(ValidatingEventBus(), scenario_name="debug", start_location="crypt")
         real_load_scenario_definition = fresh_dm.load_scenario_definition
 
         def load_scenario_definition_with_ambush_nook(scenario_name):
@@ -13668,8 +13681,8 @@ class TestDuplicateEntityNamesAcrossRooms(DMTestCase):
         fresh_dm.load_scenario_definition = load_scenario_definition_with_ambush_nook
         fresh_dm.load_game(slot_name)
 
-        self.assertEqual(fresh_dm.get_current_hp("giant spider"), 5)
-        self.assertEqual(fresh_dm.get_current_hp("giant spider_2"), 11)
+        self.assertEqual(Combat_Resolution.get_current_hp(fresh_dm.world, "giant spider"), 5)
+        self.assertEqual(Combat_Resolution.get_current_hp(fresh_dm.world, "giant spider_2"), 11)
 
 
 class TestInterleavedLocationSaveLoad(DMTestCase):
@@ -13720,14 +13733,14 @@ class TestInterleavedLocationSaveLoad(DMTestCase):
 
         self.assertIn("giant spider", self.dm_core.entities)
         self.assertIn("giant spider_2", self.dm_core.entities)
-        self.dm_core.apply_damage("giant spider", 9)  # b_wing's own spider: 14 -> 5
-        self.dm_core.apply_damage("giant spider_2", 3)  # crypt's guard_chamber spider: 14 -> 11
+        Combat_Resolution.apply_damage(self.dm_core.world, "giant spider", 9)  # b_wing's own spider: 14 -> 5
+        Combat_Resolution.apply_damage(self.dm_core.world, "giant spider_2", 3)  # crypt's guard_chamber spider: 14 -> 11
 
         slot_name = "test_crypt_interleaved_location_slot"
         self.addCleanup(shutil.rmtree, self.dm_core._save_slot_dir(slot_name), ignore_errors=True)
         self.dm_core.save_game(slot_name)
 
-        fresh_dm = DMCore(EventBus(), scenario_name="debug", start_location="crypt")
+        fresh_dm = DMCore(ValidatingEventBus(), scenario_name="debug", start_location="crypt")
         real_load_scenario_definition = fresh_dm.load_scenario_definition
 
         def load_scenario_definition_with_b_wing(scenario_name):
@@ -13743,15 +13756,15 @@ class TestInterleavedLocationSaveLoad(DMTestCase):
         # Had load_game fallen back to grouping crypt's own rooms together (the pre-fix
         # replay order), guard_chamber's spider would have claimed the bare "giant spider"
         # name instead -- these two assertions are the real regression guard.
-        self.assertEqual(fresh_dm.get_current_hp("giant spider"), 5)
-        self.assertEqual(fresh_dm.get_current_hp("giant spider_2"), 11)
+        self.assertEqual(Combat_Resolution.get_current_hp(fresh_dm.world, "giant spider"), 5)
+        self.assertEqual(Combat_Resolution.get_current_hp(fresh_dm.world, "giant spider_2"), 11)
 
     def test_load_falls_back_gracefully_for_a_save_missing_entity_instancing_order(self):
         # Backward compatibility: a save written before self.entity_instancing_order existed
         # simply has no such key -- load_game must still restore the game (via
         # _replay_nested_instancing), not crash.
         self.dm_core.enter_room("hall_of_webs")
-        self.dm_core.apply_damage("giant spider", 6)  # 14 -> 8
+        Combat_Resolution.apply_damage(self.dm_core.world, "giant spider", 6)  # 14 -> 8
 
         slot_name = "test_crypt_no_instancing_order_slot"
         slot_dir = self.dm_core._save_slot_dir(slot_name)
@@ -13765,11 +13778,11 @@ class TestInterleavedLocationSaveLoad(DMTestCase):
         with open(save_path, "w") as f:
             json.dump(data, f)
 
-        fresh_dm = DMCore(EventBus(), scenario_name="debug", start_location="crypt")
+        fresh_dm = DMCore(ValidatingEventBus(), scenario_name="debug", start_location="crypt")
         fresh_dm.load_game(slot_name)
 
         self.assertEqual(fresh_dm.current_room_key, "hall_of_webs")
-        self.assertEqual(fresh_dm.get_current_hp("giant spider"), 8)
+        self.assertEqual(Combat_Resolution.get_current_hp(fresh_dm.world, "giant spider"), 8)
 
 
 class TestLLMSaveLoad(LLMTestCase):
@@ -13802,7 +13815,7 @@ class TestLLMSaveLoad(LLMTestCase):
 
 class TestLlmDebugEvent(LLMTestCase):
     """!
-    @brief fetch_from_llm's own network path (LLM_Core.py's _queue_narration) never runs for
+    @brief fetch_from_llm's own network path (LLM_Core.py's _queue) never runs for
         real in this offline suite -- threading.Thread is patched so its target is captured
         and invoked directly/synchronously instead of on a real background thread, with
         urllib.request.urlopen mocked in place of a real Ollama connection."""
@@ -13810,7 +13823,7 @@ class TestLlmDebugEvent(LLMTestCase):
     def _run_fetch(self, prompt, urlopen_result=None, urlopen_side_effect=None):
         with patch("threading.Thread") as mock_thread, \
              patch("urllib.request.urlopen", return_value=urlopen_result, side_effect=urlopen_side_effect):
-            self.llm_core._queue_narration(prompt)
+            self.llm_core._queue(Narration(prompt))
             mock_thread.call_args.kwargs["target"]()
 
     def test_successful_request_publishes_the_full_query_and_raw_response(self):
@@ -13870,7 +13883,7 @@ class TestContextBudgetAndEmptyResponses(LLMTestCase):
         with patch("threading.Thread") as mock_thread,              patch("urllib.request.urlopen", side_effect=[
                  self._fake_response(""), self._fake_response("The wolf snarls."),
              ]):
-            self.llm_core._queue_narration("The wolf attacks.")
+            self.llm_core._queue(Narration("The wolf attacks."))
             mock_thread.call_args.kwargs["target"]()
 
         self.assertEqual(responses, ["The wolf snarls."])
@@ -13883,7 +13896,7 @@ class TestContextBudgetAndEmptyResponses(LLMTestCase):
         with patch("threading.Thread") as mock_thread,              patch("urllib.request.urlopen", side_effect=[
                  self._fake_response(""), self._fake_response("   "),
              ]):
-            self.llm_core._queue_narration("The wolf attacks.")
+            self.llm_core._queue(Narration("The wolf attacks."))
             mock_thread.call_args.kwargs["target"]()
 
         self.assertTrue(responses[-1].strip())
@@ -13895,7 +13908,7 @@ class TestContextBudgetAndEmptyResponses(LLMTestCase):
 class TestAdamNarration(LLMTestCase):
     """!
     @brief LLMCore's own side of DM_Help.py's channel: generate_adam_response/
-        _build_adam_system_message/_queue_adam_response. The load-bearing property under test
+        adam_system_message/_queue. The load-bearing property under test
         is the isolation guarantee -- unlike every other narration trigger, an ADaM exchange
         must never touch context_window at all (see LLM_Core.py's own module notes for why).
     """
@@ -13917,7 +13930,7 @@ class TestAdamNarration(LLMTestCase):
         return payload
 
     def test_publishing_help_resolved_never_touches_context_window(self):
-        # No thread/network mocking needed -- _queue_adam_response never appends to
+        # No thread/network mocking needed -- _queue never appends to
         # context_window at all, synchronously, before the background thread even starts (the
         # same style TestFreeformDialogueNarration already uses to assert dialogue's own
         # pre-fetch context_window append, just proving the opposite here).
@@ -13928,7 +13941,7 @@ class TestAdamNarration(LLMTestCase):
         self.assertEqual(self.llm_core.context_window, [])
 
     def test_system_message_includes_general_guidance_and_the_live_payload(self):
-        message = self.llm_core._build_adam_system_message(self._help_payload(), rag_query=None)
+        message = Narration_Prompts.adam_system_message(self._help_payload(), None)
 
         self.assertIn("ADaM", message)
         self.assertIn("out-of-character", message)
@@ -13946,13 +13959,13 @@ class TestAdamNarration(LLMTestCase):
 
     def test_system_message_mentions_a_creature_conjured_this_turn(self):
         payload = self._help_payload(created_creature={"created_creature": True, "name": "cave rat"})
-        message = self.llm_core._build_adam_system_message(payload, rag_query=None)
+        message = Narration_Prompts.adam_system_message(payload, None)
         self.assertIn("cave rat", message)
         self.assertIn("conjured", message)
 
     def test_system_message_mentions_an_edit_made_this_turn(self):
         payload = self._help_payload(edited={"edited": True, "name": "wolf", "reason": "player asked"})
-        message = self.llm_core._build_adam_system_message(payload, rag_query=None)
+        message = Narration_Prompts.adam_system_message(payload, None)
         self.assertIn("wolf", message)
         self.assertIn("edited", message)
 
@@ -13979,7 +13992,7 @@ class TestAdamNarration(LLMTestCase):
 class TestSceneQueryNarration(LLMTestCase):
     """!
     @brief LLMCore's own side of DM_Help.py's scene-query channel: generate_scene_query_response/
-        _build_scene_query_system_message/_queue_scene_query. The two load-bearing properties
+        scene_query_system_message/_queue. The two load-bearing properties
         under test are the mirror image of TestAdamNarration's: this one speaks as the ordinary
         Game Master (never ADaM's own persona) and *does* join context_window (unlike ADaM's own
         deliberately-excluded exchanges).
@@ -13999,7 +14012,7 @@ class TestSceneQueryNarration(LLMTestCase):
         return payload
 
     def test_system_message_speaks_as_the_gm_not_adam_and_grounds_strictly(self):
-        message = self.llm_core._build_scene_query_system_message(self._scene_payload(), rag_query=None)
+        message = Narration_Prompts.scene_query_system_message(self._scene_payload(), None)
 
         self.assertIn("Game Master", message)
         self.assertNotIn("ADaM", message)
@@ -14044,7 +14057,7 @@ class TestSceneQueryNarration(LLMTestCase):
 class FakeRagIndex:
     """!
     @brief Duck-typed stand-in for LLM_Rag.RagIndex's query() method, so LLMCore-level tests
-        (perform_rag formatting, _build_system_message wiring) don't need a real PDF/model --
+        (perform_rag formatting, system_message wiring) don't need a real PDF/model --
         that mechanism is covered on its own by TestRagIndex below.
     """
 
@@ -14058,14 +14071,14 @@ class FakeRagIndex:
 class TestLlmPerformRag(LLMTestCase):
 
 
-    def test_queue_narration_never_persists_rag_context_into_context_window(self):
+    def test_queue_never_persists_rag_context_into_context_window(self):
         # Retrieved fresh into the per-request system message each time (see
-        # _build_system_message), not stored in context_window -- otherwise every future turn
+        # system_message), not stored in context_window -- otherwise every future turn
         # would replay every past turn's lore excerpts too, ballooning the rolling window.
         self.llm_core.rag_index = FakeRagIndex([
             ({"source": "Inner Sea World Guide", "page": 23, "text": "Brevoy is a nation of two rival houses."}, 0.57),
         ])
-        self.llm_core._queue_narration("The player asks about Brevoy.")
+        self.llm_core._queue(Narration("The player asks about Brevoy."))
         stored_prompt = self.llm_core.context_window[-1]["content"]
         self.assertNotIn("Brevoy is a nation of two rival houses", stored_prompt)
         self.assertEqual(stored_prompt, "The player asks about Brevoy.")
@@ -14086,7 +14099,7 @@ class TestRagIndex(unittest.TestCase):
         # Paying SentenceTransformer's ~15-20s load once for the whole class, the same
         # setUpClass pattern TestNlpConfidenceThreshold/TestGameBoot already use.
         cls.index = RagIndex.__new__(RagIndex)
-        cls.index.event_bus = EventBus()
+        cls.index.event_bus = ValidatingEventBus()
         cls.index.model = SentenceTransformer("all-MiniLM-L6-v2")
 
     def setUp(self):
@@ -14367,7 +14380,7 @@ class TestGUICore(unittest.TestCase):
         cls.shared_root.destroy()
 
     def setUp(self):
-        self.event_bus = EventBus()
+        self.event_bus = ValidatingEventBus()
         self.gui = GUICore(self.event_bus, master=self.shared_root)
         self.gui.root.withdraw()  # keep the real window off-screen during tests
         self.slot_dirs = []
@@ -14572,7 +14585,7 @@ def lines_of(app, widget_id):
 
 @pytest.mark.asyncio
 async def test_user_input_and_llm_response_mirror_into_history():
-    event_bus = EventBus()
+    event_bus = ValidatingEventBus()
     app = TextualCore(event_bus)
 
     async with app.run_test() as pilot:
@@ -14590,7 +14603,7 @@ async def test_user_input_and_llm_response_mirror_into_history():
 async def test_background_thread_publish_is_thread_safe():
     # LLMCore publishes llm_response_ready from a background fetch thread, not the app's
     # own thread, so this exercises call_safely's cross-thread path via call_from_thread.
-    event_bus = EventBus()
+    event_bus = ValidatingEventBus()
     app = TextualCore(event_bus)
 
     async with app.run_test() as pilot:
@@ -14609,7 +14622,7 @@ async def test_background_thread_publish_is_thread_safe():
 
 @pytest.mark.asyncio
 async def test_load_button_publishes_load_requested_with_slot_name():
-    event_bus = EventBus()
+    event_bus = ValidatingEventBus()
     app = TextualCore(event_bus)
     received = []
     event_bus.subscribe("load_requested", received.append)
@@ -14817,11 +14830,13 @@ class TestNarratedPopulation(DMTestCase):
         [name] = self._crowd()
         before = dict(self.dm_core.entities[name])
 
-        with tempfile.TemporaryDirectory() as tmp:
-            with patch("dm.DM_Persistence.PROJECT_ROOT", tmp):
-                self.dm_core.save_game("crowd_slot")
-                reloaded = DMCore(EventBus(), scenario_name="debug", start_location="town_square", setting="Fantasy")
-                reloaded.load_game("crowd_slot")
+        store = MemorySlotStore()
+        self.dm_core.slot_store = store
+        self.dm_core.save_game("crowd_slot")
+        reloaded = DMCore(
+            ValidatingEventBus(), scenario_name="debug", start_location="town_square", setting="Fantasy", slot_store=store,
+        )
+        reloaded.load_game("crowd_slot")
 
         self.assertIn(name, reloaded.scenario_entities)
         self.assertEqual(reloaded.entities[name]["name"], before["name"])
@@ -14831,13 +14846,13 @@ class TestNarratedPopulation(DMTestCase):
     def test_scene_setting_prose_is_longer_and_asks_for_people_only_where_opted_in(self):
         from types import SimpleNamespace
         core = SimpleNamespace(population=self.dm_core._population_prompt_settings())
-        text = LLMCore.scene_length_instruction(core, "the opening scene")
+        text = NarratorState.scene_length_instruction(core, "the opening scene")
 
         self.assertIn("5-6 sentences", text)
         self.assertIn("market stallholders", text)
         core = SimpleNamespace(population={"sentences": "2-3", "hint": ""})
         self.assertEqual(
-            LLMCore.scene_length_instruction(core, "the opening scene"),
+            NarratorState.scene_length_instruction(core, "the opening scene"),
             "Narrate the opening scene in 2-3 sentences as the Game Master.",
         )
 
@@ -14988,16 +15003,16 @@ class TestSceneRosterNarration(LLMTestCase):
             "characters": ["a gruff innkeeper"], "entities": [], "present_entities": [],
         })
 
-        system_message = self.llm_core._build_system_message("")
+        system_message = Narration_Prompts.system_message(self.llm_core.narrator, "")
 
         self.assertIn("a gruff innkeeper", system_message)
         self.assertNotIn("fruit seller", system_message)
 
     def test_an_attack_with_no_opponent_tells_the_narrator_not_to_invent_one(self):
         outcome = RolledOutcome(entity="gladstone", skill="brawling", roll=7, difficulty=0, success=True, no_opponent=True)
-        self.assertIn("There is no opponent", self.llm_core._describe_outcome(outcome))
+        self.assertIn("There is no opponent", Narration_Prompts.describe_outcome(outcome))
         outcome.no_opponent = False
-        self.assertNotIn("no opponent", self.llm_core._describe_outcome(outcome))
+        self.assertNotIn("no opponent", Narration_Prompts.describe_outcome(outcome))
 
     def test_an_incidental_target_is_never_named_to_the_narrator(self):
         outcome = RolledOutcome(
@@ -15005,11 +15020,11 @@ class TestSceneRosterNarration(LLMTestCase):
             defender="Belor Hemlock", incidental_target=True,
         )
         outcome.effects.append(DefenderDetailsEffect(text="Belor Hemlock - Sandpoint's sheriff."))
-        text = self.llm_core._describe_outcome(outcome)
+        text = Narration_Prompts.describe_outcome(outcome)
         self.assertNotIn("Belor", text)
         self.assertIn("It isn't an attack on anyone", text)
         outcome.incidental_target = False
-        self.assertIn("against Belor Hemlock (no defense)", self.llm_core._describe_outcome(outcome))
+        self.assertIn("against Belor Hemlock (no defense)", Narration_Prompts.describe_outcome(outcome))
 
     def test_narration_is_told_to_keep_the_dice_hidden(self):
         # Found by playtest: "The successful roll means your strike connects cleanly".
@@ -15021,7 +15036,7 @@ class TestSceneRosterNarration(LLMTestCase):
 
     def test_a_trivial_check_is_narrated_without_a_roll(self):
         outcome = RolledOutcome(entity="gladstone", skill="observation", roll=0, difficulty=0, success=True, trivial=True)
-        text = self.llm_core._describe_outcome(outcome)
+        text = Narration_Prompts.describe_outcome(outcome)
         self.assertIn("no roll needed", text)
         self.assertNotIn("rolled", text)
 
@@ -15029,7 +15044,7 @@ class TestSceneRosterNarration(LLMTestCase):
         # Found by playtest: a polearms mismatch got the player a polearm they never owned.
         outcome = RolledOutcome(entity="gladstone", skill="polearms", roll=7, difficulty=0, success=True,
                                 input="grab the finest jar of spices")
-        text = self.llm_core._describe_player_actions({"actions": [outcome], "player_gear": ["longsword", "chain mail"]})
+        text = Narration_Prompts.describe_player_actions({"actions": [outcome], "player_gear": ["longsword", "chain mail"]})
         self.assertIn("Narrate what the player actually tried", text)
         self.assertIn("The player's gear is exactly: longsword, chain mail", text)
 
@@ -15042,10 +15057,10 @@ class TestSceneRosterNarration(LLMTestCase):
         })
         self.event_bus.publish("location_exits_updated", {"destinations": [{"key": "inn", "name": "The Rusty Dragon"}]})
 
-        pinned = self.llm_core._build_system_message("", label="clarification")
+        pinned = Narration_Prompts.system_message(self.llm_core.narrator, "", label="clarification")
         self.assertIn("The player is at The Fish Market and stays there", pinned)
         self.assertIn("Ways out from here: The Rusty Dragon.", pinned)
-        self.assertNotIn("stays there", self.llm_core._build_system_message("", label="item_interaction:travel"))
+        self.assertNotIn("stays there", Narration_Prompts.system_message(self.llm_core.narrator, "", label="item_interaction:travel"))
 
 
 class TestItemPhraseExtraction(unittest.TestCase):
@@ -15416,14 +15431,13 @@ class TestDialoguePromotion(DMTestCase):
         with patch("dm.DM_Improvisation.generate_referenced_npc", return_value=self._fake_npc()):
             self._talk("ask the blacksmith about repairs", "blacksmith")
 
-        with tempfile.TemporaryDirectory() as tmp:
-            with patch("dm.DM_Persistence.PROJECT_ROOT", tmp):
-                self.dm_core.save_game("promoted_slot")
-                event_bus = EventBus()
-                reloaded = DMCore(
-                    event_bus, scenario_name="debug", start_location="tavern_floor", setting="Fantasy",
-                )
-                reloaded.load_game("promoted_slot")
+        store = MemorySlotStore()
+        self.dm_core.slot_store = store
+        self.dm_core.save_game("promoted_slot")
+        reloaded = DMCore(
+            ValidatingEventBus(), scenario_name="debug", start_location="tavern_floor", setting="Fantasy", slot_store=store,
+        )
+        reloaded.load_game("promoted_slot")
 
         self.assertIn("Ferrin", reloaded.scenario_entities)
         self.assertEqual(reloaded.entities["Ferrin"]["description"], self._fake_npc()["entity"]["description"])
@@ -15456,12 +15470,11 @@ class TestRecentNarrationBuffer(DMTestCase):
     def test_the_buffer_round_trips_through_save_and_load(self):
         self.event_bus.publish("llm_response_ready", "A merchant argues outside the tavern.")
 
-        with tempfile.TemporaryDirectory() as tmp:
-            with patch("dm.DM_Persistence.PROJECT_ROOT", tmp):
-                self.dm_core.save_game("narration_slot")
-                event_bus = EventBus()
-                reloaded = DMCore(event_bus, scenario_name="debug", setting="Fantasy")
-                reloaded.load_game("narration_slot")
+        store = MemorySlotStore()
+        self.dm_core.slot_store = store
+        self.dm_core.save_game("narration_slot")
+        reloaded = DMCore(ValidatingEventBus(), scenario_name="debug", setting="Fantasy", slot_store=store)
+        reloaded.load_game("narration_slot")
 
         self.assertEqual(list(reloaded.recent_narration), ["A merchant argues outside the tavern."])
 
@@ -15472,7 +15485,7 @@ class TestConfirmationAnswers(unittest.TestCase):
 
     def _nlp(self):
         from types import SimpleNamespace
-        bus = EventBus()
+        bus = ValidatingEventBus()
         answers = []
         bus.subscribe("confirmation_answered", answers.append)
         nlp = SimpleNamespace(event_bus=bus, _awaiting_confirmation=True)
@@ -15576,7 +15589,7 @@ class TestLaw(DMTestCase):
 
     def test_silencing_every_witness_before_time_passes_keeps_the_record_clean(self):
         self._steal()
-        self.dm_core.apply_damage("shopkeeper", 1000)
+        Combat_Resolution.apply_damage(self.dm_core.world, "shopkeeper", 1000)
         self.dm_core.advance_blocks(1)
         self.assertIsNone(self._record())
 
@@ -15632,7 +15645,7 @@ class TestLaw(DMTestCase):
     def test_assault_then_kill_is_murder_charged_once(self):
         self._add_person("customer")
         self.dm_core.note_assault("gladstone", "shopkeeper")
-        self.dm_core.calculate_damage("gladstone", "shopkeeper", {"damage_value": {"dice": 0, "pips": 0, "bonus": 1000}})
+        Combat_Actions.calculate_damage(self.dm_core.world, "gladstone", "shopkeeper", {"damage_value": {"dice": 0, "pips": 0, "bonus": 1000}})
         self.assertEqual([seen["crime"] for seen in self.dm_core.entities["customer"]["known_crimes"]], ["assault", "murder"])
         self.dm_core.advance_blocks(1)
         self.assertEqual((self._record()["bounty"], self._record()["acclaim"]), (100, -6))
@@ -15641,7 +15654,7 @@ class TestLaw(DMTestCase):
         self._add_person("customer")
         before = self.dm_core.get_attitude("customer", "gladstone")
         self.dm_core.note_assault("gladstone", "shopkeeper")
-        self.dm_core.calculate_damage("gladstone", "shopkeeper", {"damage_value": {"dice": 0, "pips": 0, "bonus": 1000}})
+        Combat_Actions.calculate_damage(self.dm_core.world, "gladstone", "shopkeeper", {"damage_value": {"dice": 0, "pips": 0, "bonus": 1000}})
         after = self.dm_core.get_attitude("customer", "gladstone")
         # Assault (0.5) then murder (1.0) -- capped at the action drift cap of 60 per axis.
         self.assertEqual(after[0] - before[0], -60)
@@ -15659,7 +15672,7 @@ class TestLaw(DMTestCase):
 
     def test_killing_someone_who_struck_first_is_no_crime(self):
         self._add_person("customer")
-        self.dm_core.calculate_damage("gladstone", "shopkeeper", {"damage_value": {"dice": 0, "pips": 0, "bonus": 1000}})
+        Combat_Actions.calculate_damage(self.dm_core.world, "gladstone", "shopkeeper", {"damage_value": {"dice": 0, "pips": 0, "bonus": 1000}})
         self.assertNotIn("known_crimes", self.dm_core.entities["customer"])
 
     def test_attacking_a_bystander_is_an_assault(self):
@@ -15728,11 +15741,13 @@ class TestLaw(DMTestCase):
         self._stub_roll_dice(1)
         self._steal()
         self.dm_core.advance_blocks(1)
-        with tempfile.TemporaryDirectory() as tmp:
-            with patch("dm.DM_Persistence.PROJECT_ROOT", tmp):
-                self.dm_core.save_game("law_slot")
-                reloaded = DMCore(EventBus(), scenario_name="debug", start_location="general_store", setting="Fantasy")
-                reloaded.load_game("law_slot")
+        store = MemorySlotStore()
+        self.dm_core.slot_store = store
+        self.dm_core.save_game("law_slot")
+        reloaded = DMCore(
+            ValidatingEventBus(), scenario_name="debug", start_location="general_store", setting="Fantasy", slot_store=store,
+        )
+        reloaded.load_game("law_slot")
         self.assertEqual(reloaded.legal_records, self.dm_core.legal_records)
         self.assertEqual(reloaded.entities["shopkeeper"]["known_crimes"], self.dm_core.entities["shopkeeper"]["known_crimes"])
         self.assertEqual(reloaded.entities["gladstone"]["disguise"], self.dm_core.entities["gladstone"]["disguise"])
@@ -15820,23 +15835,23 @@ class TestEnforcement(DMTestCase):
         self._wanted(acclaim=0)
         self._stub_roll_dice(1)  # magnitude 1 is "very difficult" -- the guard's streetwise fails
         self._add_guard()
-        self.dm_core.check_enforcement()
+        self.dm_core.law_enforcement.check_enforcement()
         self.assertIsNone(self.dm_core.pending_arrest)
         self.assertEqual(self.dm_core.entities["guard"]["enforcement_checks"], {"gladstone|": False})
 
         self._stub_roll_dice(100)  # checked once per guard per identity: no second chance
-        self.dm_core.check_enforcement()
+        self.dm_core.law_enforcement.check_enforcement()
         self.assertIsNone(self.dm_core.pending_arrest)
 
         self._add_guard("captain")
-        self.dm_core.check_enforcement()
+        self.dm_core.law_enforcement.check_enforcement()
         self.assertEqual(self.dm_core.pending_arrest["enforcer"], "captain")
 
     def test_famous_enough_is_recognized_without_a_roll(self):
         self._wanted(acclaim=25)
         self._stub_roll_dice(0)
         self._add_guard()
-        self.dm_core.check_enforcement()
+        self.dm_core.law_enforcement.check_enforcement()
         self.assertEqual(self.dm_core.pending_arrest["enforcer"], "guard")
         self.assertFalse(self.confronted[0]["witnessed"])
 
@@ -15848,13 +15863,13 @@ class TestEnforcement(DMTestCase):
         )
         self._stub_roll_dice(1)  # the guard's observation can't beat 30
         self._add_guard()
-        self.dm_core.check_enforcement()
+        self.dm_core.law_enforcement.check_enforcement()
         self.assertIsNone(self.dm_core.pending_arrest)
 
     def test_past_kill_on_sight_the_guard_attacks_instead(self):
         self._wanted(bounty=100, acclaim=25)
         self._add_guard()
-        self.dm_core.check_enforcement()
+        self.dm_core.law_enforcement.check_enforcement()
         self.assertIsNone(self.dm_core.pending_arrest)
         self.assertEqual(self.confronted[0]["kind"], "kill_on_sight")
         self.assertTrue(self.dm_core.is_hostile("guard", "gladstone"))
@@ -15864,7 +15879,7 @@ class TestEnforcement(DMTestCase):
         self.dm_core._find_polity("Test Crown")["arrest_at"] = 10
         self.addCleanup(self.dm_core._find_polity("Test Crown").__setitem__, "arrest_at", 1)
         self._add_guard()
-        self.dm_core.check_enforcement()
+        self.dm_core.law_enforcement.check_enforcement()
         self.assertIsNone(self.dm_core.pending_arrest)
 
     # -- The replies --------------------------------------------------------------------
@@ -15921,7 +15936,7 @@ class TestEnforcement(DMTestCase):
         self.assertEqual(self.resolved[-1]["outcome"], "bribed")
         self.assertEqual(self.dm_core.entities["guard"]["looked_away"], {"gladstone": 5})
         self.assertEqual(self._record()["bounty"], 5)  # the record itself stands
-        self.dm_core.check_enforcement()
+        self.dm_core.law_enforcement.check_enforcement()
         self.assertIsNone(self.dm_core.pending_arrest)
 
     def test_an_incorruptible_guard_refuses_and_the_demand_stands(self):
@@ -15956,12 +15971,12 @@ class TestEnforcement(DMTestCase):
     def test_a_good_bluff_means_the_guard_no_longer_knows_them(self):
         self._wanted(acclaim=25)
         self._add_guard()
-        self.dm_core.check_enforcement()
+        self.dm_core.law_enforcement.check_enforcement()
         self._stub_roll_dice(10)
         self._answer("bluff")
         self.assertEqual(self.resolved[-1]["outcome"], "bluffed")
         self.assertFalse(self.dm_core.entities["guard"]["enforcement_checks"]["gladstone|"])
-        self.dm_core.check_enforcement()
+        self.dm_core.law_enforcement.check_enforcement()
         self.assertIsNone(self.dm_core.pending_arrest)
 
     def test_resisting_turns_the_guards_hostile_and_is_a_crime(self):
@@ -16015,14 +16030,16 @@ class TestEnforcement(DMTestCase):
     def test_an_open_arrest_survives_save_and_reload(self):
         self._add_guard()
         self._steal()
-        with tempfile.TemporaryDirectory() as tmp:
-            with patch("dm.DM_Persistence.PROJECT_ROOT", tmp):
-                self.dm_core.save_game("arrest_slot")
-                event_bus = EventBus()
-                awaiting = []
-                event_bus.subscribe("arrest_awaiting", awaiting.append)
-                reloaded = DMCore(event_bus, scenario_name="debug", start_location="general_store", setting="Fantasy")
-                reloaded.load_game("arrest_slot")
+        store = MemorySlotStore()
+        self.dm_core.slot_store = store
+        self.dm_core.save_game("arrest_slot")
+        event_bus = ValidatingEventBus()
+        awaiting = []
+        event_bus.subscribe("arrest_awaiting", awaiting.append)
+        reloaded = DMCore(
+            event_bus, scenario_name="debug", start_location="general_store", setting="Fantasy", slot_store=store,
+        )
+        reloaded.load_game("arrest_slot")
         self.assertEqual(reloaded.pending_arrest["enforcer"], "guard")
         self.assertEqual(awaiting[-1]["choices"], ["pay", "surrender", "bribe", "bluff", "resist"])
 
@@ -16047,15 +16064,14 @@ class TestSandpointEnforcement(DMTestCase):
 
     def test_the_garrison_is_under_varisian_law_and_is_sandpoints_jail(self):
         self.assertEqual(self.dm_core.current_polity(), "Varisia")
-        self.assertEqual(self.dm_core._jail_location(), "garrison")
+        self.assertEqual(self.dm_core.law_enforcement.jail_location(), "garrison")
 
     def test_a_reload_keeps_the_guards_able_to_witness(self):
         # Found by playtest: the reload replay instanced the garrison while standing elsewhere,
         # so its polity-language default never applied and nobody there could witness a crime.
-        with tempfile.TemporaryDirectory() as tmp:
-            with patch("dm.DM_Persistence.PROJECT_ROOT", tmp):
-                self.dm_core.save_game("garrison_slot")
-                self.dm_core.load_game("garrison_slot")
+        self.dm_core.slot_store = MemorySlotStore()
+        self.dm_core.save_game("garrison_slot")
+        self.dm_core.load_game("garrison_slot")
         self.assertEqual(self.dm_core.entities["Vachedi"]["languages"], ["varisian"])
         self.dm_core.nudge_attitude_from_event("Belor Hemlock", "gladstone", "assaulted", 1.0)
         self.dm_core.note_assault("gladstone", "Belor Hemlock")
@@ -16094,7 +16110,7 @@ class TestArrestReplies(unittest.TestCase):
 
     def _nlp(self, choices=("pay", "surrender", "bribe", "bluff", "resist")):
         from types import SimpleNamespace
-        bus = EventBus()
+        bus = ValidatingEventBus()
         answers = []
         bus.subscribe("arrest_answered", answers.append)
         return SimpleNamespace(event_bus=bus, _arrest_choices=list(choices)), answers
@@ -16258,6 +16274,712 @@ class TestCrimeNarration(LLMTestCase):
             "intent": "take", "item_name": "rope", "found": True, "input": "take the rope",
         })
         self.assertNotIn("Seen by", self.llm_core.context_window[-1]["content"])
+
+
+class TestSaveSlotStore(unittest.TestCase):
+    """!
+    @brief persistence/slot.py -- the slot store interface, run against both adapters (the real
+        filesystem one and the in-memory one tests use) so the in-memory fake can't drift from
+        the real behaviour -- plus the Persistable merge/restore helpers.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.stores = {"file": FileSlotStore(self.tmp.name), "memory": MemorySlotStore()}
+
+    def test_a_part_round_trips_and_carries_the_format_version(self):
+        for name, store in self.stores.items():
+            with self.subTest(store=name):
+                store.write("slot", "dm_state", {"round_number": 3})
+                data = store.read("slot", "dm_state")
+                self.assertEqual(data["round_number"], 3)
+                self.assertEqual(data[VERSION_KEY], FORMAT_VERSION)
+
+    def test_a_missing_part_is_not_found(self):
+        for name, store in self.stores.items():
+            with self.subTest(store=name):
+                with self.assertRaises(SaveError) as caught:
+                    store.read("nowhere", "dm_state")
+                self.assertEqual(caught.exception.reason, "not_found")
+
+    def test_an_unversioned_or_old_part_is_unsupported_but_a_tolerant_read_still_works(self):
+        store = self.stores["file"]
+        os.makedirs(store.slot_dir("old"))
+        with open(store.path("old", "dm_state"), "w") as f:
+            json.dump({"scenario_key": "crypt", "version": 2}, f)
+
+        with self.assertRaises(SaveError) as caught:
+            store.read("old", "dm_state")
+        self.assertEqual(caught.exception.reason, "unsupported_version")
+        self.assertEqual(store.read("old", "dm_state", check_version=False)["scenario_key"], "crypt")
+
+    def test_a_damaged_part_is_corrupt_not_a_crash(self):
+        store = self.stores["file"]
+        os.makedirs(store.slot_dir("bad"))
+        with open(store.path("bad", "dm_state"), "w") as f:
+            f.write("{not json")
+
+        with self.assertRaises(SaveError) as caught:
+            store.read("bad", "dm_state")
+        self.assertEqual(caught.exception.reason, "corrupt")
+
+    def test_a_write_leaves_no_temp_file_behind(self):
+        store = self.stores["file"]
+        store.write("slot", "dm_state", {"a": 1})
+        self.assertEqual(os.listdir(store.slot_dir("slot")), ["dm_state.json"])
+
+    def test_a_slot_name_cannot_escape_the_saves_root(self):
+        for name, store in self.stores.items():
+            with self.subTest(store=name):
+                self.assertEqual(os.path.basename(store.slot_dir("../../evil")), "evil")
+
+    def test_slots_are_listed_by_whichever_parts_exist(self):
+        for name, store in self.stores.items():
+            with self.subTest(store=name):
+                store.write("b_slot", "dm_state", {})
+                store.write("a_slot", "llm_state", {})
+                self.assertEqual(store.list_slots(), ["a_slot", "b_slot"])
+
+    def test_snapshot_all_merges_in_order_and_rejects_a_duplicate_key(self):
+        class Part(Persistable):
+            def __init__(self, **keys):
+                self.keys = keys
+                self.restored = None
+
+            def snapshot(self):
+                return dict(self.keys)
+
+            def restore(self, data):
+                self.restored = data
+
+        self.assertEqual(snapshot_all([Part(a=1), Part(b=2)]), {"a": 1, "b": 2})
+        with self.assertRaises(ValueError):
+            snapshot_all([Part(a=1), Part(a=2)])
+
+        first, second = Part(), Part()
+        calls = []
+        first.restore = lambda data: calls.append("first")
+        second.restore = lambda data: calls.append("second")
+        restore_all([first, second], {})
+        self.assertEqual(calls, ["first", "second"])
+
+
+class TestDMSaveSlotRoundTrip(DMTestCase):
+    """!
+    @brief DMCore's save/load over an in-memory slot store -- the participants' own keys round
+        trip, and a part that can't be read is rejected before anything live is touched.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.store = MemorySlotStore()
+        self.dm_core.slot_store = self.store
+        self.failed = []
+        self.event_bus.subscribe("game_load_failed", self.failed.append)
+
+    def test_every_participant_contributes_its_own_keys_with_no_overlap(self):
+        data = snapshot_all(self.dm_core.save_parts)
+        for key in (
+            "round_number", "current_block", "legal_records", "removed_entities", "known_locations",
+            "player_name", "instances", "current_target", "recent_narration", "conversation_partner",
+        ):
+            self.assertIn(key, data)
+
+    def test_the_clock_and_session_focus_round_trip(self):
+        self.dm_core.round_number = 7
+        self.dm_core.current_block = 12
+        self.dm_core.save_game("clock_slot")
+
+        fresh = DMCore(ValidatingEventBus(), scenario_name="debug", start_location="arena_grounds", slot_store=self.store)
+        fresh.load_game("clock_slot")
+
+        self.assertEqual(fresh.round_number, 7)
+        self.assertEqual(fresh.current_block, 12)
+
+    def test_an_unsupported_slot_fails_cleanly_and_leaves_live_state_alone(self):
+        self.store.write("stale", "dm_state", {"round_number": 99})
+        self.store._parts[("stale", "dm_state")] = '{"round_number": 99}'  # no format_version
+        self.dm_core.round_number = 4
+
+        self.dm_core.load_game("stale")
+
+        self.assertEqual(self.failed, [{"slot": "stale", "reason": "unsupported_version"}])
+        self.assertEqual(self.dm_core.round_number, 4)
+
+    def test_a_missing_slot_still_reports_not_found(self):
+        self.dm_core.load_game("never_saved")
+        self.assertEqual(self.failed, [{"slot": "never_saved", "reason": "not_found"}])
+
+
+class FakeLawWorld(LawWorld):
+    """!
+    @brief A LawWorld with no DMCore behind it: plain dicts for the state, and one ordered
+        timeline of everything LawEnforcement did to it -- events published and world changes
+        alike -- so a test can assert on ordering. rolls scripts resolve_action's outcomes.
+    """
+
+    def __init__(self):
+        self.entities = {
+            "hero": {"name": "Hero", "currency": 10, "hp": 10, "max_hp": 10},
+            "guard": {"name": "the guard", "tags": ["law_enforcer"], "hp": 10, "max_hp": 10},
+        }
+        self.rules = {
+            "polity": [{"name": "Crown", "arrest_at": 1, "jail": "cells"}],
+            "law": {
+                "jail_blocks_per_unit": 0.5, "bribe": [{"min_share": 0, "modifier": 0}],
+                "recognition": [{"min_acclaim": 1, "tier": "automatic"}],
+            },
+            "currency": {"denomination": [{"name": "gold", "value": 1, "plural": "gold"}]},
+        }
+        self.scenario_entities = ["hero", "guard"]
+        self.player_name = "hero"
+        self.current_location_key = "square"
+        self.locations = {"square": {"name": "The Square"}, "cells": {"name": "The Cells"}}
+        self.current_block = 0
+        self.hostile = set()
+        self.rolls = []
+        self.timeline = []
+
+    def events(self, name):
+        return [payload for kind, label, payload in self.timeline if kind == "event" and label == name]
+
+    def current_polity(self):
+        return "Crown"
+
+    def sees_through(self, witness, subject):
+        return True
+
+    def is_hostile(self, entity_name, toward_name):
+        return entity_name in self.hostile
+
+    def is_party_member(self, entity_name):
+        return entity_name == self.player_name
+
+    def resolve_action(self, entity_name, skill_name, difficulty=0):
+        outcome = self.rolls.pop(0) if self.rolls else {"success": True, "roll": 10}
+        return {"roll": 10, **outcome}
+
+    def nudge_attitude(self, entity_name, toward_name, event_name, magnitude):
+        self.timeline.append(("nudge", event_name, entity_name))
+        if event_name in ("resisted_arrest", "wanted_dead"):
+            self.hostile.add(entity_name)
+
+    def transfer_currency(self, from_name, to_name, amount):
+        self.entities[from_name]["currency"] -= amount
+        self.entities[to_name]["currency"] = self.entities[to_name].get("currency", 0) + amount
+        self.timeline.append(("transfer", to_name, amount))
+
+    def format_currency(self, amount):
+        return f"{amount} gold"
+
+    def enter_location(self, location_key):
+        self.current_location_key = location_key
+        self.timeline.append(("move", location_key, None))
+
+    def advance_blocks(self, blocks):
+        self.current_block += blocks
+        self.timeline.append(("advance", blocks, None))
+
+    def hours_for_blocks(self, blocks):
+        return blocks * 2
+
+    def publish(self, event, payload):
+        self.timeline.append(("event", event, payload))
+
+
+class TestLawEnforcementWithoutDMCore(unittest.TestCase):
+    """!
+    @brief resolution/Law_Enforcement.py driven entirely through a FakeLawWorld -- the arrest
+        flow with no DMCore, TOML boot or EventBus.
+    """
+
+    LAW = {"fine": 5, "acclaim": -1}
+    LINE = {"crime": "theft", "victim": "guard", "subject": None, "block": 0}
+
+    def setUp(self):
+        self.world = FakeLawWorld()
+        self.law = LawEnforcement(self.world)
+
+    def _wanted(self, bounty=5):
+        self.law.file_report({
+            "polity": "Crown", "identity": "hero", "law": {"fine": bounty, "acclaim": -1}, "line": self.LINE,
+        })
+
+    def _confront(self):
+        self._wanted()
+        self.law.check_enforcement()
+        self.assertTrue(self.law.pending_arrest)
+
+    def test_a_wanted_player_is_confronted_when_the_guard_recognizes_them(self):
+        self._wanted()
+        self.law.check_enforcement()
+
+        [demand] = self.world.events("arrest_confronted")
+        self.assertEqual(demand["kind"], "arrest")
+        self.assertEqual(demand["amount"], 5)
+        self.assertEqual(self.world.events("arrest_awaiting"), [{"choices": list(ARREST_CHOICES)}])
+        self.assertIn("pay", demand["notice"])
+
+    def test_a_bounty_under_arrest_at_is_ignored(self):
+        self.world.rules["polity"][0]["arrest_at"] = 10
+        self._wanted(bounty=5)
+        self.law.check_enforcement()
+        self.assertIsNone(self.law.pending_arrest)
+
+    def test_a_confrontation_started_mid_input_is_announced_only_once_the_input_is_handled(self):
+        self.law.on_input_started()
+        self._wanted()
+        self.law.enforcer_witnessed("guard", "Crown", "hero")
+        self.assertEqual(self.world.events("arrest_confronted"), [])
+
+        self.law.on_input_handled()
+        self.assertEqual(len(self.world.events("arrest_confronted")), 1)
+
+    def test_paying_settles_the_record_and_hands_the_money_over(self):
+        self._confront()
+        self.law.on_arrest_answered({"choice": "pay"})
+
+        self.assertEqual(self.law.legal_records["Crown"]["hero"]["bounty"], 0)
+        self.assertEqual(self.world.entities["guard"]["currency"], 5)
+        self.assertIsNone(self.law.pending_arrest)
+        self.assertEqual(self.world.events("arrest_resolved")[-1]["outcome"], "paid")
+
+    def test_paying_without_enough_money_keeps_the_demand_open(self):
+        self.world.entities["hero"]["currency"] = 2
+        self._confront()
+        self.law.on_arrest_answered({"choice": "pay"})
+
+        self.assertTrue(self.law.pending_arrest)
+        self.assertIn("You have 2 gold", self.world.events("player_notice")[-1]["message"])
+
+    def test_surrender_announces_before_moving_to_jail_and_advancing_the_clock(self):
+        self.world.entities["hero"]["currency"] = 1
+        self._confront()
+        self.law.on_arrest_answered({"choice": "surrender"})
+
+        order = [(kind, label) for kind, label, _ in self.world.timeline if kind in ("move", "advance") or label == "arrest_resolved"]
+        self.assertEqual(order, [("event", "arrest_resolved"), ("move", "cells"), ("advance", 2)])
+        resolved = self.world.events("arrest_resolved")[-1]
+        self.assertEqual((resolved["outcome"], resolved["blocks"], resolved["hours"]), ("surrendered", 2, 4))
+        self.assertEqual(self.law.legal_records["Crown"]["hero"]["bounty"], 0)
+
+    def test_an_incorruptible_enforcer_refuses_a_bribe_without_a_roll(self):
+        self.world.entities["guard"]["tags"].append("incorruptible")
+        self._confront()
+        self.law.on_arrest_answered({"choice": "bribe", "input": "bribe 5 gold"})
+
+        self.assertEqual(self.world.events("arrest_resolved")[-1]["outcome"], "bribe_refused")
+        self.assertEqual(self.world.entities["hero"]["currency"], 10)
+        self.assertEqual(self.law.legal_records["Crown"]["hero"]["bounty"], 5)
+
+    def test_a_taken_bribe_makes_the_enforcer_look_away_until_the_bounty_rises(self):
+        self._confront()
+        self.law.on_arrest_answered({"choice": "bribe", "input": "bribe 5 gold"})
+
+        self.assertEqual(self.world.events("arrest_resolved")[-1]["outcome"], "bribed")
+        self.assertEqual(self.world.entities["guard"]["looked_away"], {"hero": 5})
+        self.law.check_enforcement()
+        self.assertIsNone(self.law.pending_arrest)
+
+    def test_a_bribe_with_no_amount_asks_again(self):
+        self._confront()
+        self.law.on_arrest_answered({"choice": "bribe", "input": "bribe him"})
+
+        self.assertTrue(self.law.pending_arrest)
+        self.assertIn("how much", self.world.events("player_notice")[-1]["message"])
+
+    def test_a_fooled_enforcer_stops_taking_the_player_for_that_identity(self):
+        self._confront()
+        self.world.rolls = [{"roll": 3}, {"success": True}]
+        self.law.on_arrest_answered({"choice": "bluff"})
+
+        self.assertEqual(self.world.events("arrest_resolved")[-1]["outcome"], "bluffed")
+        self.assertIs(self.world.entities["guard"]["enforcement_checks"]["hero|"], False)
+
+    def test_resisting_turns_every_enforcer_hostile_and_files_the_resisting_law(self):
+        self.world.rules["polity"][0]["law"] = [{"crime": "resisting_arrest", "fine": 20, "acclaim": -2}]
+        self._confront()
+        self.law.on_arrest_answered({"choice": "resist"})
+
+        self.assertIn("guard", self.world.hostile)
+        self.assertEqual(self.law.legal_records["Crown"]["hero"]["bounty"], 25)
+        self.assertEqual(self.world.events("arrest_resolved")[-1]["outcome"], "resisted")
+
+    def test_leaving_the_location_counts_as_fleeing(self):
+        self._confront()
+        self.world.current_location_key = "elsewhere"
+        self.law.on_input_started()
+        self.law.on_input_handled()
+
+        self.assertIsNone(self.law.pending_arrest)
+        self.assertEqual(self.world.events("arrest_resolved")[-1]["how"], "fled")
+
+    def test_carrying_on_twice_counts_as_resisting(self):
+        self._confront()
+        for _ in range(STALL_LIMIT):
+            self.law.on_input_started()
+            self.law.on_arrest_answered({"choice": "other"})
+            self.law.note_player_acted()
+            self.law.on_input_handled()
+
+        self.assertEqual(self.world.events("arrest_resolved")[-1]["how"], "ignored")
+
+    def test_a_queued_report_is_filed_only_if_a_witness_lived(self):
+        self.world.entities["witness"] = {"hp": 0, "max_hp": 5}
+        self.law.queue_report({
+            "polity": "Crown", "identity": "hero", "law": self.LAW, "line": self.LINE, "witnesses": ["witness"],
+        })
+        self.law.file_pending_reports()
+        self.assertEqual(self.law.legal_records, {})
+
+        self.world.entities["witness"]["hp"] = 5
+        self.law.queue_report({
+            "polity": "Crown", "identity": "hero", "law": self.LAW, "line": self.LINE, "witnesses": ["witness"],
+        })
+        self.law.file_pending_reports()
+        self.assertEqual(self.law.legal_records["Crown"]["hero"]["bounty"], 5)
+
+    def test_state_round_trips_and_an_announced_arrest_asks_its_question_again(self):
+        self._confront()
+        saved = self.law.snapshot()
+
+        reloaded = LawEnforcement(self.world)
+        reloaded.restore(json.loads(json.dumps(saved)))
+        self.world.timeline.clear()
+        reloaded.resume_after_load()
+
+        self.assertEqual(reloaded.legal_records, self.law.legal_records)
+        self.assertEqual(reloaded.pending_arrest, self.law.pending_arrest)
+        self.assertEqual(self.world.events("arrest_awaiting"), [{"choices": list(ARREST_CHOICES)}])
+
+
+class TestWorldContext(DMTestCase):
+    """!
+    @brief resolution/World_Context.py -- the bundle every Combat_Resolution function takes
+        first. DMCore holds one and exposes entities/rules/skills as read-only views of it.
+    """
+
+    def test_a_function_runs_over_a_bare_context_with_no_dmcore(self):
+        ctx = WorldContext({"orc": {"max_hp": 7, "band": 3}})
+
+        self.assertEqual(Combat_Resolution.get_current_hp(ctx, "orc"), 7)
+        self.assertEqual(Combat_Resolution.get_band(ctx, "orc"), 3)
+        self.assertEqual(Combat_Resolution.get_distance_between(ctx, "orc", "orc"), 0)
+
+    def test_fields_not_given_default_to_empty_so_a_missing_one_fails_at_first_use(self):
+        ctx = WorldContext()
+        self.assertEqual((ctx.entities, ctx.rules, ctx.skills), ({}, {}, {}))
+        self.assertIsNone(ctx.event_bus)
+
+    def test_dmcore_exposes_the_contexts_own_dicts_not_copies(self):
+        world = self.dm_core.world
+        self.assertIs(self.dm_core.entities, world.entities)
+        self.assertIs(self.dm_core.rules, world.rules)
+        self.assertIs(self.dm_core.skills, world.skills)
+        self.assertIs(world.event_bus, self.event_bus)
+
+    def test_nothing_can_rebind_the_state_a_context_holds(self):
+        for name in ("entities", "rules", "skills"):
+            with self.subTest(name=name):
+                with self.assertRaises(AttributeError):
+                    setattr(self.dm_core, name, {})
+
+    def test_reloading_rules_fills_the_same_dicts_in_place(self):
+        before = (self.dm_core.entities, self.dm_core.rules, self.dm_core.skills)
+        self.dm_core.load_rules(os.path.join("Rules", "Fantasy"))
+
+        self.assertIs(self.dm_core.entities, before[0])
+        self.assertIs(self.dm_core.rules, before[1])
+        self.assertIs(self.dm_core.skills, before[2])
+
+    def test_a_condition_applies_through_the_context(self):
+        Combat_Resolution.apply_condition(self.dm_core.world, "gladstone", "wounded", duration="permanent", dismiss="")
+        self.assertTrue(Combat_Resolution.has_condition(self.dm_core.world, "gladstone", "wounded"))
+
+
+class FakeCombatHooks(CombatHooks):
+    """!@brief CombatHooks that record every call -- Combat_Actions driven with no DMCore."""
+
+    def __init__(self, hostile=()):
+        self.hostile = set(hostile)
+        self.calls = []
+
+    def is_hostile(self, entity_name, toward_name):
+        return entity_name in self.hostile
+
+    def note_kill(self, killer, victim):
+        self.calls.append(("note_kill", killer, victim))
+
+    def nudge_combat_hit_attitude(self, target_name, attacker_name, net_damage):
+        self.calls.append(("nudge_combat_hit_attitude", target_name, attacker_name, net_damage))
+
+    def nudge_attitude_from_event(self, entity_name, toward_name, event_name, magnitude):
+        self.calls.append(("nudge_attitude_from_event", entity_name, toward_name, event_name))
+
+    def move_toward_or_away(self, entity_name, opponent_name, direction):
+        self.calls.append(("move", entity_name, opponent_name, direction))
+
+    def transfer_item(self, from_name, to_name, item_name):
+        self.calls.append(("transfer_item", from_name, to_name, item_name))
+        return True
+
+
+class TestCombatActionsWithoutDMCore(unittest.TestCase):
+    """!
+    @brief resolution/Combat_Actions.py over a bare WorldContext and a fake CombatHooks -- the
+        parts of combat that used to need a booted DMCore.
+    """
+
+    HIT = {"damage_value": {"dice": 0, "pips": 0, "bonus": 10}, "damage_tags": []}
+
+    def _world(self, hostile=("orc",), **entities):
+        base = {
+            "hero": {"name": "Hero", "max_hp": 10, "hp": 10, "band": 1, "skills": {}},
+            "orc": {"name": "Orc", "max_hp": 5, "hp": 5, "band": 1, "skills": {}},
+        }
+        base.update(entities)
+        self.hooks = FakeCombatHooks(hostile=hostile)
+        return WorldContext(
+            base, event_bus=ValidatingEventBus(), scenario_entities=list(base), player_name="hero", hooks=self.hooks,
+        )
+
+    def test_a_killing_blow_reports_the_kill_through_the_hooks(self):
+        ctx = self._world()
+        result = Combat_Actions.calculate_damage(ctx, "hero", "orc", self.HIT)
+
+        self.assertEqual(result["remaining_hp"], 0)
+        self.assertIn(("note_kill", "hero", "orc"), self.hooks.calls)
+
+    def test_a_blow_that_does_not_kill_reports_nothing(self):
+        ctx = self._world()
+        Combat_Actions.calculate_damage(ctx, "hero", "orc", {"damage_value": {"dice": 0, "pips": 0, "bonus": 1}, "damage_tags": []})
+        self.assertEqual(self.hooks.calls, [])
+
+    def test_hitting_an_already_dead_target_is_not_a_second_kill(self):
+        ctx = self._world(orc={"name": "Orc", "max_hp": 5, "hp": 0, "band": 1, "skills": {}})
+        Combat_Actions.calculate_damage(ctx, "hero", "orc", self.HIT)
+        self.assertEqual(self.hooks.calls, [])
+
+    def test_create_spawn_is_stashed_on_the_corpse_when_its_requirements_hold(self):
+        ctx = self._world(orc={"name": "Orc", "max_hp": 5, "hp": 5, "band": 2, "subtype": "humanoid", "skills": {}})
+        ability = {**self.HIT, "create_spawn": {
+            "name": "wight", "delay_rounds": 3,
+            "requirements": [{"field": "subtype", "operator": "==", "value": "humanoid"}],
+        }}
+        Combat_Actions.calculate_damage(ctx, "hero", "orc", ability)
+
+        self.assertEqual(ctx.entities["orc"]["pending_spawn"], {"name": "wight", "band": 2, "rounds_remaining": 3})
+
+    def test_an_enemies_only_area_ability_skips_the_allies_standing_beside_the_target(self):
+        ctx = self._world(
+            hostile=("orc", "goblin"),
+            goblin={"name": "Goblin", "max_hp": 3, "hp": 3, "band": 1, "skills": {}},
+            ally={"name": "Ally", "max_hp": 3, "hp": 3, "band": 1, "skills": {}},
+        )
+        ability = {"targets": {"number": 0, "aoe": 0, "side": "enemies"}}
+
+        targets = Combat_Actions.resolve_targets(ctx, "hero", "orc", ability)
+
+        self.assertEqual(targets[0], "orc")
+        self.assertIn("goblin", targets)
+        self.assertNotIn("ally", targets)
+
+    def test_a_self_sided_ability_targets_only_the_caster(self):
+        ctx = self._world()
+        self.assertEqual(
+            Combat_Actions.resolve_targets(ctx, "hero", None, {"targets": {"side": "self"}}), ["hero"],
+        )
+
+    def test_a_stunned_entity_cannot_act(self):
+        ctx = self._world()
+        Combat_Resolution.apply_condition(ctx, "orc", "stunned", duration="rounds", length=1, dismiss="")
+        ctx.rules["condition"] = [{"name": "stunned", "prevents_action": True}]
+
+        self.assertTrue(Combat_Actions.is_action_prevented(ctx, "orc"))
+        self.assertFalse(Combat_Actions.is_action_prevented(ctx, "hero"))
+
+
+class TestNarrationPromptsWithoutLLMCore(unittest.TestCase):
+    """!
+    @brief llm/Narration_Prompts.py driven with a bare NarratorState and event payloads -- what the
+        narrator is told, with no LLMCore, thread, network or EventBus.
+    """
+
+    def setUp(self):
+        self.state = NarratorState()
+
+    def test_an_item_pickup_is_a_labelled_narration_tagged_with_who_was_present(self):
+        result = Narration_Prompts.item_interaction(self.state, {
+            "intent": "take", "item_name": "rope", "found": True, "input": "take the rope", "present_entities": ["a"],
+        })
+
+        self.assertIsInstance(result, Narration)
+        self.assertEqual(result.kind, "narration")
+        self.assertEqual(result.label, "item_interaction:take")
+        self.assertEqual(result.present_entities, ["a"])
+        self.assertEqual(result.rag_query, "take the rope")
+        self.assertIn('The player takes "rope"', result.prompt)
+
+    def test_a_denied_pickup_that_nothing_in_the_world_refused_is_a_notice_not_prose(self):
+        result = Narration_Prompts.item_interaction(self.state, {
+            "intent": "take", "item_name": "rope", "found": False, "reason": "not_present", "phrase": "belt knife",
+        })
+
+        self.assertIsInstance(result, Notice)
+        self.assertIn('no "belt knife" here', result.message)
+        self.assertEqual(result.log[0], "Generating item interaction response (take).")
+
+    def test_a_denial_the_world_gave_is_narrated_with_only_its_real_reason(self):
+        result = Narration_Prompts.item_interaction(self.state, {
+            "intent": "take", "item_name": "rope", "found": False, "reason": "locked", "container": "chest",
+        })
+        self.assertIn("chest is locked shut", result.prompt)
+        self.assertIn("don't invent", result.prompt)
+
+    def test_a_quiet_clause_narrates_nothing(self):
+        result = Narration_Prompts.item_interaction(self.state, {"intent": "advance", "quiet": True})
+        self.assertIsInstance(result, Skip)
+        self.assertIn("quiet", result.log)
+
+    def test_dialogue_carries_everything_its_own_system_message_needs(self):
+        result = Narration_Prompts.npc_dialogue(self.state, {
+            "target": "innkeeper_2", "target_label": "the Innkeeper", "found": True, "utterance": "hello",
+            "speech_form": "address", "persona": "Gruff.", "attitude": "wary", "input": "hello",
+        })
+
+        self.assertEqual((result.kind, result.target_key, result.speaker), ("dialogue", "innkeeper_2", "the Innkeeper"))
+        self.assertEqual((result.persona, result.attitude), ("Gruff.", "wary"))
+        self.assertEqual(result.label, "dialogue:innkeeper_2")
+
+    def test_adam_and_scene_queries_say_which_system_message_frames_them(self):
+        adam = Narration_Prompts.adam(self.state, {"input": "help"})
+        query = Narration_Prompts.scene_query(self.state, {"input": "what do I see", "present_entities": ["x"]})
+
+        self.assertEqual((adam.kind, adam.present_entities), ("adam", None))
+        self.assertEqual((query.kind, query.present_entities), ("scene_query", ["x"]))
+
+    def test_the_scenario_intro_records_the_scene_it_narrates(self):
+        result = Narration_Prompts.scene_intro(self.state, {
+            "name": "The Arena", "description": "Sand.", "characters": ["gladstone - a man"],
+        })
+
+        self.assertEqual((self.state.scenario_name, self.state.scene_name), ("The Arena", "The Arena"))
+        self.assertIn("Characters present: gladstone - a man", result.prompt)
+        self.assertEqual(result.label, "scenario_intro")
+
+    def test_a_throwaway_scenario_intro_still_updates_the_state_but_narrates_nothing(self):
+        result = Narration_Prompts.scene_intro(self.state, {"name": "X", "description": "d", "skip_intro": True})
+        self.assertIsInstance(result, Skip)
+        self.assertEqual(self.state.scenario_name, "X")
+
+    def test_a_fled_arrest_is_told_out_of_character(self):
+        result = Narration_Prompts.arrest(self.state, {"outcome": "fled", "enforcer": "the guard", "polity": "Crown"})
+        self.assertIsInstance(result, Notice)
+        self.assertIn("fled from the guard", result.message)
+
+    def test_the_system_message_grounds_the_gm_in_the_scene_and_the_retrieved_lore(self):
+        self.state.scenario_name = "The Arena"
+        self.state.scenario_description = "Sand."
+        self.state.scenario_characters = ["gladstone - a man"]
+        self.state.scene_name = "The Arena"
+
+        message = Narration_Prompts.system_message(self.state, "A lore excerpt.")
+
+        self.assertIn('Setting: "The Arena" - Sand.', message)
+        self.assertIn("Characters: gladstone - a man", message)
+        self.assertIn("A lore excerpt.", message)
+        self.assertIn("stays there", message)
+
+
+class TestEventContract(unittest.TestCase):
+    """!
+    @brief events/schemas.py's declared payloads, from both sides: the validating bus rejects a
+        producer's key the schema doesn't know, and every key a consumer reads has to be one the
+        schema declares -- a key on only one side is a silent None.
+    """
+
+    def test_a_payload_with_an_undeclared_key_fails_at_the_line_that_published_it(self):
+        bus = ValidatingEventBus()
+        with self.assertRaises(EventContractError) as caught:
+            bus.publish("item_interaction_resolved", {"intent": "take", "found": True, "ammount": 5})
+        self.assertIn("unknown key 'ammount'", str(caught.exception))
+
+    def test_a_missing_required_key_and_a_wrongly_typed_value_are_caught(self):
+        bus = ValidatingEventBus()
+        with self.assertRaises(EventContractError):
+            bus.publish("item_interaction_resolved", {"found": True})
+        with self.assertRaises(EventContractError):
+            bus.publish("dialogue_resolved", {"found": "yes"})
+        with self.assertRaises(EventContractError):
+            bus.publish("llm_response_ready", {"not": "a string"})
+
+    def test_a_turn_is_checked_clause_by_clause(self):
+        bus = ValidatingEventBus()
+        bus.publish("turn_detected", {"clauses": [{"kind": "action", "skill": "blades", "score": 0.9}], "input": "x"})
+        with self.assertRaises(EventContractError):
+            bus.publish("turn_detected", {"clauses": [{"kind": "action", "skil": "blades"}], "input": "x"})
+        with self.assertRaises(EventContractError):
+            bus.publish("turn_detected", {"clauses": [{"kind": "mystery"}], "input": "x"})
+
+    def test_strict_off_lets_a_deliberately_malformed_payload_through(self):
+        bus = ValidatingEventBus()
+        bus.strict = False
+        bus.publish("llm_response_ready", {"anything": 1})
+
+    def test_unschemad_events_are_never_checked(self):
+        ValidatingEventBus().publish("log_info", {"whatever": object()})
+
+    def _declared(self, schema):
+        import typing
+        return set(typing.get_type_hints(schema))
+
+    def test_every_key_the_narrators_read_from_an_item_result_is_declared(self):
+        import glob
+        import importlib
+        from events.schemas import ItemInteractionResolved
+
+        declared = self._declared(ItemInteractionResolved)
+        consumers = [Narration_Prompts.item_interaction]
+        for path in glob.glob(os.path.join("intents", "*.py")):
+            module = importlib.import_module("intents." + os.path.basename(path)[:-3])
+            consumers += [fn for name, fn in vars(module).items() if name.startswith("narrate") and callable(fn)]
+        for function in consumers:
+            with self.subTest(consumer=function.__module__ + "." + function.__name__):
+                self.assertEqual(consumed_keys(function, "data") - declared, set())
+
+    def test_every_key_the_dialogue_narrator_reads_is_declared(self):
+        from events.schemas import DialogueResolved
+        self.assertEqual(consumed_keys(Narration_Prompts.npc_dialogue, "data") - self._declared(DialogueResolved), set())
+
+    def test_every_key_dmcore_reads_from_a_turn_and_its_clauses_is_declared(self):
+        from events.schemas import ActionClause, ItemClause, TurnDetected
+        self.assertEqual(consumed_keys(DMCore._on_turn_detected, "data") - self._declared(TurnDetected), set())
+        clause_keys = self._declared(ActionClause) | self._declared(ItemClause)
+        self.assertEqual(consumed_keys(DMCore._on_turn_detected, "clause") - clause_keys, set())
+
+
+class TestRoomMoveCarriesItsDirection(DMTestCase):
+    """!
+    @brief The room-move narrator reads "direction" ("The player heads forward, arriving at ...");
+        found by the event contract: nothing used to send it, so every move read "heads onward".
+    """
+    scenario_name = "debug"
+    start_location = "crypt"
+
+    def test_a_move_publishes_the_direction_it_tried(self):
+        resolved = self._capture("item_interaction_resolved")
+        self.dm_core._on_item_interaction_detected({"intent": "move", "item_name": None, "direction": "forward", "input": "go forward"})
+
+        # Hostiles in the entrance block the way (found is False) -- the direction rides along either way.
+        self.assertEqual(resolved[-1]["direction"], "forward")
+
+    def test_a_refused_move_carries_it_too(self):
+        resolved = self._capture("item_interaction_resolved")
+        self.dm_core._on_item_interaction_detected({"intent": "move", "item_name": None, "direction": "left", "input": "go left"})
+
+        self.assertFalse(resolved[-1]["found"])
+        self.assertEqual(resolved[-1]["direction"], "left")
 
 
 if __name__ == "__main__":

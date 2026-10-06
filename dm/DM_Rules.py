@@ -6,6 +6,7 @@ import resolution.Combat_Resolution as Combat_Resolution
 from dm.DM_Types import DMCoreProtocol
 from resolution.Program_Interpreter import run_program
 from paths import PROJECT_ROOT
+import resolution.Combat_Actions as Combat_Actions
 
 # Reserved sentinel a scenario/room "entities" entry can use in place of a literal character
 # name to mean "whichever entity is currently the player" (self.player_name) -- resolved in
@@ -284,7 +285,7 @@ class RulesMixin(DMCoreProtocol):
         # A flat set of every ability name appearing in any [[skill]]'s own "abilities" field --
         # a skill-listed ability is usable by any entity, no ownership check at all. Built once
         # here, alongside self.skills itself, so resolve_named_ability's own skill-list fallback
-        # (DM_Combat.py) stays a cheap membership check rather than a per-turn scan over every
+        # (Combat_Actions.py) stays a cheap membership check rather than a per-turn scan over every
         # loaded skill.
         self.universal_abilities = {
             ability_name for skill in self.skills.values() for ability_name in skill.get("abilities", [])
@@ -368,7 +369,7 @@ class RulesMixin(DMCoreProtocol):
         if not raw:
             return []
         names = [raw] if isinstance(raw, str) else list(raw)
-        return [name for name in names if name in self.scenario_entities and self.get_current_hp(name) > 0]
+        return [name for name in names if name in self.scenario_entities and Combat_Resolution.get_current_hp(self.world, name) > 0]
 
     def get_carrying_capacity(self, entity_name, _visited=None):
         """!
@@ -521,7 +522,7 @@ class RulesMixin(DMCoreProtocol):
             not one of the shared Rules/<setting>/*.toml catalogs) isn't loaded until after
             load_rules finishes, and needs this same check too. Doesn't block loading -- same
             "malformed data degrades quietly" convention as load_rules' own per-file try/except
-            -- just surfaces the mismatch instead of DM_Combat.py silently reading a slot key
+            -- just surfaces the mismatch instead of Combat_Actions.py silently reading a slot key
             nothing declared.
         """
         for name, entity in self.entities.items():
@@ -910,11 +911,11 @@ class RulesMixin(DMCoreProtocol):
         """
         entity = self.entities.get(instance_name, {})
         notice = entity.get("notice")
-        if not notice or not self.has_condition(instance_name, "hidden"):
+        if not notice or not Combat_Resolution.has_condition(self.world, instance_name, "hidden"):
             return
-        result = self.resolve_action(self.player_name, notice.get("skill", ""), notice.get("difficulty", 0))
+        result = Combat_Resolution.resolve_action(self.world, self.player_name, notice.get("skill", ""), notice.get("difficulty", 0))
         if result["success"]:
-            self.dismiss_condition(instance_name, "hidden")
+            Combat_Resolution.dismiss_condition(self.world, instance_name, "hidden")
 
     def _populate_room(self, room_key, skip_llm_generation=False):
         """!
@@ -1136,7 +1137,7 @@ class RulesMixin(DMCoreProtocol):
             map_to_present_entity).
 
             Closes a real staleness bug: LLMCore.scenario_characters feeds
-            _build_system_message's own " Characters: ..." line on EVERY narration, but was
+            system_message's own " Characters: ..." line on EVERY narration, but was
             only ever assigned by generate_scene_intro (on scenario_loaded) and load_state --
             so walking from the market into the tavern left every later narration still
             claiming the market's roster was present. Deliberately its own event rather than
@@ -1167,7 +1168,7 @@ class RulesMixin(DMCoreProtocol):
         # (DM_Law.py). Each witness/subject pair is only ever checked once. The same goes for
         # an enforcer recognizing a wanted player (DM_Enforcement.py).
         self.check_presence()
-        self.check_enforcement()
+        self.law_enforcement.check_enforcement()
 
         entities = []
         for entity_name in self.scenario_entities:
@@ -1239,9 +1240,9 @@ class RulesMixin(DMCoreProtocol):
             simply totals to zero for it, so this step is a harmless no-op.
         """
         for entity_name in list(self.scenario_entities):
-            for target_name in self.evaluate_proximity_statuses(entity_name, "on_arrival"):
+            for target_name in Combat_Actions.evaluate_proximity_statuses(self.world, entity_name, "on_arrival"):
                 self.apply_round_upkeep(target_name)
-                Combat_Resolution.tick_condition_durations(self.entities, self.event_bus, target_name, "rounds")
+                Combat_Resolution.tick_condition_durations(self.world, target_name, "rounds")
 
     def enter_room(self, room_key, arrival_band=1, skip_llm_generation=False):
         """!
@@ -1281,7 +1282,7 @@ class RulesMixin(DMCoreProtocol):
         # travel's own location-to-location one (DM_Travel.py's _enter_location) -- "rooms" is
         # scoped to this one transition point, not every possible scene change.
         for entity_name in list(self.scenario_entities):
-            Combat_Resolution.tick_condition_durations(self.entities, self.event_bus, entity_name, "rooms")
+            Combat_Resolution.tick_condition_durations(self.world, entity_name, "rooms")
 
         self.current_room_key = room_key
         self.entities[self.player_name]["band"] = arrival_band

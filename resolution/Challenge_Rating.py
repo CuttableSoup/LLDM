@@ -3,7 +3,7 @@
     same "pure, entity-shape-agnostic" precedent Character_Creation.py sets, since a challenge
     rating needs to be computable from plain skills/hp/damage numbers regardless of where they
     came from (a live DMCore entity today; a hypothetical encounter generator's own draft data
-    tomorrow -- see CLAUDE.md's "Extended goals"). DM_Combat.py's get_challenge_rating/
+    tomorrow -- see CLAUDE.md's "Extended goals"). Combat_Actions.py's get_challenge_rating/
     get_party_challenge_rating are the DMCore-touching glue that pulls those numbers off a
     live entity and calls into this module, the same split Character_Creation.py/
     DM_CharacterCreation.py already use for character creation.
@@ -25,7 +25,7 @@
 
 import math
 
-# Every 3 pips converts to a die (the same scale DM_Combat.py's get_opposing_skill/
+# Every 3 pips converts to a die (the same scale Combat_Actions.py's get_opposing_skill/
 # select_ability_skill already rate skills on) -- skill_rating is the one place that
 # convention is spelled out, so nothing else needs to hardcode "* 3" separately.
 SKILL_RATING_DIVISOR = 3
@@ -35,7 +35,7 @@ def skill_rating(dice, pips):
     """!
     @brief Converts a {dice, pips} pair onto a single comparable scale, in pip units. The
         shared building block behind get_opposing_skill/select_ability_skill's own skill
-        comparisons (DM_Combat.py) and this module's own challenge rating -- one definition
+        comparisons (Combat_Actions.py) and this module's own challenge rating -- one definition
         of "how good is a dice+pips rating" the whole engine agrees on.
     @param dice The number of dice.
     @param pips The flat pip bonus (0-2 in practice; not normalized here).
@@ -71,13 +71,13 @@ def calculate_challenge_rating(
         two sides, each a sum of independently meaningful components on the same pip-unit scale
         skill_rating establishes, combined by twice their geometric mean rather than a flat sum
         (see this module's own docstring for why). Every input here is already resolved by the
-        caller (ex: DM_Combat.py's get_challenge_rating, which knows how to pull these off a
+        caller (ex: Combat_Actions.py's get_challenge_rating, which knows how to pull these off a
         live entity and its setting's own skills.toml) -- this function itself stays pure
         arithmetic:
           - offense_side: skill_rating(offense_skill_rating's own dice/pips) + skill_rating(
             damage_dice, damage_pips) -- the entity's single best attack (weapon or ability),
             its own to-hit skill and its own damage paired together rather than mixed
-            independently from two different candidates (see DM_Combat.py's
+            independently from two different candidates (see Combat_Actions.py's
             _best_offense_package). "How fast this entity can kill you."
           - survival_side -- "how long this entity lasts" -- sums:
             - defense: the entity's own rating in whichever skill(s) a setting's skills.toml

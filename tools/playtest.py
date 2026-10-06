@@ -38,6 +38,7 @@ import shutil
 import sys
 import threading
 import time
+import resolution.Combat_Resolution as Combat_Resolution
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -267,7 +268,7 @@ class Harness:
             return wrapper
 
         # Each _queue_* method starts exactly one background _fetch_and_publish.
-        for name in ("_queue_narration", "_queue_dialogue", "_queue_adam_response", "_queue_scene_query"):
+        for name in ("_queue", "_queue", "_queue", "_queue"):
             setattr(self.llm, name, counted_queue(getattr(self.llm, name)))
         fetch = self.llm._fetch_and_publish
 
@@ -303,7 +304,7 @@ class Harness:
         problems = []
         for name in self.dm._all_known_instance_names():
             entity = self.dm.entities.get(name, {})
-            hp = self.dm.get_current_hp(name)
+            hp = Combat_Resolution.get_current_hp(self.dm.world, name)
             if hp is None or hp != hp:
                 problems.append(f"{name}: hp is {hp!r}")
             cur = entity.get("currency", 0)
@@ -367,12 +368,12 @@ class Harness:
                 f"{[k for k in sorted(set(sa) | set(sb)) if sa.get(k) != sb.get(k)]}"]
 
     def _slot_state(self, slot):
-        with open(os.path.join(ROOT, "Saves", slot, "dm_state.json")) as f:
+        with open(self.dm.slot_store.path(slot, "dm_state")) as f:
             return json.load(f)
 
     def cleanup_saves(self):
         for slot in self.saved_slots:
-            shutil.rmtree(os.path.join(ROOT, "Saves", slot), ignore_errors=True)
+            shutil.rmtree(self.dm.slot_store.slot_dir(slot), ignore_errors=True)
 
     # --- main loop -----------------------------------------------------------------------
 

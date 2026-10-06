@@ -167,7 +167,7 @@ def fit_skills_to_cr(
         side the same way the old flat-sum version distributed its own "remaining" budget --
         offense_side (minus any already-known damage rating) goes to every named offense-role
         key_skill, tied at the same rating (only the single best-rated one is ever actually
-        read forward, via DM_Combat.py's _best_offense_package/get_challenge_rating's own
+        read forward, via Combat_Actions.py's _best_offense_package/get_challenge_rating's own
         max-over-candidates, so tying keeps the result exact regardless of which one ends up
         "best"); survival_side splits into HP (via hp_share) and whatever's left for defense/
         resistive, resistive skills averaging against EVERY resistive-role skill the catalog
@@ -190,7 +190,7 @@ def fit_skills_to_cr(
         skill lists) -- duplicates are fine (deduped, order-preserving).
     @param target_cr The challenge rating to fit toward (already variance-rolled).
     @param skills_catalog The setting's own {skill_name: {"combat_role", ...}} table (ex:
-        DM_Combat.py's self.skills) -- pure data, no live DMCore needed, the same "just a
+        Combat_Actions.py's self.skills) -- pure data, no live DMCore needed, the same "just a
         dict" precedent load_character_creation_data's own rules_dir scan already sets for a
         DMCore-independent module.
     @param hp_share The fraction of survival_side's own budget spent on HP (default 0.3,
@@ -403,7 +403,7 @@ def generate_npc_stats(
         small fake catalog) doesn't pay/duplicate the file scan.
     @param target_cr The challenge rating to aim for, before variance/cr_multiplier.
     @param skills_catalog Forwarded to fit_skills_to_cr -- the setting's own {skill_name:
-        {"combat_role", ...}} table (ex: DM_Combat.py's self.skills).
+        {"combat_role", ...}} table (ex: Combat_Actions.py's self.skills).
     @param hint Optional flavor text (ex: "a suspicious traveling merchant") folded into the
         LLM prompt; a generic prompt is used if omitted.
     @param qualities The entity's own already-resolved qualities dict (gender/race/age --

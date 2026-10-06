@@ -7,12 +7,12 @@
     function here is directly testable with a bare {} entities dict, no DMCore/EventBus
     subscription/scenario load required.
 
-    DM_Combat.py's CombatMixin and DM_Status.py's StatusMixin keep their existing method
-    names/signatures -- every one of these becomes a thin wrapper forwarding self.entities/
-    self.rules/self.skills/self.event_bus, so no caller anywhere else in the codebase changes
-    at all. DM_Movement.py's get_band/get_distance_between are the same shape, included here
-    since get_comparable_value's own "distance_to_target" field and several functions below
-    depend on them.
+    Every function takes a WorldContext (World_Context.py) as its first argument -- the
+    entities/rules/skills/event_bus bundle -- except the two that need none (roll_dice,
+    matches_supertype_or_subtype). DMCore holds one as DMCore.world and callers pass it
+    straight in; a test or helper with only part of the picture builds WorldContext(entities).
+    get_band/get_distance_between are here too, since get_comparable_value's own
+    "distance_to_target" field and several functions below depend on them.
 
     Deliberately excludes anything that reaches into a sibling mixin beyond this graph
     (ex: apply_test_outcome's own loot_entity call, run_round_upkeep's own
@@ -57,62 +57,62 @@ def roll_dice(dice, pips):
     return sum(random.randint(1, 6) for _ in range(max(dice, 0))) + pips
 
 
-def get_current_hp(entities, entity_name):
+def get_current_hp(ctx, entity_name):
     """!
     @brief Gets an entity's current HP, initializing it from max_hp the first time it's needed.
-    @param entities The live entities dict.
+    @param ctx The WorldContext (entities/rules/skills/event_bus) this runs against.
     @param entity_name The name of the entity.
     @return The entity's current HP.
     """
-    entity = entities.get(entity_name, {})
+    entity = ctx.entities.get(entity_name, {})
     if "hp" not in entity:
         entity["hp"] = entity.get("max_hp", 0)
     return entity["hp"]
 
 
-def get_band(entities, entity_name):
+def get_band(ctx, entity_name):
     """!
     @brief The entity's current band -- a 1-indexed position in the scenario's own bands,
         objective (not relative to the player or anything else).
-    @param entities The live entities dict.
+    @param ctx The WorldContext (entities/rules/skills/event_bus) this runs against.
     @param entity_name The entity to check.
     @return The entity's "band" field (1 if unset).
     """
-    return entities.get(entity_name, {}).get("band", 1)
+    return ctx.entities.get(entity_name, {}).get("band", 1)
 
 
-def get_distance_between(entities, entity_a, entity_b):
+def get_distance_between(ctx, entity_a, entity_b):
     """!
     @brief The gap between two entities, in bands -- just their two band numbers subtracted.
-    @param entities The live entities dict.
+    @param ctx The WorldContext (entities/rules/skills/event_bus) this runs against.
     @param entity_a The first entity's name.
     @param entity_b The second entity's name.
     @return The absolute band gap between them (0 if they're in the same band).
     """
-    return abs(get_band(entities, entity_a) - get_band(entities, entity_b))
+    return abs(get_band(ctx, entity_a) - get_band(ctx, entity_b))
 
 
-def get_active_conditions(entities, entity_name):
+def get_active_conditions(ctx, entity_name):
     """!
     @brief entity_name's own active_conditions dict -- the one place every other function/
         caller in this module reads it from, rather than each re-deriving
         entities.get(name, {}).get("active_conditions", {}) independently.
-    @param entities The live entities dict.
+    @param ctx The WorldContext (entities/rules/skills/event_bus) this runs against.
     @param entity_name The entity to check.
     @return The entity's active_conditions dict ({} if it has none).
     """
-    return entities.get(entity_name, {}).get("active_conditions", {})
+    return ctx.entities.get(entity_name, {}).get("active_conditions", {})
 
 
-def has_condition(entities, entity_name, condition_name):
+def has_condition(ctx, entity_name, condition_name):
     """!
     @brief Whether entity_name currently has condition_name active.
-    @param entities The live entities dict.
+    @param ctx The WorldContext (entities/rules/skills/event_bus) this runs against.
     @param entity_name The entity to check.
     @param condition_name The condition name to look for.
     @return True if condition_name is in the entity's active_conditions.
     """
-    return condition_name in get_active_conditions(entities, entity_name)
+    return condition_name in get_active_conditions(ctx, entity_name)
 
 
 # The five denominations a condition's own "duration" may be authored as -- "rounds"/"rooms"/
@@ -124,27 +124,25 @@ def has_condition(entities, entity_name, condition_name):
 CONDITION_DURATIONS = ("rounds", "rooms", "blocks", "permanent")
 
 
-def _apply_stat_drain(entities, rules, entity_name, condition_name):
+def _apply_stat_drain(ctx, entity_name, condition_name):
     """!
     @brief Permanently removes dice/pips from entity_name's own base skill, per condition_name's
         own [[condition]] entry's optional "drain" = {skill, dice, pips} -- the Pathfinder
         "Energy Drained" shape (a permanent stat loss, distinct from [[condition]]'s ordinary
         "modifier", which is a roll-time-only penalty that evaporates the instant the condition
         is dismissed). Clamped so a drain can never push a skill below 0/0.
-    @param entities The live entities dict.
-    @param rules The loaded rules dict (may be None/{} -- no [[condition]] entry found means
-        nothing to drain).
+    @param ctx The WorldContext (entities/rules/skills/event_bus) this runs against.
     @param entity_name The name of the entity losing the stat.
     @param condition_name The name of the condition being newly applied.
     @return {"skill", "dice", "pips"} describing the amount actually removed (for
         dismiss_condition to restore later), or None if this condition authors no "drain" at
         all, or the entity has no such skill to drain.
     """
-    condition_def = next((c for c in (rules or {}).get("condition", []) if c.get("name") == condition_name), None)
+    condition_def = next((c for c in (ctx.rules or {}).get("condition", []) if c.get("name") == condition_name), None)
     drain = condition_def.get("drain") if condition_def else None
     if not drain:
         return None
-    skill_stats = entities.get(entity_name, {}).get("skills", {}).get(drain.get("skill"))
+    skill_stats = ctx.entities.get(entity_name, {}).get("skills", {}).get(drain.get("skill"))
     if skill_stats is None:
         return None
     dice_amount = min(drain.get("dice", 0), skill_stats.get("dice", 0))
@@ -154,9 +152,9 @@ def _apply_stat_drain(entities, rules, entity_name, condition_name):
     return {"skill": drain["skill"], "dice": dice_amount, "pips": pips_amount}
 
 
-def _find_condition_def(rules, condition_name):
+def _find_condition_def(ctx, condition_name):
     """!@brief The [[condition]] entry named condition_name, or None."""
-    return next((c for c in (rules or {}).get("condition", []) if c.get("name") == condition_name), None)
+    return next((c for c in (ctx.rules or {}).get("condition", []) if c.get("name") == condition_name), None)
 
 
 # The fields a "form" override (below) swaps wholesale -- what actually makes something a
@@ -174,7 +172,7 @@ FORM_OVERRIDE_FIELDS = (
 )
 
 
-def _apply_form_override(entities, rules, entity_name, condition_name):
+def _apply_form_override(ctx, entity_name, condition_name):
     """!
     @brief Replaces entity_name's own FORM_OVERRIDE_FIELDS with the [[entity]] named by
         condition_name's own [[condition]] entry's optional "form" field -- the Pathfinder
@@ -186,9 +184,7 @@ def _apply_form_override(entities, rules, entity_name, condition_name):
         the scene (rather than a name nobody's instanced yet) copies that live instance's
         current stats instead of a pristine template's, the same edge case _instance_entities'
         own docstring already documents for ordinary instancing, not a new risk this introduces.
-    @param entities The live entities dict.
-    @param rules The loaded rules dict (may be None/{} -- no [[condition]] entry found, or no
-        "form" field, means nothing to override).
+    @param ctx The WorldContext (entities/rules/skills/event_bus) this runs against.
     @param entity_name The name of the entity taking on the new form.
     @param condition_name The name of the condition being newly applied.
     @return A {field: original_value_or_None} snapshot of exactly what was overwritten (for
@@ -196,12 +192,12 @@ def _apply_form_override(entities, rules, entity_name, condition_name):
         should be removed again on restore) -- or None if this condition authors no "form" at
         all, or the named form/entity doesn't exist.
     """
-    condition_def = _find_condition_def(rules, condition_name)
+    condition_def = _find_condition_def(ctx, condition_name)
     form_name = condition_def.get("form") if condition_def else None
     if not form_name:
         return None
-    entity = entities.get(entity_name)
-    form_template = entities.get(form_name)
+    entity = ctx.entities.get(entity_name)
+    form_template = ctx.entities.get(form_name)
     if entity is None or form_template is None:
         return None
     snapshot = {field: entity[field] if field in entity else None for field in FORM_OVERRIDE_FIELDS}
@@ -213,51 +209,50 @@ def _apply_form_override(entities, rules, entity_name, condition_name):
     return snapshot
 
 
-def _convert_periodic_phase(rules, phase):
+def _convert_periodic_phase(ctx, phase):
     """!
     @brief Normalizes a periodic_test phase ({"unit", "length"}) the same way apply_condition
         normalizes an authored "days" duration -- "days" becomes "blocks", length scaled by
         rules.toml's own [time].blocks_per_day; "rounds"/"blocks" pass through unchanged.
-    @param rules The loaded rules dict (may be None/{}).
+    @param ctx The WorldContext (entities/rules/skills/event_bus) this runs against.
     @param phase {"unit", "length"} -- an onset or interval entry off a [[condition]]'s own
         "periodic_test" table.
     @return (unit, length) with "days" already converted to "blocks".
     """
     unit, length = phase["unit"], phase["length"]
     if unit == "days":
-        blocks_per_day = (rules or {}).get("time", {}).get("blocks_per_day", 3)
+        blocks_per_day = (ctx.rules or {}).get("time", {}).get("blocks_per_day", 3)
         unit, length = "blocks", length * blocks_per_day
     return unit, length
 
 
-def _init_periodic_state(rules, condition_name):
+def _init_periodic_state(ctx, condition_name):
     """!
     @brief Seeds a freshly-applied condition's own periodic_test countdown state -- the
         Pathfinder poison/disease "Frequency"/"Onset" shape (Rules/Fantasy/reference/
         pathfinder_mapping.toml's Poison/Dying-Stable-Disabled rows): a periodic self-save that
         starts after an optional onset delay, then repeats every "interval" until either it's
         dismissed some other way or "cure_after_successes" consecutive passes cure it outright.
-    @param rules The loaded rules dict (may be None/{} -- no [[condition]] entry found means
-        nothing to seed).
+    @param ctx The WorldContext (entities/rules/skills/event_bus) this runs against.
     @param condition_name The name of the condition being newly applied.
     @return {"remaining", "onset_passed", "successes", "drained"} state dict, or None if
         condition_name authors no "periodic_test" at all.
     """
-    condition_def = _find_condition_def(rules, condition_name)
+    condition_def = _find_condition_def(ctx, condition_name)
     periodic_test = condition_def.get("periodic_test") if condition_def else None
     if not periodic_test:
         return None
     onset = periodic_test.get("onset")
     if onset and onset.get("length", 0) > 0:
-        _, remaining = _convert_periodic_phase(rules, onset)
+        _, remaining = _convert_periodic_phase(ctx, onset)
         onset_passed = False
     else:
-        _, remaining = _convert_periodic_phase(rules, periodic_test["interval"])
+        _, remaining = _convert_periodic_phase(ctx, periodic_test["interval"])
         onset_passed = True
     return {"remaining": remaining, "onset_passed": onset_passed, "successes": 0, "drained": {}}
 
 
-def apply_condition(entities, event_bus, entity_name, condition_name, duration=None, length=None, dismiss=None, rules=None):
+def apply_condition(ctx, entity_name, condition_name, duration=None, length=None, dismiss=None):
     """!
     @brief Marks a condition as active on an entity -- a no-op if the entity's own
         "immune_conditions" ({supertypes, subtypes}, the same shape cure/dispel/damage_bonus_vs
@@ -268,8 +263,7 @@ def apply_condition(entities, event_bus, entity_name, condition_name, duration=N
         (which only ever matches an incoming hit's own damage_tags, never a condition's identity).
         An entity with no "immune_conditions" at all, or a condition with no matching
         supertype/subtype, is unaffected -- opt-in, same as every other declarative entity field.
-    @param entities The live entities dict.
-    @param event_bus The EventBus to publish a log_info line to.
+    @param ctx The WorldContext (entities/rules/skills/event_bus) this runs against.
     @param entity_name The name of the entity gaining the condition.
     @param condition_name The name of the condition, as defined in the [[condition]] table.
     @param duration Which clock the condition counts down against -- one of
@@ -281,23 +275,17 @@ def apply_condition(entities, event_bus, entity_name, condition_name, duration=N
         cure_after_successes check -- see _init_periodic_state).
     @param length How many of "duration"'s own unit remain (unused/ignored for "permanent").
     @param dismiss What removes the condition (ex: "healing", "resurrection").
-    @param rules The loaded rules dict, needed to convert a "days" duration to "blocks", and to
-        look up condition_name's own optional "drain"/"periodic_test" (see _apply_stat_drain/
-        _init_periodic_state) -- every caller that can ever author "days"/"drain" (DM_Status.py's
-        own apply_condition wrapper, Program_Interpreter.py's `condition` op, evaluate_statuses
-        below) already has self.rules/rules in reach and passes it through; a caller that only
-        ever applies a plain "permanent"/"rounds"/"rooms"/"blocks", non-draining condition (ex:
-        DM_Travel.py's "surprised") can omit it.
+    @param ctx The WorldContext (entities/rules/skills/event_bus) this runs against.
     """
     if duration == "days":
-        blocks_per_day = (rules or {}).get("time", {}).get("blocks_per_day", 3)
+        blocks_per_day = (ctx.rules or {}).get("time", {}).get("blocks_per_day", 3)
         duration, length = "blocks", length * blocks_per_day
-    entity = entities.get(entity_name)
+    entity = ctx.entities.get(entity_name)
     if entity is None:
         return
     immune_spec = entity.get("immune_conditions")
     if immune_spec:
-        condition_def = _find_condition_def(rules, condition_name)
+        condition_def = _find_condition_def(ctx, condition_name)
         if condition_def and matches_supertype_or_subtype(condition_def, immune_spec):
             return
     active_conditions = entity.setdefault("active_conditions", {})
@@ -310,9 +298,9 @@ def apply_condition(entities, event_bus, entity_name, condition_name, duration=N
         periodic = active_conditions[condition_name].get("_periodic")
         form = active_conditions[condition_name].get("_form")
     else:
-        drained = _apply_stat_drain(entities, rules, entity_name, condition_name)
-        periodic = _init_periodic_state(rules, condition_name)
-        form = _apply_form_override(entities, rules, entity_name, condition_name)
+        drained = _apply_stat_drain(ctx, entity_name, condition_name)
+        periodic = _init_periodic_state(ctx, condition_name)
+        form = _apply_form_override(ctx, entity_name, condition_name)
     entry = {"duration": duration, "length": length, "dismiss": dismiss}
     if drained:
         entry["_drained"] = drained
@@ -321,10 +309,10 @@ def apply_condition(entities, event_bus, entity_name, condition_name, duration=N
     if form:
         entry["_form"] = form
     active_conditions[condition_name] = entry
-    event_bus.publish("log_info", f"{entity_name} gains condition '{condition_name}'.")
+    ctx.event_bus.publish("log_info", f"{entity_name} gains condition '{condition_name}'.")
 
 
-def tick_condition_durations(entities, event_bus, entity_name, unit, amount=1):
+def tick_condition_durations(ctx, entity_name, unit, amount=1):
     """!
     @brief Decrements entity_name's own active_conditions entries whose "duration" matches unit
         by amount, dismissing any that reach 0 or below -- the one shared countdown every
@@ -334,22 +322,21 @@ def tick_condition_durations(entities, event_bus, entity_name, unit, amount=1):
         An entry with no "length" set (ex: "permanent", or a malformed apply site) is left
         alone -- there's nothing to count down. Iterates a snapshot of active_conditions'
         own keys, since dismissing one mutates the same dict mid-loop.
-    @param entities The live entities dict.
-    @param event_bus The EventBus, forwarded to dismiss_condition.
+    @param ctx The WorldContext (entities/rules/skills/event_bus) this runs against.
     @param entity_name The entity to tick.
     @param unit Which duration denomination just elapsed ("rounds"/"rooms"/"blocks").
     @param amount How many of that unit elapsed (blocks only -- rounds/rooms always tick by 1).
     """
-    active_conditions = get_active_conditions(entities, entity_name)
+    active_conditions = get_active_conditions(ctx, entity_name)
     for condition_name, entry in list(active_conditions.items()):
         if entry.get("duration") != unit or entry.get("length") is None:
             continue
         entry["length"] -= amount
         if entry["length"] <= 0:
-            dismiss_condition(entities, event_bus, entity_name, condition_name)
+            dismiss_condition(ctx, entity_name, condition_name)
 
 
-def _apply_periodic_drain(entities, entity_name, periodic_state, drain_specs):
+def _apply_periodic_drain(ctx, entity_name, periodic_state, drain_specs):
     """!
     @brief Applies one failed periodic_test's own "on_fail.drain" list, accumulating the actual
         amount removed per skill onto periodic_state's own "drained" dict -- repeatable, unlike
@@ -357,12 +344,12 @@ def _apply_periodic_drain(entities, entity_name, periodic_state, drain_specs):
         more than once before being cured. dismiss_condition reads this dict back to restore
         every skill it ever touched, in total, the moment the condition finally clears. Clamped
         per application so a drain can never push a skill below 0/0, same as _apply_stat_drain.
-    @param entities The live entities dict.
+    @param ctx The WorldContext (entities/rules/skills/event_bus) this runs against.
     @param entity_name The entity failing its save.
     @param periodic_state The condition instance's own "_periodic" dict, mutated in place.
     @param drain_specs A list of {"skill", "dice", "pips"} entries (periodic_test.on_fail.drain).
     """
-    skills = entities.get(entity_name, {}).get("skills", {})
+    skills = ctx.entities.get(entity_name, {}).get("skills", {})
     for spec in drain_specs:
         skill_stats = skills.get(spec.get("skill"))
         if skill_stats is None:
@@ -376,7 +363,7 @@ def _apply_periodic_drain(entities, entity_name, periodic_state, drain_specs):
         accumulated["pips"] += pips_amount
 
 
-def tick_periodic_tests(entities, rules, event_bus, entity_name, unit, amount=1):
+def tick_periodic_tests(ctx, entity_name, unit, amount=1):
     """!
     @brief Advances entity_name's own periodic_test countdowns by amount of unit ("rounds" or
         "blocks") -- the Pathfinder poison ("Frequency 1/round") / disease ("Frequency 1/day")
@@ -399,53 +386,51 @@ def tick_periodic_tests(entities, rules, event_bus, entity_name, unit, amount=1)
         honest way. A fail resets that counter to 0 and applies periodic_test's own
         "on_fail.drain" (see _apply_periodic_drain) and/or "on_fail.damage" (an ordinary rolled
         hit, via apply_damage -- a simple ongoing toxin with no ability-damage component at all).
-    @param entities The live entities dict.
-    @param rules The loaded rules dict.
-    @param event_bus The EventBus, forwarded to apply_damage/dismiss_condition.
+    @param ctx The WorldContext (entities/rules/skills/event_bus) this runs against.
     @param entity_name The entity to tick.
     @param unit Which denomination just elapsed ("rounds"/"blocks") -- only conditions whose
         currently-active phase (onset if not yet passed, else interval) shares this unit (after
         "days" conversion) are advanced at all.
     @param amount How many of that unit elapsed.
     """
-    active_conditions = get_active_conditions(entities, entity_name)
+    active_conditions = get_active_conditions(ctx, entity_name)
     for condition_name, entry in list(active_conditions.items()):
         periodic_state = entry.get("_periodic")
         if periodic_state is None:
             continue
-        condition_def = _find_condition_def(rules, condition_name)
+        condition_def = _find_condition_def(ctx, condition_name)
         periodic_test = condition_def.get("periodic_test") if condition_def else None
         if not periodic_test:
             continue
         active_phase = periodic_test["interval"] if periodic_state["onset_passed"] else (
             periodic_test.get("onset") or periodic_test["interval"]
         )
-        phase_unit, _ = _convert_periodic_phase(rules, active_phase)
+        phase_unit, _ = _convert_periodic_phase(ctx, active_phase)
         if phase_unit != unit:
             continue
         periodic_state["remaining"] -= amount
         if periodic_state["remaining"] > 0:
             continue
         periodic_state["onset_passed"] = True
-        _, periodic_state["remaining"] = _convert_periodic_phase(rules, periodic_test["interval"])
-        roll = resolve_action(entities, rules, event_bus, entity_name, periodic_test["skill"], periodic_test.get("difficulty", 0))
+        _, periodic_state["remaining"] = _convert_periodic_phase(ctx, periodic_test["interval"])
+        roll = resolve_action(ctx, entity_name, periodic_test["skill"], periodic_test.get("difficulty", 0))
         if roll["success"]:
             periodic_state["successes"] += 1
             if periodic_state["successes"] >= periodic_test.get("cure_after_successes", float("inf")):
-                dismiss_condition(entities, event_bus, entity_name, condition_name)
+                dismiss_condition(ctx, entity_name, condition_name)
         else:
             periodic_state["successes"] = 0
             on_fail = periodic_test.get("on_fail", {})
             if on_fail.get("drain"):
-                _apply_periodic_drain(entities, entity_name, periodic_state, on_fail["drain"])
+                _apply_periodic_drain(ctx, entity_name, periodic_state, on_fail["drain"])
             damage_spec = on_fail.get("damage")
             if damage_spec:
                 damage_total = roll_dice(damage_spec.get("dice", 0), damage_spec.get("pips", 0)) + damage_spec.get("bonus", 0)
                 if damage_total > 0:
-                    apply_damage(entities, rules, event_bus, entity_name, damage_total)
+                    apply_damage(ctx, entity_name, damage_total)
 
 
-def dismiss_matching_conditions(entities, rules, event_bus, entity_name, spec):
+def dismiss_matching_conditions(ctx, entity_name, spec):
     """!
     @brief Dismisses every one of entity_name's own active conditions whose [[condition]] entry
         matches spec's "supertypes"/"subtypes" filter (matches_supertype_or_subtype, reused
@@ -458,35 +443,33 @@ def dismiss_matching_conditions(entities, rules, event_bus, entity_name, spec):
         DM_Core.py's _apply_dispel_if_hit exactly, just removing a condition instead of banishing
         an entity; a target carrying nothing matching simply has nothing cured, the same
         "used on the wrong thing just wastes it" shape dispel already has.
-    @param entities The live entities dict.
-    @param rules The loaded rules dict.
-    @param event_bus The EventBus, forwarded to dismiss_condition.
+    @param ctx The WorldContext (entities/rules/skills/event_bus) this runs against.
     @param entity_name The name of the entity being cured.
     @param spec A table carrying "supertypes"/"subtypes" (both optional, each a list of
         strings) -- see matches_supertype_or_subtype.
     @return A list of the condition names actually dismissed (possibly empty).
     """
     cured = []
-    for condition_name in list(get_active_conditions(entities, entity_name)):
-        condition_def = _find_condition_def(rules, condition_name)
+    for condition_name in list(get_active_conditions(ctx, entity_name)):
+        condition_def = _find_condition_def(ctx, condition_name)
         if condition_def and matches_supertype_or_subtype(condition_def, spec):
-            dismiss_condition(entities, event_bus, entity_name, condition_name)
+            dismiss_condition(ctx, entity_name, condition_name)
             cured.append(condition_name)
     return cured
 
 
-def tick_ability_cooldowns(entities, entity_name):
+def tick_ability_cooldowns(ctx, entity_name):
     """!
     @brief Decrements every one of entity_name's own active ability_cooldowns entries by one,
         dropping any that reach 0 -- the per-round counterpart to tick_condition_durations, for
         an ability's own cooldown_rounds (set when the ability is used -- see
-        DM_Combat.py's resolve_behavior_action) rather than a [[condition]]'s duration/length.
+        Combat_Actions.py's resolve_behavior_action) rather than a [[condition]]'s duration/length.
         Called once per round from run_round_upkeep (DM_Status.py), same cadence as
         tick_condition_durations(unit="rounds").
-    @param entities The live entities dict.
+    @param ctx The WorldContext (entities/rules/skills/event_bus) this runs against.
     @param entity_name The entity to tick.
     """
-    cooldowns = entities.get(entity_name, {}).get("ability_cooldowns")
+    cooldowns = ctx.entities.get(entity_name, {}).get("ability_cooldowns")
     if not cooldowns:
         return
     for ability_name in list(cooldowns):
@@ -495,7 +478,7 @@ def tick_ability_cooldowns(entities, entity_name):
             del cooldowns[ability_name]
 
 
-def dismiss_condition(entities, event_bus, entity_name, condition_name):
+def dismiss_condition(ctx, entity_name, condition_name):
     """!
     @brief Removes a condition from an entity, if it's currently active -- restoring any stat
         drain it applied (see _apply_stat_drain/apply_condition, and _apply_periodic_drain's own
@@ -504,17 +487,16 @@ def dismiss_condition(entities, event_bus, entity_name, condition_name):
         (which would need condition_name's own [[condition]] entry to still exist/be unchanged --
         reading back what was actually removed is exact regardless). No rules param needed here
         as a result.
-    @param entities The live entities dict.
-    @param event_bus The EventBus to publish a log_info line to.
+    @param ctx The WorldContext (entities/rules/skills/event_bus) this runs against.
     @param entity_name The name of the entity losing the condition.
     @param condition_name The name of the condition to remove.
     @return True if the condition was present and removed, False otherwise.
     """
-    active_conditions = get_active_conditions(entities, entity_name)
+    active_conditions = get_active_conditions(ctx, entity_name)
     if condition_name not in active_conditions:
         return False
     entry = active_conditions.pop(condition_name)
-    skills = entities.get(entity_name, {}).get("skills", {})
+    skills = ctx.entities.get(entity_name, {}).get("skills", {})
     drained = entry.get("_drained")
     if drained:
         skill_stats = skills.get(drained["skill"])
@@ -536,7 +518,7 @@ def dismiss_condition(entities, event_bus, entity_name, condition_name):
     # skills). Two form-shaped conditions active on the same entity at once, or one applied
     # while a drain is already active, still leaves restore order undefined -- not solved here,
     # same as drain's own pre-existing lack of a general conflict-resolution story.
-    entity = entities.get(entity_name)
+    entity = ctx.entities.get(entity_name)
     form = entry.get("_form")
     if form and entity is not None:
         for field, value in form.items():
@@ -544,11 +526,11 @@ def dismiss_condition(entities, event_bus, entity_name, condition_name):
                 entity.pop(field, None)
             else:
                 entity[field] = value
-    event_bus.publish("log_info", f"{entity_name} loses condition '{condition_name}'.")
+    ctx.event_bus.publish("log_info", f"{entity_name} loses condition '{condition_name}'.")
     return True
 
 
-def get_concealment(entities, rules, entity_name):
+def get_concealment(ctx, entity_name):
     """!
     @brief The highest "miss_chance" (percent, 0-100) of any of entity_name's own
         active_conditions with a matching [[condition]] entry authoring one -- the Pathfinder
@@ -556,13 +538,12 @@ def get_concealment(entities, rules, entity_name):
         outright. Takes the max across conditions rather than summing them (concealment
         doesn't stack additively either in Pathfinder), capped at 95 so nothing is ever
         completely unhittable by ordinary means.
-    @param entities The live entities dict.
-    @param rules The loaded rules dict.
+    @param ctx The WorldContext (entities/rules/skills/event_bus) this runs against.
     @param entity_name The name of the entity to check.
     @return The effective miss_chance, 0 if nothing applies.
     """
-    active_conditions = get_active_conditions(entities, entity_name)
-    condition_defs = {c.get("name"): c for c in rules.get("condition", [])}
+    active_conditions = get_active_conditions(ctx, entity_name)
+    condition_defs = {c.get("name"): c for c in ctx.rules.get("condition", [])}
     best = 0
     for condition_name in active_conditions:
         condition_def = condition_defs.get(condition_name)
@@ -574,7 +555,7 @@ def get_concealment(entities, rules, entity_name):
     return min(best, 95)
 
 
-def get_override_target(entities, rules, entity_name):
+def get_override_target(ctx, entity_name):
     """!
     @brief The raw "override_target" value ("random", or a literal entity name) authored by
         any of entity_name's own active_conditions with a matching [[condition]] entry -- the
@@ -585,26 +566,24 @@ def get_override_target(entities, rules, entity_name):
         same "no defined stacking order" precedent get_condition_modifier's own summing
         sidesteps by just adding everything together; a stacked, contradictory pair of forced-
         target effects isn't a case any shipped content produces.
-    @param entities The live entities dict.
-    @param rules The loaded rules dict.
+    @param ctx The WorldContext (entities/rules/skills/event_bus) this runs against.
     @param entity_name The name of the entity to check.
     @return "random", a literal entity name, or None if nothing overrides.
     """
-    condition_defs = {c.get("name"): c for c in rules.get("condition", [])}
+    condition_defs = {c.get("name"): c for c in ctx.rules.get("condition", [])}
     override = None
-    for condition_name in get_active_conditions(entities, entity_name):
+    for condition_name in get_active_conditions(ctx, entity_name):
         condition_def = condition_defs.get(condition_name)
         if condition_def and condition_def.get("override_target"):
             override = condition_def["override_target"]
     return override
 
 
-def resolve_override_target(entities, rules, entity_name, candidates):
+def resolve_override_target(ctx, entity_name, candidates):
     """!
     @brief Resolves entity_name's own active override_target (get_override_target) to a real,
         currently-living target name.
-    @param entities The live entities dict.
-    @param rules The loaded rules dict.
+    @param ctx The WorldContext (entities/rules/skills/event_bus) this runs against.
     @param entity_name The name of the entity to check.
     @param candidates A caller-supplied pool of other currently-living scene entities to pick
         randomly from -- this pure module has no notion of "the scene" (self.scenario_entities
@@ -615,17 +594,17 @@ def resolve_override_target(entities, rules, entity_name, candidates):
         treated the same as no override at all rather than erroring); None if nothing
         overrides in the first place.
     """
-    override = get_override_target(entities, rules, entity_name)
+    override = get_override_target(ctx, entity_name)
     if override is None:
         return None
     if override == "random":
         return random.choice(candidates) if candidates else None
-    if get_current_hp(entities, override) > 0:
+    if get_current_hp(ctx, override) > 0:
         return override
     return None
 
 
-def get_skill_group_members(rules, name_or_names):
+def get_skill_group_members(ctx, name_or_names):
     """!
     @brief Expands a skill/group name (or a list of them) through rules.toml's own
         [[skill_group]] table -- {name, skills} entries letting a cluster of skills be
@@ -638,25 +617,24 @@ def get_skill_group_members(rules, name_or_names):
         so this is purely additive over every existing "skill" field/reference that never
         mentions a group. The two current consumers: get_condition_modifier's own applies_to,
         and get_equipped_skill_bonus's own equipped_skill_bonus.skill.
-    @param rules The loaded rules dict.
+    @param ctx The WorldContext (entities/rules/skills/event_bus) this runs against.
     @param name_or_names A single skill/group name, or a list of them.
     @return A flat list of real skill names (groups expanded; duplicates not deduplicated,
         since every caller only ever uses this for a membership test).
     """
     names = name_or_names if isinstance(name_or_names, list) else [name_or_names]
-    group_defs = {g.get("name"): g.get("skills", []) for g in rules.get("skill_group", [])}
+    group_defs = {g.get("name"): g.get("skills", []) for g in ctx.rules.get("skill_group", [])}
     expanded = []
     for name in names:
         expanded.extend(group_defs.get(name, [name]))
     return expanded
 
 
-def get_condition_modifier(entities, rules, entity_name, skill_name=None):
+def get_condition_modifier(ctx, entity_name, skill_name=None):
     """!
     @brief Sums the {dice, pips, bonus} roll modifier of every one of entity_name's own
         active_conditions that has a matching entry in conditions.toml's own [[condition]] table.
-    @param entities The live entities dict.
-    @param rules The loaded rules dict.
+    @param ctx The WorldContext (entities/rules/skills/event_bus) this runs against.
     @param entity_name The name of the entity to sum modifiers for.
     @param skill_name The skill being rolled, if known. A [[condition]] entry's own optional
         "applies_to" (a list of skill/skill_group names -- see get_skill_group_members)
@@ -667,8 +645,8 @@ def get_condition_modifier(entities, rules, entity_name, skill_name=None):
         already follow with no opponent_name.
     @return A {"dice", "pips", "bonus"} dict, each defaulting to 0 if nothing applies.
     """
-    active_conditions = get_active_conditions(entities, entity_name)
-    condition_defs = {c.get("name"): c for c in rules.get("condition", [])}
+    active_conditions = get_active_conditions(ctx, entity_name)
+    condition_defs = {c.get("name"): c for c in ctx.rules.get("condition", [])}
     total = {"dice": 0, "pips": 0, "bonus": 0}
     for condition_name in active_conditions:
         condition_def = condition_defs.get(condition_name)
@@ -678,7 +656,7 @@ def get_condition_modifier(entities, rules, entity_name, skill_name=None):
         if not modifier:
             continue
         applies_to = condition_def.get("applies_to")
-        if applies_to and skill_name not in get_skill_group_members(rules, applies_to):
+        if applies_to and skill_name not in get_skill_group_members(ctx, applies_to):
             continue
         total["dice"] += modifier.get("dice", 0)
         total["pips"] += modifier.get("pips", 0)
@@ -686,7 +664,7 @@ def get_condition_modifier(entities, rules, entity_name, skill_name=None):
     return total
 
 
-def get_equipped_skill_bonus(entities, rules, entity_name, skill_name):
+def get_equipped_skill_bonus(ctx, entity_name, skill_name):
     """!
     @brief Sums the {dice, pips} bonus every one of entity_name's own equipped items
         contributes to skill_name, via each item's own optional "equipped_skill_bonus" =
@@ -697,8 +675,7 @@ def get_equipped_skill_bonus(entities, rules, entity_name, skill_name):
         skill, a skill_group (see get_skill_group_members -- ex: a belt granting +1D to every
         Strength-based skill at once), or a list mixing either, the same "single name or list"
         convention an ability's own "skill" field already follows.
-    @param entities The live entities dict.
-    @param rules The loaded rules dict.
+    @param ctx The WorldContext (entities/rules/skills/event_bus) this runs against.
     @param entity_name The name of the entity to check.
     @param skill_name The skill being rolled, or None (matches nothing, same "can't match
         without a value" precedent get_condition_modifier's own applies_to follows).
@@ -707,19 +684,19 @@ def get_equipped_skill_bonus(entities, rules, entity_name, skill_name):
     total = {"dice": 0, "pips": 0}
     if skill_name is None:
         return total
-    entity = entities.get(entity_name, {})
+    entity = ctx.entities.get(entity_name, {})
     for item_name in entity.get("equipped", {}).values():
-        bonus = entities.get(item_name, {}).get("equipped_skill_bonus")
-        if bonus and skill_name in get_skill_group_members(rules, bonus.get("skill")):
+        bonus = ctx.entities.get(item_name, {}).get("equipped_skill_bonus")
+        if bonus and skill_name in get_skill_group_members(ctx, bonus.get("skill")):
             total["dice"] += bonus.get("dice", 0)
             total["pips"] += bonus.get("pips", 0)
     return total
 
 
-def get_comparable_value(entities, entity_name, field, opponent_name=None):
+def get_comparable_value(ctx, entity_name, field, opponent_name=None):
     """!
     @brief Resolves a requirement's field name to a comparable value for an entity.
-    @param entities The live entities dict.
+    @param ctx The WorldContext (entities/rules/skills/event_bus) this runs against.
     @param entity_name The name of the entity to check.
     @param field The field name, either a derived value (ex: "hp_per_remain",
         "distance_to_target", "has_condition:<name>", "opponent_has_condition:<name>",
@@ -728,23 +705,23 @@ def get_comparable_value(entities, entity_name, field, opponent_name=None):
     @return The resolved value, or None if it can't be determined.
     """
     if field == "hp_per_remain":
-        entity = entities.get(entity_name, {})
+        entity = ctx.entities.get(entity_name, {})
         max_hp = entity.get("max_hp", 0)
         if max_hp <= 0:
             return None
-        return get_current_hp(entities, entity_name) / max_hp
+        return get_current_hp(ctx, entity_name) / max_hp
     if field == "distance_to_target":
         if opponent_name is None:
             return None
-        return get_distance_between(entities, entity_name, opponent_name)
+        return get_distance_between(ctx, entity_name, opponent_name)
     if field.startswith("has_condition:"):
         condition_name = field[len("has_condition:"):]
-        return has_condition(entities, entity_name, condition_name)
+        return has_condition(ctx, entity_name, condition_name)
     if field.startswith("opponent_has_condition:"):
         if opponent_name is None:
             return None
         condition_name = field[len("opponent_has_condition:"):]
-        return has_condition(entities, opponent_name, condition_name)
+        return has_condition(ctx, opponent_name, condition_name)
     if field.startswith("ability_ready:"):
         # True unless entity_name's own ability_cooldowns (set by an ability's own
         # cooldown_rounds, ticked down once per round by tick_ability_cooldowns) still has a
@@ -753,7 +730,7 @@ def get_comparable_value(entities, entity_name, field, opponent_name=None):
         # weaker fallback entry in the meantime, the same way "has_condition:<name>" already
         # lets one gate off a paralyzed/warded creature's own attack entries.
         ability_name = field[len("ability_ready:"):]
-        cooldowns = entities.get(entity_name, {}).get("ability_cooldowns", {})
+        cooldowns = ctx.entities.get(entity_name, {}).get("ability_cooldowns", {})
         return cooldowns.get(ability_name, 0) <= 0
     if field in Social_Resolution.ATTITUDE_AXES:
         # entity_name's own attitude *toward* opponent_name -- ex: a program condition like
@@ -765,45 +742,43 @@ def get_comparable_value(entities, entity_name, field, opponent_name=None):
         if opponent_name is None:
             return None
         axis_index = Social_Resolution.ATTITUDE_AXES.index(field)
-        return Social_Resolution.get_attitude(entities, entity_name, opponent_name)[axis_index]
-    return entities.get(entity_name, {}).get(field)
+        return Social_Resolution.get_attitude(ctx.entities, entity_name, opponent_name)[axis_index]
+    return ctx.entities.get(entity_name, {}).get(field)
 
 
-def _requirement_matches(entities, event_bus, entity_name, requirement, opponent_name):
+def _requirement_matches(ctx, entity_name, requirement, opponent_name):
     """!
     @brief Evaluates one entry of a requirements list -- either a plain {field, operator,
         value} comparison, or a nested {"all"|"any"|"none": [...]} boolean combination of more
         such entries (recursive), the same shape Program_Interpreter.evaluate_condition already
         gives program `if`-steps.
-    @param entities The live entities dict.
-    @param event_bus The EventBus to publish a log_warning line to on an unknown operator.
+    @param ctx The WorldContext (entities/rules/skills/event_bus) this runs against.
     @param entity_name The name of the entity to check.
     @param requirement A {field, operator, value} comparison, or a boolean-combinator table.
     @param opponent_name The entity being acted against, if any.
     @return True if this entry is satisfied.
     """
     if "all" in requirement:
-        return all(_requirement_matches(entities, event_bus, entity_name, sub, opponent_name) for sub in requirement["all"])
+        return all(_requirement_matches(ctx, entity_name, sub, opponent_name) for sub in requirement["all"])
     if "any" in requirement:
-        return any(_requirement_matches(entities, event_bus, entity_name, sub, opponent_name) for sub in requirement["any"])
+        return any(_requirement_matches(ctx, entity_name, sub, opponent_name) for sub in requirement["any"])
     if "none" in requirement:
-        return not any(_requirement_matches(entities, event_bus, entity_name, sub, opponent_name) for sub in requirement["none"])
+        return not any(_requirement_matches(ctx, entity_name, sub, opponent_name) for sub in requirement["none"])
 
     compare = COMPARATORS.get(requirement.get("operator"))
     if compare is None:
-        event_bus.publish("log_warning", f"Unknown requirement operator: {requirement.get('operator')}")
+        ctx.event_bus.publish("log_warning", f"Unknown requirement operator: {requirement.get('operator')}")
         return False
 
-    actual_value = get_comparable_value(entities, entity_name, requirement.get("field"), opponent_name)
+    actual_value = get_comparable_value(ctx, entity_name, requirement.get("field"), opponent_name)
     return actual_value is not None and compare(actual_value, requirement.get("value"))
 
 
-def entity_matches_requirements(entities, event_bus, entity_name, requirements, opponent_name=None):
+def entity_matches_requirements(ctx, entity_name, requirements, opponent_name=None):
     """!
     @brief Checks whether an entity currently satisfies every comparison in a status's
         (or a behavior's, or an [entity.test]'s) requirements.
-    @param entities The live entities dict.
-    @param event_bus The EventBus to publish a log_warning line to on an unknown operator.
+    @param ctx The WorldContext (entities/rules/skills/event_bus) this runs against.
     @param entity_name The name of the entity to check.
     @param requirements A list of {field, operator, value} comparisons (each of which may
         instead be a nested {"all"|"any"|"none": [...]} boolean combination -- see
@@ -812,58 +787,53 @@ def entity_matches_requirements(entities, event_bus, entity_name, requirements, 
     @return True if every entry is satisfied.
     """
     return all(
-        _requirement_matches(entities, event_bus, entity_name, requirement, opponent_name)
+        _requirement_matches(ctx, entity_name, requirement, opponent_name)
         for requirement in requirements
     )
 
 
-def get_applicable_statuses(entities, rules, event_bus, entity_name, trigger):
+def get_applicable_statuses(ctx, entity_name, trigger):
     """!
     @brief Finds every status definition for a given trigger whose requirements the entity
         currently meets.
-    @param entities The live entities dict.
-    @param rules The loaded rules dict.
-    @param event_bus The EventBus, forwarded to entity_matches_requirements.
+    @param ctx The WorldContext (entities/rules/skills/event_bus) this runs against.
     @param entity_name The name of the entity to check.
     @param trigger The trigger name to filter statuses by (ex: "on_damage").
     @return A list of matching status definitions.
     """
     return [
-        status for status in rules.get("status", [])
+        status for status in ctx.rules.get("status", [])
         if status.get("trigger") == trigger
-        and entity_matches_requirements(entities, event_bus, entity_name, status.get("requirements", []))
+        and entity_matches_requirements(ctx, entity_name, status.get("requirements", []))
     ]
 
 
-def evaluate_statuses(entities, rules, event_bus, entity_name, trigger):
+def evaluate_statuses(ctx, entity_name, trigger):
     """!
     @brief Applies every status matching the given trigger that the entity currently
         qualifies for, then dismisses any condition this same trigger's statuses previously
         applied whose requirements no longer hold.
-    @param entities The live entities dict.
-    @param rules The loaded rules dict.
-    @param event_bus The EventBus, forwarded to apply_condition/dismiss_condition.
+    @param ctx The WorldContext (entities/rules/skills/event_bus) this runs against.
     @param entity_name The name of the entity to evaluate.
     @param trigger The trigger name to evaluate (ex: "on_damage").
     @return The list of status definitions that were applied.
     """
-    matched_statuses = get_applicable_statuses(entities, rules, event_bus, entity_name, trigger)
+    matched_statuses = get_applicable_statuses(ctx, entity_name, trigger)
     matched_conditions = set()
     for status in matched_statuses:
         apply_block = status.get("apply")
         if apply_block and apply_block.get("condition"):
             apply_condition(
-                entities, event_bus, entity_name,
+                ctx, entity_name,
                 apply_block["condition"],
                 duration=apply_block.get("duration"),
                 length=apply_block.get("length"),
                 dismiss=apply_block.get("dismiss"),
-                rules=rules,
             )
             matched_conditions.add(apply_block["condition"])
 
-    active_conditions = get_active_conditions(entities, entity_name)
-    for status in rules.get("status", []):
+    active_conditions = get_active_conditions(ctx, entity_name)
+    for status in ctx.rules.get("status", []):
         if status.get("trigger") != trigger:
             continue
         apply_block = status.get("apply")
@@ -872,71 +842,65 @@ def evaluate_statuses(entities, rules, event_bus, entity_name, trigger):
             continue
         active_entry = active_conditions.get(condition_name)
         if active_entry is not None and not active_entry.get("dismiss"):
-            dismiss_condition(entities, event_bus, entity_name, condition_name)
+            dismiss_condition(ctx, entity_name, condition_name)
 
     return matched_statuses
 
 
-def apply_damage(entities, rules, event_bus, entity_name, amount, actor_name=None):
+def apply_damage(ctx, entity_name, amount, actor_name=None):
     """!
     @brief Subtracts damage from an entity's current HP, floored at 0, evaluates on_damage
         statuses, and runs entity_name's own [entity.on_damage] program -- pure-to-pure, right
         alongside evaluate_statuses, never lifted up to a DMCore wrapper.
-    @param entities The live entities dict.
-    @param rules The loaded rules dict.
-    @param event_bus The EventBus to publish a log_info line to.
+    @param ctx The WorldContext (entities/rules/skills/event_bus) this runs against.
     @param entity_name The name of the entity taking damage.
     @param amount The amount of damage to apply.
     @param actor_name The entity that dealt the damage, if known (ctx's own "actor" for
         on_damage) -- absent for damage with no real attacker (ex: a trap, per-round upkeep).
     @return The entity's remaining HP.
     """
-    entity = entities.get(entity_name)
+    entity = ctx.entities.get(entity_name)
     if entity is None:
         return 0
-    current_hp = get_current_hp(entities, entity_name)
+    current_hp = get_current_hp(ctx, entity_name)
     entity["hp"] = max(0, current_hp - amount)
-    event_bus.publish("log_info", f"{entity_name} takes {amount} damage ({current_hp} -> {entity['hp']} HP).")
-    evaluate_statuses(entities, rules, event_bus, entity_name, "on_damage")
+    ctx.event_bus.publish("log_info", f"{entity_name} takes {amount} damage ({current_hp} -> {entity['hp']} HP).")
+    evaluate_statuses(ctx, entity_name, "on_damage")
     Program_Interpreter.run_program(
-        entity.get("on_damage"), {"actor": actor_name, "target": entity_name}, entities, rules, event_bus,
+        entity.get("on_damage"), {"actor": actor_name, "target": entity_name}, ctx.entities, ctx.rules, ctx.event_bus,
     )
     return entity["hp"]
 
 
-def apply_healing(entities, rules, event_bus, entity_name, amount, actor_name=None):
+def apply_healing(ctx, entity_name, amount, actor_name=None):
     """!
     @brief Adds HP to an entity, clamped at their own max_hp, and runs entity_name's own
         [entity.on_heal] program -- the symmetric counterpart to apply_damage's own on_damage.
-    @param entities The live entities dict.
-    @param rules The loaded rules dict.
-    @param event_bus The EventBus to publish a log_info line to.
+    @param ctx The WorldContext (entities/rules/skills/event_bus) this runs against.
     @param entity_name The name of the entity being healed.
     @param amount The amount of HP to restore.
     @param actor_name The entity that healed this one, if known (ctx's own "actor" for on_heal).
     @return The entity's current HP after healing.
     """
-    entity = entities.get(entity_name)
+    entity = ctx.entities.get(entity_name)
     if entity is None:
         return 0
-    current_hp = get_current_hp(entities, entity_name)
+    current_hp = get_current_hp(ctx, entity_name)
     max_hp = entity.get("max_hp", current_hp)
     entity["hp"] = min(max_hp, current_hp + amount)
-    event_bus.publish("log_info", f"{entity_name} heals {amount} HP ({current_hp} -> {entity['hp']} HP).")
-    evaluate_statuses(entities, rules, event_bus, entity_name, "on_damage")
+    ctx.event_bus.publish("log_info", f"{entity_name} heals {amount} HP ({current_hp} -> {entity['hp']} HP).")
+    evaluate_statuses(ctx, entity_name, "on_damage")
     Program_Interpreter.run_program(
-        entity.get("on_heal"), {"actor": actor_name, "target": entity_name}, entities, rules, event_bus,
+        entity.get("on_heal"), {"actor": actor_name, "target": entity_name}, ctx.entities, ctx.rules, ctx.event_bus,
     )
     return entity["hp"]
 
 
-def resolve_bonus(entities, rules, event_bus, attacker_name, bonus):
+def resolve_bonus(ctx, attacker_name, bonus):
     """!
     @brief Resolves a damage_value's bonus field, which may be a flat number or a
         "user.<rule>" reference into a rules.toml formula.
-    @param entities The live entities dict.
-    @param rules The loaded rules dict.
-    @param event_bus The EventBus to publish a log_warning line to on an unknown reference.
+    @param ctx The WorldContext (entities/rules/skills/event_bus) this runs against.
     @param attacker_name The name of the entity dealing damage.
     @param bonus The bonus field from a damage_value table.
     @return The resolved flat bonus amount.
@@ -947,35 +911,35 @@ def resolve_bonus(entities, rules, event_bus, attacker_name, bonus):
         return 0
 
     rule_name = bonus.split(".")[-1]
-    formula = rules.get(rule_name)
+    formula = ctx.rules.get(rule_name)
     if not formula:
-        event_bus.publish("log_warning", f"Unknown damage bonus reference: {bonus}")
+        ctx.event_bus.publish("log_warning", f"Unknown damage bonus reference: {bonus}")
         return 0
 
-    skill_stats = entities.get(attacker_name, {}).get("skills", {}).get(formula.get("skill"), {"dice": 0})
+    skill_stats = ctx.entities.get(attacker_name, {}).get("skills", {}).get(formula.get("skill"), {"dice": 0})
     return skill_stats.get("dice", 0) // formula.get("divisor", 1)
 
 
-def get_equipped_weapon(entities, entity_name):
+def get_equipped_weapon(ctx, entity_name):
     """!
     @brief Finds the first of an entity's equipped items that deals damage.
-    @param entities The live entities dict.
+    @param ctx The WorldContext (entities/rules/skills/event_bus) this runs against.
     @param entity_name The name of the entity to check.
     @return The equipped weapon's entity table, or None if nothing equipped has a damage_value.
     """
-    entity = entities.get(entity_name, {})
+    entity = ctx.entities.get(entity_name, {})
     for item_name in entity.get("equipped", {}).values():
-        item = entities.get(item_name)
+        item = ctx.entities.get(item_name)
         if item and "damage_value" in item:
             return item
     return None
 
 
-def resolve_weapon_reference(entities, attacker_name, value, field):
+def resolve_weapon_reference(ctx, attacker_name, value, field):
     """!
     @brief Resolves a damage_value's dice/pips field when it's the "user.weapon.<field>"
         indirection.
-    @param entities The live entities dict.
+    @param ctx The WorldContext (entities/rules/skills/event_bus) this runs against.
     @param attacker_name The name of the entity dealing damage.
     @param value The dice or pips field from a damage_value table.
     @param field Which field this is ("dice" or "pips"), matched against "user.weapon.<field>".
@@ -984,43 +948,41 @@ def resolve_weapon_reference(entities, attacker_name, value, field):
     """
     if value != f"user.weapon.{field}":
         return value
-    weapon = get_equipped_weapon(entities, attacker_name)
+    weapon = get_equipped_weapon(ctx, attacker_name)
     if weapon is None:
         return 0
     return weapon.get("damage_value", {}).get(field, 0)
 
 
-def resolve_damage_value(entities, rules, event_bus, attacker_name, damage_value):
+def resolve_damage_value(ctx, attacker_name, damage_value):
     """!
     @brief Rolls a damage_value's dice/pips and adds its resolved bonus.
-    @param entities The live entities dict.
-    @param rules The loaded rules dict.
-    @param event_bus The EventBus to publish a log_warning line to.
+    @param ctx The WorldContext (entities/rules/skills/event_bus) this runs against.
     @param attacker_name The name of the entity dealing damage.
     @param damage_value A {dice, pips, bonus} table from an ability, weapon, or spell.
     @return The total rolled damage before any reduction.
     """
-    dice = resolve_weapon_reference(entities, attacker_name, damage_value.get("dice", 0), "dice")
-    pips = resolve_weapon_reference(entities, attacker_name, damage_value.get("pips", 0), "pips")
+    dice = resolve_weapon_reference(ctx, attacker_name, damage_value.get("dice", 0), "dice")
+    pips = resolve_weapon_reference(ctx, attacker_name, damage_value.get("pips", 0), "pips")
     if not isinstance(dice, (int, float)) or not isinstance(pips, (int, float)):
-        event_bus.publish("log_warning", f"Unsupported damage dice/pips reference: {damage_value}")
+        ctx.event_bus.publish("log_warning", f"Unsupported damage dice/pips reference: {damage_value}")
         dice, pips = 0, 0
 
-    bonus = resolve_bonus(entities, rules, event_bus, attacker_name, damage_value.get("bonus", 0))
+    bonus = resolve_bonus(ctx, attacker_name, damage_value.get("bonus", 0))
     return roll_dice(int(dice), int(pips)) + bonus
 
 
-def get_damage_reduction(entities, defender_name, damage_tags):
+def get_damage_reduction(ctx, defender_name, damage_tags):
     """!
     @brief Sums the rolled reduction against the given damage tags: the defender's own
         innate resistance_value/resistance_tags plus the rolled armor value of any equipped
         items that resist the same tags.
-    @param entities The live entities dict.
+    @param ctx The WorldContext (entities/rules/skills/event_bus) this runs against.
     @param defender_name The name of the entity taking damage.
     @param damage_tags The damage tags of the incoming attack (ex: ["fire"]).
     @return The total damage reduction.
     """
-    defender = entities.get(defender_name, {})
+    defender = ctx.entities.get(defender_name, {})
     reduction = 0
 
     resistance_value = defender.get("resistance_value")
@@ -1030,7 +992,7 @@ def get_damage_reduction(entities, defender_name, damage_tags):
         reduction += roll_dice(resistance_value.get("dice", 0), resistance_value.get("pips", 0))
 
     for item_name in defender.get("equipped", {}).values():
-        item = entities.get(item_name, {})
+        item = ctx.entities.get(item_name, {})
         armor_value = item.get("armor_value")
         armor_tags = item.get("armor_tags", [])
         armor_bypassed = any(tag in item.get("armor_bypass_tags", []) for tag in damage_tags)
@@ -1040,16 +1002,16 @@ def get_damage_reduction(entities, defender_name, damage_tags):
     return reduction
 
 
-def get_vulnerability_bonus(entities, defender_name, damage_tags):
+def get_vulnerability_bonus(ctx, defender_name, damage_tags):
     """!
     @brief Rolls the extra damage a defender's own vulnerability_value/vulnerability_tags
         adds on a matching hit.
-    @param entities The live entities dict.
+    @param ctx The WorldContext (entities/rules/skills/event_bus) this runs against.
     @param defender_name The name of the entity taking damage.
     @param damage_tags The damage tags of the incoming attack (ex: ["water"]).
     @return The rolled bonus damage, or 0 if no tag matches.
     """
-    defender = entities.get(defender_name, {})
+    defender = ctx.entities.get(defender_name, {})
     vulnerability_value = defender.get("vulnerability_value")
     vulnerability_tags = defender.get("vulnerability_tags", [])
     if vulnerability_value and any(tag in vulnerability_tags for tag in damage_tags):
@@ -1072,7 +1034,7 @@ def matches_supertype_or_subtype(entity, spec):
     return entity.get("supertype") in spec.get("supertypes", []) or entity.get("subtype") in spec.get("subtypes", [])
 
 
-def get_damage_bonus_vs(entities, defender_name, ability):
+def get_damage_bonus_vs(ctx, defender_name, ability):
     """!
     @brief Rolls an ability's own damage_bonus_vs bonus -- extra damage that only applies
         against a defender of a particular kind, matched by supertype/subtype rather than by
@@ -1081,7 +1043,7 @@ def get_damage_bonus_vs(entities, defender_name, ability):
         damage vs. a creature type), which damage_tags alone can't express -- a "holy" damage
         tag would need every undead entity to also carry a matching vulnerability_tag, an
         indirect workaround rather than checking the defender's own supertype directly.
-    @param entities The live entities dict.
+    @param ctx The WorldContext (entities/rules/skills/event_bus) this runs against.
     @param defender_name The name of the entity taking damage.
     @param ability A table optionally carrying "damage_bonus_vs" = {supertypes, subtypes,
         value = {dice, pips, bonus}}.
@@ -1092,14 +1054,14 @@ def get_damage_bonus_vs(entities, defender_name, ability):
     spec = ability.get("damage_bonus_vs")
     if not spec:
         return 0
-    defender = entities.get(defender_name, {})
+    defender = ctx.entities.get(defender_name, {})
     if not matches_supertype_or_subtype(defender, spec):
         return 0
     value = spec.get("value", {})
     return roll_dice(value.get("dice", 0), value.get("pips", 0)) + value.get("bonus", 0)
 
 
-def get_damage_bonus_if_condition(entities, defender_name, ability):
+def get_damage_bonus_if_condition(ctx, defender_name, ability):
     """!
     @brief Rolls an ability's own damage_bonus_if_condition bonus -- extra damage that only
         applies while the defender currently carries a named condition, checked via has_condition
@@ -1107,7 +1069,7 @@ def get_damage_bonus_if_condition(entities, defender_name, ability):
         thing is this" check). This is the Pathfinder Sneak Attack shape -- bonus damage against a
         target's current *state* (flat-footed/flanked), not its type -- structurally a twin of
         get_damage_bonus_vs, just keyed off the defender's own active_conditions instead.
-    @param entities The live entities dict.
+    @param ctx The WorldContext (entities/rules/skills/event_bus) this runs against.
     @param defender_name The name of the entity taking damage.
     @param ability A table optionally carrying "damage_bonus_if_condition" = {condition,
         value = {dice, pips, bonus}}.
@@ -1116,13 +1078,13 @@ def get_damage_bonus_if_condition(entities, defender_name, ability):
     spec = ability.get("damage_bonus_if_condition")
     if not spec:
         return 0
-    if not has_condition(entities, defender_name, spec.get("condition")):
+    if not has_condition(ctx, defender_name, spec.get("condition")):
         return 0
     value = spec.get("value", {})
     return roll_dice(value.get("dice", 0), value.get("pips", 0)) + value.get("bonus", 0)
 
 
-def is_immune_to(entities, defender_name, damage_tags):
+def is_immune_to(ctx, defender_name, damage_tags):
     """!
     @brief Whether an entity's immunity_tags fully negate an incoming attack's damage tags.
         "any" is a reserved wildcard: an entity authoring immunity_tags = ["any"] is immune to
@@ -1135,19 +1097,19 @@ def is_immune_to(entities, defender_name, damage_tags):
         armor_tags/vulnerability_tags list would ever legitimately contain the literal string
         "any", so an "any"-tagged hit already skips reduction/vulnerability for every defender
         without any further code, matching purely on ordinary tag membership.
-    @param entities The live entities dict.
+    @param ctx The WorldContext (entities/rules/skills/event_bus) this runs against.
     @param defender_name The name of the entity taking damage.
     @param damage_tags The damage tags of the incoming attack (ex: ["fire"]).
     @return True if the defender's own immunity_tags author the "any" wildcard, or any damage
             tag matches the defender's immunity_tags.
     """
-    immunity_tags = entities.get(defender_name, {}).get("immunity_tags", [])
+    immunity_tags = ctx.entities.get(defender_name, {}).get("immunity_tags", [])
     if "any" in immunity_tags:
         return True
     return any(tag in immunity_tags for tag in damage_tags)
 
 
-def apply_on_hit_condition(entities, rules, event_bus, defender_name, ability, damage_tags):
+def apply_on_hit_condition(ctx, defender_name, ability, damage_tags):
     """!
     @brief Applies an ability's own on_hit_condition directly to whoever it just hit -- no
         [entity.test] detour needed. This is the Pathfinder "Wounding"/poison-on-hit shape
@@ -1157,10 +1119,7 @@ def apply_on_hit_condition(entities, rules, event_bus, defender_name, ability, d
         plain weapon/ability hit never has). Skipped entirely if the defender is immune to the
         ability's own damage_tags -- an attack a creature is fully immune to shouldn't also
         inflict a condition tied to that same damage.
-    @param entities The live entities dict.
-    @param rules The loaded rules dict, forwarded to apply_condition (for "days" duration
-        conversion).
-    @param event_bus The EventBus, forwarded to apply_condition.
+    @param ctx The WorldContext (entities/rules/skills/event_bus) this runs against.
     @param defender_name The name of the entity that was just hit.
     @param ability A table optionally carrying "on_hit_condition" = {condition, chance,
         duration, length, dismiss}. "chance" (1-100, default 100) is the percent chance the
@@ -1168,18 +1127,17 @@ def apply_on_hit_condition(entities, rules, event_bus, defender_name, ability, d
     @param damage_tags The hit's own damage_tags, checked against the defender's immunity_tags.
     """
     on_hit = ability.get("on_hit_condition")
-    if not on_hit or is_immune_to(entities, defender_name, damage_tags):
+    if not on_hit or is_immune_to(ctx, defender_name, damage_tags):
         return
     if random.randint(1, 100) > on_hit.get("chance", 100):
         return
     apply_condition(
-        entities, event_bus, defender_name, on_hit["condition"],
+        ctx, defender_name, on_hit["condition"],
         duration=on_hit.get("duration"), length=on_hit.get("length"), dismiss=on_hit.get("dismiss"),
-        rules=rules,
     )
 
 
-def apply_destroy_equipped(entities, event_bus, defender_name, ability):
+def apply_destroy_equipped(ctx, defender_name, ability):
     """!
     @brief Rolls an ability's own destroy_equipped and, on success, destroys whatever the
         defender currently has equipped in that slot outright (Inventory_Resolution.
@@ -1187,8 +1145,7 @@ def apply_destroy_equipped(entities, event_bus, defender_name, ability):
         This is the Pathfinder Rust Monster corrosion / Sunder-a-weapon shape, deliberately
         simplified from Pathfinder's own two-hit item-HP model (see destroy_equipped_item's own
         comment). Mirrors apply_on_hit_condition's own "chance" roll shape exactly.
-    @param entities The live entities dict.
-    @param event_bus The EventBus, forwarded to destroy_equipped_item.
+    @param ctx The WorldContext (entities/rules/skills/event_bus) this runs against.
     @param defender_name The name of the entity whose gear is at risk.
     @param ability A table optionally carrying "destroy_equipped" = {slot, chance}. "chance"
         (1-100, default 100) is the percent chance it actually lands -- absent means it always
@@ -1201,10 +1158,10 @@ def apply_destroy_equipped(entities, event_bus, defender_name, ability):
         return None
     if random.randint(1, 100) > spec.get("chance", 100):
         return None
-    return Inventory_Resolution.destroy_equipped_item(entities, event_bus, defender_name, spec["slot"])
+    return Inventory_Resolution.destroy_equipped_item(ctx.entities, ctx.event_bus, defender_name, spec["slot"])
 
 
-def calculate_damage(entities, rules, event_bus, attacker_name, defender_name, ability):
+def calculate_damage(ctx, attacker_name, defender_name, ability):
     """!
     @brief Calculates and applies damage from an attacker's ability to a defender, including
         immunity, resistance/armor reduction, vulnerability, a supertype/subtype-matched
@@ -1212,9 +1169,7 @@ def calculate_damage(entities, rules, event_bus, attacker_name, defender_name, a
         Pathfinder Sneak Attack shape). Also records ability's own damage_tags onto defender_name's
         own "recent_damage_tags", and applies the ability's own on_hit_condition and
         destroy_equipped (if any) directly to the defender.
-    @param entities The live entities dict.
-    @param rules The loaded rules dict.
-    @param event_bus The EventBus to publish a log_info line to.
+    @param ctx The WorldContext (entities/rules/skills/event_bus) this runs against.
     @param attacker_name The name of the entity dealing damage.
     @param defender_name The name of the entity taking damage.
     @param ability A table with damage_value {dice, pips, bonus} and damage_tags.
@@ -1224,27 +1179,27 @@ def calculate_damage(entities, rules, event_bus, attacker_name, defender_name, a
     damage_value = ability.get("damage_value", {"dice": 0, "pips": 0, "bonus": 0})
     damage_tags = ability.get("damage_tags", [])
 
-    raw_damage = resolve_damage_value(entities, rules, event_bus, attacker_name, damage_value)
-    if is_immune_to(entities, defender_name, damage_tags):
+    raw_damage = resolve_damage_value(ctx, attacker_name, damage_value)
+    if is_immune_to(ctx, defender_name, damage_tags):
         reduction = raw_damage
         vulnerability_bonus = 0
         bonus_vs = 0
         bonus_if_condition = 0
     else:
-        reduction = get_damage_reduction(entities, defender_name, damage_tags)
-        vulnerability_bonus = get_vulnerability_bonus(entities, defender_name, damage_tags)
-        bonus_vs = get_damage_bonus_vs(entities, defender_name, ability)
-        bonus_if_condition = get_damage_bonus_if_condition(entities, defender_name, ability)
+        reduction = get_damage_reduction(ctx, defender_name, damage_tags)
+        vulnerability_bonus = get_vulnerability_bonus(ctx, defender_name, damage_tags)
+        bonus_vs = get_damage_bonus_vs(ctx, defender_name, ability)
+        bonus_if_condition = get_damage_bonus_if_condition(ctx, defender_name, ability)
     net_damage = max(0, raw_damage + vulnerability_bonus + bonus_vs + bonus_if_condition - reduction)
-    remaining_hp = apply_damage(entities, rules, event_bus, defender_name, net_damage, actor_name=attacker_name)
-    apply_on_hit_condition(entities, rules, event_bus, defender_name, ability, damage_tags)
-    apply_destroy_equipped(entities, event_bus, defender_name, ability)
+    remaining_hp = apply_damage(ctx, defender_name, net_damage, actor_name=attacker_name)
+    apply_on_hit_condition(ctx, defender_name, ability, damage_tags)
+    apply_destroy_equipped(ctx, defender_name, ability)
 
-    defender = entities.get(defender_name)
+    defender = ctx.entities.get(defender_name)
     if defender is not None and damage_tags:
         defender.setdefault("recent_damage_tags", set()).update(damage_tags)
 
-    event_bus.publish(
+    ctx.event_bus.publish(
         "log_info",
         f"{attacker_name} deals {raw_damage} raw damage to {defender_name}"
         f"{f' (+{vulnerability_bonus} vulnerability)' if vulnerability_bonus else ''}"
@@ -1265,17 +1220,16 @@ def calculate_damage(entities, rules, event_bus, attacker_name, defender_name, a
     }
 
 
-def get_opposing_skill(entities, skills, skill_name, defender_name):
+def get_opposing_skill(ctx, skill_name, defender_name):
     """!
     @brief Finds the defender's best (highest-rated) skill among a skill's opposing skills.
-    @param entities The live entities dict.
-    @param skills The loaded skill catalog (self.skills -- distinct from rules).
+    @param ctx The WorldContext (entities/rules/skills/event_bus) this runs against.
     @param skill_name The attacker's skill.
     @param defender_name The name of the defending entity.
     @return The defender's highest-rated matching opposing skill name, or None.
     """
-    opposes = skills.get(skill_name, {}).get("opposes", [])
-    defender_skills = entities.get(defender_name, {}).get("skills", {})
+    opposes = ctx.skills.get(skill_name, {}).get("opposes", [])
+    defender_skills = ctx.entities.get(defender_name, {}).get("skills", {})
     best_skill = None
     best_rating = None
     for opposing_skill in opposes:
@@ -1289,12 +1243,10 @@ def get_opposing_skill(entities, skills, skill_name, defender_name):
     return best_skill
 
 
-def resolve_action(entities, rules, event_bus, entity_name, skill_name, difficulty=0, dice_penalty=0, skill_divisor=1):
+def resolve_action(ctx, entity_name, skill_name, difficulty=0, dice_penalty=0, skill_divisor=1):
     """!
     @brief Resolves the outcome of an entity using a skill against a difficulty.
-    @param entities The live entities dict.
-    @param rules The loaded rules dict.
-    @param event_bus The EventBus to publish a log_info line to.
+    @param ctx The WorldContext (entities/rules/skills/event_bus) this runs against.
     @param entity_name The name of the entity performing the action.
     @param skill_name The skill being used.
     @param difficulty The target number the roll must meet or beat.
@@ -1309,19 +1261,19 @@ def resolve_action(entities, rules, event_bus, entity_name, skill_name, difficul
         unchanged, exactly as every existing call site behaves.
     @return A dict describing the roll and whether it succeeded.
     """
-    entity = entities.get(entity_name, {})
+    entity = ctx.entities.get(entity_name, {})
     skill_stats = entity.get("skills", {}).get(skill_name, {"dice": 0, "pips": 0})
     base_dice = skill_stats.get("dice", 0)
     base_pips = skill_stats.get("pips", 0)
     rating = skill_rating(base_dice, base_pips) / skill_divisor
     base_dice, base_pips = int(rating // SKILL_RATING_DIVISOR), int(rating % SKILL_RATING_DIVISOR)
-    condition_modifier = get_condition_modifier(entities, rules, entity_name, skill_name)
-    equip_bonus = get_equipped_skill_bonus(entities, rules, entity_name, skill_name)
+    condition_modifier = get_condition_modifier(ctx, entity_name, skill_name)
+    equip_bonus = get_equipped_skill_bonus(ctx, entity_name, skill_name)
     dice = max(0, base_dice - dice_penalty + condition_modifier["dice"] + equip_bonus["dice"])
     pips = base_pips + condition_modifier["pips"] + equip_bonus["pips"]
     roll = roll_dice(dice, pips) + condition_modifier["bonus"]
     success = roll >= difficulty
-    event_bus.publish(
+    ctx.event_bus.publish(
         "log_info",
         f"Resolved action: {entity_name} used {skill_name}, rolled {roll} vs difficulty {difficulty} -> {'success' if success else 'failure'}."
     )
@@ -1334,14 +1286,11 @@ def resolve_action(entities, rules, event_bus, entity_name, skill_name, difficul
     }
 
 
-def resolve_opposed_action(entities, rules, skills, event_bus, attacker_name, skill_name, defender_name, dice_penalty=0, ability=None, skill_divisor=1):
+def resolve_opposed_action(ctx, attacker_name, skill_name, defender_name, dice_penalty=0, ability=None, skill_divisor=1):
     """!
     @brief Resolves a skill roll opposed by a defending entity's matching skill. Range is
         checked by the caller before this is reached at all.
-    @param entities The live entities dict.
-    @param rules The loaded rules dict.
-    @param skills The loaded skill catalog.
-    @param event_bus The EventBus to publish log lines to.
+    @param ctx The WorldContext (entities/rules/skills/event_bus) this runs against.
     @param attacker_name The name of the acting entity.
     @param skill_name The skill being used by the attacker.
     @param defender_name The name of the opposing entity.
@@ -1359,24 +1308,24 @@ def resolve_opposed_action(entities, rules, skills, event_bus, attacker_name, sk
         miss outright), unless "ability" authors "ignores_concealment" (ex: a ghost touch/
         seeking weapon).
     """
-    opposing_skill = get_opposing_skill(entities, skills, skill_name, defender_name)
+    opposing_skill = get_opposing_skill(ctx, skill_name, defender_name)
     if opposing_skill:
-        defender_stats = entities[defender_name]["skills"][opposing_skill]
-        defender_modifier = get_condition_modifier(entities, rules, defender_name, opposing_skill)
-        defender_equip_bonus = get_equipped_skill_bonus(entities, rules, defender_name, opposing_skill)
+        defender_stats = ctx.entities[defender_name]["skills"][opposing_skill]
+        defender_modifier = get_condition_modifier(ctx, defender_name, opposing_skill)
+        defender_equip_bonus = get_equipped_skill_bonus(ctx, defender_name, opposing_skill)
         defender_dice = max(0, defender_stats.get("dice", 0) + defender_modifier["dice"] + defender_equip_bonus["dice"])
         defender_pips = defender_stats.get("pips", 0) + defender_modifier["pips"] + defender_equip_bonus["pips"]
         difficulty = roll_dice(defender_dice, defender_pips) + defender_modifier["bonus"]
     else:
         difficulty = 0
 
-    result = resolve_action(entities, rules, event_bus, attacker_name, skill_name, difficulty, dice_penalty=dice_penalty, skill_divisor=skill_divisor)
+    result = resolve_action(ctx, attacker_name, skill_name, difficulty, dice_penalty=dice_penalty, skill_divisor=skill_divisor)
     result["defender"] = defender_name
     result["opposing_skill"] = opposing_skill
     if result["success"] and not (ability and ability.get("ignores_concealment")):
-        concealment = get_concealment(entities, rules, defender_name)
+        concealment = get_concealment(ctx, defender_name)
         if concealment and random.randint(1, 100) <= concealment:
             result["success"] = False
             result["concealed_miss"] = True
-            event_bus.publish("log_info", f"{attacker_name}'s attack on {defender_name} misses outright -- concealed.")
+            ctx.event_bus.publish("log_info", f"{attacker_name}'s attack on {defender_name} misses outright -- concealed.")
     return result

@@ -1,4 +1,3 @@
-import json
 import os
 import queue
 import threading
@@ -12,21 +11,20 @@ from resolution.Character_Creation import (
 )
 from gui.Character_Creation_GUI import run_character_creation_dialog
 from dm.DM_Rules import list_available_characters, list_available_scenarios, list_available_settings
-from paths import PROJECT_ROOT
+from persistence.slot import FileSlotStore, SaveError
+from resolution.World_Context import WorldContext
 
 DEFAULT_SETTING = "Pathfinder"
 # Settings that exist purely as test fixtures: still loadable (tests, --setting on the CLI) but
 # not offered in the Ruleset menu.
 HIDDEN_SETTINGS = {"Fantasy"}
 
-SAVES_DIR = "Saves"
-
 class GUICore:
     """!
     @brief Main class handling the display and user interaction.
     """
 
-    def __init__(self, event_bus, master=None, default_setting=DEFAULT_SETTING):
+    def __init__(self, event_bus, master=None, default_setting=DEFAULT_SETTING, slot_store=None):
         """!
         @brief Initializes the GUI components.
         @param event_bus The central event bus instance.
@@ -46,8 +44,10 @@ class GUICore:
             a starting point, not a lock: request_character_creation/request_scenario_load
             both read whatever the Ruleset menu is set to at the moment they're used, not
             this constructor argument.
+        @param slot_store Where save slots live (persistence/slot.py); None is the real Saves/.
         """
         self.event_bus = event_bus
+        self.slot_store = slot_store or FileSlotStore()
         # Marshals every Tk-widget-touching call onto this thread -- Tkinter may only be
         # touched from here, but several event handlers below can fire from a background
         # thread (LLDM.py's own Ollama-bootstrap status via display_system_status, LLMCore's
@@ -564,17 +564,10 @@ class GUICore:
 
     def _list_save_slots(self):
         """!
-        @brief Every existing save slot -- a subdirectory of Saves/ -- sorted for display.
-            Resolved the same script-relative way as _save_slot_dir, so this lists the same
-            directory Save/Load actually read and write regardless of the process's cwd.
+        @brief Every existing save slot, sorted for display -- the slot store's own listing, so
+            it's the same directory Save/Load actually read and write.
         """
-        saves_dir = os.path.join(PROJECT_ROOT, SAVES_DIR)
-        if not os.path.isdir(saves_dir):
-            return []
-        return sorted(
-            name for name in os.listdir(saves_dir)
-            if os.path.isdir(os.path.join(saves_dir, name))
-        )
+        return self.slot_store.list_slots()
 
     def display_player_notice(self, data):
         # Out of character: a failed attempt to rephrase, or a yes/no question (LLMCore/DMCore).
@@ -587,7 +580,10 @@ class GUICore:
         self.append_to_history(f"[System] Game loaded from '{data.get('slot')}'.\n\n")
 
     def display_game_load_failed(self, data):
-        self.append_to_history(f"[System] No save named '{data.get('slot')}' found.\n\n")
+        if data.get("reason", "not_found") == "not_found":
+            self.append_to_history(f"[System] No save named '{data.get('slot')}' found.\n\n")
+        else:
+            self.append_to_history(f"[System] Save '{data.get('slot')}' can't be loaded ({data.get('reason')}).\n\n")
 
     def _resolve_equip_slots(self, entity, equip_slot_rules):
         """!
@@ -629,7 +625,7 @@ class GUICore:
             itself). "scenario_entities" is what keeps an is_party template not actually part
             of the current scenario off the Party tab just for sitting in self.entities --
             self.entities alone can't tell an instanced party member apart from an uninstanced
-            template in the same dict (see DM_Combat.py's get_party_challenge_rating, which
+            template in the same dict (see Combat_Actions.py's get_party_challenge_rating, which
             filters the same way; CLAUDE.md's "Architecture" has a worked example, though every
             is_party entity in Rules/Fantasy/ is scenario-local today, so no real content
             currently exercises this beyond a synthetic test).
@@ -691,7 +687,7 @@ class GUICore:
                 self.party_tree.insert(inventory_node, tk.END, text="(none)")
 
             conditions_node = self.party_tree.insert(member, tk.END, text="Conditions", open=False)
-            active_conditions = Combat_Resolution.get_active_conditions(entities, entity_key) or {}
+            active_conditions = Combat_Resolution.get_active_conditions(WorldContext(entities=entities), entity_key) or {}
             for condition_name in active_conditions:
                 self.party_tree.insert(conditions_node, tk.END, text=condition_name)
             if not active_conditions:
@@ -729,49 +725,33 @@ class GUICore:
 
     def _save_slot_dir(self, slot_name):
         """!
-        @brief Mirrors DMCore._save_slot_dir/LLMCore._save_slot_dir exactly. GUICore has no
-            reference to either -- the three cores only ever talk through events -- so this
-            small path helper is deliberately duplicated here too, and must stay in sync:
-            all three write sibling files into the same Saves/<slot_name>/ directory.
-        @param slot_name The save slot's name, as given by the player.
-        @return The absolute directory path for this slot.
+        @return This slot's directory -- the slot store's own answer, shared with DMCore/LLMCore.
         """
-        safe_name = os.path.basename(slot_name.strip()) or "unnamed"
-        return os.path.join(PROJECT_ROOT, SAVES_DIR, safe_name)
+        return self.slot_store.slot_dir(slot_name)
 
     def save_game(self, slot_name):
         """!
-        @brief Writes this core's own slice of a save slot -- currently just the Notes tab's
-            free text -- to Saves/<slot_name>/gui_state.json. DMCore/LLMCore independently
-            write their own sibling files for the same slot (see CLAUDE.md's "Saving and
-            loading" for why this isn't one combined file).
-        @param slot_name The save slot's name (used as a directory name under Saves/).
+        @brief Writes this core's own part of a save slot -- currently just the Notes tab's free
+            text -- as "gui_state". DMCore/LLMCore independently write their own sibling parts
+            for the same slot (see docs/persistence.md).
+        @param slot_name The save slot's name.
         """
-        slot_dir = self._save_slot_dir(slot_name)
-        os.makedirs(slot_dir, exist_ok=True)
-        data = {
-            "version": 1,
-            "notes": self.notes_text.get("1.0", "end-1c"),
-        }
-        with open(os.path.join(slot_dir, "gui_state.json"), "w") as f:
-            json.dump(data, f, indent=2)
+        self.slot_store.write(slot_name, "gui_state", {"notes": self.notes_text.get("1.0", "end-1c")})
         self.event_bus.publish("log_info", f"GUI state saved to slot '{slot_name}'.")
 
     def load_game(self, slot_name):
         """!
-        @brief Restores the Notes tab's text from Saves/<slot_name>/gui_state.json. A missing
-            file just logs and leaves the current Notes tab alone -- DMCore's own load_game is
-            what publishes "game_load_failed" for narrating that to the player, so this
-            doesn't duplicate that feedback.
+        @brief Restores the Notes tab's text from the slot's "gui_state" part. A part that can't
+            be read just logs and leaves the current Notes tab alone -- DMCore's own load_game is
+            what publishes "game_load_failed" for narrating that to the player, so this doesn't
+            duplicate that feedback.
         @param slot_name The save slot's name to load.
         """
-        path = os.path.join(self._save_slot_dir(slot_name), "gui_state.json")
-        if not os.path.exists(path):
-            self.event_bus.publish("log_error", f"No GUI state for slot '{slot_name}'.")
+        try:
+            data = self.slot_store.read(slot_name, "gui_state")
+        except SaveError as error:
+            self.event_bus.publish("log_error", f"No GUI state for slot '{slot_name}' ({error}).")
             return
-
-        with open(path, "r") as f:
-            data = json.load(f)
 
         self.display_notes(data.get("notes", ""))
         self.event_bus.publish("log_info", f"GUI state loaded from slot '{slot_name}'.")

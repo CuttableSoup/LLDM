@@ -41,6 +41,7 @@
 
 import os
 import sys
+import resolution.Combat_Actions as Combat_Actions
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _REPO_ROOT)
@@ -70,7 +71,7 @@ def _snapshot(dm, name, suffix=""):
         offense package (skill + damage), full skills, and max_hp; damage_tags dropped (no
         resistance/armor on any debug.toml entity here to interact with anyway)."""
     entity = dm.entities[name]
-    skill_stats, dice, pips = dm._best_offense_package(name)
+    skill_stats, dice, pips = Combat_Actions._best_offense_package(dm.world, name)
     return {
         "name": f"{name}{suffix}",
         "skills": copy.deepcopy(entity["skills"]),
@@ -224,14 +225,14 @@ def run_swarm_phase(dm, party_configs, skills_catalog, rules):
 
     data_points = []
     for party_label, (party_members, party_count) in party_configs.items():
-        party_cr_total = sum(dm.get_challenge_rating(base_name) for base_name, _ in party_members)
+        party_cr_total = sum(Combat_Actions.get_challenge_rating(dm.world, base_name) for base_name, _ in party_members)
         party_avg_cr = party_cr_total / party_count
 
         def build_party(members=party_members):
             return [_snapshot(dm, base_name, suffix=suffix) for base_name, suffix in members]
 
         for monster_name in monster_names:
-            monster_cr = dm.get_challenge_rating(monster_name)
+            monster_cr = Combat_Actions.get_challenge_rating(dm.world, monster_name)
             if monster_cr <= 0:
                 continue
             cr_ratio = party_avg_cr / monster_cr
@@ -288,7 +289,7 @@ def run_boss_phase(dm, party_configs, skills_catalog, rules):
     boss_shapes = {"tanky (0.3)": 0.3, "balanced (0.5)": 0.5, "glass cannon (0.7)": 0.7}
     results = []
     for party_label, (party_members, party_count) in party_configs.items():
-        party_cr_total = sum(dm.get_challenge_rating(base_name) for base_name, _ in party_members)
+        party_cr_total = sum(Combat_Actions.get_challenge_rating(dm.world, base_name) for base_name, _ in party_members)
 
         def build_party(members=party_members):
             return [_snapshot(dm, base_name, suffix=suffix) for base_name, suffix in members]

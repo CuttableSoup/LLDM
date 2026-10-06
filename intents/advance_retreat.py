@@ -5,6 +5,38 @@
     unrelated to the scene target or the locked-container gate, unlike every item-named intent.
 """
 
+import re
+from intents.match import IntentMatch
+
+# -- What the classifier matches (see intents/registry.py's MATCHES) --
+
+# Movement/positioning (see DM_Movement.py) -- like open/close, these act on the whole scene
+# rather than a named item, so no map_to_item lookup ever runs for them either. Phrases, not
+# bare "move ", since a bare word would swallow unrelated skill phrasing the same way a bare
+# "close " would have (see the module note above) -- none of these collide with any
+# skills.toml keyword list. Deliberately no "close the distance" here even though it's a
+# natural phrasing -- CLOSE_KEYWORDS' "close the " is checked first (see item_intent_gates)
+# and would swallow it as a "close" intent instead.
+# "follow"/"go after" close on someone the same way -- there's no follow mechanic, so closing the
+# distance is what the engine can do. Found by playtest: "i follow her at a respectful distance"
+# was not understood. (A "<verb> toward" phrasing is TOWARD_PATTERN's, below.)
+ADVANCE_KEYWORDS = (
+    "advance", "move closer", "approach", "move toward", "move in", "step closer", "follow", "go after",
+)
+# "head/walk/proceed (carefully) toward X": travel when X is a real destination (checked in
+# classify() before the item pass), else advance (detect_item_intent). Found by playtest: "i'll
+# proceed carefully toward the wyrmwatch" was not understood; "head toward the docks" already
+# reached travel through the semantic router and must keep doing so.
+TOWARD_PATTERN = re.compile(
+    r"\b(?:head|walk|proceed|go|make (?:my|our) way|run|hurry|stride|creep|edge)(?:s|es|ed|ing)?"
+    r"(?:\s+\w+ly)?\s+towards?\b"
+)
+RETREAT_KEYWORDS = ("retreat", "back away", "back off", "fall back", "step back", "withdraw", "move away")
+MATCH = {
+    "advance": IntentMatch(keywords=ADVANCE_KEYWORDS, patterns=(TOWARD_PATTERN,), exempt=True),
+    "retreat": IntentMatch(keywords=RETREAT_KEYWORDS, exempt=True),
+}
+
 
 def resolve_advance_retreat(core, data, resolved):
     """!

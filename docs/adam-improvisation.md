@@ -38,7 +38,7 @@ exceptions on purpose.
 
 **Deliberately excluded from `context_window`.** Every other narration trigger appends both
 prompt and reply to `LLMCore`'s shared rolling window. ADaM's own `generate_adam_response`/
-`_queue_adam_response` instead send a standalone `[system, user]` request to
+`_queue` instead send a standalone `[system, user]` request to
 `_fetch_and_publish(..., store_in_context=False)`, appending neither. Two reasons: (1) tone — a
 meta/OOC exchange left in the shared window risks the GM later parroting mechanical facts
 in-fiction; (2) budget — ADaM's dense payloads (full skill lists, exits) would otherwise crowd
@@ -74,7 +74,7 @@ channel never runs the `REMOVAL_KEYWORDS`/`CREATURE_KEYWORDS`/`EDIT_KEYWORDS` ga
 higher-risk mutation paths do, and never reports the player's own mechanical state
 (skills/abilities/equipped/inventory) — irrelevant to "what does the room look like."
 
-`LLMCore.generate_scene_query_response`/`_build_scene_query_system_message`/`_queue_scene_query`
+`LLMCore.generate_scene_query_response`/`scene_query_system_message`/`_queue`
 mirror ADaM's own trio, but differ in exactly the two ways the design calls for: the system
 message speaks as the ordinary in-fiction Game Master, not ADaM's own explicit out-of-character
 persona (while keeping the identical strict "use only the facts given below; never invent people,
@@ -217,7 +217,7 @@ and triggers `_publish_party_status()`.
 under `"ad_hoc_entities"` — reachable meaning a live `self.scenario_entities` participant (a
 conjured creature/container/trap, or a temporary summon — see "Summoning"), present in some
 ground list, or sitting in some known instance's own inventory/equipped mapping.
-`"recent_damage_tags"` (`calculate_damage`, `DM_Combat.py`) is stripped from the copied dict
+`"recent_damage_tags"` (`calculate_damage`, `Combat_Resolution.py`) is stripped from the copied dict
 first — a plain Python `set`, not JSON-serializable, and deliberately ephemeral regardless (see
 "Status and conditions"'s own per-round upkeep note). `load_game` restores each entity with a
 full dict replacement alongside `"ground"`, republishes `item_catalog_updated` once, then

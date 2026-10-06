@@ -146,7 +146,13 @@ kill_on_sight_at = 100   # ... and at which they attack instead
 - At or past `kill_on_sight_at`, every enforcer present gets the `wanted_dead` attitude event —
   hostile through the ordinary combat machinery, no talking.
 
-The confrontation is `DMCore.pending_arrest` (saved). It's announced only once the player's
+The confrontation is `LawEnforcement.pending_arrest` (saved; `DMCore.pending_arrest` reads through to it).
+`resolution/Law_Enforcement.py`'s `LawEnforcement` owns the whole flow below plus `legal_records` and
+`pending_reports`, and reaches the game only through its `LawWorld` port (`DMCoreLawWorld`, in
+`DM_Enforcement.py`) — so it's tested against a fake world with no `DMCore`. `publish` is on the port
+rather than returned from each method because surrender announces the outcome *and then* moves the
+party to jail and advances the clock; narration reads the world when an event goes out. Crime
+detection and witnesses stay in `DM_Law.py`, which calls in to file reports. It's announced only once the player's
 input has fully resolved (NLPCore publishes `player_input_handled`), so the crime is narrated
 before the guard steps in. Announcing publishes `arrest_confronted` (narrated by
 `LLMCore.generate_arrest_response` from the record's own charges and amount) and

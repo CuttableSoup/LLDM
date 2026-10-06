@@ -7,6 +7,23 @@
     target or the locked-container gate, unlike every item-named intent.
 """
 
+from intents.match import IntentMatch
+
+# -- What the classifier matches (see intents/registry.py's MATCHES) --
+
+# Attaching one currently-present entity to another's own "mount" field (see
+# entity_schema.toml's own "mount", DM_Movement.py's _resolve_hitch_intent/
+# _resolve_unhitch_intent) -- ex: "hitch the horse to the cart". Like mount/dismount above,
+# DMCore (not this module) resolves *which* two entities are named and in what order; no
+# skills.toml keyword is the bare word "hitch"/"unhitch", so neither risks the collision
+# MOUNT_KEYWORDS' own comment describes for "climb"/"ride".
+HITCH_KEYWORDS = ("hitch ",)
+UNHITCH_KEYWORDS = ("unhitch",)
+MATCH = {
+    "hitch": IntentMatch(keywords=HITCH_KEYWORDS, exempt=True),
+    "unhitch": IntentMatch(keywords=UNHITCH_KEYWORDS, exempt=True),
+}
+
 
 def resolve_hitch(core, data, resolved):
     """!

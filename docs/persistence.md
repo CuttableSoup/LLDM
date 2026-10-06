@@ -8,12 +8,41 @@ Three sibling JSON files per slot — `Saves/<slot>/dm_state.json`, `llm_state.j
 `gui_state.json` — written/read independently by `DMCore`, `LLMCore`, and `GUICore`. `EventBus`
 has no request/response mechanism, so each core owns and persists its own slice.
 
+**The slot store** (`persistence/slot.py`) is the one place that knows where a slot lives and how a
+part is written and read: `FileSlotStore` (production — `Saves/<slot>/<part>.json`, written
+atomically via a temp file and `os.replace`) and `MemorySlotStore` (tests — same interface, no
+filesystem). All three cores take an optional `slot_store=`; `LLDM.py` builds one `FileSlotStore`
+and hands it to each. Every part is stamped with `format_version` (`FORMAT_VERSION`); a slot from
+another version, a missing part, or invalid JSON raises `SaveError` (`not_found`, `corrupt`,
+`unsupported_version`), which `DMCore.load_game` publishes as `game_load_failed {"slot",
+"reason"}`. There are no migrations: an older slot simply won't load. `store.read` returns the
+whole parsed part before anything live is touched, so a bad part never leaves a half-restored
+`DMCore` (a failure *during* restore is still fail-fast, with no rollback).
+
+**Participants.** `dm_state` is assembled by `DMCore.save_parts`, an ordered list of `Persistable`
+slices (`snapshot()` → that slice's keys, `restore(data)`). Each slice lives next to the state it
+owns, and `snapshot_all` rejects two slices claiming one key. The list order *is* the restore
+order:
+
+1. `ClockSlice` (`DM_Time.py`) — `round_number`, the block clock, `pending_downtime`.
+2. `LawEnforcement` (`resolution/Law_Enforcement.py`, itself a `Persistable`) — `legal_records`,
+   `pending_reports`, `pending_arrest`.
+3. `RemovedEntitiesSlice` (`DM_Improvisation.py`) and `KnownLocationsSlice` (`DM_Travel.py`) —
+   read by re-instancing, so they restore first.
+4. `WorldSlice` (`DM_Persistence.py`) — everything about the world itself (below), one participant
+   because `load_rules` → rename → instancing replay → saved-location jump → overlay is a single
+   ordered sequence.
+5. `SessionSlice` (`DM_Core.py`) — `current_target`, `recent_narration`, `conversation_partner`;
+   after the world, because re-instancing resets the first and clears the last.
+
+A new subsystem adds a slice and one entry to that list; it never edits `DM_Persistence.py`.
+
 **Trigger:** `save_requested`/`load_requested {"slot": slot_name}`, published by
 `Intent_Classification.py`'s `detect_save_load_intent` (via `IntentClassifier.classify`), by
 `GUICore`'s File → Save... / Character → Load... popups
 (see "Booting the game" for the cold-start case), or by `Textual_Core`'s Save/Load buttons.
 
-`DMCore.save_game` writes a diff from a fresh instantiation: `setting`, `scenario_key`,
+`WorldSlice` writes a diff from a fresh instantiation: `setting`, `scenario_key`,
 `player_name`, `round_number`, `current_location_key`, `current_room_key`, `location_runtime`
 (every visited location's own `{persistent_names, visited_rooms}` cache — see "Scenarios,
 locations, and rooms"), `scenario_entities`, `ground`, and per-instance `{hp, active_conditions,

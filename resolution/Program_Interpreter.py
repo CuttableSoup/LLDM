@@ -33,6 +33,7 @@ import re
 import resolution.Combat_Resolution as Combat_Resolution
 import resolution.Inventory_Resolution as Inventory_Resolution
 import resolution.Social_Resolution as Social_Resolution
+from resolution.World_Context import WorldContext
 # Reserved role tokens ctx is always keyed by, and the only values entity/toward/from/to args
 # may name -- see PLAYER_PLACEHOLDER (DM_Rules.py) for the same reserved-token precedent.
 ROLES = ("actor", "target")
@@ -109,7 +110,7 @@ def _evaluate_comparison(expr, ctx, entities):
         return False
     opponent_role = "target" if role == "actor" else "actor"
     opponent_name = ctx.get(opponent_role)
-    actual = Combat_Resolution.get_comparable_value(entities, entity_name, field, opponent_name)
+    actual = Combat_Resolution.get_comparable_value(WorldContext(entities=entities), entity_name, field, opponent_name)
     compare = Combat_Resolution.COMPARATORS.get(operator)
     if compare is None or actual is None:
         return False
@@ -177,7 +178,7 @@ def resolve_value(value, ctx, entities):
     if entity_name is None:
         return None
     opponent_role = "target" if role == "actor" else "actor"
-    return Combat_Resolution.get_comparable_value(entities, entity_name, field, ctx.get(opponent_role))
+    return Combat_Resolution.get_comparable_value(WorldContext(entities=entities), entity_name, field, ctx.get(opponent_role))
 
 
 def _require(step, key):
@@ -193,9 +194,8 @@ def _op_condition(step, ctx, entities, rules, event_bus):
     if entity_name is None:
         return
     Combat_Resolution.apply_condition(
-        entities, event_bus, entity_name, _require(step, "name"),
+        WorldContext(entities=entities, event_bus=event_bus, rules=rules), entity_name, _require(step, "name"),
         duration=step.get("duration"), length=step.get("length"), dismiss=step.get("dismiss"),
-        rules=rules,
     )
 
 
@@ -204,7 +204,7 @@ def _op_dismiss_condition(step, ctx, entities, rules, event_bus):
     entity_name = resolve_role(_require(step, "entity"), ctx)
     if entity_name is None:
         return
-    Combat_Resolution.dismiss_condition(entities, event_bus, entity_name, _require(step, "name"))
+    Combat_Resolution.dismiss_condition(WorldContext(entities=entities, event_bus=event_bus), entity_name, _require(step, "name"))
 
 
 def _op_attitude(step, ctx, entities, rules, event_bus):
@@ -233,7 +233,7 @@ def _op_damage(step, ctx, entities, rules, event_bus):
         "damage_value": {"dice": step.get("dice", 0), "pips": step.get("pips", 0), "bonus": step.get("bonus", 0)},
         "damage_tags": step.get("tags", []),
     }
-    Combat_Resolution.calculate_damage(entities, rules, event_bus, attacker_name, entity_name, ability)
+    Combat_Resolution.calculate_damage(WorldContext(entities=entities, rules=rules, event_bus=event_bus), attacker_name, entity_name, ability)
 
 
 def _op_heal(step, ctx, entities, rules, event_bus):
@@ -242,7 +242,7 @@ def _op_heal(step, ctx, entities, rules, event_bus):
     if entity_name is None:
         return
     amount = Combat_Resolution.roll_dice(step.get("dice", 0), step.get("pips", 0)) + step.get("bonus", 0)
-    Combat_Resolution.apply_healing(entities, rules, event_bus, entity_name, amount)
+    Combat_Resolution.apply_healing(WorldContext(entities=entities, rules=rules, event_bus=event_bus), entity_name, amount)
 
 
 def _op_inject_directive(step, ctx, entities, rules, event_bus):

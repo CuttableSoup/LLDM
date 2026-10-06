@@ -27,7 +27,7 @@ matched `pass`/`fail` table: `dismiss_condition` removes a condition, `condition
 one, `loot` transfers everything on the target via `loot_entity`, `reveal` (truthy) applies a
 permanent `"identified"` condition — the content it reveals is read back off the entity's own
 `tags` field by whoever narrates it, not stored on the outcome itself — and `xp` (truthy) awards
-XP via `_award_xp_for_defeat` (`DM_Combat.py`, see `docs/combat.md`'s "Experience (XP)") — the
+XP via `_award_xp_for_defeat` (`Combat_Actions.py`, see `docs/combat.md`'s "Experience (XP)") — the
 same primitive a combat kill uses, just opt-in per test rather than automatic, since most
 `[entity.test]`s (ex: the chest's own lock) aren't "surviving a threat." `items.toml`'s dart
 trap/scythe trap are the shipped example, both pairing `xp = true` with their own
@@ -248,7 +248,7 @@ giving the difficulty number real stakes rather than a free retry. Only on succe
 `place_new_item(player_name, item_name)` and append a `CraftEffect` to the resulting
 `RolledOutcome`'s own `effects`. This is a plain `ActionOutcome` like any other, so it flows
 through the ordinary `action_resolved`/`round_resolved` narration path unchanged;
-`LLM_Core.py`'s `_describe_outcome` dispatches `CraftEffect` through its own formatter registry
+`LLM_Core.py`'s `describe_outcome` dispatches `CraftEffect` through its own formatter registry
 (mirroring `SummonEffect`'s own) and gained three no-roll `ActionOutcome` branches
 (`NotCraftableOutcome`/`MissingMaterialsOutcome`/`MissingStationOutcome`, mirroring the existing
 `OutOfRangeOutcome` branch) — no new narration trigger event was needed. A craft attempt

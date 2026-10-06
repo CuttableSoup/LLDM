@@ -1,6 +1,7 @@
 import re
 
 from dm.DM_Types import DMCoreProtocol
+import resolution.Combat_Resolution as Combat_Resolution
 
 # The whole-word wrapper every literal name scan in this file shares -- a bare substring
 # search would let "anne" match "annexed" and "risa" match "risky".
@@ -105,7 +106,7 @@ class DialogueMixin(DMCoreProtocol):
         key = (self.conversation_partner or {}).get("key")
         if not key:
             return None
-        if key not in self.scenario_entities or self.get_current_hp(key) <= 0 or self.is_hidden(key):
+        if key not in self.scenario_entities or Combat_Resolution.get_current_hp(self.world, key) <= 0 or self.is_hidden(key):
             self._set_conversation_partner(None)
             return None
         return key
@@ -156,7 +157,7 @@ class DialogueMixin(DMCoreProtocol):
             entity = self.entities.get(name, {})
             if (
                 self._is_party_member(name) or entity.get("supertype") == "object"
-                or self.get_current_hp(name) <= 0 or self.is_hidden(name)
+                or Combat_Resolution.get_current_hp(self.world, name) <= 0 or self.is_hidden(name)
             ):
                 continue
             if self._detect_language_barrier(name)[0] is None:
@@ -164,7 +165,7 @@ class DialogueMixin(DMCoreProtocol):
         fallback = self._get_target_name(include_background=True, include_objects=False)
         # Never the dead: found by playtest, an unnamed remark kept going to the corpse of a
         # bystander killed the turn before.
-        return fallback if fallback and self.get_current_hp(fallback) > 0 else None
+        return fallback if fallback and Combat_Resolution.get_current_hp(self.world, fallback) > 0 else None
 
     def _resolve_dialogue(self, input_text, sentiments=None, forced_target=None):
         """!
@@ -233,7 +234,7 @@ class DialogueMixin(DMCoreProtocol):
             return {"target": None, "found": False, "reason": "no_one_here"}
         self.event_bus.publish("log_info", f"Resolved dialogue target: '{target_name}' ({resolution}).")
 
-        if target_name in self.scenario_entities and self.get_current_hp(target_name) <= 0:
+        if target_name in self.scenario_entities and Combat_Resolution.get_current_hp(self.world, target_name) <= 0:
             # Said outright: told only "isn't here to respond", the narrator had a corpse
             # "gasping for air" through thirteen turns of a playtest.
             return {"target": target_name, "found": False, "reason": "dead"}
@@ -289,7 +290,7 @@ class DialogueMixin(DMCoreProtocol):
     def _shares_language_with(self, target_name):
         """!
         @brief Whether target_name understands the player (see _detect_language_barrier) --
-            a plain bool wrapper around _detect_language_barrier for callers (ex: DM_Combat.py's
+            a plain bool wrapper around _detect_language_barrier for callers (ex: Combat_Actions.py's
             _ability_requires_language gate) that only need a yes/no, not the narration-facing
             target_language/nonsense_phrase pair.
         @param target_name The entity being checked against.

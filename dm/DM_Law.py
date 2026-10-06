@@ -19,20 +19,8 @@
 
 from dm.DM_Types import DMCoreProtocol
 import resolution.Law_Resolution as Law_Resolution
-
-# An entity tagged this enforces the law of whatever polity it stands in: a crime it witnesses
-# is filed immediately, and it knows that polity's records.
-ENFORCER_TAG = "law_enforcer"
-
-# Per-entity law state, round-tripped by DM_Persistence.py exactly as stored: what a witness
-# saw (and which disguises/presences it already checked), who struck a victim first, and a
-# disguise currently worn.
-# Also, for an enforcer (DM_Enforcement.py): whom it has already recognized or failed to, and
-# whom a bribe bought it off from.
-LAW_INSTANCE_FIELDS = (
-    "known_crimes", "assaulted_by", "disguise", "disguise_count", "disguise_checks", "presence_checks",
-    "enforcement_checks", "looked_away",
-)
+import resolution.Combat_Resolution as Combat_Resolution
+import resolution.Combat_Actions as Combat_Actions
 
 # How a crime reads in a witness's own persona line (legal_facts_for).
 CRIME_PHRASES = {
@@ -50,13 +38,9 @@ class LawMixin(DMCoreProtocol):
 
     def _init_law_state(self):
         """!
-        @brief legal_records: {polity: {identity: {"bounty", "acclaim", "crimes"}}}.
-            pending_reports: crimes witnessed but not yet filed -- each {"polity", "identity",
-            "law", "line", "witnesses"} -- filed at the next advance_blocks if a witness lives.
-            Both round-trip through save/load (DM_Persistence.py).
+        @brief Hooks the crime events. The records and pending reports this module writes to are
+            LawEnforcement's (self.law_enforcement, built by _init_enforcement_state).
         """
-        self.legal_records = {}
-        self.pending_reports = []
         self.event_bus.subscribe("crime_committed", self._on_crime_committed)
         self.event_bus.subscribe("disguise_changed", self._on_disguise_changed)
 
@@ -138,7 +122,7 @@ class LawMixin(DMCoreProtocol):
         checks = self.entities[witness].setdefault("disguise_checks", {})
         if disguise["identity"] not in checks:
             skill = self._law_settings().get("witness_skill", "observation")
-            checks[disguise["identity"]] = self.resolve_action(witness, skill, disguise.get("quality", 0))["success"]
+            checks[disguise["identity"]] = Combat_Resolution.resolve_action(self.world, witness, skill, disguise.get("quality", 0))["success"]
         return checks[disguise["identity"]]
 
     def _identity_seen_by(self, witness, offender):
@@ -150,7 +134,7 @@ class LawMixin(DMCoreProtocol):
         return offender, self.entities.get(offender, {}).get("name", offender)
 
     def _is_enforcer(self, name):
-        return ENFORCER_TAG in self.entities.get(name, {}).get("tags", [])
+        return Law_Resolution.is_enforcer(self.entities, name)
 
     # -- Recording crimes ----------------------------------------------------------------
 
@@ -207,42 +191,21 @@ class LawMixin(DMCoreProtocol):
             report = {"polity": polity, "identity": identity, "law": law, "line": line, "witnesses": seen_by}
             enforcers = [name for name in seen_by if self._is_enforcer(name)]
             if enforcers:
-                self._file_report(report)
+                self.law_enforcement.file_report(report)
                 if offender == self.player_name:
-                    # An enforcer who saw it acts on it now (DM_Enforcement.py) -- the first who
+                    # An enforcer who saw it acts on it now (LawEnforcement) -- the first who
                     # can: one who is the victim is already fighting back.
                     for enforcer in enforcers:
-                        if self._enforcer_witnessed(enforcer, polity, identity):
+                        if self.law_enforcement.enforcer_witnessed(enforcer, polity, identity):
                             break
             else:
-                self.pending_reports.append(report)
+                self.law_enforcement.queue_report(report)
 
         self.event_bus.publish("crime_witnessed", {
             "crime": crime, "offender": offender, "victim": victim, "polity": polity,
             "witnesses": list(witnesses),
         })
         self.event_bus.publish("log_info", f"Law: {crime} by {offender} in {polity}, seen by {', '.join(witnesses)}.")
-
-    def _file_report(self, report):
-        record = Law_Resolution.file_report(
-            self.legal_records, report["polity"], report["identity"], report["law"],
-            {key: report["line"].get(key) for key in ("crime", "victim", "subject", "block")},
-        )
-        self.event_bus.publish("log_info", (
-            f"Law: {report['line']['crime']} filed against {report['identity']} in {report['polity']} "
-            f"(bounty {record['bounty']}, acclaim {record['acclaim']})."
-        ))
-
-    def _file_pending_reports(self):
-        """!
-        @brief Called by advance_blocks (DM_Time.py): every queued report with a witness still
-            alive reaches its polity's record. Silencing every witness before time passes means
-            the crime is never filed -- they still knew, but nobody lived to tell.
-        """
-        pending, self.pending_reports = self.pending_reports, []
-        for report in pending:
-            if any(self.get_current_hp(name) > 0 for name in report["witnesses"] if name in self.entities):
-                self._file_report(report)
 
     # -- Hook points ---------------------------------------------------------------------
 
@@ -261,7 +224,7 @@ class LawMixin(DMCoreProtocol):
         marks = self.entities.get(victim, {}).setdefault("assaulted_by", [])
         if attacker not in marks:
             marks.append(attacker)
-        self.note_arrest_assault(attacker)
+        self.law_enforcement.note_assault(attacker)
         self.report_crime("assault", attacker, victim=victim)
 
     def note_kill(self, killer, victim):
@@ -284,12 +247,12 @@ class LawMixin(DMCoreProtocol):
         if not polity or not bans:
             return
         name = ability.get("name")
-        skill = self._resolve_lore_skill(name) if name in self.entities else None
+        skill = Combat_Actions._resolve_lore_skill(self.world, name) if name in self.entities else None
         difficulty = self._law_settings().get("spell_identify_base", 15) + (ability.get("level") or 0)
         unidentified = {"supertype": "spell"}
         groups = {}
         for witness in self._witnesses(caster):
-            identified = bool(skill) and self.resolve_action(witness, skill, difficulty)["success"]
+            identified = bool(skill) and Combat_Resolution.resolve_action(self.world, witness, skill, difficulty)["success"]
             broken = Law_Resolution.matching_laws(bans, "banned_ability", ability if identified else unidentified)
             if broken:
                 label = name if identified else "a spell"
@@ -339,8 +302,8 @@ class LawMixin(DMCoreProtocol):
             return False
         if difficulty == 0:
             return True
-        skill = self._resolve_lore_skill(subject) or settings.get("recognition_skill", "streetwise")
-        return self.resolve_action(witness, skill, difficulty)["success"]
+        skill = Combat_Actions._resolve_lore_skill(self.world, subject) or settings.get("recognition_skill", "streetwise")
+        return Combat_Resolution.resolve_action(self.world, witness, skill, difficulty)["success"]
 
     def _on_disguise_changed(self, data):
         """!
@@ -352,9 +315,9 @@ class LawMixin(DMCoreProtocol):
         disguise = entity.get("disguise")
         if disguise and not disguise.get("quality"):
             skill = self._law_settings().get("disguise_skill", "disguise")
-            disguise["quality"] = self.resolve_action(data["entity"], skill, 0)["roll"]
+            disguise["quality"] = Combat_Resolution.resolve_action(self.world, data["entity"], skill, 0)["roll"]
         self.check_presence()
-        self.check_enforcement()
+        self.law_enforcement.check_enforcement()
 
     # -- What prompts may say ------------------------------------------------------------
 
@@ -387,16 +350,8 @@ class LawMixin(DMCoreProtocol):
         return lines
 
     def _display_name(self, name):
-        if not name:
-            return None
-        return self.entities.get(name, {}).get("name", name)
+        return Law_Resolution.display_name(self.entities, name)
 
     def _identity_label(self, identity):
         """!@brief A record identity as an NPC would name it -- a disguise reads as its alias."""
-        if identity in self.entities:
-            return self._display_name(identity)
-        for entity in self.entities.values():
-            disguise = entity.get("disguise")
-            if disguise and disguise.get("identity") == identity:
-                return disguise["alias"]
-        return "a disguised stranger"
+        return Law_Resolution.identity_label(self.entities, identity)

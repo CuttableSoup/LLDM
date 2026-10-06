@@ -45,6 +45,8 @@ from resolution.NPC_Generation import load_npc_keywords
 from resolution.Social_Resolution import set_prompt_directive
 from gui.Textual_Core import TextualCore
 from textual.widgets import RichLog
+import resolution.Combat_Resolution as Combat_Resolution
+import resolution.Combat_Actions as Combat_Actions
 
 
 def _ollama_reachable():
@@ -312,7 +314,7 @@ class TestRagGroundedNarration(_LivePipelineTestCase):
         return self.llm_core.rag_index.ready
 
     def test_lore_relevant_input_triggers_a_real_rag_retrieval(self):
-        # perform_rag runs synchronously inside _queue_narration, before the network call --
+        # perform_rag runs synchronously inside _queue, before the network call --
         # so a "RAG retrieved" log_info fires whether or not the LLM call itself succeeds,
         # making this a clean signal that retrieval actually happened (not a proxy for the
         # LLM's eventual wording, which this deliberately never asserts on -- see
@@ -337,7 +339,7 @@ class TestArenaCombatConversation(_LivePipelineTestCase):
         input, checking that real round narration actually flows through a live LLM turn after
         turn -- the mechanics themselves (behavior resolution, damage, targeting) are already
         exhaustively unit-tested with no LLM involved at all, by TestCombatLoop/
-        TestEntityBehavior in test_unit.py. roll_dice is genuinely random (see DM_Combat.py),
+        TestEntityBehavior in test_unit.py. roll_dice is genuinely random (see Combat_Actions.py),
         not seeded here, so every assertion below checks the event/narration *structure* holds
         up round after round rather than who lands a hit or who wins.
     """
@@ -480,7 +482,7 @@ class TestGridTravelAmbushConversation(_LivePipelineTestCase):
         "wild boar" -- pure Python, unrelated to Ollama, the same determinism
         test_unit.py's own _stub_encounter_roll gets for free -- so the ambush is guaranteed
         without needing a live model to cooperate. roll_dice is left genuinely random/unseeded
-        (see DM_Combat.py), matching TestArenaCombatConversation's own precedent: this attacks
+        (see Combat_Actions.py), matching TestArenaCombatConversation's own precedent: this attacks
         for real through the ordinary pipeline first, and only force-finishes the wild boar
         (bypassing further real dice) if it's still alive after a bounded number of real
         attacks, so the test can't hang or flake on an unlucky streak of misses.
@@ -525,14 +527,14 @@ class TestGridTravelAmbushConversation(_LivePipelineTestCase):
         # test-only shortcuts) -- proves an ambush fight is an entirely ordinary combat turn,
         # not some special mode. Bounded retries since roll_dice is genuinely unseeded.
         for _ in range(3):
-            if self.dm_core.get_current_hp("wild boar") <= 0:
+            if Combat_Resolution.get_current_hp(self.dm_core.world, "wild boar") <= 0:
                 break
             say("I attack the wild boar with my weapon")
 
         # Force-finish only if real dice didn't already settle it -- deterministic either way,
         # never flaky on how the live rolls actually landed.
         if self.dm_core.pending_downtime is not None:
-            self.dm_core.apply_damage("wild boar", 999)
+            Combat_Resolution.apply_damage(self.dm_core.world, "wild boar", 999)
             self.dm_core._resolve_combat_round({"actions": []})
             self._wait_for_responses(len(self.responses) + 1)
             arrival_response = self.responses[-1]
@@ -807,7 +809,7 @@ class TestChestSagaConversation(_LivePipelineTestCase):
         self.assertTrue(check_result.success, "Seeded roll should have passed -- see the seed comment above.")
         reveal_effects = [e for e in check_result.effects if isinstance(e, RevealEffect)]
         self.assertEqual(reveal_effects[0].tags, ["cursed"])
-        self.assertTrue(self.dm_core.is_identified("cursed dagger"))
+        self.assertTrue(Combat_Actions.is_identified(self.dm_core.world, "cursed dagger"))
 
         say("examine the cursed dagger")
         self.assertEqual(resolved_events[-1]["item_name"], "cursed dagger")
@@ -842,8 +844,8 @@ class TestChestTradeConversation(_LivePipelineTestCase):
 
     def setUp(self):
         self._boot()
-        self.dm_core.dismiss_condition("chest", "locked")
-        self.dm_core.dismiss_condition("chest", "closed")
+        Combat_Resolution.dismiss_condition(self.dm_core.world, "chest", "locked")
+        Combat_Resolution.dismiss_condition(self.dm_core.world, "chest", "closed")
 
     def test_afford_gate_then_successful_purchase_through_the_real_pipeline(self):
         resolved_events = []
@@ -947,7 +949,7 @@ class TestCryptDungeonConversation(_LivePipelineTestCase):
 
         say("I attack the spider")
         say("I attack the spider")
-        self.assertEqual(self.dm_core.get_current_hp("giant spider"), 0)
+        self.assertEqual(Combat_Resolution.get_current_hp(self.dm_core.world, "giant spider"), 0)
         # A hostile creature always batches into round narration, never the single-action path.
         self.assertEqual(len(round_events), 2)
 
@@ -980,7 +982,7 @@ class TestCryptDungeonConversation(_LivePipelineTestCase):
         # Started with 3 health potions, +1 from the coffer, +1 from the chest.
         self.assertEqual(self.dm_core.entities[player_name]["inventory"].count("health potion"), 5)
         # Every check passed and the trap was disarmed cleanly -- no damage the whole way through.
-        self.assertEqual(self.dm_core.get_current_hp(player_name), 36)
+        self.assertEqual(Combat_Resolution.get_current_hp(self.dm_core.world, player_name), 36)
 
         print("\n=== Crypt dungeon transcript ===")
         for player_input, response in transcript:
@@ -1149,8 +1151,8 @@ class TestNpcGenerationLive(unittest.TestCase):
         self.assertTrue(entity["skills"])
         self.assertGreater(entity["max_hp"], 0)
 
-        npc_cr = dm_core.get_challenge_rating("generated_stranger")
-        player_cr = dm_core.get_challenge_rating(dm_core.player_name)
+        npc_cr = Combat_Actions.get_challenge_rating(dm_core.world, "generated_stranger")
+        player_cr = Combat_Actions.get_challenge_rating(dm_core.world, dm_core.player_name)
         # variance=0.15 (the module default) plus this template's own hp_share/keyword-count
         # slop -- a generous band, since this is checking "the whole pipeline produced a
         # sane, roughly-matched NPC," not pinning down the exact fitting math (already
@@ -1213,7 +1215,7 @@ class TestReferencedNpcLive(unittest.TestCase):
             # earlier draft passed a flat 2, which fit_skills_to_cr correctly turns into a
             # 0 HP stat block, and the test then "failed" over a fixture nobody would ever
             # produce in play (the real figure here is ~13).
-            self.dm_core.get_challenge_rating(self.dm_core.player_name) * BYSTANDER_CR_SHARE,
+            Combat_Actions.get_challenge_rating(self.dm_core.world, self.dm_core.player_name) * BYSTANDER_CR_SHARE,
             self.npc_keywords,
             self.dm_core.skills,
         )
@@ -1291,7 +1293,7 @@ class TestReferencedNpcLive(unittest.TestCase):
         self.assertEqual([n for n in self.dm_core.scenario_entities if n not in self.before], [name])
         self.assertFalse(self.dm_core.is_hostile(name, self.dm_core.player_name))
         self.assertNotEqual(self.dm_core.current_target, name)
-        self.assertEqual(self.dm_core.get_band(name), self.dm_core.get_band(self.dm_core.player_name))
+        self.assertEqual(Combat_Resolution.get_band(self.dm_core.world, name), Combat_Resolution.get_band(self.dm_core.world, self.dm_core.player_name))
 
 
 @unittest.skipUnless(_ollama_reachable(), "Ollama not reachable at http://127.0.0.1:11434")

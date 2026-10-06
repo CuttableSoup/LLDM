@@ -4,7 +4,7 @@
     Settings/<setting>/ (ex: "Inner Sea Primer.pdf" under Settings/Pathfinder/), so
     LLMCore.perform_rag can ground narration in actual campaign-setting text instead of
     letting the LLM invent lore wholesale. RagIndex is a self-contained helper LLMCore owns by
-    composition, not a mixin -- unlike DMCore's mixins (DM_Combat.py etc.), which all share
+    composition, not a mixin -- unlike DMCore's mixins (Combat_Actions.py etc.), which all share
     DMCore's own entities/rules/skills state, RagIndex needs nothing from LLMCore beyond the
     event bus for logging, so plain ownership (self.rag_index = RagIndex(event_bus) in
     LLMCore.__init__) is the simpler fit.

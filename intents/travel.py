@@ -7,6 +7,46 @@
     every item-named intent. See docs/movement-scenarios.md and docs/downtime.md's own "Travel".
 """
 
+import re
+from intents.match import IntentMatch
+
+# -- What the classifier matches (see intents/registry.py's MATCHES) --
+
+# Location-to-location travel (see DM_Movement.py's _resolve_travel_intent) -- a different axis
+# from DIRECTION_PHRASES below: a room's own exits are a fixed forward/back/left/right
+# vocabulary, but a location's own exits are reachable by naming where you want to go, which
+# this module has no catalog of (self.locations lives on DMCore, not here) -- so unlike
+# detect_direction, this only recognizes that the input *smells like* a travel attempt at all;
+# DMCore resolves *which* location it names from the raw input itself (same "search input for a
+# known name" pattern _resolve_dialogue_target/_resolve_formation_intent already use). Checked
+# ahead of item-interaction detection, same tier as DIRECTION_PHRASES. Deliberately no "travel
+# to " here -- it would collide with skills.toml's own navigation keyword "travel" (see
+# test_item_and_dialogue_keywords_never_collide_with_a_real_skill_keyword), so "go to "/"head
+# to "/"walk to " cover the same phrasing without that risk.
+TRAVEL_KEYWORDS = ("go to ", "head to ", "walk to ", "proceed to ", "enter the ", "go outside", "exit the")
+# Checked separately from TRAVEL_KEYWORDS' own plain substring match -- a bare "leave" collides
+# with axes' own "cleave" skill keyword the same way ADAM_NAME_PATTERN's "adam" would collide
+# with plenty of ordinary words without \b-anchoring; word-boundary matching is what a short,
+# common word like this needs, same precedent ADAM_NAME_PATTERN already sets.
+LEAVE_PATTERN = re.compile(r"\bleave\b")
+# Semantic-router phrases (nlp/Intent_Classification.py's INTENT_PROTOTYPES).
+PROTOTYPES = {
+        # No "step inside the inn" here, deliberately: "inn" sits close enough to "innkeeper" that
+        # a plain greeting ("hey there innkeeper") scored 0.56 against it and routed as travel.
+        # A prototype whose distinguishing noun is also a common NPC role word earns its whole
+        # intent a false positive on every greeting aimed at that role -- "head into the tavern"
+        # already covers entering a named building without that collision.
+
+    "travel": (
+        "head into the tavern", "go over to the market square", "walk to the blacksmith shop",
+        "make my way to the temple", "step inside the guild hall", "leave here for the docks",
+    ),
+}
+MATCH = {
+    "travel": IntentMatch(keywords=TRAVEL_KEYWORDS, patterns=(LEAVE_PATTERN,), prototypes=PROTOTYPES["travel"], question_blocked=True, item_pass=False),
+}
+
+
 _REASON_TEXT = {
     "no_exit": "there's no way through in that direction",
     "blocked_by_enemies": "something hostile is still standing in the way",

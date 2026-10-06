@@ -1,5 +1,6 @@
 from dm.DM_Types import DMCoreProtocol
 from resolution.NPC_Generation import resolve_varied_value
+import resolution.Combat_Resolution as Combat_Resolution
 
 
 class EncounterMixin(DMCoreProtocol):
@@ -103,7 +104,7 @@ class EncounterMixin(DMCoreProtocol):
         if result in self.entities or result in self.entity_templates:
             key = "name" if result in self.entities else "template"
             instanced = self._instance_entities(
-                [{key: result, "band": self.get_band(self.player_name)}],
+                [{key: result, "band": Combat_Resolution.get_band(self.world, self.player_name)}],
                 party_pool=self.persistent_entities, skip_llm_generation=skip_llm_generation,
             )
             hostile = False

@@ -16,12 +16,18 @@
 from Event_Bus import EventBus
 from resolution.Challenge_Rating import skill_rating
 from resolution.Combat_Resolution import calculate_damage, get_current_hp, resolve_opposed_action
+from resolution.World_Context import WorldContext
+
+
+def _hp(entities, name):
+    """!@brief get_current_hp over a bare entities dict -- the simulator holds no WorldContext of its own."""
+    return get_current_hp(WorldContext(entities), name)
 
 
 def best_offense_skill(entity, skills_catalog):
     """!
     @brief The highest-rated combat_role == "offense" skill on a bare entity dict -- the
-        simulator's own stand-in for DM_Combat.py's _best_offense_package/_skills_with_role,
+        simulator's own stand-in for Combat_Actions.py's _best_offense_package/_skills_with_role,
         pure and scoped to exactly what a simulated fight needs (which named skill this
         combatant swings with), not the full equipped-weapon/ability candidate search a live
         scene entity's real attack resolution does.
@@ -63,9 +69,10 @@ def _take_turn(entities, rules, skills_catalog, event_bus, attacker_name, defend
         "damage_value": entities[attacker_name].get("damage_value", {"dice": 0, "pips": 0, "bonus": 0}),
         "damage_tags": entities[attacker_name].get("damage_tags", []),
     }
-    result = resolve_opposed_action(entities, rules, skills_catalog, event_bus, attacker_name, skill_name, defender_name, ability=ability)
+    world = WorldContext(entities, rules, skills_catalog, event_bus)
+    result = resolve_opposed_action(world, attacker_name, skill_name, defender_name, ability=ability)
     if result["success"]:
-        calculate_damage(entities, rules, event_bus, attacker_name, defender_name, ability)
+        calculate_damage(world, attacker_name, defender_name, ability)
 
 
 def simulate_fight(entities, rules, skills_catalog, name_a, name_b, event_bus, max_rounds=50):
@@ -88,12 +95,12 @@ def simulate_fight(entities, rules, skills_catalog, name_a, name_b, event_bus, m
     for round_number in range(1, max_rounds + 1):
         order = (name_a, name_b) if round_number % 2 == 1 else (name_b, name_a)
         for actor, opponent in ((order[0], order[1]), (order[1], order[0])):
-            if get_current_hp(entities, actor) <= 0 or get_current_hp(entities, opponent) <= 0:
+            if _hp(entities, actor) <= 0 or _hp(entities, opponent) <= 0:
                 continue
             _take_turn(entities, rules, skills_catalog, event_bus, actor, opponent)
 
-        a_alive = get_current_hp(entities, name_a) > 0
-        b_alive = get_current_hp(entities, name_b) > 0
+        a_alive = _hp(entities, name_a) > 0
+        b_alive = _hp(entities, name_b) > 0
         if not a_alive or not b_alive:
             if a_alive:
                 return {"winner": name_a, "rounds": round_number, "timeout": False}
@@ -153,10 +160,10 @@ def _lowest_hp_living_target(entities, candidate_names):
     @param candidate_names The opposing side's own roster (dead members are skipped).
     @return The chosen target's own name, or None if every candidate is already dead.
     """
-    living = [name for name in candidate_names if get_current_hp(entities, name) > 0]
+    living = [name for name in candidate_names if _hp(entities, name) > 0]
     if not living:
         return None
-    return min(living, key=lambda name: get_current_hp(entities, name))
+    return min(living, key=lambda name: _hp(entities, name))
 
 
 def simulate_group_fight(entities, rules, skills_catalog, side_a_names, side_b_names, event_bus, max_rounds=50):
@@ -176,13 +183,13 @@ def simulate_group_fight(entities, rules, skills_catalog, side_a_names, side_b_n
     @return {"winner": "a", "b", or None (timeout), "rounds": int, "timeout": bool}.
     """
     def _alive(names):
-        return [name for name in names if get_current_hp(entities, name) > 0]
+        return [name for name in names if _hp(entities, name) > 0]
 
     for round_number in range(1, max_rounds + 1):
         sides = (side_a_names, side_b_names) if round_number % 2 == 1 else (side_b_names, side_a_names)
         for acting_side, opposing_side in (sides, tuple(reversed(sides))):
             for actor in _alive(acting_side):
-                if get_current_hp(entities, actor) <= 0:
+                if _hp(entities, actor) <= 0:
                     continue  # may have died to an earlier actor's turn this same round
                 target = _lowest_hp_living_target(entities, opposing_side)
                 if target is None:

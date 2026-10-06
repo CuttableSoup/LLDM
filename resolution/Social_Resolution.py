@@ -24,6 +24,7 @@
 """
 
 import resolution.Combat_Resolution as Combat_Resolution
+from resolution.World_Context import WorldContext
 # Mirrors DM_Social.py's own ATTITUDE_AXES/ACTION_ATTITUDE_DRIFT_CAP exactly -- see that
 # module's own module-level comments for the fuller rationale (the six-to-three axis collapse,
 # and why action-driven drift gets a wider cap than talk-driven drift). Owned here now, the same
@@ -136,7 +137,7 @@ def set_prompt_directive(entities, entity_name, text, source_name=None, duration
     entity = entities.get(entity_name)
     if entity is None or entity.get("supertype") == "object":
         return
-    if Combat_Resolution.get_current_hp(entities, entity_name) <= 0:
+    if Combat_Resolution.get_current_hp(WorldContext(entities=entities), entity_name) <= 0:
         return
     directive = {"text": text, "source": source_name}
     if duration_blocks is not None:
@@ -164,7 +165,7 @@ def nudge_attitude_from_event(entities, rules, entity_name, toward_name, event_n
     entity = entities.get(entity_name)
     if entity is None or "attitudes" not in entity or entity.get("supertype") == "object":
         return
-    if Combat_Resolution.get_current_hp(entities, entity_name) <= 0:
+    if Combat_Resolution.get_current_hp(WorldContext(entities=entities), entity_name) <= 0:
         return
     event = next(
         (candidate for candidate in rules.get("attitude_event", []) if candidate.get("name") == event_name),

@@ -23,7 +23,7 @@ narration per round). Otherwise it publishes as `action_resolved` (one narration
 A `round_resolved` payload carries the player's resolved actions (`"actions"`, a `list[
 ActionOutcome]` — see "Multiple actions") plus `"turns"`: every other living scene entity's own
 `{"actor", "initiative", "outcome"}` wrapper — `"outcome"` is that entity's own `ActionOutcome`
-from `resolve_behavior_action` (`DM_Combat.py`, a `RolledOutcome` on an attack or a
+from `resolve_behavior_action` (`Combat_Actions.py`, a `RolledOutcome` on an attack or a
 `MovementOutcome` on a deliberate/fallback move), `"actor"`/`"initiative"` are this round's own
 bookkeeping around it, not part of what actually happened, so they wrap the typed outcome rather
 than living as fields on it. Driven by each entity's `[[entity.behavior]]` table — a
@@ -113,7 +113,7 @@ on that ability's skill (`_catalog_ability_skill`) with the player's own matchin
 than on 0 dice under its own name.
 
 A behavior entry's `action` is either an ability name or one of two reserved movement words,
-`"advance"`/`"retreat"` (`MOVEMENT_ACTIONS`, `DM_Combat.py`), routed to `move_toward_or_away`
+`"advance"`/`"retreat"` (`MOVEMENT_ACTIONS`, `Combat_Actions.py`), routed to `move_toward_or_away`
 instead of an ability lookup. An explicit `"retreat"` entry is how a creature values its own
 life — checked ahead of its attack entry, ex: `debug.toml`'s wolf flees once `hp_per_remain`
 drops under 0.40 (the same cutoff `statuses.toml`'s `"wounded"` tier bottoms out at); an
@@ -191,7 +191,7 @@ here assumes any particular setting's own skill list.
 `calculate_party_challenge_rating(member_ratings)` is a plain sum, not an average — a larger
 party of individually modest ratings can still outrate one strong boss.
 
-`DM_Combat.py`'s `get_challenge_rating(entity_name)`/`get_party_challenge_rating()` are the
+`Combat_Actions.py`'s `get_challenge_rating(entity_name)`/`get_party_challenge_rating()` are the
 DMCore-touching glue. `_best_offense_package` finds the single best-*paired* skill+damage from
 every equipped item plus every resolved ability with a `damage_value` (the same candidate pool
 `find_attack_ability` draws from, just not filtered to one particular skill), ranked by
@@ -216,7 +216,7 @@ today — rather than adding a standalone "knowledge" skill or splitting into se
 Knowledge-X skills the way this engine's own domain-consolidated skill list otherwise avoids. An
 unmatched creature subtype (ex: an ordinary humanoid) simply has no lore check available.
 
-`DM_Combat.py`'s `_resolve_lore_check_intent` resolves *which* creature is meant the same
+`Combat_Actions.py`'s `_resolve_lore_check_intent` resolves *which* creature is meant the same
 "search the raw input for a currently-present entity's own name" way `_resolve_mount_intent`/
 `_resolve_formation_intent` already do (`DM_Movement.py`) — no embedding match. `_resolve_lore_
 skill` picks whichever `[[skill]]`'s own `lore_types` matches the target's `supertype`/`subtype`
@@ -263,10 +263,11 @@ interaction_response` path every other free-standing intent already uses.
 
 The actual roll/condition computation below (`resolve_action`, `get_condition_modifier`,
 `apply_condition`, `evaluate_statuses`, ...) lives in `Combat_Resolution.py`, a pure module
-taking `entities`/`rules`/`event_bus` explicitly rather than reading `self` — `DM_Status.py`'s
-own methods are thin wrappers forwarding `self.entities`/`self.rules`/`self.event_bus`, kept
-for every existing caller's sake (see "Architecture"). `get_active_conditions(entity_name)`
-(a plain `{}`-defaulted dict) and `has_condition(entity_name, condition_name)` (a boolean
+whose functions take a `WorldContext` (`resolution/World_Context.py`: entities/rules/skills/
+event_bus) as their first argument rather than reading `self` — callers hold `DMCore.world` and
+write `Combat_Resolution.resolve_action(self.world, ...)` (see "Architecture").
+`get_active_conditions(ctx, entity_name)`
+(a plain `{}`-defaulted dict) and `has_condition(ctx, entity_name, condition_name)` (a boolean
 membership check) are the shared read accessors every other `active_conditions` check below —
 `is_locked`/`is_closed`/`is_identified`/`is_hidden`/`is_test_available`'s own
 `requires_condition`/`blocks_if_condition` gates, and the two derived requirement fields just
@@ -322,7 +323,7 @@ can't revive a dead entity through the same path that clears a wound tier.
 `get_condition_modifier(entity_name)` (`DM_Status.py`) sums the `modifier` of every one of an
 entity's `active_conditions` that has a matching `[[condition]]` entry — an active condition
 with no such entry (ex: `"locked"`/`"closed"`/`"hidden"`, presence flags on non-creature
-entities) contributes nothing. `resolve_action`/`resolve_opposed_action` (`DM_Combat.py`) fold
+entities) contributes nothing. `resolve_action`/`resolve_opposed_action` (`Combat_Resolution.py`) fold
 this into every roll: `dice` is reduced (floored at 0, same floor `dice_penalty` already uses)
 by both `dice_penalty` *and* the acting entity's own condition dice penalty together, `pips` is
 adjusted directly, and `bonus` is added to the final roll total after dice are rolled. In an
@@ -338,7 +339,7 @@ flavor — a wounded character is measurably worse at everything, not just descr
 a condition's `modifier` entirely if it authors `applies_to` and `skill_name` isn't in it (no
 `skill_name` at all never matches a scoped condition, same "can't match without a value"
 precedent `distance_to_target`/`opponent_has_condition` already follow with no `opponent_name`).
-`resolve_action`/`resolve_opposed_action` (`DM_Combat.py`) both already have the skill in scope
+`resolve_action`/`resolve_opposed_action` (`Combat_Resolution.py`) both already have the skill in scope
 at their own call sites, so this costs no new plumbing beyond the one added parameter —
 `resolve_opposed_action` passes the defender's own resolved `opposing_skill`, not the attacker's
 `skill_name`, for the defender's side. A condition authoring no `applies_to` at all (every
@@ -365,7 +366,7 @@ penalized roll), this stops the entity from acting on its own turn at all.
 `DM_Core.py`'s `_resolve_roll` checks it first, ahead of even a spell's own `materials` gate —
 the player's own turn, if prevented, returns an `ActionPreventedOutcome` (no roll, same
 "can't do it, don't roll" shape `OutOfRangeOutcome`/`LanguageBarrierOutcome` already use).
-`DM_Combat.py`'s `resolve_behavior_action` checks it too, for a creature/ally's own turn —
+`Combat_Actions.py`'s `resolve_behavior_action` checks it too, for a creature/ally's own turn —
 treated exactly like "no `[[entity.behavior]]` entry currently matches" (`None`, no action this
 round), rather than a new outcome type on that side. `rules.toml`'s `"pinned"`
 (`maneuvers.toml`'s `"pin"`, only landable on an already-`"grappled"` target) is the first
@@ -391,7 +392,7 @@ player's) has already resolved, it calls `apply_round_upkeep` for every living
 result via the ordinary `apply_healing`/`apply_damage`. A condition's own
 `upkeep_blocked_by_tags` (ex: `"regenerating"`'s own `["fire"]`) suppresses *both* its
 heal and damage for that entity's tick entirely if the entity's own `"recent_damage_tags"` (a
-plain `set`, populated by `calculate_damage` whenever it runs at all — DM_Combat.py — and never
+plain `set`, populated by `calculate_damage` whenever it runs at all — Combat_Resolution.py — and never
 persisted; not part of the whitelisted fields `DM_Persistence.py`'s `save_game` writes) overlaps
 it — the Pathfinder "Regeneration 10 (fire)" shape: heals every round except one it's touched by
 fire. `recent_damage_tags` is cleared at the end of every `apply_round_upkeep` call, so it only
@@ -436,7 +437,7 @@ absent/inert unless a piece of content actually authors it.
 - **`cooldown_rounds`** (an ability field) + the derived requirement field
   `"ability_ready:<name>"` -- using a behavior-driven ability that authors `cooldown_rounds`
   sets the acting entity's own `ability_cooldowns[name]` to that many rounds (`resolve_
-  behavior_action`, `DM_Combat.py`, regardless of hit/miss), ticked back down to 0 (removed
+  behavior_action`, `Combat_Actions.py`, regardless of hit/miss), ticked back down to 0 (removed
   once it gets there) by `tick_ability_cooldowns`, called from `run_round_upkeep` alongside the
   existing condition-duration tick. A behavior list gates back off the same ability meanwhile
   via `{field = "ability_ready:<name>", operator = "==", value = true}` (`get_comparable_value`),
@@ -482,7 +483,7 @@ absent/inert unless a piece of content actually authors it.
 - **`override_target`** (a `[[condition]]` field, `"random"` or a literal entity name) --
   `resolve_override_target` hijacks WHO an entity's turn is aimed at, not whether it can act
   (`prevents_action`) or which ability it picks (`choose_behavior` runs unaffected). Folded
-  into `resolve_behavior_action` (`DM_Combat.py`), which swaps its own `target_name` *before*
+  into `resolve_behavior_action` (`Combat_Actions.py`), which swaps its own `target_name` *before*
   choosing a behavior, so a distance-based behavior choice (ex: a bandit favoring its bow at
   range) judges the real, overridden target rather than the original one. `"random"` picks
   uniformly from every other currently-living scene entity (the Pathfinder Confused shape); a
@@ -705,7 +706,7 @@ outside of `apply_damage`/`apply_healing`'s own calls.
 
 ## Experience (XP)
 
-`_award_xp_for_defeat` (`DM_Combat.py`) is one shared primitive with two call sites, each
+`_award_xp_for_defeat` (`Combat_Actions.py`) is one shared primitive with two call sites, each
 deciding independently *when* an entity counts as neutralized rather than duplicating this
 method's own math:
 - `calculate_damage` captures `defender_name`'s HP before calling into
@@ -778,7 +779,7 @@ see `docs/downtime.md`'s "Not yet built".
 (`spells.toml`/`techniques.toml`) or an inline table for a one-off innate ability.
 `techniques.toml`'s `cleave` exercises a multi-skill `skill = [...]` list and weapon-scaled
 damage (`"user.weapon.dice"`/`"user.weapon.pips"`); see `ability_matches_skill`,
-`resolve_weapon_reference`, `resolve_damage_value` in `DM_Combat.py`. Naming a technique/spell
+`resolve_weapon_reference`, `resolve_damage_value` in `Combat_Resolution.py`. Naming a technique/spell
 directly in input can resolve it via `map_to_action` before a bare skill would.
 
 
@@ -787,7 +788,7 @@ directly in input can resolve it via `map_to_action` before a bare skill would.
 An ability's own `targets = {number, aoe, side}` (`entity_schema.toml`) widens who a
 successful roll actually lands on, past the single `target_name` the roll was resolved
 against — absent entirely (every ordinary weapon, most spells) means just that one entity,
-unchanged. `resolve_targets` (`DM_Combat.py`) always puts `target_name` first, then — if
+unchanged. `resolve_targets` (`Combat_Actions.py`) always puts `target_name` first, then — if
 `targets` is authored — adds every other living scene entity within `aoe` bands of it
 (`get_distance_between`, nearest-first; `aoe = 0`, the default, means only entities sharing
 `target_name`'s own band), filtered by `side` (`"enemies"`, the default, and `"allies"` via

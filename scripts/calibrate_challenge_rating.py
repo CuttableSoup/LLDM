@@ -22,7 +22,7 @@
     spreads 47% / 24% / 4% (avg 25%) on the identical builds -- a real, meaningful reduction
     (roughly two-fifths), but NOT a full fix. The remaining spread traces to a distinct,
     deliberately out-of-scope sub-problem: offense_side itself still sums to-hit skill and
-    damage-per-hit rather than combining them the same multiplicative way (DM_Combat.py's own
+    damage-per-hit rather than combining them the same multiplicative way (Combat_Actions.py's own
     _best_offense_package already treats a trained, 0-damage offense skill as meaningful on
     purpose -- the same simplification generated NPCs rely on by default -- so recursing AM-GM
     one level deeper would make every generation-default 0-damage NPC read as CR 0, a much bigger
@@ -79,7 +79,7 @@ SHAPE_DAMAGE_RATINGS = {"glass_cannon": 24, "balanced": 9, "tank": 3}  # 8D / 3D
 # 0D tank (no damage-dealing weapon/ability at all) can structurally never win regardless of
 # anything else (0 raw damage every hit), which isn't really testing hp_divisor/offense_side vs.
 # survival_side at all -- see this module's own docstring for why that's a distinct, deliberately
-# out-of-scope sub-problem (DM_Combat.py's own _best_offense_package already treats a trained,
+# out-of-scope sub-problem (Combat_Actions.py's own _best_offense_package already treats a trained,
 # 0-damage offense skill as meaningful on purpose, the same simplification generated NPCs rely on
 # by default). 1D is the smallest non-degenerate damage rating.
 

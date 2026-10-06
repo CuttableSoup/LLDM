@@ -5,6 +5,33 @@
     target or the locked-container gate, unlike every item-named intent. See docs/downtime.md.
 """
 
+from intents.match import IntentMatch
+
+# -- What the classifier matches (see intents/registry.py's MATCHES) --
+
+# Downtime rest (see DM_Time.py's rest, docs/downtime.md) -- like formation/speak_language
+# above, this acts on the player's own party/clock rather than a named item, so no
+# map_to_item lookup ever runs for it either; DMCore, not this module, is what decides *how
+# long* the rest lasts (a plain "rest" spends one block, a phrase naming night/dawn/morning
+# spends a whole day's worth), by searching the raw input the same "search input for
+# specifics" pattern travel/formation/speak_language already follow. Bare "rest" is safe
+# (word-boundary matched -- see _phrase_matches) since no skills.toml keyword is the literal
+# word "rest"; "camp"/"sleep" only ever appear here as part of a longer phrase, never bare,
+# so neither risks colliding with survivalism's own bare "camp" keyword the way a bare "camp"
+# here would have. Deliberately no "take a rest" -- TAKE_KEYWORDS' own "take " is checked
+# well ahead of this tuple and would swallow it as an item "take" first.
+REST_KEYWORDS = ("rest", "make camp", "set up camp", "sleep", "camp for the night")
+# Semantic-router phrases (nlp/Intent_Classification.py's INTENT_PROTOTYPES).
+PROTOTYPES = {
+    "rest": (
+        "make camp for the night", "set up camp and sleep", "take a long rest",
+        "bed down until morning", "sleep until dawn",
+    ),
+}
+MATCH = {
+    "rest": IntentMatch(keywords=REST_KEYWORDS, prototypes=PROTOTYPES["rest"], exempt=True, question_blocked=True),
+}
+
 
 def resolve_rest(core, data, resolved):
     """!

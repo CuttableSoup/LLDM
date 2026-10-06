@@ -5,9 +5,9 @@ Part of the [LLDM](../CLAUDE.md) docs — narration triggers, LLM backends (Olla
 ## Narration
 
 `LLMCore` subscribes to narration-relevant events, sharing outcome-text building
-(`_describe_outcome` — also the one place that turns a successful summon's own `SummonEffect`
+(`describe_outcome` — also the one place that turns a successful summon's own `SummonEffect`
 into an actual narrated line, "Summoning" above) and background-fetch plumbing
-(`_queue_narration`/`_fetch_and_publish`):
+(`_queue`/`_fetch_and_publish`):
 - `scenario_loaded` → `generate_scene_intro` — once, from `DMCore.__init__`.
 - `round_resolved` → `generate_round_response` — combat, once per round.
 - `action_resolved` → `generate_response` — non-combat, once per skill use.
@@ -15,20 +15,20 @@ into an actual narrated line, "Summoning" above) and background-fetch plumbing
   resolve (`reason` "musing", or no reason): a short in-character acknowledgment. An *attempt* the
   engine couldn't resolve (`reason` "unresolved_action", "unmatched", "no_seller",
   "improvisation_declined"/"_unavailable"), and an item denial of `not_present`/`no_recipient`,
-  is never narrated: `_publish_failed_attempt` sends a `player_notice` (`FAILED_ATTEMPT_MESSAGES`)
+  is never narrated: `failed_attempt` sends a `player_notice` (`FAILED_ATTEMPT_MESSAGES`)
   that the GUIs show as a `[System]` line and the player rephrases. Nothing enters the context
   window and no time passes — found by playtest: an unresolved "I'll buy the lantern" was
   narrated as the shopkeeper handing it over, which then stood in history as if it happened.
 - `item_interaction_resolved` → `generate_item_interaction_response` — covers examine/take/give/
   trade/open/close/use/equip/unequip/drop, room transitions, and location-to-location travel.
 - `dialogue_resolved` → `generate_npc_dialogue` — a found target routes through
-  `_queue_dialogue`; a denied one falls back to an ordinary `_queue_narration` explanation.
+  `_queue`; a denied one falls back to an ordinary `_queue` explanation.
 - `game_load_failed` → `generate_load_failed_response`.
-- `help_resolved` → `generate_adam_response` — routes through `_queue_adam_response`, the one
+- `help_resolved` → `generate_adam_response` — routes through `_queue`, the one
   trigger here that never touches `context_window` at all.
 - `scene_query_resolved` → `generate_scene_query_response` — a free-standing "what do I see"/
   "who is here" question (see `docs/adam-improvisation.md`'s "Scene queries"), routed through
-  `_queue_scene_query`; answered in the ordinary GM voice, grounded the same strict way ADaM is,
+  `_queue`; answered in the ordinary GM voice, grounded the same strict way ADaM is,
   and (unlike ADaM) does join `context_window`.
 - `encounter_triggered` → `generate_encounter_response` — a location/room's own random
   encounter roll (see "Random encounters"), the one trigger here that's never a response to
@@ -43,12 +43,12 @@ the location's real exits listed (`location_exits_updated`). Exempt only for a r
 playtest's player into a tavern and then underground ruins over a few clarification/skill replies
 while the engine never left the market, so every later turn described a place the game wasn't in.
 
-Every skill/round narration (`_describe_player_actions`) also tells the narrator to narrate what
+Every skill/round narration (`describe_player_actions`) also tells the narrator to narrate what
 the player actually wrote — the skill only names the dice — and that the player's gear is exactly
 the payload's `"player_gear"` (DMCore's equipped items). A playtest's "grab the finest jar of
 spices" mismatched to *polearms*; told only "Skill used: polearms", the narrator handed over a
 polearm the player never owned, and the player LLM swung it for fifteen turns. `generate_npc_dialogue`'s own system message (built by
-`_build_dialogue_system_message`) is different in kind, not just content — it speaks as the
+`dialogue_system_message`) is different in kind, not just content — it speaks as the
 addressed entity, grounded in `persona`/`attitude` plus that entity's own presence-filtered
 history, never the standing GM framing.
 
@@ -73,7 +73,7 @@ nothing by staying free to add sensory color; only the "nothing resolved" paths 
 explicit guardrail. Scene query and ADaM (above) already carried this same discipline from the
 day they shipped, being built around exactly this risk from the start.
 
-Every `_queue_narration`/`_queue_dialogue` call's background fetch also publishes
+Every `_queue`/`_queue` call's background fetch also publishes
 `llm_debug_updated {"query", "response"}` alongside `llm_response_ready` — consumed only by
 `GUICore`'s Debug tab, never stored in `context_window` itself.
 
@@ -270,7 +270,7 @@ vectorize_pdf.py [pdf_or_dir] [--query "..."]`, defaulting to `Settings/Fantasy/
 
 ## The scene roster
 
-`_build_system_message` injects `" Characters: " + join(self.scenario_characters)` into **every**
+`system_message` injects `" Characters: " + join(self.scenario_characters)` into **every**
 narration system message. That attribute used to be assigned only by `generate_scene_intro` (on
 `scenario_loaded`, once per playthrough) and `load_state` — so it described the scenario's
 *starting* scene forever: walk from Sandpoint's market into the tavern and every later narration

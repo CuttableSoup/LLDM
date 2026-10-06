@@ -125,6 +125,17 @@ xdist, so don't fold it into the same `-n auto` invocation without checking that
 first. A machine sleeping mid-run can look exactly like a hang (no worker output until it
 resumes) -- rule that out before concluding `-n` broke something.
 
+## The event contract
+
+Every `EventBus()` in `tests/test_unit.py` is a `ValidatingEventBus` (`tests/event_contract.py`):
+publishing on a schema'd event (`events/schemas.py`) with an undeclared key, a missing required
+key, or a wrongly-typed value raises at the line that published it, so a producer can't drift
+without a test failing. `TestEventContract` also checks the other half statically — every key
+`Narration_Prompts.item_interaction`, the free-standing intents' `narrate()`,
+`Narration_Prompts.npc_dialogue` and `DMCore._on_turn_detected` read must be declared. Set
+`bus.strict = False` for a test that deliberately publishes a malformed payload. This is how the
+room-move narrator's never-sent `direction` was found.
+
 ## Long-form playtests
 
 `tools/playtest.py` drives the real pipeline headless with a second LLM playing (see its module

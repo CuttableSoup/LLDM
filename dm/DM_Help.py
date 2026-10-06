@@ -1,4 +1,5 @@
 from dm.DM_Types import DMCoreProtocol
+import resolution.Combat_Actions as Combat_Actions
 
 
 class HelpMixin(DMCoreProtocol):
@@ -8,7 +9,7 @@ class HelpMixin(DMCoreProtocol):
         self.scenario_entities/self.rooms/self.locations/self.current_location_key/
         self.event_bus, set up by DMCore.__init__, plus RulesMixin's
         _current_room/_current_scene_name/_current_scene_description/
-        _describe_scenario_characters and CombatMixin's resolve_ability. Inherits
+        _describe_scenario_characters and Combat_Actions.py's resolve_ability. Inherits
         DMCoreProtocol purely so type checkers can resolve these shared attributes/cross-mixin
         methods -- see DM_Types.py.
 
@@ -18,7 +19,7 @@ class HelpMixin(DMCoreProtocol):
         persona name, not a scene entity, so there's no addressee to resolve and no way for
         this to fail to find someone -- it always resolves, gathering a fresh snapshot of the
         player's own mechanical state and the current scene every time it's invoked. LLMCore's
-        own side (generate_adam_response/_build_adam_system_message/_queue_adam_response,
+        own side (generate_adam_response/adam_system_message/_queue,
         LLM_Core.py) is what actually turns this payload into a reply -- see its own module
         notes for why that reply is deliberately excluded from context_window entirely,
         instead of merely presence-untagged the way dialogue/narration entries are.
@@ -42,7 +43,7 @@ class HelpMixin(DMCoreProtocol):
         above, but *without* requiring "adam" to be said at all, and never running the
         removal/creature/edit gates -- purely read-only. LLMCore answers it in the ordinary
         in-fiction Game Master voice, not ADaM's own persona (generate_scene_query_response/
-        _build_scene_query_system_message), and its exchange joins context_window normally,
+        scene_query_system_message), and its exchange joins context_window normally,
         unlike ADaM's own deliberately-excluded one.
     """
 
@@ -63,14 +64,14 @@ class HelpMixin(DMCoreProtocol):
         """!
         @brief Formats the player's own flat "abilities" list for ADaM's own system message,
             resolving each entry (a shared catalog reference or an inline table -- see
-            CombatMixin's resolve_ability) to its own name/description, the same way any other
+            Combat_Actions.py's resolve_ability) to its own name/description, the same way any other
             ability lookup in this codebase already does.
         @return A list of formatted ability strings ("name: description", or just "name" if
                 the resolved table has no description).
         """
         described = []
         for entry in self.entities.get(self.player_name, {}).get("abilities", []):
-            resolved = self.resolve_ability(entry)
+            resolved = Combat_Actions.resolve_ability(self.world, entry)
             if not resolved:
                 continue
             name = resolved.get("name", "")
@@ -203,7 +204,7 @@ class HelpMixin(DMCoreProtocol):
             REMOVAL_KEYWORDS/CREATURE_KEYWORDS/EDIT_KEYWORDS gates ADaM's own higher-risk
             mutation paths do, and it's meant to be narrated in the ordinary in-fiction Game
             Master voice, not ADaM's own out-of-character persona -- see LLM_Core.py's
-            generate_scene_query_response/_build_scene_query_system_message. Publishes no
+            generate_scene_query_response/scene_query_system_message. Publishes no
             "help_resolved" fields it doesn't need (skills/abilities/equipped/inventory are
             the player's own mechanical state, irrelevant to "what does the room look like").
         @param data The "scene_query_detected" payload ({"input": processed_text}).

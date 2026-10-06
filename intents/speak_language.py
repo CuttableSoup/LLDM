@@ -6,6 +6,24 @@
     unlike every item-named intent.
 """
 
+from intents.match import IntentMatch
+
+# -- What the classifier matches (see intents/registry.py's MATCHES) --
+
+# Switching which of the player's own known languages is currently active (see DM_Dialogue.py's
+# _current_language/_resolve_language_intent) -- like formation above, this acts on the player's
+# own state rather than a named item, so no map_to_item lookup ever runs for it either; DMCore,
+# not this module, is what figures out *which* language is named, by searching the raw input for
+# one of the player's own "languages" (same "search input for a known name" pattern
+# _resolve_formation_intent already uses for a party member's own name). Phrases, not a bare
+# "speak ", since a bare word would collide with the linguistics skill's own "speak" keyword
+# (skills.toml) -- same collision-avoidance reason DIALOGUE_KEYWORDS' own "speak to "/"speak
+# with " already follow.
+SPEAK_LANGUAGE_KEYWORDS = ("speak in ", "switch to speaking ", "start speaking ")
+MATCH = {
+    "speak_language": IntentMatch(keywords=SPEAK_LANGUAGE_KEYWORDS, exempt=True),
+}
+
 
 def resolve_speak_language(core, data, resolved):
     """!

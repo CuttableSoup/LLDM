@@ -2,6 +2,8 @@ import math
 import re
 
 from dm.DM_Types import DMCoreProtocol
+from persistence.slot import Persistable
+import resolution.Combat_Resolution as Combat_Resolution
 
 # A single, reused scratch location key for a mid-journey ambush -- never a freshly-minted
 # key per pause (see _enter_encounter_site), so a long playthrough with many interrupted
@@ -21,7 +23,7 @@ class TravelMixin(DMCoreProtocol):
         self.is_daytime/self._resolve_one_encounter/self.resolve_action/
         self.apply_condition/self._any_hostile_present/self._resume_pending_downtime, set up
         by DMCore.__init__ or implemented by DM_Rules.py/DM_Encounters.py/DM_Time.py/
-        DM_Combat.py/DM_Status.py/DM_Core.py). See docs/downtime.md's "Travel" for the design
+        Combat_Actions.py/DM_Status.py/DM_Core.py). See docs/downtime.md's "Travel" for the design
         this implements.
 
         An optional "grid" field ({x, y}) on a [[location]] table opts it into this whole
@@ -491,11 +493,11 @@ class TravelMixin(DMCoreProtocol):
         else:
             watcher = roster[self.watch_rotation_index % len(roster)]
             self.watch_rotation_index += 1
-            result = self.resolve_action(watcher, "observation", environment.get("watch_difficulty", 0))
+            result = Combat_Resolution.resolve_action(self.world, watcher, "observation", environment.get("watch_difficulty", 0))
             surprised = not result["success"]
         if surprised:
             for name in roster:
-                self.apply_condition(name, "surprised", duration="rounds", length=1, dismiss="")
+                Combat_Resolution.apply_condition(self.world, name, "surprised", duration="rounds", length=1, dismiss="")
         return surprised
 
     def _route_is_passable(self, origin_grid, destination_grid):
@@ -723,3 +725,20 @@ class TravelMixin(DMCoreProtocol):
         self.current_room_key = None
         self.visited_rooms = {}
         self.entities[self.player_name]["band"] = 1
+
+
+class KnownLocationsSlice(Persistable):
+    """!
+    @brief Every location key ever entered, so a reload doesn't forget which overworld
+        destinations grid-based travel already unlocked by name. Restored ahead of the world
+        slice; load_scenario's own known_locations seeding re-unions harmlessly on top.
+    """
+
+    def __init__(self, core):
+        self.core = core
+
+    def snapshot(self):
+        return {"known_locations": sorted(self.core.known_locations)}
+
+    def restore(self, data):
+        self.core.known_locations = set(data.get("known_locations", []))

@@ -50,7 +50,7 @@ class MovementMixin(DMCoreProtocol):
         a creature/ally triggers the exact same math via move_toward_or_away, either because
         its own `[[entity.behavior]]` explicitly names `action = "advance"`/`"retreat"` (ex:
         a self-preserving animal fleeing once badly hurt) or because resolve_behavior_action
-        (DM_Combat.py) falls back to it automatically when the behavior it did choose names an
+        (Combat_Actions.py) falls back to it automatically when the behavior it did choose names an
         attack that can't currently reach its target -- closing the distance instead of simply
         not acting.
 
@@ -67,29 +67,6 @@ class MovementMixin(DMCoreProtocol):
         always the floor, "advance" just can't go tighter than being in the same band as
         whatever's already there.
     """
-
-    def get_band(self, entity_name):
-        """!
-        @brief The entity's current band -- a 1-indexed position in the scenario's own bands,
-            objective (not relative to the player or anything else).
-        @param entity_name The entity to check.
-        @return The entity's "band" field (1 if unset -- ex: an ad-hoc test entity with no
-                scenario-authored starting band defaults to band 1, same as load_scenario
-                already seeds for anything that doesn't specify one).
-        """
-        return Combat_Resolution.get_band(self.entities, entity_name)
-
-    def get_distance_between(self, entity_a, entity_b):
-        """!
-        @brief The gap between two entities, in bands -- just their two band numbers
-            subtracted, since both are objective positions on the same scenario-wide scale
-            (see this file's module docstring for why that's a deliberate departure from an
-            earlier, player-anchored version).
-        @param entity_a The first entity's name.
-        @param entity_b The second entity's name.
-        @return The absolute band gap between them (0 if they're in the same band).
-        """
-        return Combat_Resolution.get_distance_between(self.entities, entity_a, entity_b)
 
     def _clamp_band(self, band):
         """!
@@ -136,7 +113,7 @@ class MovementMixin(DMCoreProtocol):
             to take effect on the very next move -- no new mechanism required, just not wired
             to any player-issued command yet.
         """
-        player_band = self.get_band(self.player_name)
+        player_band = Combat_Resolution.get_band(self.world, self.player_name)
         for entity_name in self.scenario_entities:
             if entity_name == self.player_name:
                 continue
@@ -157,7 +134,7 @@ class MovementMixin(DMCoreProtocol):
         entity = self.entities.get(entity_name)
         if entity is None:
             return None
-        entity["band"] = self._clamp_band(self.get_band(entity_name) + delta)
+        entity["band"] = self._clamp_band(Combat_Resolution.get_band(self.world, entity_name) + delta)
         return entity["band"]
 
     def _resolve_move_delta(self, entity_name, opponent_name, direction):
@@ -183,8 +160,8 @@ class MovementMixin(DMCoreProtocol):
         @param direction "advance" (closes the gap) or "retreat" (opens it).
         @return The signed band delta to pass to move_entity.
         """
-        entity_band = self.get_band(entity_name)
-        gap = self.get_band(opponent_name) - entity_band
+        entity_band = Combat_Resolution.get_band(self.world, entity_name)
+        gap = Combat_Resolution.get_band(self.world, opponent_name) - entity_band
         speed = self.entities.get(entity_name, {}).get("speed", 1)
 
         if gap == 0:
@@ -232,9 +209,9 @@ class MovementMixin(DMCoreProtocol):
             return None
 
         before_gaps = {
-            entity_name: self.get_distance_between(self.player_name, entity_name)
+            entity_name: Combat_Resolution.get_distance_between(self.world, self.player_name, entity_name)
             for entity_name in self.scenario_entities
-            if entity_name != self.player_name and self.get_current_hp(entity_name) > 0
+            if entity_name != self.player_name and Combat_Resolution.get_current_hp(self.world, entity_name) > 0
         }
 
         self.move_entity(self.player_name, self._resolve_move_delta(self.player_name, target_name, direction))
@@ -243,7 +220,7 @@ class MovementMixin(DMCoreProtocol):
 
         moved = []
         for entity_name, before in before_gaps.items():
-            after = self.get_distance_between(self.player_name, entity_name)
+            after = Combat_Resolution.get_distance_between(self.world, self.player_name, entity_name)
             if after != before:
                 moved.append({"entity": entity_name, "before": before, "after": after})
         return moved
@@ -272,10 +249,10 @@ class MovementMixin(DMCoreProtocol):
         if entity_name not in self.entities or opponent_name not in self.entities:
             return None
 
-        before = self.get_distance_between(entity_name, opponent_name)
+        before = Combat_Resolution.get_distance_between(self.world, entity_name, opponent_name)
         self.move_entity(entity_name, self._resolve_move_delta(entity_name, opponent_name, direction))
         self._sync_mount_bands(entity_name)
-        after = self.get_distance_between(entity_name, opponent_name)
+        after = Combat_Resolution.get_distance_between(self.world, entity_name, opponent_name)
         return {"opponent": opponent_name, "before": before, "after": after}
 
     def _sync_mount_bands(self, mover_name):
@@ -301,7 +278,7 @@ class MovementMixin(DMCoreProtocol):
             than building out multi-hop party-wide mount chains no shipped scenario needs yet.
         @param mover_name The entity whose band just changed.
         """
-        new_band = self.get_band(mover_name)
+        new_band = Combat_Resolution.get_band(self.world, mover_name)
         for ridden_name in self._resolve_mount_targets(mover_name):
             self.entities[ridden_name]["band"] = new_band
         for name in self.scenario_entities:
@@ -371,7 +348,7 @@ class MovementMixin(DMCoreProtocol):
             return
         target_name = candidates[0]
 
-        if self.get_current_hp(target_name) <= 0:
+        if Combat_Resolution.get_current_hp(self.world, target_name) <= 0:
             resolved(False, reason="target_down")
             return
         if self.is_hostile(target_name, self.player_name):
@@ -385,7 +362,7 @@ class MovementMixin(DMCoreProtocol):
             return
 
         self.entities[self.player_name]["mount"] = target_name
-        self.entities[self.player_name]["band"] = self._clamp_band(self.get_band(target_name))
+        self.entities[self.player_name]["band"] = self._clamp_band(Combat_Resolution.get_band(self.world, target_name))
         resolved(True, target=target_name)
 
     def _resolve_dismount_intent(self, resolved):
@@ -475,7 +452,7 @@ class MovementMixin(DMCoreProtocol):
             return
         puller_name, vehicle_name = named[0], named[1]
 
-        if self.get_current_hp(puller_name) <= 0 or self.get_current_hp(vehicle_name) <= 0:
+        if Combat_Resolution.get_current_hp(self.world, puller_name) <= 0 or Combat_Resolution.get_current_hp(self.world, vehicle_name) <= 0:
             resolved(False, reason="target_down")
             return
         if self.is_hostile(puller_name, self.player_name):
@@ -543,62 +520,6 @@ class MovementMixin(DMCoreProtocol):
 
         resolved(False, reason="not_hitched")
 
-    def is_in_range(self, attacker_name, defender_name, ability):
-        """!
-        @brief Whether attacker_name can currently reach defender_name with ability at all --
-            a pure reachability gate, no difficulty change either way (see this file's
-            module docstring for why the earlier per-tier accuracy modifier was dropped).
-        @param attacker_name The name of the acting entity.
-        @param defender_name The name of the target entity.
-        @param ability The weapon/spell/innate-ability table being used, or None if this
-            skill use isn't an attack at all (ex: a social check) -- always in range, since
-            there's nothing physical to be out of reach of.
-        @return True if reachable (ability is None, or the band gap is within ability's own
-                "range", which defaults to 0 -- melee, same band only -- when absent).
-        """
-        if ability is None:
-            return True
-        max_range = ability.get("range", 0)
-        return self.get_distance_between(attacker_name, defender_name) <= max_range
-
-    def has_medium_access(self, attacker_name, defender_name, ability):
-        """!
-        @brief Whether attacker_name can physically engage defender_name at all, given each
-            entity's own optional "medium" ("air"/"water"/"earth"; absent/"ground" -- the
-            default every existing entity implicitly has, completely unaffected either way) --
-            a second, independent reachability gate alongside is_in_range's own band-distance
-            check, not a replacement for it. This is deliberately NOT a new spatial/elevation
-            axis: the band model stays exactly one-dimensional, and nothing about *traversing*
-            bands changes (there was never any terrain-blocking to bypass in the first place --
-            every entity already crosses every band freely regardless of what's narrated
-            there). What Fly/Swim-and-submerge/Burrow actually need mechanically is this: a
-            grounded creature's melee can't connect with something airborne/submerged/
-            underground unless it shares that medium itself -- the Pathfinder shape of "you
-            can't full-attack a flying dragon with your sword," not a movement-cost question.
-            A defender in "ground" (the default) is always reachable by everyone, unconditionally
-            -- so the overwhelming majority of entities, which never author "medium" at all, are
-            completely unaffected by this check regardless of what they fight.
-        @param attacker_name The name of the acting entity.
-        @param defender_name The name of the target entity.
-        @param ability The weapon/spell/innate-ability table being used, or None (always
-            reachable, same "nothing physical to be out of reach of" case is_in_range shares).
-        @return True if defender_name is in "ground" (or has no "medium" authored at all);
-                True if the ability has a "range" > 0 at all (any ranged/reach attack already
-                crosses medium -- no new field needed on any existing weapon/spell, this reuses
-                "range" exactly as authored today); True if attacker_name's own "medium"
-                matches defender_name's; False otherwise (a melee-only, "ground"-medium
-                attacker can't touch a non-"ground" defender).
-        """
-        if ability is None:
-            return True
-        defender_medium = self.entities.get(defender_name, {}).get("medium", "ground")
-        if defender_medium == "ground":
-            return True
-        if ability.get("range", 0) > 0:
-            return True
-        attacker_medium = self.entities.get(attacker_name, {}).get("medium", "ground")
-        return attacker_medium == defender_medium
-
     def _find_room_exit(self, room, direction):
         """!
         @brief Finds the current room's own declared [[room.exit]] usable right now for the
@@ -619,7 +540,7 @@ class MovementMixin(DMCoreProtocol):
         matching_direction = [e for e in room.get("exit", []) if e.get("direction") == direction]
         if not matching_direction:
             return None, "no_exit"
-        player_band = self.get_band(self.player_name)
+        player_band = Combat_Resolution.get_band(self.world, self.player_name)
         for exit_def in matching_direction:
             if exit_def.get("band") == player_band:
                 return exit_def, None
@@ -644,17 +565,18 @@ class MovementMixin(DMCoreProtocol):
         """
         exit_def, reason = self._find_room_exit(self._current_room(), direction)
         if exit_def is None:
-            resolved(False, reason=reason)
+            resolved(False, reason=reason, direction=direction)
             return
 
         if self._any_hostile_present():
-            resolved(False, reason="blocked_by_enemies")
+            resolved(False, reason="blocked_by_enemies", direction=direction)
             return
 
         self.enter_room(exit_def["destination"], exit_def.get("arrival_band", 1))
         new_room = self._current_room()
         resolved(
             True,
+            direction=direction,
             room_name=new_room.get("name", "") if new_room else "",
             room_description=new_room.get("description", "") if new_room else "",
             characters=self._describe_scenario_characters(),

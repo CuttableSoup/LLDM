@@ -10,29 +10,33 @@ from dm.DM_ActionOutcome import (
     TeleportEffect, rolled_outcome_from_roll,
 )
 from dm.DM_CharacterCreation import CharacterCreationMixin
-from dm.DM_Combat import CombatMixin
+from dm.DM_Combat import DMCoreCombatHooks
 from dm.DM_Crafting import CraftingMixin
 from dm.DM_Dialogue import WORD_BOUNDARY, DialogueMixin
 from dm.DM_Encounters import EncounterMixin
 from dm.DM_Enforcement import EnforcementMixin
 from dm.DM_Help import HelpMixin
-from dm.DM_Improvisation import ImprovisationMixin
+from dm.DM_Improvisation import ImprovisationMixin, RemovedEntitiesSlice
 from dm.DM_Inventory import InventoryMixin
 from dm.DM_Law import LawMixin
 from dm.DM_Movement import MovementMixin
 from dm.DM_NpcGeneration import NpcGenerationMixin
-from dm.DM_Persistence import PersistenceMixin
+from dm.DM_Persistence import PersistenceMixin, WorldSlice
 from dm.DM_Rules import RulesMixin, scenario_exists
 from dm.DM_Social import SocialMixin
 from dm.DM_Status import StatusMixin
 from dm.DM_Summoning import SummoningMixin
-from dm.DM_Time import TimeMixin
-from dm.DM_Travel import TravelMixin
+from dm.DM_Time import ClockSlice, TimeMixin
+from dm.DM_Travel import KnownLocationsSlice, TravelMixin
 from dm.DM_Validation import ValidationMixin
 from intents.registry import HANDLERS as FREE_STANDING_INTENT_HANDLERS
+from persistence.slot import FileSlotStore, Persistable
 from resolution.AdHoc_Generation import TRIVIAL_DIFFICULTY, rate_difficulty
 from resolution.Combat_Resolution import matches_supertype_or_subtype, resolve_damage_value
 from resolution.Program_Interpreter import run_program
+from resolution.World_Context import WorldContext
+import resolution.Combat_Resolution as Combat_Resolution
+import resolution.Combat_Actions as Combat_Actions
 
 # Multi-instance combat targeting (see DMCore._resolve_named_instance_ambiguity): NLPCore's own
 # map_to_target (NLP_Core.py) picks one specific live instance name by raw text similarity to
@@ -87,11 +91,46 @@ RECENT_NARRATION_CHARS = 400
 NARRATION_SYSTEM_PREFIX = "System: "
 
 
-class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixin, RulesMixin, PersistenceMixin, CharacterCreationMixin, NpcGenerationMixin, DialogueMixin, HelpMixin, ImprovisationMixin, EncounterMixin, SummoningMixin, CraftingMixin, ValidationMixin, TimeMixin, TravelMixin, LawMixin, EnforcementMixin):
+class SessionSlice(Persistable):
+    """!
+    @brief The save-slot keys for what the session is focused on right now -- the combat target,
+        the last few narration beats (grounding for NPC promotion; losing them would only cost a
+        resumed save a beat or two of flavor, but it's two lines to keep), and who the player is
+        talking to. Restored after the world: re-instancing re-enters the saved location, which
+        resets the target and clears the conversation partner, and the mid-load narration the
+        load itself triggers would otherwise be the first thing appended to recent_narration.
+    """
+
+    def __init__(self, core):
+        self.core = core
+
+    def snapshot(self):
+        core = self.core
+        return {
+            "current_target": core.current_target,
+            "recent_narration": list(core.recent_narration),
+            "conversation_partner": core.conversation_partner,
+        }
+
+    def restore(self, data):
+        core = self.core
+        # load_scenario/enter_room already reset current_target to a freshly computed default --
+        # overlay the saved one so a resumed fight keeps targeting whoever it was fighting.
+        core.current_target = data.get("current_target", core.current_target)
+        core.recent_narration.clear()
+        core.recent_narration.extend(data.get("recent_narration", []))
+        # Absent from an older save: no conversation running. Republished so NLPCore routes the
+        # next unmarked line correctly.
+        core.conversation_partner = data.get("conversation_partner")
+        core._publish_conversation_partner()
+
+
+
+class DMCore(InventoryMixin, SocialMixin, StatusMixin, MovementMixin, RulesMixin, PersistenceMixin, CharacterCreationMixin, NpcGenerationMixin, DialogueMixin, HelpMixin, ImprovisationMixin, EncounterMixin, SummoningMixin, CraftingMixin, ValidationMixin, TimeMixin, TravelMixin, LawMixin, EnforcementMixin):
     """!
     @brief Main class handling the core mechanics of the RPG system. The implementation is
         composed from domain mixins in sibling files -- DM_Rules.py (rules/scenario
-        loading), DM_Combat.py (dice/damage/ability resolution), DM_Status.py (the
+        loading), DM_Combat.py (the CombatHooks adapter for resolution/Combat_Actions.py), DM_Status.py (the
         status/condition system and entity tests), DM_Inventory.py (currency/item
         transfer, plus the equip/drop/use/container item-interaction intents), DM_Social.py
         (attitudes and character description), DM_Movement.py (distance tracking,
@@ -122,9 +161,47 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         docstring.
     """
 
+    @property
+    def entities(self):
+        return self.world.entities
+
+    @property
+    def skills(self):
+        return self.world.skills
+
+    @property
+    def rules(self):
+        return self.world.rules
+
+    # Replaced wholesale during play (a new room, a rename), so these can be assigned --
+    # the context always reads the current value.
+    @property
+    def scenario_entities(self):
+        return self.world.scenario_entities
+
+    @scenario_entities.setter
+    def scenario_entities(self, value):
+        self.world.scenario_entities = value
+
+    @property
+    def player_name(self):
+        return self.world.player_name
+
+    @player_name.setter
+    def player_name(self, value):
+        self.world.player_name = value
+
+    @property
+    def universal_abilities(self):
+        return self.world.universal_abilities
+
+    @universal_abilities.setter
+    def universal_abilities(self, value):
+        self.world.universal_abilities = value
+
     def __init__(
         self, event_bus, scenario_name="debug", character=None, setting="Fantasy", start_location=None,
-        publish_intro_narration=True,
+        publish_intro_narration=True, slot_store=None,
     ):
         """!
         @brief Initializes the DM core and loads system references.
@@ -164,11 +241,17 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             re-instancing anyway; narrating an intro from a snapshot that's already stale by
             the time the LLM call would return can describe entities (ex: a background NPC
             rolled a "dwarf" here) that the load's own re-roll doesn't actually carry over.
+        @param slot_store Where save slots live (persistence/slot.py) -- None (the default) is
+            the real Saves/ directory; a test passes a MemorySlotStore.
         """
         self.event_bus = event_bus
+        self.slot_store = slot_store or FileSlotStore()
         self.setting = setting
-        self.skills = {}
-        self.entities = {}
+        # The one bundle of live state the pure resolution functions run against (see
+        # World_Context.py). entities/skills/rules below read through it and have no setters,
+        # so nothing can rebind them out from under a function that was handed it -- they're
+        # filled in place (load_rules, load_scenario) instead.
+        self.world = WorldContext(event_bus=event_bus, hooks=DMCoreCombatHooks(self))
         # Stub templates for NPC generation (see NPC_Generation.py/DM_NpcGeneration.py,
         # CLAUDE.md's "NPC generation") -- kept in their own namespace, loaded from
         # [[entity_template]] tables (declared inline in a scenario file, ex:
@@ -208,7 +291,6 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         self.removed_entities = set()
         # True while load_game re-walks the scenario; _resolve_location_encounter skips its rolls.
         self._restoring_save = False
-        self.rules = {}
         self.round_number = 0
         # The block clock (see docs/downtime.md / DM_Time.py) -- a single monotonic counter of
         # every 8-hour (by default) "block" elapsed since the scenario started, a fully separate
@@ -236,6 +318,13 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         self._init_law_state()
         # What guards do about it (DM_Enforcement.py) -- the open confrontation, if any.
         self._init_enforcement_state()
+        # What a save snapshots and a load restores, in restore order: everything the world's
+        # re-instancing reads comes first, the world itself next, then what needs the finished
+        # scene (see each slice's own docstring).
+        self.save_parts = [
+            ClockSlice(self), self.law_enforcement, RemovedEntitiesSlice(self), KnownLocationsSlice(self),
+            WorldSlice(self), SessionSlice(self),
+        ]
         # A question put to the player that their next input answers -- today only "attack
         # someone you never named?" (_request_assault_confirmation). Not saved: a reload simply
         # drops an unanswered question.
@@ -366,7 +455,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             clauses (see NLP_Core.py's ACTION_CLAUSE_PATTERN/_split_action_clauses) and
             classifies each as either an item interaction or a skill/ability action, publishing
             both kinds together in one "clauses" list -- always plural, even for the
-            overwhelmingly common single-clause case, so this handler, DM_Combat.py's
+            overwhelmingly common single-clause case, so this handler, Combat_Actions.py's
             resolve_action/resolve_opposed_action, and every "action_resolved"/"round_resolved"
             consumer (LLM_Core.py) are all built around one consistent shape. This is the West
             End Games D6 "multiple actions" rule: a character may attempt as many actions as
@@ -483,7 +572,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
                 player_actions.append(item_result)
                 continue
 
-            attack_ability = named_ability or self.find_attack_ability(self.player_name, skill_name)
+            attack_ability = named_ability or Combat_Actions.find_attack_ability(self.world, self.player_name, skill_name)
             # A damaging ability, or one authored as an act of aggression that deals none
             # (maneuvers.toml's trip/grapple/bull rush -- entity_schema.toml's "assault").
             is_attack = bool(attack_ability and ("damage_value" in attack_ability or attack_ability.get("assault")))
@@ -555,7 +644,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             # DM-published narration-triggering event carries one.
             "present_entities": list(self.scenario_entities),
             # What the player actually carries in hand/on body -- the narrator is told to stay
-            # inside it (LLMCore._describe_player_actions), not invent gear from a skill name.
+            # inside it (LLMCore.describe_player_actions), not invent gear from a skill name.
             "player_gear": [
                 self.entities.get(item, {}).get("name", item)
                 for item in dict.fromkeys(self.entities.get(self.player_name, {}).get("equipped", {}).values())
@@ -606,9 +695,9 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         @return (skill_name, named_ability) -- named_ability is None if skill_name was
             already a plain skill.
         """
-        named_ability = self.resolve_named_ability(self.player_name, skill_name)
+        named_ability = Combat_Actions.resolve_named_ability(self.world, self.player_name, skill_name)
         if named_ability:
-            skill_name = self.select_ability_skill(self.player_name, named_ability) or skill_name
+            skill_name = Combat_Actions.select_ability_skill(self.world, self.player_name, named_ability) or skill_name
         elif skill_name not in self.skills:
             # NLPCore's action bank holds every entity's abilities, so "kick him" can match a
             # horse's own innate "kick" -- unowned and not a skill, it used to roll 0 dice under
@@ -649,7 +738,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         """
         if not modifier_name:
             return None
-        return self.resolve_named_ability(self.player_name, modifier_name)
+        return Combat_Actions.resolve_named_ability(self.world, self.player_name, modifier_name)
 
     def _apply_ability_modifier(self, ability, modifier):
         """!
@@ -721,14 +810,12 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             save's own skill -- the caller skips calculate_damage entirely for that target then.
         """
         spec = ability["save_for_half"]
-        check = self.resolve_action(defender_name, spec["skill"], difficulty=ability.get("difficulty", 10))
+        check = Combat_Resolution.resolve_action(self.world, defender_name, spec["skill"], difficulty=ability.get("difficulty", 10))
         if not check["success"]:
             return copy.deepcopy(ability)
         if spec["skill"] in self.entities.get(defender_name, {}).get("negates_save_for_half", []):
             return None
-        raw_damage = resolve_damage_value(
-            self.entities, self.rules, self.event_bus, self.player_name, ability.get("damage_value", {}),
-        )
+        raw_damage = resolve_damage_value(self.world, self.player_name, ability.get("damage_value", {}))
         halved = copy.deepcopy(ability)
         halved["damage_value"] = {"dice": 0, "pips": 0, "bonus": raw_damage // 2}
         return halved
@@ -823,7 +910,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             explicit_target
             and explicit_target in self.scenario_entities
             and explicit_target != self.player_name
-            and self.get_current_hp(explicit_target) > 0
+            and Combat_Resolution.get_current_hp(self.world, explicit_target) > 0
         ):
             return False
         if self.is_hostile(explicit_target, self.player_name):
@@ -863,7 +950,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
 
         candidates = [
             name for name in self.scenario_entities
-            if self._instance_family(name) == family and self.get_current_hp(name) > 0
+            if self._instance_family(name) == family and Combat_Resolution.get_current_hp(self.world, name) > 0
         ]
         candidates.sort(key=_suffix)
         return candidates
@@ -906,18 +993,18 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         if any(re.search(rf"\b{word}\b", text) for word in TARGET_WOUNDED_KEYWORDS):
             wounded = [
                 name for name in candidates
-                if (self.get_comparable_value(name, "hp_per_remain") or 1.0) < TARGET_WOUNDED_HP_CUTOFF
+                if (Combat_Resolution.get_comparable_value(self.world, name, "hp_per_remain") or 1.0) < TARGET_WOUNDED_HP_CUTOFF
             ]
             if wounded:
-                return min(wounded, key=lambda name: self.get_comparable_value(name, "hp_per_remain"))
+                return min(wounded, key=lambda name: Combat_Resolution.get_comparable_value(self.world, name, "hp_per_remain"))
 
         if any(re.search(rf"\b{word}\b", text) for word in TARGET_HEALTHY_KEYWORDS):
             healthy = [
                 name for name in candidates
-                if (self.get_comparable_value(name, "hp_per_remain") or 0.0) >= TARGET_WOUNDED_HP_CUTOFF
+                if (Combat_Resolution.get_comparable_value(self.world, name, "hp_per_remain") or 0.0) >= TARGET_WOUNDED_HP_CUTOFF
             ]
             if healthy:
-                return max(healthy, key=lambda name: self.get_comparable_value(name, "hp_per_remain"))
+                return max(healthy, key=lambda name: Combat_Resolution.get_comparable_value(self.world, name, "hp_per_remain"))
 
         return explicit_target
 
@@ -951,7 +1038,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         # Checked ahead of even materials -- an entity unable to act at all this turn (ex: a
         # "pinned" condition, prevents_action = true) can't cast/attack/anything, the most
         # fundamental "can't do it, don't roll" gate of all.
-        if self.is_action_prevented(self.player_name):
+        if Combat_Actions.is_action_prevented(self.world, self.player_name):
             return ActionPreventedOutcome(self.player_name, skill_name), None, False
 
         # A spell/technique/innate ability's own "materials" (same {item, quantity} shape a
@@ -978,7 +1065,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             # *other* skill against this same target (ex: forcing the chest with "strength")
             # still falls through to the normal opposed-skill path below, e.g. resolved
             # against its "fortitude" if it has one.
-            roll = self.resolve_action(
+            roll = Combat_Resolution.resolve_action(self.world, 
                 self.player_name, skill_name, test.get("difficulty", 0), dice_penalty=dice_penalty,
             )
             outcome = test.get("pass") if roll["success"] else test.get("fail")
@@ -1017,7 +1104,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             # shape) -- reported as the same OutOfRangeOutcome, an honest simplification
             # rather than a distinct outcome type for what's still fundamentally "can't reach
             # them right now."
-            ability = named_ability or self.find_attack_ability(self.player_name, skill_name)
+            ability = named_ability or Combat_Actions.find_attack_ability(self.world, self.player_name, skill_name)
             skill_divisor = 1
             if modifier and ability and matches_supertype_or_subtype(ability, modifier.get("applies_to", {})):
                 # The modifier costs the attacker's own skill (skill_divisor, folded into
@@ -1026,10 +1113,10 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
                 # damage_value -- never the shared spells.toml/creatures.toml entity itself.
                 ability = self._apply_ability_modifier(ability, modifier)
                 skill_divisor = modifier.get("skill_divisor", 1)
-            if not self.is_in_range(self.player_name, target_name, ability) or not self.has_medium_access(self.player_name, target_name, ability):
+            if not Combat_Actions.is_in_range(self.world, self.player_name, target_name, ability) or not Combat_Actions.has_medium_access(self.world, self.player_name, target_name, ability):
                 result = OutOfRangeOutcome(self.player_name, skill_name, target_name)
             elif (
-                self._ability_requires_language(skill_name, ability)
+                Combat_Actions._ability_requires_language(self.world, skill_name, ability)
                 and not self._shares_language_with(target_name)
             ):
                 # Same "can't do it, don't roll" shape as is_in_range above -- a
@@ -1049,13 +1136,13 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
                 # A target that actually wants to resist authors its own [entity.test] instead
                 # (skill = [...], difficulty = ...) -- checked above this branch, via_test,
                 # which already takes priority whenever it matches.
-                roll = self.resolve_action(
+                roll = Combat_Resolution.resolve_action(self.world, 
                     self.player_name, skill_name, ability["difficulty"], dice_penalty=dice_penalty, skill_divisor=skill_divisor,
                 )
                 result = rolled_outcome_from_roll(roll)
                 result.defender = target_name
             else:
-                roll = self.resolve_opposed_action(
+                roll = Combat_Resolution.resolve_opposed_action(self.world, 
                     self.player_name, skill_name, target_name, dice_penalty=dice_penalty, ability=ability, skill_divisor=skill_divisor,
                 )
                 result = rolled_outcome_from_roll(roll)
@@ -1072,7 +1159,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
                     entity=self.player_name, skill=skill_name, roll=0, difficulty=0, success=True, trivial=True,
                 )
             else:
-                roll = self.resolve_action(self.player_name, skill_name, difficulty, dice_penalty=dice_penalty)
+                roll = Combat_Resolution.resolve_action(self.world, self.player_name, skill_name, difficulty, dice_penalty=dice_penalty)
                 result = rolled_outcome_from_roll(roll)
         return result, ability, via_test
 
@@ -1150,7 +1237,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             failed roll too, deliberately -- see their own docstrings). Order matters: materials
             are spent before damage/summon effects are appended, mirroring a botched craft
             attempt's own "consume regardless of outcome" precedent. Scoped to the player's own
-            _on_turn_detected pipeline only -- resolve_behavior_action (DM_Combat.py, a
+            _on_turn_detected pipeline only -- resolve_behavior_action (Combat_Actions.py, a
             creature's own turn) has no attitude to nudge and no spell materials/summons of its
             own to resolve, so it keeps its own narrower, separate damage-only handling rather
             than routing through this.
@@ -1206,19 +1293,19 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         if via_test:
             return
         if ability is None:
-            ability = named_ability or self.find_attack_ability(self.player_name, skill_name)
+            ability = named_ability or Combat_Actions.find_attack_ability(self.world, self.player_name, skill_name)
         if not ability:
             return
         program = ability.get("on_pass" if result.success else "on_fail")
         if not program:
             return
-        # resolve_targets (DM_Combat.py) is [target_name] alone (or [None], untargeted) for
+        # resolve_targets (Combat_Actions.py) is [target_name] alone (or [None], untargeted) for
         # every ability with no authored "targets" table -- one run, unchanged from before this
         # existed -- or the wider AoE/multi-target/discriminated pool its own {number, aoe,
         # side} table describes, run once per resolved target so ex: a discriminating area
         # effect's own on_pass (a condition applied via Program_Interpreter's apply_condition
         # op) actually lands on every ally/enemy it caught, not just target_name.
-        for program_target in self.resolve_targets(self.player_name, target_name, ability):
+        for program_target in Combat_Actions.resolve_targets(self.world, self.player_name, target_name, ability):
             run_program(
                 # "roll" -- this roll's own total, for an op that keeps it (ex: "disguise", whose
                 # quality is what a witness's observation must beat; see DM_Law.py).
@@ -1263,16 +1350,16 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         """
         if result.success and not via_test:
             if ability is None:
-                ability = named_ability or self.find_attack_ability(self.player_name, skill_name)
+                ability = named_ability or Combat_Actions.find_attack_ability(self.world, self.player_name, skill_name)
             if ability and "damage_value" in ability:
-                # resolve_targets (DM_Combat.py) is [target_name] alone for every ability with
+                # resolve_targets (Combat_Actions.py) is [target_name] alone for every ability with
                 # no authored "targets" table -- unchanged single-target behavior, [None] if
                 # there's also no target_name at all (skipped below, nothing to hit) -- or the
                 # wider AoE/multi-target/discriminated/self-only pool its own {number, aoe,
                 # side} table describes (ex: techniques.toml's cleave, a fireball-style blast, a
                 # self-only ward that needs no named target at all). Each real hit gets its own
                 # damage roll/DamageEffect/attitude nudge, same as a lone target already did.
-                for defender_name in self.resolve_targets(self.player_name, target_name, ability):
+                for defender_name in Combat_Actions.resolve_targets(self.world, self.player_name, target_name, ability):
                     if not defender_name:
                         continue
                     hit_ability = ability
@@ -1285,7 +1372,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
                         hit_ability = self._resolve_save_for_half(ability, defender_name)
                         if hit_ability is None:
                             continue
-                    damage = self.calculate_damage(self.player_name, defender_name, hit_ability)
+                    damage = Combat_Actions.calculate_damage(self.world, self.player_name, defender_name, hit_ability)
                     result.effects.append(DamageEffect(
                         defender=damage["defender"], net_damage=damage["net_damage"],
                         remaining_hp=damage["remaining_hp"],
@@ -1295,7 +1382,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
                     # per-swing amount, so a graze barely registers and a near-kill genuinely
                     # scares them (the "threat" axis) even while disposition stays pinned at
                     # is_hostile's own floor. _nudge_combat_hit_attitude is the shared call-site
-                    # shape resolve_behavior_action (DM_Combat.py, an entity's own combat-turn
+                    # shape resolve_behavior_action (Combat_Actions.py, an entity's own combat-turn
                     # attack) also uses -- only who's attacking differs, never the shape.
                     self._nudge_combat_hit_attitude(defender_name, self.player_name, damage.get("net_damage", 0))
                 # "on_action" statuses (ex: Frightful Presence) -- see DM_Status.py's
@@ -1304,7 +1391,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
                 # -- the actor's own qualifying requirements don't change per-target, so
                 # re-evaluating them once per resolve_targets() entry would be redundant work
                 # for the same result.
-                self.evaluate_proximity_statuses(self.player_name, "on_action")
+                Combat_Actions.evaluate_proximity_statuses(self.world, self.player_name, "on_action")
 
     def _nudge_combat_hit_attitude(self, target_name, attacker_name, net_damage):
         """!
@@ -1312,7 +1399,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             nudge on the victim's own attitude toward whoever hit it, plus the "bonds made on
             the battlefield" ripple to bystanders (_nudge_shared_enemy_bonds). Shared by
             _apply_damage_if_hit (the player's own attack) and resolve_behavior_action
-            (DM_Combat.py, any other entity's own combat-turn attack) -- the same call-site
+            (Combat_Actions.py, any other entity's own combat-turn attack) -- the same call-site
             shape either way, just parameterized on who actually swung. Stays one-directional,
             same as before this was shared: only the victim's attitude toward the attacker
             moves, never the reverse (an attacker's own feelings are already fully authored via
@@ -1336,7 +1423,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             restricted to allies/party members -- even a bystander merely wary of attacker_name
             can start softening if attacker_name keeps fighting something that bystander already
             hates. attacker_name need not be the player -- any entity's resolved attack routes
-            through here (see resolve_behavior_action, DM_Combat.py), so an ally striking down a
+            through here (see resolve_behavior_action, Combat_Actions.py), so an ally striking down a
             shared foe earns the same bystander warmth a player blow would.
             Safe to call for every observer in scenario_entities regardless of whether it has
             real attitude data of its own: is_hostile(observer, target_name) returns True
@@ -1434,7 +1521,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         cure_spec = named_ability.get("cure")
         if not cure_spec:
             return
-        cured = self.cure_conditions(target_name, cure_spec)
+        cured = Combat_Resolution.dismiss_matching_conditions(self.world, target_name, cure_spec)
         result.effects.append(CureEffect(target=target_name, conditions=cured))
 
     def _apply_teleport_if_hit(self, result, named_ability):
@@ -1473,7 +1560,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
 
         destination_band = named_ability.get("teleport_to_band")
         if destination_band is not None:
-            new_band = self.move_entity(self.player_name, destination_band - self.get_band(self.player_name))
+            new_band = self.move_entity(self.player_name, destination_band - Combat_Resolution.get_band(self.world, self.player_name))
             if new_band is not None:
                 result.effects.append(TeleportEffect(entity=self.player_name, band=new_band))
 
@@ -1512,7 +1599,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         @param result The roll result, appended to with a DefenderDetailsEffect if
             describe_character returns anything. A no-roll outcome (out_of_range,
             missing_spell_materials, ...) has no "defender details" fragment in its own
-            narration at all (see LLM_Core.py's _describe_outcome), so this only ever does
+            narration at all (see Narration_Prompts.py's describe_outcome), so this only ever does
             anything for a RolledOutcome.
         @param target_name self.current_target, or None.
         """
@@ -1539,7 +1626,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         """
         self.round_number += 1
         result["round"] = self.round_number
-        result["initiative"] = self.roll_initiative(self.player_name)
+        result["initiative"] = Combat_Actions.roll_initiative(self.world, self.player_name)
         turns = []
         for entity_name in self.scenario_entities:
             if entity_name == self.player_name:
@@ -1549,7 +1636,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             opponent = self.player_name if self.is_hostile(entity_name, self.player_name) else self.current_target
             if not opponent:
                 continue
-            turn_outcome = self.resolve_behavior_action(entity_name, opponent)
+            turn_outcome = Combat_Actions.resolve_behavior_action(self.world, entity_name, opponent)
             if turn_outcome:
                 # The envelope stays a plain dict (see DM_ActionOutcome.py's own module
                 # docstring on scope) -- "actor"/"initiative" are this round's own bookkeeping
@@ -1557,7 +1644,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
                 # outcome rather than living as fields on it.
                 turns.append({
                     "actor": entity_name,
-                    "initiative": self.roll_initiative(entity_name),
+                    "initiative": Combat_Actions.roll_initiative(self.world, entity_name),
                     "outcome": turn_outcome,
                 })
         if turns:
@@ -1572,7 +1659,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         # interrupted mid-round by an earlier actor's kill (ex: an ally finishing it off
         # before the round is even done resolving, or upkeep damage finishing off a bleeding
         # target that survived the round's own attacks).
-        if self.current_target and self.get_current_hp(self.current_target) <= 0:
+        if self.current_target and Combat_Resolution.get_current_hp(self.world, self.current_target) <= 0:
             self.current_target = self._choose_combat_target()
         # A paused travel/rest (see docs/downtime.md's "Pausing for a fight") resumes the
         # instant the last hostile in the scene actually drops -- checked fresh every round
@@ -1593,7 +1680,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
                 entity.
         """
         return any(
-            self.is_hostile(entity_name, self.player_name) and self.get_current_hp(entity_name) > 0
+            self.is_hostile(entity_name, self.player_name) and Combat_Resolution.get_current_hp(self.world, entity_name) > 0
             for entity_name in self.scenario_entities
             if entity_name != self.player_name
         )
@@ -1959,14 +2046,14 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
                 list) if the check passed and its outcome had a truthy "reveal" key.
         """
         test = self.entities[item_name]["test"]
-        roll = self.resolve_action(
+        roll = Combat_Resolution.resolve_action(self.world, 
             self.player_name, skill_name, test.get("difficulty", 0), dice_penalty=dice_penalty,
         )
         outcome = test.get("pass") if roll["success"] else test.get("fail")
         self.apply_test_outcome(item_name, outcome)
         self._run_test_outcome_program(test, roll["success"], item_name)
         effects = []
-        if self.is_identified(item_name):
+        if Combat_Actions.is_identified(self.world, item_name):
             effects.append(RevealEffect(tags=list(self.entities[item_name].get("tags", []))))
         result = rolled_outcome_from_roll(roll, effects=effects)
         result.defender = item_name
@@ -2056,7 +2143,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
             name for name in self.scenario_entities
             if name != self.player_name and not self._is_party_member(name)
             and self.entities.get(name, {}).get("supertype") == "creature"
-            and self.get_current_hp(name) > 0 and not self.is_hidden(name)
+            and Combat_Resolution.get_current_hp(self.world, name) > 0 and not self.is_hidden(name)
             and str((self.entities[name].get("qualities") or {}).get("gender", "")).lower() in wanted
         ]
         return matches[0] if len(matches) == 1 else None
@@ -2109,12 +2196,12 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         for instance_name in self.scenario_entities:
             if instance_name == self.player_name:
                 continue
-            if self.is_hostile(instance_name, self.player_name) and self.get_current_hp(instance_name) > 0:
+            if self.is_hostile(instance_name, self.player_name) and Combat_Resolution.get_current_hp(self.world, instance_name) > 0:
                 return instance_name
         for instance_name in self.scenario_entities:
             if self._is_party_member(instance_name) or self._is_background(instance_name):
                 continue
-            if self.get_current_hp(instance_name) > 0:
+            if Combat_Resolution.get_current_hp(self.world, instance_name) > 0:
                 return instance_name
         # Only once nothing else non-party qualifies does an ambient crowd member get picked
         # -- a market's fishmonger must never displace the room's own chest/trap here, since
@@ -2123,12 +2210,12 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         for instance_name in self.scenario_entities:
             if self._is_party_member(instance_name):
                 continue
-            if self.get_current_hp(instance_name) > 0:
+            if Combat_Resolution.get_current_hp(self.world, instance_name) > 0:
                 return instance_name
         for instance_name in self.scenario_entities:
             if instance_name == self.player_name:
                 continue
-            if self.get_current_hp(instance_name) > 0:
+            if Combat_Resolution.get_current_hp(self.world, instance_name) > 0:
                 return instance_name
         return None
 
@@ -2149,6 +2236,6 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, CombatMixin, MovementMixi
         return bool(
             self.current_target
             and self.current_target in self.scenario_entities
-            and self.get_current_hp(self.current_target) > 0
+            and Combat_Resolution.get_current_hp(self.world, self.current_target) > 0
             and self.is_hostile(self.current_target, self.player_name)
         )

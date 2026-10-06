@@ -1,7 +1,8 @@
-from dm.DM_Combat import MOVEMENT_ACTIONS, TRANSFER_ACTIONS
+from resolution.Combat_Actions import MOVEMENT_ACTIONS, TRANSFER_ACTIONS
 from dm.DM_Rules import PLAYER_PLACEHOLDER
 from dm.DM_Types import DMCoreProtocol
 from resolution.Law_Resolution import AUTOMATIC, CRIMES
+import resolution.Combat_Actions as Combat_Actions
 
 # Entity fields (see Rules/Fantasy/reference/template_schema.toml's own note) an
 # [[entity_template]] must never author -- NPC_Generation.py fills these in at instancing time,
@@ -160,7 +161,7 @@ class ValidationMixin(DMCoreProtocol):
                 label = f"{namespace_label} '{name}'"
                 self._check_skill_field(label, entity.get("skill"))
                 for ability in entity.get("abilities", []):
-                    resolved = self.resolve_ability(ability)
+                    resolved = Combat_Actions.resolve_ability(self.world, ability)
                     if resolved is None:
                         continue
                     ability_name = resolved.get("name", ability if isinstance(ability, str) else "?")
@@ -180,7 +181,7 @@ class ValidationMixin(DMCoreProtocol):
 
     def _resolves_as_named_ability(self, entity, ability_name):
         """!
-        @brief Mirrors resolve_named_ability's own resolution (DM_Combat.py) -- an entity's own
+        @brief Mirrors resolve_named_ability's own resolution (Combat_Actions.py) -- an entity's own
             "abilities" list, matched by resolved name, else self.universal_abilities -- but
             against an already-in-hand entity dict rather than a self.entities lookup by name,
             so this works for an entity_template too (never itself a self.entities key,
@@ -191,7 +192,7 @@ class ValidationMixin(DMCoreProtocol):
         @return True if ability_name resolves, same semantics as resolve_named_ability.
         """
         for ability in entity.get("abilities", []):
-            resolved = self.resolve_ability(ability)
+            resolved = Combat_Actions.resolve_ability(self.world, ability)
             if resolved and resolved.get("name") == ability_name:
                 return True
         return ability_name in self.universal_abilities
@@ -306,7 +307,7 @@ class ValidationMixin(DMCoreProtocol):
                     self._check_materials(f"{label} [entity.craft]", craft.get("materials"))
 
                 for ability in entity.get("abilities", []):
-                    resolved = self.resolve_ability(ability)
+                    resolved = Combat_Actions.resolve_ability(self.world, ability)
                     if resolved is None:
                         continue
                     ability_name = resolved.get("name", ability if isinstance(ability, str) else "?")
@@ -853,7 +854,7 @@ class ValidationMixin(DMCoreProtocol):
                     self._check_program_condition_durations(label, entity.get(program_field))
 
                 for ability in entity.get("abilities", []):
-                    resolved = self.resolve_ability(ability)
+                    resolved = Combat_Actions.resolve_ability(self.world, ability)
                     if resolved is None:
                         continue
                     ability_name = resolved.get("name", ability if isinstance(ability, str) else "?")

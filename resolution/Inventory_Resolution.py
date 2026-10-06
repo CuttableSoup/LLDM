@@ -17,6 +17,14 @@
 import re
 
 
+# Reference scale for nudge_attitude_from_event's own magnitude param (0..1) when a transferred
+# item/amount of currency drives a "theft"/"favor" attitude nudge -- items.toml's own authored
+# values top out around 15 today, so this leaves headroom before an ordinary item hits the 1.0
+# (full-strength) ceiling, while a genuinely valuable item or a sizeable currency gift/theft can
+# still reach it. A single tunable knob, same "one intensity knob" precedent DM_Social.py's own
+# SENTIMENT_INTENSITY_SCALE already sets.
+SIGNIFICANT_VALUE = 25
+
 def _settle(amount):
     """!
     @brief Rounds a balance after fractional prices have moved through it -- a setting may price

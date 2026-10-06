@@ -6,6 +6,39 @@
     unlike every item-named intent.
 """
 
+from intents.match import IntentMatch
+
+# -- What the classifier matches (see intents/registry.py's MATCHES) --
+
+# Party positioning (see DM_Core._resolve_formation_intent / docs/movement-scenarios.md's
+# "Party formation") --
+# like advance/retreat above, these act on the scene (specifically, whichever party member is
+# named, or the whole party if none is) rather than a named item, so no map_to_item lookup ever
+# runs for them either; unlike advance/retreat, DMCore -- not this module -- is what figures out
+# *who* is being addressed, by searching the raw input for a party member's own name. None of
+# these phrases collide with ADVANCE/RETREAT_KEYWORDS' own substrings (ex: "fall back" is
+# retreat, "fall in behind" is not "fall back").
+FORMATION_BEHIND_KEYWORDS = (
+    "stay behind", "get behind", "hang back", "keep behind", "fall in behind", "stand behind",
+)
+FORMATION_ABREAST_KEYWORDS = (
+    "walk beside", "stay beside", "stay abreast", "walk with me", "walk alongside", "flank me",
+    "stand beside", "walk abreast",
+)
+# Semantic-router phrases (nlp/Intent_Classification.py's INTENT_PROTOTYPES).
+PROTOTYPES = {
+    "formation_behind": (
+        "stay behind me", "keep back and follow me", "fall in behind me",
+    ),
+    "formation_abreast": (
+        "walk beside me", "stay at my side", "move up alongside me",
+    ),
+}
+MATCH = {
+    "formation_behind": IntentMatch(keywords=FORMATION_BEHIND_KEYWORDS, prototypes=PROTOTYPES["formation_behind"], exempt=True),
+    "formation_abreast": IntentMatch(keywords=FORMATION_ABREAST_KEYWORDS, prototypes=PROTOTYPES["formation_abreast"], exempt=True),
+}
+
 
 def resolve_formation(core, data, resolved):
     """!

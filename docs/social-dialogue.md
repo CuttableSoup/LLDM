@@ -100,7 +100,7 @@ hates. Safe to call unconditionally over every scene entity: a tableless creatur
 `nudge_attitude_from_event`'s own "no `[entity.attitudes]` table" gate silently no-ops for
 exactly that case, so a mindless hostile creature never actually accumulates a bond it has no
 data to hold. Two call sites share this shape, `attacker_name` being whichever side actually
-landed the hit: `_apply_damage_if_hit` after a landed *player* hit, and `DM_Combat.py`'s
+landed the hit: `_apply_damage_if_hit` after a landed *player* hit, and `Combat_Actions.py`'s
 `resolve_behavior_action` after any *other* entity's own successful combat-turn attack (ex: a
 monster hitting the player, or an ally striking a shared foe) — a generalization
 `_nudge_shared_enemy_bonds` needed no changes of its own to support, since it already looped
@@ -111,7 +111,7 @@ decided it was attacking in the first place, so an automatic reciprocal nudge on
 own side would be redundant with something already hand-authored.
 
 `theft`/`favor` aren't player-only anymore: `DM_Inventory.py`'s `_resolve_transfer_intent` still
-covers the player's own `take`/`give` intents, and `DM_Combat.py`'s `TRANSFER_ACTIONS`/
+covers the player's own `take`/`give` intents, and `Combat_Actions.py`'s `TRANSFER_ACTIONS`/
 `_resolve_transfer_behavior` cover the NPC side — reserved `[[entity.behavior]]` action names
 `"steal"`/`"gift"` (parallel to `MOVEMENT_ACTIONS`' own `"advance"`/`"retreat"`), naming which
 item to move via the behavior entry's own `"item"` field (`"currency"`, the same reserved
@@ -254,7 +254,7 @@ reads the *meaning* of an utterance, which the target never received). `target_l
 first of the target's own unshared languages; `nonsense_phrase` is looked up by matching that
 name against `races.toml`'s own `[[race]].language` field (`None` if no race claims it, ex: a
 scenario-authored language with no matching race entry). `LLMCore.generate_npc_dialogue`
-branches on `language_barrier` to `_build_language_barrier_prompt`, instructing the model to
+branches on `language_barrier` to `build_language_barrier_prompt`, instructing the model to
 reply only with invented gibberish styled after `nonsense_phrase` (explicitly told not to reuse
 it verbatim) rather than answering what was actually asked — persona/attitude still ground *tone*
 (a hostile speaker's gibberish should still read as hostile), just never the content. Only the
@@ -294,7 +294,7 @@ opt-in via `language_dependent = true` on an ability entry (`entity_schema.toml`
 fixed-classification role `damage_tags`/`armor_tags` already play, see `docs/combat.md`'s "Tags
 vs. conditions" — deliberately not reusing `damage_tags` itself, since that field only ever feeds
 the damage-reduction pipeline and many language-dependent checks deal no damage at all).
-`DM_Combat.py`'s `_ability_requires_language(skill_name, ability)` checks the resolved ability's
+`Combat_Actions.py`'s `_ability_requires_language(skill_name, ability)` checks the resolved ability's
 own flag when one was named; for a bare skill use with no named ability (ex: "persuade the
 guard" resolves `skill_name="charisma"` with no ability, since `find_attack_ability` deliberately
 never scans *universal* abilities like `charm`), it falls back to checking the skill's own
@@ -436,12 +436,12 @@ passes both through on `dialogue_resolved`):
   know").
 
 Before this, the raw command itself was quoted as speech (`The player says: "talk to the
-fishmonger"`), and the model invented a conversation to fit. `LLMCore._build_speech_prompt`
+fishmonger"`), and the model invented a conversation to fit. `LLMCore.build_speech_prompt`
 builds one prompt per form, always in the second person. The PC is "you" in every dialogue
 prompt, including language-barrier and not-found ones. The model used to copy "the player"
 straight into replies.
 
-**Reply shape.** `_build_dialogue_system_message` lays the NPC out as "Who {target} is" (persona)
+**Reply shape.** `dialogue_system_message` lays the NPC out as "Who {target} is" (persona)
 and "How {target} feels about you" (attitude). It asks for:
 
 - mostly the NPC's own spoken words, in quotes, in everyday language

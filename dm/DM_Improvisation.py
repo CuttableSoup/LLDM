@@ -7,8 +7,11 @@ from resolution.AdHoc_Generation import (
     generate_referenced_npc,
 )
 from dm.DM_Types import DMCoreProtocol
+from persistence.slot import Persistable
 from resolution.Character_Creation import BASE_LANGUAGE, load_learnable_languages
 from resolution.NPC_Generation import load_npc_keywords
+import resolution.Combat_Resolution as Combat_Resolution
+import resolution.Combat_Actions as Combat_Actions
 
 # subtype values generate_ad_hoc_item may return that are placed as live, targetable scene
 # participants (self.scenario_entities) rather than on the ground or in inventory -- a
@@ -59,7 +62,7 @@ class ImprovisationMixin(DMCoreProtocol):
         set up by DMCore.__init__, plus RulesMixin's _current_scene_description/
         _place_new_entity/_unique_entity_key/_all_known_instance_names (PersistenceMixin),
         InventoryMixin's _current_ground_items/place_new_item,
-        CombatMixin's get_equip_slots/get_challenge_rating, SocialMixin's is_hostile,
+        Combat_Actions.py's get_equip_slots/get_challenge_rating, SocialMixin's is_hostile,
         MovementMixin's get_band, StatusMixin's apply_condition/dismiss_condition/get_current_hp,
         and DMCore's
         own _on_item_interaction_detected/_target_is_engaged. Inherits DMCoreProtocol purely
@@ -345,7 +348,7 @@ class ImprovisationMixin(DMCoreProtocol):
 
         hostile = [
             candidate for candidate in removable
-            if self.is_hostile(candidate, self.player_name) and self.get_current_hp(candidate) > 0
+            if self.is_hostile(candidate, self.player_name) and Combat_Resolution.get_current_hp(self.world, candidate) > 0
         ]
         decision = decide_entity_removal(
             input_text, self._current_scene_description(), sorted(removable), hostile_entities=hostile,
@@ -376,7 +379,7 @@ class ImprovisationMixin(DMCoreProtocol):
             unconditionally (a container/trap is never hostile); pass the caller's own
             is_hostile(name, ...) check for a conjured creature instead.
         """
-        self._place_new_entity(name, entity, self.get_band(self.player_name))
+        self._place_new_entity(name, entity, Combat_Resolution.get_band(self.world, self.player_name))
         if insert_front:
             self.scenario_entities.insert(0, name)
         else:
@@ -416,7 +419,7 @@ class ImprovisationMixin(DMCoreProtocol):
             may return a *hostile* creature and so change the scene's balance -- the
             narrower, non-hostile-by-schema _attempt_dialogue_promotion below is what runs
             automatically instead (see this class's own module docstring for the three tiers). target_cr is the player's own current challenge rating (get_challenge_rating,
-            CombatMixin) -- a single-target encounter framing appropriate for an ad hoc,
+            Combat_Actions.py) -- a single-target encounter framing appropriate for an ad hoc,
             mid-scene spawn, unlike real NPC generation's own party-pool resolution (see
             DM_NpcGeneration.py's _resolve_npc_target_cr), which isn't needed here since there's
             no entity_template's own target_cr field to resolve against. On success, disambiguates
@@ -435,7 +438,7 @@ class ImprovisationMixin(DMCoreProtocol):
                 {"created_creature": True, "name"}.
         """
         npc_keywords = load_npc_keywords(os.path.join("Rules", self.setting))
-        target_cr = self.get_challenge_rating(self.player_name)
+        target_cr = Combat_Actions.get_challenge_rating(self.world, self.player_name)
         result = generate_ad_hoc_creature(
             input_text, self._current_scene_description(), target_cr, npc_keywords, self.skills,
         )
@@ -534,7 +537,7 @@ class ImprovisationMixin(DMCoreProtocol):
         """
         settings = settings or self._population_settings()
         if any(
-            self.is_hostile(name, self.player_name) and self.get_current_hp(name) > 0
+            self.is_hostile(name, self.player_name) and Combat_Resolution.get_current_hp(self.world, name) > 0
             for name in list(self.scenario_entities)
         ):
             return 0
@@ -551,7 +554,7 @@ class ImprovisationMixin(DMCoreProtocol):
         people = extract_narrated_people(
             text, self._current_scene_description(), settings["hint"],
             [self.entities.get(name, {}).get("name", name) for name in list(self.scenario_entities)],
-            room, self.get_challenge_rating(self.player_name) * settings["cr_share"],
+            room, Combat_Actions.get_challenge_rating(self.world, self.player_name) * settings["cr_share"],
             npc_keywords, self.skills, settings["freeform"], report=self._report_population_decline,
         )
         if people:
@@ -662,7 +665,7 @@ class ImprovisationMixin(DMCoreProtocol):
         # anywhere in the scene is enough to refuse, whether or not it is what the player is
         # currently aimed at.
         if any(
-            self.is_hostile(name, self.player_name) and self.get_current_hp(name) > 0
+            self.is_hostile(name, self.player_name) and Combat_Resolution.get_current_hp(self.world, name) > 0
             for name in self.scenario_entities
         ):
             return None
@@ -685,7 +688,7 @@ class ImprovisationMixin(DMCoreProtocol):
                 for name in self.scenario_entities if name != self.player_name
             ],
             list(self.recent_narration),
-            self.get_challenge_rating(self.player_name) * BYSTANDER_CR_SHARE,
+            Combat_Actions.get_challenge_rating(self.world, self.player_name) * BYSTANDER_CR_SHARE,
             npc_keywords,
             self.skills,
         )
@@ -752,13 +755,33 @@ class ImprovisationMixin(DMCoreProtocol):
                 "entities": [catalog_entry(name, entity)],
             })
         if decision.get("apply_condition"):
-            self.apply_condition(name, decision["apply_condition"], duration="permanent", dismiss="")
+            Combat_Resolution.apply_condition(self.world, name, decision["apply_condition"], duration="permanent", dismiss="")
             changed = True
         if decision.get("dismiss_condition"):
-            self.dismiss_condition(name, decision["dismiss_condition"])
+            Combat_Resolution.dismiss_condition(self.world, name, decision["dismiss_condition"])
             changed = True
 
         if not changed:
             return {"edited": False}
 
         return {"edited": True, "name": name, "reason": decision.get("reason", "")}
+
+
+class RemovedEntitiesSlice(Persistable):
+    """!
+    @brief Every name ever forcibly removed from a scene (remove_entity_from_scene), so a reload
+        doesn't let a scenario/room's static "entities" list respawn it. Must be restored before
+        the world is re-instanced -- _instance_entities consults it -- so it's listed ahead of the
+        world slice in DMCore's participant list.
+    """
+
+    def __init__(self, core):
+        self.core = core
+
+    def snapshot(self):
+        # sorted(): a set's iteration order depends on insertion history, so listing it as-is
+        # would make a save/load/save round trip non-deterministic for no gameplay reason.
+        return {"removed_entities": sorted(self.core.removed_entities)}
+
+    def restore(self, data):
+        self.core.removed_entities = set(data.get("removed_entities", []))

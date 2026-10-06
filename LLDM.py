@@ -1,7 +1,5 @@
 import argparse
 import atexit
-import json
-import os
 import sys
 import threading
 
@@ -14,6 +12,7 @@ from gui.GUI_Core import GUICore
 from nlp.NLP_Core import NLPCore
 from llm.LLM_Backend import BACKEND_NAMES, describe, load_backend, set_backend
 from llm.Ollama_Launcher import ensure_ollama_running, stop_ollama
+from persistence.slot import FileSlotStore, SaveError
 
 DEFAULT_SCENARIO = "lost_coast"
 
@@ -23,35 +22,33 @@ DEFAULT_SCENARIO = "lost_coast"
 DEBUG = True
 
 
-def _peek_saved_scenario_key(slot_name, fallback, fallback_setting="Fantasy"):
+def _peek_saved_scenario_key(slot_name, fallback, fallback_setting="Fantasy", slot_store=None):
     """!
     @brief Reads just a save slot's own "scenario_key"/"setting" straight out of its
-        dm_state.json -- without needing a live DMCore to ask (see DM_Persistence.py's
+        dm_state -- without needing a live DMCore to ask (see DM_Persistence.py's
         save_game/load_game) -- so main()'s own cold-start "Load..." handler knows which
         scenario/setting to construct a brand new DMCore against *before* DMCore.load_game()
         itself has anything to run against. Both matter: DMCore.__init__ resolves scenario_key
         against Rules/<setting>/scenarios/ before load_game ever gets to overlay the save's
         own state, so a setting mismatch here would fail scenario lookup outright rather than
         just cosmetically narrating the wrong intro (see load_game's own "throwaway intro"
-        note). Mirrors DM_Persistence.py's own _save_slot_dir sanitizing (os.path.basename,
-        stripped) so this reads the exact same directory a real load_game would.
+        note). Reads through the same slot store a real load_game does, so it's the same slot.
     @param slot_name The save slot name, as picked from GUICore's own load-slot picker.
     @param fallback Returned as the scenario key if the slot doesn't exist or its
-        dm_state.json can't be read/parsed -- DMCore.load_game itself is what surfaces a real
+        dm_state part can't be read/parsed -- DMCore.load_game itself is what surfaces a real
         "no such slot" error to the player (via "game_load_failed"); this only ever has to
         pick *some* scenario to construct DMCore with in the first place.
     @param fallback_setting Returned as the setting under the same failure conditions.
+    @param slot_store Where save slots live; None is the real Saves/.
     @return (scenario_key, setting) -- either or both may be the given fallbacks.
     """
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    safe_name = os.path.basename(slot_name.strip()) or "unnamed"
-    path = os.path.join(base_dir, "Saves", safe_name, "dm_state.json")
     try:
-        with open(path, "r") as f:
-            data = json.load(f)
-        return data.get("scenario_key", fallback), data.get("setting", fallback_setting)
-    except (OSError, ValueError):
+        # A tolerant peek -- a slot from an older format still names its own scenario/setting, and
+        # DMCore.load_game is what reports it as unloadable.
+        data = (slot_store or FileSlotStore()).read(slot_name, "dm_state", check_version=False)
+    except SaveError:
         return fallback, fallback_setting
+    return data.get("scenario_key", fallback), data.get("setting", fallback_setting)
 
 
 def main():
@@ -115,7 +112,9 @@ def main():
     # already exists for the Ollama bootstrap (next) to report progress into -- none of its own
     # subscriptions (llm_response_ready, rules_loaded, ...) can fire this early regardless of
     # construction order, since nothing publishes them until DMCore exists.
-    gui_core = GUICore(event_bus, default_setting=args.setting)
+    # One slot store for all three cores, so Save/Load agree on where slots live.
+    slot_store = FileSlotStore()
+    gui_core = GUICore(event_bus, default_setting=args.setting, slot_store=slot_store)
 
     # 1.6. Best-effort local Ollama bootstrap -- installs a local copy if nothing's found
     # anywhere (one-time; see Ollama_Launcher.py's own module note) and makes sure the
@@ -165,7 +164,7 @@ def main():
     # NLPCore needs to hear 'rules_loaded' from DMCore
     nlp_core = NLPCore(event_bus)
     # LLMCore needs to hear 'action_resolved' from DMCore
-    llm_core = LLMCore(event_bus)
+    llm_core = LLMCore(event_bus, slot_store=slot_store)
 
     # 2.5. No scenario/character is loaded automatically -- DMCore (and the scenario it
     # publishes "scenario_loaded" for during its own __init__) is only ever constructed in
@@ -196,7 +195,7 @@ def main():
         # every caller except on_load_requested below (see that call site's own comment).
         dm_core = DMCore(
             event_bus, scenario_name=scenario_name, character=character, setting=setting,
-            publish_intro_narration=publish_intro_narration,
+            publish_intro_narration=publish_intro_narration, slot_store=slot_store,
         )
 
     def on_character_created(data):
@@ -228,7 +227,7 @@ def main():
             event_bus.publish("log_warning", "load_requested with no slot name; ignored.")
             return
         scenario_name, setting = _peek_saved_scenario_key(
-            slot, args.scenario or DEFAULT_SCENARIO, args.setting,
+            slot, args.scenario or DEFAULT_SCENARIO, args.setting, slot_store=slot_store,
         )
         # publish_intro_narration=False -- this DMCore exists only to hand to load_game()
         # below a moment later (the documented "throwaway" construction, see

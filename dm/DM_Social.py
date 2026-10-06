@@ -2,6 +2,7 @@ import resolution.Social_Resolution as Social_Resolution
 from dm.DM_Types import DMCoreProtocol
 from resolution.AdHoc_Generation import basic_combat_kit
 from resolution.Social_Resolution import ACTION_ATTITUDE_DRIFT_CAP, ATTITUDE_AXES, TALK_ATTITUDE_DRIFT_CAP
+import resolution.Combat_Actions as Combat_Actions
 
 # nudge_attitude's own scaling factor -- the disposition delta for one dialogue turn is
 # classify_sentiment's own confidence score (already a 0..1 measure of how strongly the model
@@ -174,9 +175,9 @@ class SocialMixin(DMCoreProtocol):
         # and a merchant's best of those is charisma -- found by playtest, an assaulted trinket
         # vendor "fought back" with a charisma roll every round. A physical attack is one the
         # setting's own defense-role skill (dodge) opposes.
-        defense = set(self._skills_with_role("defense"))
+        defense = set(Combat_Actions._skills_with_role(self.world, "defense"))
         physical = [
-            name for name in self._skills_with_role("offense")
+            name for name in Combat_Actions._skills_with_role(self.world, "offense")
             if defense & set(self.skills.get(name, {}).get("opposes", []))
         ]
         trained = [name for name in physical if name in skills]
@@ -277,7 +278,7 @@ class SocialMixin(DMCoreProtocol):
 
         # How they talk -- register, dialect, verbosity, tics -- next to lines they've actually
         # said, which are the best example of it. What keeps a dialogue reply from coming out in
-        # the narrator's own voice (see LLMCore._build_dialogue_system_message).
+        # the narrator's own voice (see LLMCore.dialogue_system_message).
         voice = entity.get("voice")
         if voice:
             parts.append(f"Voice: {voice}")

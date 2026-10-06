@@ -22,11 +22,11 @@ outcome carries unused. `TeleportEffect` is `_apply_teleport_if_hit`'s own (`DM_
 an ability's `teleport_to_band`/`teleport_to_location` field relocates the player outright on
 a successful cast (Dimension Door/Teleport, Pathfinder-mapping terms), the same "not really
 against anyone" scope a summon already has.
-`resolve_action`/`resolve_opposed_action` (`DM_Combat.py`) themselves keep returning a plain,
+`resolve_action`/`resolve_opposed_action` (`Combat_Resolution.py`) themselves keep returning a plain,
 untyped roll dict — `DM_Rules.py`'s hidden-notice auto-roll (`_auto_roll_notice`) uses that raw
 dict for an unrelated bool check with nothing to do with narration — so every narration-facing
 call site builds its own `ActionOutcome` one layer up (`DM_Core.py`'s `_resolve_roll` and
-friends, `DM_Crafting.py`'s `_try_craft_action`, `DM_Combat.py`'s `resolve_behavior_action`).
+friends, `DM_Crafting.py`'s `_try_craft_action`, `Combat_Actions.py`'s `resolve_behavior_action`).
 `_on_turn_detected` and `_on_item_interaction_detected` both also call `_publish_party_status`,
 which re-publishes `party_status_changed {"entities": self.entities}` so `GUICore`'s Party tab
 redraws after anything that could have changed a party member's HP/equipment/inventory/
@@ -200,7 +200,7 @@ generalization rather than memorization.
 
 **Resolution.** `dice_penalty = max(0, len(clauses) - 1)`, computed once per turn from the
 combined item + action clause count and threaded through every dice-rolling action-kind entry:
-`resolve_action`/`resolve_opposed_action` (`DM_Combat.py`) subtract whole dice (never pips) from
+`resolve_action`/`resolve_opposed_action` (`Combat_Resolution.py`) subtract whole dice (never pips) from
 the *acting* entity's pool, floored at 0. For an opposed roll only the attacker's roll is
 reduced — the defender's difficulty roll is computed before `dice_penalty` is applied.
 `_on_turn_detected` loops every clause: item-kind entries resolve immediately via
@@ -212,7 +212,7 @@ because `self.current_target` happens to already be hostile from an earlier turn
 entries narrate separately (their own `item_interaction_resolved`, ahead of the batched
 action-kind entries) rather than folding into one merged prompt.
 
-`LLMCore._describe_player_actions` describes every entry in `"actions"`, preceded by a line
+`Narration_Prompts.describe_player_actions` describes every entry in `"actions"`, preceded by a line
 naming the shared penalty whenever there's more than one, so narration reads as one character
 splitting their attention rather than several independent, equally-precise attacks.
 

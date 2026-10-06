@@ -24,7 +24,28 @@ import re
 # DMCore-independent (no DMCore/game-state coupling of its own), so importing its shared
 # intent-vocabulary constants doesn't compromise this module's own independence. See
 # IMPROVISABLE_INTENTS, below, for what these three are actually used for here.
+from intents.advance_retreat import TOWARD_PATTERN
+from intents.registry import MATCHES
+from intents.travel import LEAVE_PATTERN
 from resolution.AdHoc_Generation import GROUND_AWARE_INTENTS, PLAYER_CENTRIC_INTENTS, TARGET_CENTRIC_INTENTS
+
+# The free-standing intents' keyword phrases, regexes and semantic-router prototypes live with
+# the intent that owns them (intents/<name>.py's MATCH, collected in intents/registry.py's
+# MATCHES, in gate order) -- these module-level names are views of that manifest, kept so the
+# rest of this file (and its tests) can keep reading them by name.
+LORE_KEYWORDS = MATCHES["lore_check"].keywords
+ADVANCE_KEYWORDS = MATCHES["advance"].keywords
+RETREAT_KEYWORDS = MATCHES["retreat"].keywords
+FORMATION_BEHIND_KEYWORDS = MATCHES["formation_behind"].keywords
+FORMATION_ABREAST_KEYWORDS = MATCHES["formation_abreast"].keywords
+SPEAK_LANGUAGE_KEYWORDS = MATCHES["speak_language"].keywords
+REST_KEYWORDS = MATCHES["rest"].keywords
+MOUNT_KEYWORDS = MATCHES["mount"].keywords
+DISMOUNT_KEYWORDS = MATCHES["dismount"].keywords
+HITCH_KEYWORDS = MATCHES["hitch"].keywords
+UNHITCH_KEYWORDS = MATCHES["unhitch"].keywords
+TRAVEL_KEYWORDS = MATCHES["travel"].keywords
+
 
 # Substring checks against processed input to decide item-interaction intent, before any skill
 # matching runs. Phrases (not bare words) where a bare word would collide with an existing
@@ -34,18 +55,6 @@ from resolution.AdHoc_Generation import GROUND_AWARE_INTENTS, PLAYER_CENTRIC_INT
 # description is "Using swords and knives in close combat.", which a bare "close " would
 # misfire on before skill matching ever got a chance to run.
 EXAMINE_KEYWORDS = ("examine", "inspect", "look at", "check out")
-# Recalling in-fiction knowledge about a currently-present creature's own weaknesses/abilities
-# (the Pathfinder Knowledge-skill shape -- see skills.toml's own "lore_types" field,
-# DM_Combat.py's _resolve_lore_check_intent, docs/extended-goals.md's "Knowledge checks
-# revealing monster lore"). Deliberately never names the creature itself here -- like MOUNT_
-# KEYWORDS/FORMATION_*_KEYWORDS below, DMCore resolves *which* one by searching the raw input
-# for a currently-present entity's own name. Long, distinctive phrases, not bare words, so this
-# never collides with DIALOGUE_KEYWORDS' own "ask "/"tell " (a genuine "ask the sheriff what he
-# knows" must still reach dialogue, not this).
-LORE_KEYWORDS = (
-    "what do you know about", "what do i know about", "what does my character know about",
-    "recall what you know about", "recall what i know about",
-)
 # Moves an item already in the player's own inventory into a worn/wielded [entity.equipped]
 # slot -- see DMCore._resolve_equip_intent. No collision risk with any skill's own keyword
 # list (checked by test_keyword_tables_never_collide_with_a_skill_keyword, below).
@@ -87,86 +96,6 @@ USE_KEYWORDS = ("drink ", "quaff ", "drink it")
 CRAFT_KEYWORDS = ("craft ", "craft a ", "craft an ", "craft the ", "brew ", "forge a ", "forge an ")
 OPEN_KEYWORDS = ("open the ", "open it")
 CLOSE_KEYWORDS = ("close the ", "close it", "shut the ", "shut it")
-# Movement/positioning (see DM_Movement.py) -- like open/close, these act on the whole scene
-# rather than a named item, so no map_to_item lookup ever runs for them either. Phrases, not
-# bare "move ", since a bare word would swallow unrelated skill phrasing the same way a bare
-# "close " would have (see the module note above) -- none of these collide with any
-# skills.toml keyword list. Deliberately no "close the distance" here even though it's a
-# natural phrasing -- CLOSE_KEYWORDS' "close the " is checked first (see item_intent_gates)
-# and would swallow it as a "close" intent instead.
-# "follow"/"go after" close on someone the same way -- there's no follow mechanic, so closing the
-# distance is what the engine can do. Found by playtest: "i follow her at a respectful distance"
-# was not understood. (A "<verb> toward" phrasing is TOWARD_PATTERN's, below.)
-ADVANCE_KEYWORDS = (
-    "advance", "move closer", "approach", "move toward", "move in", "step closer", "follow", "go after",
-)
-# "head/walk/proceed (carefully) toward X": travel when X is a real destination (checked in
-# classify() before the item pass), else advance (detect_item_intent). Found by playtest: "i'll
-# proceed carefully toward the wyrmwatch" was not understood; "head toward the docks" already
-# reached travel through the semantic router and must keep doing so.
-TOWARD_PATTERN = re.compile(
-    r"\b(?:head|walk|proceed|go|make (?:my|our) way|run|hurry|stride|creep|edge)(?:s|es|ed|ing)?"
-    r"(?:\s+\w+ly)?\s+towards?\b"
-)
-RETREAT_KEYWORDS = ("retreat", "back away", "back off", "fall back", "step back", "withdraw", "move away")
-# Party positioning (see DM_Core._resolve_formation_intent / docs/movement-scenarios.md's
-# "Party formation") --
-# like advance/retreat above, these act on the scene (specifically, whichever party member is
-# named, or the whole party if none is) rather than a named item, so no map_to_item lookup ever
-# runs for them either; unlike advance/retreat, DMCore -- not this module -- is what figures out
-# *who* is being addressed, by searching the raw input for a party member's own name. None of
-# these phrases collide with ADVANCE/RETREAT_KEYWORDS' own substrings (ex: "fall back" is
-# retreat, "fall in behind" is not "fall back").
-FORMATION_BEHIND_KEYWORDS = (
-    "stay behind", "get behind", "hang back", "keep behind", "fall in behind", "stand behind",
-)
-FORMATION_ABREAST_KEYWORDS = (
-    "walk beside", "stay beside", "stay abreast", "walk with me", "walk alongside", "flank me",
-    "stand beside", "walk abreast",
-)
-# Switching which of the player's own known languages is currently active (see DM_Dialogue.py's
-# _current_language/_resolve_language_intent) -- like formation above, this acts on the player's
-# own state rather than a named item, so no map_to_item lookup ever runs for it either; DMCore,
-# not this module, is what figures out *which* language is named, by searching the raw input for
-# one of the player's own "languages" (same "search input for a known name" pattern
-# _resolve_formation_intent already uses for a party member's own name). Phrases, not a bare
-# "speak ", since a bare word would collide with the linguistics skill's own "speak" keyword
-# (skills.toml) -- same collision-avoidance reason DIALOGUE_KEYWORDS' own "speak to "/"speak
-# with " already follow.
-SPEAK_LANGUAGE_KEYWORDS = ("speak in ", "switch to speaking ", "start speaking ")
-# Downtime rest (see DM_Time.py's rest, docs/downtime.md) -- like formation/speak_language
-# above, this acts on the player's own party/clock rather than a named item, so no
-# map_to_item lookup ever runs for it either; DMCore, not this module, is what decides *how
-# long* the rest lasts (a plain "rest" spends one block, a phrase naming night/dawn/morning
-# spends a whole day's worth), by searching the raw input the same "search input for
-# specifics" pattern travel/formation/speak_language already follow. Bare "rest" is safe
-# (word-boundary matched -- see _phrase_matches) since no skills.toml keyword is the literal
-# word "rest"; "camp"/"sleep" only ever appear here as part of a longer phrase, never bare,
-# so neither risks colliding with survivalism's own bare "camp" keyword the way a bare "camp"
-# here would have. Deliberately no "take a rest" -- TAKE_KEYWORDS' own "take " is checked
-# well ahead of this tuple and would swallow it as an item "take" first.
-REST_KEYWORDS = ("rest", "make camp", "set up camp", "sleep", "camp for the night")
-# Climbing onto/off of a named, currently-present entity to take on its own travel_speed/
-# carrying capacity (see entity_schema.toml's own "mount", DM_Movement.py's
-# _resolve_mount_intent/_resolve_dismount_intent) -- like rest/formation above, this acts on
-# the player's own state rather than a named item, so no map_to_item lookup ever runs for it
-# either; DMCore, not this module, is what figures out *which* entity is being mounted, by
-# searching the raw input for a currently-present entity's own name (same "search input for a
-# known name" pattern _resolve_formation_intent already uses). Deliberately multi-word
-# phrases, not bare "mount"/"climb"/"ride" -- athletics' own "climb" keyword and husbandry's
-# own "ride" keyword (skills.toml) would otherwise be swallowed as this intent before skill
-# matching ever got a chance to run, the same collision-avoidance reason every other keyword
-# tuple in this file follows. "dismount" alone is safe -- no skill keyword is that literal word.
-MOUNT_KEYWORDS = ("mount the ", "climb onto the ", "climb on the ", "get on the ", "hop on the ", "ride the ")
-DISMOUNT_KEYWORDS = ("dismount", "get off the ", "climb off the ", "hop off the ")
-# Attaching one currently-present entity to another's own "mount" field (see
-# entity_schema.toml's own "mount", DM_Movement.py's _resolve_hitch_intent/
-# _resolve_unhitch_intent) -- ex: "hitch the horse to the cart". Like mount/dismount above,
-# DMCore (not this module) resolves *which* two entities are named and in what order; no
-# skills.toml keyword is the bare word "hitch"/"unhitch", so neither risks the collision
-# MOUNT_KEYWORDS' own comment describes for "climb"/"ride".
-HITCH_KEYWORDS = ("hitch ",)
-UNHITCH_KEYWORDS = ("unhitch",)
 # Free-form conversational address -- bypasses the skill/dice system entirely, the same as
 # every item/movement intent above (see DM_Core.py's "Items and movement as intents"), but
 # checked only after item-interaction detection has already had its shot, so a genuine item
@@ -401,23 +330,6 @@ EDIT_KEYWORDS = (
     "change", "edit", "make the", "make it", "is now", "describe it as", "describe the",
 )
 
-# Location-to-location travel (see DM_Movement.py's _resolve_travel_intent) -- a different axis
-# from DIRECTION_PHRASES below: a room's own exits are a fixed forward/back/left/right
-# vocabulary, but a location's own exits are reachable by naming where you want to go, which
-# this module has no catalog of (self.locations lives on DMCore, not here) -- so unlike
-# detect_direction, this only recognizes that the input *smells like* a travel attempt at all;
-# DMCore resolves *which* location it names from the raw input itself (same "search input for a
-# known name" pattern _resolve_dialogue_target/_resolve_formation_intent already use). Checked
-# ahead of item-interaction detection, same tier as DIRECTION_PHRASES. Deliberately no "travel
-# to " here -- it would collide with skills.toml's own navigation keyword "travel" (see
-# test_item_and_dialogue_keywords_never_collide_with_a_real_skill_keyword), so "go to "/"head
-# to "/"walk to " cover the same phrasing without that risk.
-TRAVEL_KEYWORDS = ("go to ", "head to ", "walk to ", "proceed to ", "enter the ", "go outside", "exit the")
-# Checked separately from TRAVEL_KEYWORDS' own plain substring match -- a bare "leave" collides
-# with axes' own "cleave" skill keyword the same way ADAM_NAME_PATTERN's "adam" would collide
-# with plenty of ordinary words without \b-anchoring; word-boundary matching is what a short,
-# common word like this needs, same precedent ADAM_NAME_PATTERN already sets.
-LEAVE_PATTERN = re.compile(r"\bleave\b")
 
 # The one intent name that is never published -- a deliberate "none of the above" class for
 # map_to_intent's own argmax (see INTENT_PROTOTYPES). Leading underscore so it can never collide
@@ -467,29 +379,8 @@ INTENT_PROTOTYPES = {
         "look around the room", "look over this place", "have a look about the area",
         "take a look at this place", "take stock of the area",
     ),
-    # No "step inside the inn" here, deliberately: "inn" sits close enough to "innkeeper" that
-    # a plain greeting ("hey there innkeeper") scored 0.56 against it and routed as travel.
-    # A prototype whose distinguishing noun is also a common NPC role word earns its whole
-    # intent a false positive on every greeting aimed at that role -- "head into the tavern"
-    # already covers entering a named building without that collision.
-    "travel": (
-        "head into the tavern", "go over to the market square", "walk to the blacksmith shop",
-        "make my way to the temple", "step inside the guild hall", "leave here for the docks",
-    ),
-    "rest": (
-        "make camp for the night", "set up camp and sleep", "take a long rest",
-        "bed down until morning", "sleep until dawn",
-    ),
-    "lore_check": (
-        "what do i know about trolls", "recall what i have heard about this creature",
-        "remember any lore about goblins", "what can i recall about this monster",
-    ),
-    "formation_behind": (
-        "stay behind me", "keep back and follow me", "fall in behind me",
-    ),
-    "formation_abreast": (
-        "walk beside me", "stay at my side", "move up alongside me",
-    ),
+    # Every free-standing intent that authors prototypes (intents/<name>.py's PROTOTYPES).
+    **{name: match.prototypes for name, match in MATCHES.items() if match.prototypes},
     # Greetings and address-someone phrasings earn their place here as much as the action ones
     # do: "hey there innkeeper" scored 0.56 against travel's own "step inside the inn" purely on
     # "inn"/"innkeeper" before these existed -- a confident mis-route on an input whose correct
@@ -540,14 +431,11 @@ ACTION_CLAUSE_PATTERN = re.compile(r"--|[,;:?]|\band\b|\bthen\b")
 # act on the current scene target directly, so map_to_item never runs for them) that's
 # independent of whether the intent is exempt -- "open"/"close" still cost a turn action (see
 # DM_Core.py) despite needing no item lookup, the same way "give"/"take"/etc. do. "lore_check" is
-# the one exemption granted despite actually rolling dice (DM_Combat.py's
+# the one exemption granted despite actually rolling dice (Combat_Actions.py's
 # _resolve_lore_check_intent) -- every other member here is free *because* it's diceless; this
 # one is free by deliberate design instead, since a mid-fight Knowledge check shouldn't cost the
 # player a turn (and hand the enemy a free one) just to think out loud.
-EXEMPT_ITEM_INTENTS = frozenset({
-    "advance", "retreat", "formation_behind", "formation_abreast", "speak_language", "rest",
-    "mount", "dismount", "hitch", "unhitch", "lore_check",
-})
+EXEMPT_ITEM_INTENTS = frozenset(name for name, match in MATCHES.items() if match.exempt)
 NO_ITEM_LOOKUP_INTENTS = frozenset({"open", "close"})
 
 # The item-interaction verbs eligible for DM_Improvisation.py's ad hoc creation fallback (see
@@ -586,7 +474,7 @@ ITEM_LOSING_INTENTS = frozenset({"give", "drop", "trade", "use"})
 # docks?" hits TRAVEL_KEYWORDS first), so a question reaching it is talk, not a command. Found
 # by playtest: "is that argument about the docks or about something else entirely?" routed to
 # travel and walked the player to the shipyard mid-conversation.
-QUESTION_BLOCKED_ROUTES = frozenset({"travel", "rest"})
+QUESTION_BLOCKED_ROUTES = frozenset(name for name, match in MATCHES.items() if match.question_blocked)
 
 # A line opening on one of these is a question even without its "?" -- never adjudicated as a
 # possible action (see classify's "declarative" case).
@@ -816,16 +704,24 @@ def split_action_clauses(processed_text):
     return [clause for clause in clauses if clause]
 
 
+def _free_standing_match(processed_text, match):
+    """!@brief Whether processed_text trips one free-standing intent's keyword gate or its extra patterns."""
+    return _keyword_gate(processed_text, match.keywords) or any(p.search(processed_text) for p in match.patterns)
+
+
 def detect_item_intent(processed_text):
     """!
     @brief Checks processed input for an item-interaction verb, ahead of skill matching.
     @param processed_text The cleaned and processed player input.
     @return "examine", "equip", "unequip", "drop", "take", "give", "trade", "use", "craft",
-        "open", "close", "advance", "retreat", "formation_behind", "formation_abreast",
-        "speak_language", "rest", "mount", "dismount", "hitch", "unhitch", "lore_check", or None.
+        "open", "close", or a free-standing intent (intents/registry.py's MATCHES: "advance",
+        "retreat", "formation_behind", "formation_abreast", "speak_language", "rest", "mount",
+        "dismount", "hitch", "unhitch", "lore_check"), or None.
     """
-    if _keyword_gate(processed_text, LORE_KEYWORDS):
-        return "lore_check"
+    # lore_check's long phrases are gated ahead of every item verb that might sit inside them.
+    for name, match in MATCHES.items():
+        if match.before_items and match.item_pass and _free_standing_match(processed_text, match):
+            return name
     if _keyword_gate(processed_text, EXAMINE_KEYWORDS):
         return "examine"
     # Checked ahead of EQUIP_KEYWORDS purely as defense in depth -- _phrase_matches' own
@@ -853,31 +749,12 @@ def detect_item_intent(processed_text):
         return "open"
     if _keyword_gate(processed_text, CLOSE_KEYWORDS):
         return "close"
-    # Checked ahead of ADVANCE_KEYWORDS -- "stand behind"/"walk abreast" etc. don't
-    # collide with any advance/retreat phrase, but formation is the more specific match
-    # whenever both could plausibly apply.
-    if _keyword_gate(processed_text, FORMATION_BEHIND_KEYWORDS):
-        return "formation_behind"
-    if _keyword_gate(processed_text, FORMATION_ABREAST_KEYWORDS):
-        return "formation_abreast"
-    if _keyword_gate(processed_text, SPEAK_LANGUAGE_KEYWORDS):
-        return "speak_language"
-    if _keyword_gate(processed_text, REST_KEYWORDS):
-        return "rest"
-    # Checked ahead of ADVANCE_KEYWORDS for the same reason FORMATION_*_KEYWORDS is -- "mount
-    # the horse" shouldn't ever be swallowed as a plain "advance".
-    if _keyword_gate(processed_text, MOUNT_KEYWORDS):
-        return "mount"
-    if _keyword_gate(processed_text, DISMOUNT_KEYWORDS):
-        return "dismount"
-    if _keyword_gate(processed_text, HITCH_KEYWORDS):
-        return "hitch"
-    if _keyword_gate(processed_text, UNHITCH_KEYWORDS):
-        return "unhitch"
-    if _keyword_gate(processed_text, ADVANCE_KEYWORDS) or TOWARD_PATTERN.search(processed_text):
-        return "advance"
-    if _keyword_gate(processed_text, RETREAT_KEYWORDS):
-        return "retreat"
+    # The rest, in MATCHES order: formation, speak_language, rest, mount/dismount, hitch/unhitch,
+    # then advance/retreat -- each more specific match ahead of the plain advance it could be
+    # mistaken for ("stand behind", "mount the horse").
+    for name, match in MATCHES.items():
+        if not match.before_items and match.item_pass and _free_standing_match(processed_text, match):
+            return name
     return None
 
 

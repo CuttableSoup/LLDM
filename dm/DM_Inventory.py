@@ -1,13 +1,9 @@
 import resolution.Inventory_Resolution as Inventory_Resolution
+from resolution.Inventory_Resolution import SIGNIFICANT_VALUE  # noqa: F401 -- re-exported
 from dm.DM_Types import DMCoreProtocol
+import resolution.Combat_Resolution as Combat_Resolution
+import resolution.Combat_Actions as Combat_Actions
 
-# Reference scale for nudge_attitude_from_event's own magnitude param (0..1) when a transferred
-# item/amount of currency drives a "theft"/"favor" attitude nudge -- items.toml's own authored
-# values top out around 15 today, so this leaves headroom before an ordinary item hits the 1.0
-# (full-strength) ceiling, while a genuinely valuable item or a sizeable currency gift/theft can
-# still reach it. A single tunable knob, same "one intensity knob" precedent DM_Social.py's own
-# SENTIMENT_INTENSITY_SCALE already sets.
-SIGNIFICANT_VALUE = 25
 
 
 class InventoryMixin(DMCoreProtocol):
@@ -275,7 +271,7 @@ class InventoryMixin(DMCoreProtocol):
         """
         if intent == "examine":
             description = self.entities.get(item_name, {}).get("description", "")
-            revealed = list(self.entities.get(item_name, {}).get("tags", [])) if self.is_identified(item_name) else []
+            revealed = list(self.entities.get(item_name, {}).get("tags", [])) if Combat_Actions.is_identified(self.world, item_name) else []
             resolved(True, description=description, revealed=revealed)
             return
         if self._bulk_would_be_exceeded(item_name):
@@ -318,7 +314,7 @@ class InventoryMixin(DMCoreProtocol):
             pips} skill stat if present (ex: health potion) and rolled through apply_healing
             (DM_Status.py); and poison, read from a "poison" {dice, pips} skill stat the same
             way but rolled through the ordinary calculate_damage/apply_damage path instead
-            (DM_Combat.py), tagged damage_tags = ["poison"] -- self-inflicted (attacker and
+            (Combat_Actions.py), tagged damage_tags = ["poison"] -- self-inflicted (attacker and
             defender are both the player), so a poison-resistant or poison-immune character
             correctly reduces or negates it exactly like a real attack would, and
             evaluate_statuses' own wound-tier conditions still apply. An item can carry either,
@@ -356,15 +352,15 @@ class InventoryMixin(DMCoreProtocol):
 
         healing = item.get("skills", {}).get("healing")
         healed = 0
-        remaining_hp = self.get_current_hp(self.player_name)
+        remaining_hp = Combat_Resolution.get_current_hp(self.world, self.player_name)
         if healing:
-            healed = self.roll_dice(healing.get("dice", 0), healing.get("pips", 0))
-            remaining_hp = self.apply_healing(self.player_name, healed)
+            healed = Combat_Resolution.roll_dice(healing.get("dice", 0), healing.get("pips", 0))
+            remaining_hp = Combat_Resolution.apply_healing(self.world, self.player_name, healed)
 
         poison = item.get("skills", {}).get("poison")
         poisoned = 0
         if poison:
-            damage_result = self.calculate_damage(
+            damage_result = Combat_Actions.calculate_damage(self.world, 
                 self.player_name, self.player_name,
                 {
                     "damage_value": {"dice": poison.get("dice", 0), "pips": poison.get("pips", 0), "bonus": 0},
@@ -374,7 +370,7 @@ class InventoryMixin(DMCoreProtocol):
             poisoned = damage_result["net_damage"]
             remaining_hp = damage_result["remaining_hp"]
 
-        self.apply_condition(item_name, "identified", duration="permanent", dismiss="")
+        Combat_Resolution.apply_condition(self.world, item_name, "identified", duration="permanent", dismiss="")
 
         charges_left = self._consume_charge(item_name)
         replaced_with = None
@@ -416,7 +412,7 @@ class InventoryMixin(DMCoreProtocol):
             if not self.is_closed(target_name):
                 resolved(False, reason="already_open", container=target_name)
                 return
-            self.dismiss_condition(target_name, "closed")
+            Combat_Resolution.dismiss_condition(self.world, target_name, "closed")
             # Real contents, not a guess: each item's own describe_character() output (its
             # flavor description only -- the same purely-descriptive, no-mechanical-data
             # field selection describe_character already uses for entities) -- never its
@@ -436,7 +432,7 @@ class InventoryMixin(DMCoreProtocol):
         if self.is_closed(target_name):
             resolved(False, reason="already_closed", container=target_name)
             return
-        self.apply_condition(target_name, "closed", duration="permanent", dismiss="")
+        Combat_Resolution.apply_condition(self.world, target_name, "closed", duration="permanent", dismiss="")
         resolved(True, container=target_name)
 
     def _resolve_transfer_intent(self, intent, item_name, target_name, resolved):
@@ -557,7 +553,7 @@ class InventoryMixin(DMCoreProtocol):
             # A plain look never surfaces a hidden property (ex: the cursed dagger's curse) --
             # only once is_identified is true (a passed [entity.test], ex: an arcane check)
             # does examining it start including what that check actually revealed.
-            revealed = list(self.entities.get(item_name, {}).get("tags", [])) if self.is_identified(item_name) else []
+            revealed = list(self.entities.get(item_name, {}).get("tags", [])) if Combat_Actions.is_identified(self.world, item_name) else []
             # No real container involved when source_name/destination_name are both the player
             # (the "already in your own inventory" branch above) -- narration shouldn't claim
             # the item came from target_name when nothing was actually taken from it.

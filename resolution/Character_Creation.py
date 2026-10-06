@@ -27,9 +27,9 @@ LEARNABLE_ABILITY_SUPERTYPES = ("spell", "technique")
 # What race_baseline_skills falls back to for a skill a race's own [race.skill_dice] table
 # doesn't cover (every shipped race in races.toml lists all of them; this only matters for a
 # malformed/incomplete race, or race=None -- ex: an unrecognized race name) -- 0D, the same
-# "untrained" convention DM_Combat.py's own resolve_action/roll_initiative use for an entity's
-# own missing skill. Kept as its own constant here (not imported from DM_Combat.py) since
-# this whole module has to stay importable with no DMCore/DM_Combat.py in the picture at all
+# "untrained" convention Combat_Actions.py's own resolve_action/roll_initiative use for an entity's
+# own missing skill. Kept as its own constant here (not imported from Combat_Actions.py) since
+# this whole module has to stay importable with no DMCore/Combat_Actions.py in the picture at all
 # (see this file's own module docstring).
 UNTRAINED_DICE = 0
 

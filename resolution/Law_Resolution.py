@@ -15,6 +15,7 @@ import math
 import resolution.Combat_Resolution as Combat_Resolution
 import resolution.Social_Resolution as Social_Resolution
 from resolution.Inventory_Resolution import _settle
+from resolution.World_Context import WorldContext
 
 # Every crime kind a [[polity.law]] may name -- DM_Validation.py rejects anything else.
 CRIMES = ("theft", "assault", "murder", "banned_ability", "banned_presence", "resisting_arrest")
@@ -23,6 +24,50 @@ CRIMES = ("theft", "assault", "murder", "banned_ability", "banned_presence", "re
 # shambling corpse is recognized by anyone, trained or not (an untrained 0-dice roll would
 # otherwise always fail).
 AUTOMATIC = "automatic"
+
+# An entity tagged this enforces the law of whatever polity it stands in: a crime it witnesses
+# is filed immediately, and it knows that polity's records.
+ENFORCER_TAG = "law_enforcer"
+
+# Per-entity law state, round-tripped by the world's save slice exactly as stored: what a witness
+# saw (and which disguises/presences it already checked), who struck a victim first, and a
+# disguise currently worn. Also, for an enforcer: whom it has already recognized or failed to,
+# and whom a bribe bought it off from.
+LAW_INSTANCE_FIELDS = (
+    "known_crimes", "assaulted_by", "disguise", "disguise_count", "disguise_checks", "presence_checks",
+    "enforcement_checks", "looked_away",
+)
+
+
+def is_enforcer(entities, name):
+    """!@brief Whether name is tagged ENFORCER_TAG."""
+    return ENFORCER_TAG in entities.get(name, {}).get("tags", [])
+
+
+def find_polity(rules, name):
+    """!@return The [[polity]] entry called name, or None."""
+    for polity in rules.get("polity", []):
+        if polity.get("name") == name:
+            return polity
+    return None
+
+
+def display_name(entities, name):
+    """!@return name as an NPC would say it (the entity's own "name" field), None for no name."""
+    if not name:
+        return None
+    return entities.get(name, {}).get("name", name)
+
+
+def identity_label(entities, identity):
+    """!@brief A record identity as an NPC would name it -- a disguise reads as its alias."""
+    if identity in entities:
+        return display_name(entities, identity)
+    for entity in entities.values():
+        disguise = entity.get("disguise")
+        if disguise and disguise.get("identity") == identity:
+            return disguise["alias"]
+    return "a disguised stranger"
 
 
 def law_matches(law, subject):
@@ -132,7 +177,7 @@ def is_capable_witness(entities, name, offender_name):
     entity = entities.get(name, {})
     if entity.get("supertype") == "object" or not entity.get("languages"):
         return False
-    if Combat_Resolution.get_current_hp(entities, name) <= 0:
+    if Combat_Resolution.get_current_hp(WorldContext(entities=entities), name) <= 0:
         return False
     disposition = base_disposition(entities, name, offender_name)
     return disposition is not None and disposition > -100

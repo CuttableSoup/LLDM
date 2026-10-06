@@ -24,6 +24,28 @@ because it's diceless; it's exempted from the ordinary turn pipeline by delibera
 instead, so recalling monster lore mid-fight never costs a turn.
 _Avoid_: scene intent, movement intent (move/travel are only two of the thirteen).
 
+**Legal record**:
+One polity's standing file on one identity — the bounty, acclaim and charges that polity holds
+against whoever the identity is. Only a crime committed inside that polity changes it, and it
+never decays.
+_Avoid_: rap sheet, criminal record, wanted status.
+
+**Pending report**:
+A crime witnessed by someone other than an enforcer, not yet filed against the offender's legal
+record. It is filed when time next passes, provided a witness is still alive.
+_Avoid_: queued crime, unfiled crime.
+
+**Arrest confrontation**:
+The open demand an enforcer has made of the player, awaiting one of the five replies (pay,
+surrender, bribe, bluff, resist). It is announced only once the turn that provoked it has fully
+resolved.
+_Avoid_: pending arrest (the implementation's own name), arrest scene.
+
+**Save slot**:
+One named save, made of three independent parts — the game state, the narrator's memory, and
+the Notes tab — each written and restored by whoever owns it.
+_Avoid_: save file, save game.
+
 **Scene target**:
 The entity a non-free-standing item-interaction intent implicitly acts against when no item
 name resolves it otherwise — the current combat target if one exists, else the first

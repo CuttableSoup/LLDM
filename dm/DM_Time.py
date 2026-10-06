@@ -1,5 +1,6 @@
 import resolution.Combat_Resolution as Combat_Resolution
 from dm.DM_Types import DMCoreProtocol
+from persistence.slot import Persistable
 
 
 class TimeMixin(DMCoreProtocol):
@@ -173,7 +174,7 @@ class TimeMixin(DMCoreProtocol):
         @brief Advances the block clock by blocks (floored at 0 -- there's no such thing as
             time moving backward). The one and only place self.current_block is ever
             mutated, mirroring round_number's own single incrementing site
-            (_resolve_combat_round, DM_Combat.py). Also expires any planted prompt_directive
+            (_resolve_combat_round, Combat_Actions.py). Also expires any planted prompt_directive
             whose own countdown runs out this many blocks (_expire_prompt_directives) -- the
             one other piece of state that ticks against this same clock.
         @param blocks How many blocks elapse.
@@ -185,7 +186,7 @@ class TimeMixin(DMCoreProtocol):
         self._tick_conditions_by_block(blocks)
         if blocks:
             # Witnesses who lived long enough to tell someone (DM_Law.py).
-            self._file_pending_reports()
+            self.law_enforcement.file_pending_reports()
         return self.get_time_state()
 
     def _tick_conditions_by_block(self, blocks):
@@ -208,8 +209,8 @@ class TimeMixin(DMCoreProtocol):
         if blocks <= 0:
             return
         for entity_name in list(self.entities):
-            Combat_Resolution.tick_condition_durations(self.entities, self.event_bus, entity_name, "blocks", blocks)
-            Combat_Resolution.tick_periodic_tests(self.entities, self.rules, self.event_bus, entity_name, "blocks", blocks)
+            Combat_Resolution.tick_condition_durations(self.world, entity_name, "blocks", blocks)
+            Combat_Resolution.tick_periodic_tests(self.world, entity_name, "blocks", blocks)
 
     def _expire_prompt_directives(self, blocks):
         """!
@@ -325,17 +326,45 @@ class TimeMixin(DMCoreProtocol):
 
         healed = {}
         for entity_name in self.scenario_entities:
-            if not self._is_party_member(entity_name) or self.get_current_hp(entity_name) <= 0:
+            if not self._is_party_member(entity_name) or Combat_Resolution.get_current_hp(self.world, entity_name) <= 0:
                 continue
             fortitude = self.entities.get(entity_name, {}).get("skills", {}).get(
                 "fortitude", {"dice": 0, "pips": 0},
             )
-            amount = self.roll_dice(
+            amount = Combat_Resolution.roll_dice(
                 fortitude.get("dice", 0) * blocks, fortitude.get("pips", 0) * blocks,
             )
-            remaining_hp = self.apply_healing(entity_name, amount)
+            remaining_hp = Combat_Resolution.apply_healing(self.world, entity_name, amount)
             healed[entity_name] = {"healed": amount, "remaining_hp": remaining_hp}
 
         self.apply_downtime_upkeep(blocks)
 
         return {"interrupted": False, "healed": healed, "blocks_spent": blocks, "time": time_state}
+
+
+class ClockSlice(Persistable):
+    """!
+    @brief The save-slot keys this module's clock owns: round_number (combat rounds), the block
+        clock (current_block/watch_rotation_index) and an interrupted downtime waiting to
+        resume (pending_downtime). Restored verbatim -- never re-derived from __init__'s own
+        _seed_starting_date, which only runs on a fresh start.
+    """
+
+    def __init__(self, core):
+        self.core = core
+
+    def snapshot(self):
+        core = self.core
+        return {
+            "round_number": core.round_number,
+            "current_block": core.current_block,
+            "watch_rotation_index": core.watch_rotation_index,
+            "pending_downtime": core.pending_downtime,
+        }
+
+    def restore(self, data):
+        core = self.core
+        core.round_number = data.get("round_number", 0)
+        core.current_block = data.get("current_block", 0)
+        core.watch_rotation_index = data.get("watch_rotation_index", 0)
+        core.pending_downtime = data.get("pending_downtime")

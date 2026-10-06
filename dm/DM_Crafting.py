@@ -2,6 +2,8 @@ from collections import Counter
 
 from dm.DM_ActionOutcome import CraftEffect, MissingMaterialsOutcome, MissingStationOutcome, NotCraftableOutcome, rolled_outcome_from_roll
 from dm.DM_Types import DMCoreProtocol
+import resolution.Combat_Resolution as Combat_Resolution
+import resolution.Combat_Actions as Combat_Actions
 
 
 class CraftingMixin(DMCoreProtocol):
@@ -28,7 +30,7 @@ class CraftingMixin(DMCoreProtocol):
             no-roll "reason", mirroring _resolve_roll's own "out_of_range" no-roll precedent
             (DM_Core.py), before any dice are rolled. Once past every gate, rolls
             resolve_action against the recipe's own difficulty (using the player's best-rated
-            skill among the recipe's own skill list -- select_ability_skill, DM_Combat.py,
+            skill among the recipe's own skill list -- select_ability_skill, Combat_Actions.py,
             already picks a multi-candidate skill this exact way for a multi-skill ability like
             cleave), consumes every material unconditionally (success or failure alike -- a
             botched attempt still spends the materials), and on success places the crafted
@@ -51,8 +53,8 @@ class CraftingMixin(DMCoreProtocol):
         if not self._has_materials(self.player_name, materials):
             return MissingMaterialsOutcome(self.player_name, item_name, materials)
 
-        skill_name = self.select_ability_skill(self.player_name, {"skill": craft.get("skill", [])})
-        roll = self.resolve_action(
+        skill_name = Combat_Actions.select_ability_skill(self.world, self.player_name, {"skill": craft.get("skill", [])})
+        roll = Combat_Resolution.resolve_action(self.world, 
             self.player_name, skill_name, craft.get("difficulty", 0), dice_penalty=dice_penalty,
         )
 

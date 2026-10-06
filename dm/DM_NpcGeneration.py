@@ -12,6 +12,7 @@ import os
 from resolution.Challenge_Rating import calculate_party_challenge_rating
 from dm.DM_Types import DMCoreProtocol
 from resolution.NPC_Generation import generate_npc_stats, load_npc_keywords, resolve_varied_value
+import resolution.Combat_Actions as Combat_Actions
 
 # Fallback target CR for an entity_template whose own "target_cr" field is missing or
 # unrecognized -- should never come up with valid authoring (a log_warning fires alongside
@@ -33,7 +34,7 @@ class NpcGenerationMixin(DMCoreProtocol):
     @brief Only ever called from RulesMixin's _instance_entities, right after an instance
         resolved from self.entity_templates (not self.entities) is stored into
         self.entities -- relies on self.entities/self.player_name/self.event_bus, set up by
-        DMCore.__init__, plus get_challenge_rating (CombatMixin). Inherits DMCoreProtocol
+        DMCore.__init__, plus get_challenge_rating (Combat_Actions.py). Inherits DMCoreProtocol
         purely so type checkers can resolve these shared attributes/cross-mixin methods --
         see DM_Types.py.
     """
@@ -56,13 +57,13 @@ class NpcGenerationMixin(DMCoreProtocol):
         if isinstance(target_cr_field, (int, float)):
             return target_cr_field
         if target_cr_field == "player":
-            return self.get_challenge_rating(self.player_name)
+            return Combat_Actions.get_challenge_rating(self.world, self.player_name)
         if target_cr_field == "party":
             pool = list(party_pool) + [
                 name for name in instance_names_so_far
                 if name == self.player_name or self.entities.get(name, {}).get("is_party")
             ]
-            return calculate_party_challenge_rating(self.get_challenge_rating(name) for name in pool)
+            return calculate_party_challenge_rating(Combat_Actions.get_challenge_rating(self.world, name) for name in pool)
         self.event_bus.publish(
             "log_warning",
             f"generate=true template has an unrecognized target_cr {target_cr_field!r}; "

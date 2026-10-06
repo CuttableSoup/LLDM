@@ -999,7 +999,7 @@ def generate_ad_hoc_creature(
         -- an empty catalog (ex: a setting with no npc_keyword entries at all) declines
         immediately, no LLM call.
     @param skills_catalog Forwarded to fit_skills_to_cr -- the setting's own {skill_name:
-        {"combat_role", ...}} table (ex: DM_Combat.py's self.skills).
+        {"combat_role", ...}} table (ex: Combat_Actions.py's self.skills).
     @param call_chat_completion/api_url/timeout See generate_ad_hoc_item's own docstring.
     @param hp_divisor/offense_share Forwarded to fit_skills_to_cr.
     @return {"created": False, "reason": str} on decline, an empty npc_keywords, or any failure
@@ -1050,7 +1050,7 @@ def _build_creature_entity(arguments, npc_keywords, target_cr, skills_catalog, h
 
         Note what falls out of the disposition split below: only a "hostile" creature is given
         abilities/behavior at all. A wary/neutral/friendly one is dialogue-only -- it cannot
-        attack, never produces a turn in a combat round (DM_Combat.py's choose_behavior returns
+        attack, never produces a turn in a combat round (Combat_Actions.py's choose_behavior returns
         None with no behavior list), and is never an AoE "enemy". That is exactly why
         generate_referenced_npc's narrowed enum is sufficient on its own to keep automatic
         promotion out of combat balance.

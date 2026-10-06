@@ -1,4 +1,5 @@
 from dm.DM_Types import DMCoreProtocol
+import resolution.Combat_Resolution as Combat_Resolution
 
 
 class SummoningMixin(DMCoreProtocol):
@@ -53,7 +54,7 @@ class SummoningMixin(DMCoreProtocol):
                 summon_spec's own name/template doesn't resolve to anything real
                 (_instance_entities' own log_error already reports why).
         """
-        entry = {"band": self.get_band(self.player_name)}
+        entry = {"band": Combat_Resolution.get_band(self.world, self.player_name)}
         if "template" in summon_spec:
             entry["template"] = summon_spec["template"]
         else:
@@ -73,7 +74,7 @@ class SummoningMixin(DMCoreProtocol):
 
     def _advance_pending_spawn(self, entity_name):
         """!
-        @brief Counts down a corpse's own "pending_spawn" (stashed by DM_Combat.py's
+        @brief Counts down a corpse's own "pending_spawn" (stashed by Combat_Actions.py's
             calculate_damage on a killing blow whose ability authored "create_spawn") once per
             combat round, instancing the named entity at the corpse's own band the round this
             reaches 0 -- the Pathfinder Wight/Shadow "kills become one of us" shape. Deliberately

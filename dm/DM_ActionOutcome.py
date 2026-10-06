@@ -1,8 +1,8 @@
 """!
 @file DM_ActionOutcome.py
 @brief The typed result of one resolved player/creature action -- what DM_Core.py's
-    _on_turn_detected (and DM_Crafting.py's _try_craft_action, DM_Combat.py's
-    resolve_behavior_action) hand to LLM_Core.py's _describe_outcome for narration, replacing
+    _on_turn_detected (and DM_Crafting.py's _try_craft_action, Combat_Actions.py's
+    resolve_behavior_action) hand to Narration_Prompts.py's describe_outcome for narration, replacing
     the untyped, ad hoc "result" dict every one of those producers used to bolt a new optional
     key onto (see CLAUDE.md's own "Action resolution pipeline" for where this sits).
 
@@ -15,12 +15,12 @@
     on, not a new field every existing ActionOutcome instance carries unused.
 
     LanguageBarrierOutcome is OutOfRangeOutcome's own shape reused for a different pre-roll
-    gate -- a language_dependent ability/skill (DM_Combat.py's _ability_requires_language)
+    gate -- a language_dependent ability/skill (Combat_Actions.py's _ability_requires_language)
     against a target the player's own current_language isn't shared with, same "can't do it,
     don't roll" precedent (see DM_Core.py's _resolve_roll).
 
     Deliberately data-only -- no formatting logic lives here. LLM_Core.py's own
-    _describe_outcome owns turning one of these into narration text (see CONTEXT.md's
+    describe_outcome owns turning one of these into narration text (see CONTEXT.md's
     "ActionOutcome"/"Effect" entries for the vocabulary, kept independent of this module's
     own implementation).
 
@@ -204,7 +204,7 @@ class MissingMaterialsOutcome:
 @dataclass
 class TransferOutcome:
     """!@brief A creature/ally's own behavior-driven turn was an autonomous item transfer
-        ("steal"/"gift", DM_Combat.py's resolve_behavior_action) rather than an attack or a
+        ("steal"/"gift", Combat_Actions.py's resolve_behavior_action) rather than an attack or a
         move -- enemy/ally-turn only; the player's own "take"/"give" never reaches this
         pipeline at all (DM_Inventory.py's own _resolve_transfer_intent)."""
     entity: str

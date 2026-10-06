@@ -144,7 +144,12 @@ class TextualCore(App):
         self.call_safely(self._write, "history", f"[System] Game loaded from '{data.get('slot')}'.")
 
     def _on_game_load_failed(self, data):
-        self.call_safely(self._write, "history", f"[System] No save named '{data.get('slot')}' found.")
+        if data.get("reason", "not_found") == "not_found":
+            self.call_safely(self._write, "history", f"[System] No save named '{data.get('slot')}' found.")
+        else:
+            self.call_safely(
+                self._write, "history", f"[System] Save '{data.get('slot')}' can't be loaded ({data.get('reason')}).",
+            )
 
 
 if __name__ == "__main__":

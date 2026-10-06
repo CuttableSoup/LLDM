@@ -10,6 +10,7 @@
     target resolution, the locked-container gate, _run_interact_program) ahead of their own
     dispatch in DM_Core.py, which a per-intent split would only duplicate.
 """
+from intents import advance_retreat, formation, hitch, lore_check, mount, rest, speak_language, travel
 from intents.advance_retreat import narrate_advance_retreat, resolve_advance_retreat
 from intents.formation import narrate_formation, resolve_formation
 from intents.hitch import narrate_hitch, narrate_unhitch, resolve_hitch, resolve_unhitch
@@ -36,3 +37,15 @@ HANDLERS = {
     "unhitch": (resolve_unhitch, narrate_unhitch),
     "lore_check": (resolve_lore_check, narrate_lore_check),
 }
+
+# intent string -> IntentMatch, in the order the classifier gates them: lore_check ahead of the
+# item-named intents, then the rest after them (formation ahead of advance -- "stand behind" is
+# the more specific match -- and mount/hitch ahead of advance so "mount the horse" is never
+# swallowed as one). nlp/Intent_Classification.py builds its keyword tables, semantic-router
+# prototypes and exemption sets from this; adding a free-standing intent adds its IntentMatch to
+# its own module's MATCH and the module to this tuple.
+MATCHES = {}
+for _module in (
+    lore_check, formation, speak_language, rest, mount, hitch, advance_retreat, travel,
+):
+    MATCHES.update(_module.MATCH)

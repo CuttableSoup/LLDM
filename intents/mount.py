@@ -6,6 +6,28 @@
     scene target or the locked-container gate, unlike every item-named intent.
 """
 
+from intents.match import IntentMatch
+
+# -- What the classifier matches (see intents/registry.py's MATCHES) --
+
+# Climbing onto/off of a named, currently-present entity to take on its own travel_speed/
+# carrying capacity (see entity_schema.toml's own "mount", DM_Movement.py's
+# _resolve_mount_intent/_resolve_dismount_intent) -- like rest/formation above, this acts on
+# the player's own state rather than a named item, so no map_to_item lookup ever runs for it
+# either; DMCore, not this module, is what figures out *which* entity is being mounted, by
+# searching the raw input for a currently-present entity's own name (same "search input for a
+# known name" pattern _resolve_formation_intent already uses). Deliberately multi-word
+# phrases, not bare "mount"/"climb"/"ride" -- athletics' own "climb" keyword and husbandry's
+# own "ride" keyword (skills.toml) would otherwise be swallowed as this intent before skill
+# matching ever got a chance to run, the same collision-avoidance reason every other keyword
+# tuple in this file follows. "dismount" alone is safe -- no skill keyword is that literal word.
+MOUNT_KEYWORDS = ("mount the ", "climb onto the ", "climb on the ", "get on the ", "hop on the ", "ride the ")
+DISMOUNT_KEYWORDS = ("dismount", "get off the ", "climb off the ", "hop off the ")
+MATCH = {
+    "mount": IntentMatch(keywords=MOUNT_KEYWORDS, exempt=True),
+    "dismount": IntentMatch(keywords=DISMOUNT_KEYWORDS, exempt=True),
+}
+
 
 def resolve_mount(core, data, resolved):
     """!

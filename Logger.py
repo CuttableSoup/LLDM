@@ -40,7 +40,7 @@ class Logger:
 
         self.event_bus.subscribe("log_info", self.log_info)
         self.event_bus.subscribe("log_error", self.log_error)
-        # Published from a dozen call sites (ex: DM_Combat.py, DM_Persistence.py) but never
+        # Published from a dozen call sites (ex: Combat_Actions.py, DM_Persistence.py) but never
         # actually consumed before now -- every warning was silently dropped rather than
         # reaching the console. Folded in here rather than left as a debug-only addition, since
         # a missing "load_requested with no slot name" warning is a console gap regardless of
