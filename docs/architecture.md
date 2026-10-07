@@ -67,21 +67,49 @@ rather than assuming a particular path.
   `_resolve_language_intent`, `DM_Time.py`'s `rest`) — those methods, and their own tests, are
   unchanged by this split. `narrate()` builds the LLM prompt from the same
   `item_interaction_resolved` payload, including that intent's own failure-reason text (`move`/
-  `travel`'s own `narrate()` also updates `llm_core.scenario_description`/`scenario_characters`
-  on success, the same ongoing-narration-grounding refresh `generate_scene_intro` does for a
-  brand-new scenario) — item-named intents (`examine`/`take`/`give`/`trade`/`use`/`equip`/
-  `unequip`/`drop`/`open`/`close`) are out of scope for this registry, since they share real
-  pre-condition logic (scene target resolution, the locked-container gate,
-  `_run_interact_program`) ahead of their own dispatch in `DM_Core.py` that a per-intent split
-  would only duplicate.
+  `travel`'s own `narrate()` only *read* the payload; `LLMCore.generate_item_interaction_response`
+  is the one writer of the narrator's scene state, refreshing it from the payload on a successful
+  `ARRIVAL_INTENTS` intent before narrating, the same ongoing-narration-grounding refresh
+  `generate_scene_intro` does for a brand-new scenario). Item-named intents
+  (`examine`/`take`/`give`/`trade`/`use`/`equip`/`unequip`/`drop`/`open`/`close`) are the other
+  manifest, `item_named.py`'s `ITEM_NAMED`: each `ItemIntent` declares its `resolve`, its
+  success-only `narrate`, and the two pre-conditions that used to be branches in `DM_Core.py` —
+  `gated` (the scene target's locked-container gate applies) and `ground_aware` (an item on the
+  room's ground is reached ahead of any target). `DM_Core.py` keeps the shared pre-condition logic
+  (scene target, `already_owned`, `_run_interact_program`) once and reads those flags; a denied
+  attempt is still narrated by the shared failure text in `Narration_Prompts.item_interaction`.
+  `improvisation.py` holds the three intent sets the ad hoc creation fallback partitions by.
+- **`Ability_Effects.py`** (`resolution/`) — what an actor's ability does once its roll has
+  landed, one implementation for the player's own turn (`DMCore._finish_rolled_outcome`) and every
+  other entity's combat turn (`resolve_behavior_action`): damage (single or AoE, `save_for_half`),
+  summon, dispel, cure, teleport, spell materials, and the ability's own `on_pass`/`on_fail`
+  program. It takes a *resolved* target — the caller decides who (the player's turn infers it from
+  text; an NPC's comes from its behavior list). Each effect is data-gated, so an NPC gains only what
+  its ability authors; `teleport_to_location` stays player-only. What the combat graph can't reach
+  (conjuring, banishing, moving, entering a location, spending materials) goes through `ctx.hooks`.
+- **`Conveyance.py`** (`resolution/`) — the graph an entity's `mount` field draws and what is asked
+  of it: `carrying_capacity` (sums across a team), `travel_speed` (minimum), `terrain_tags` (union),
+  `current_bulk`, `max_bulk`, `would_exceed_capacity`/`is_overloaded`, `mount_targets`/`mount_chain`,
+  `is_conveyance`. One walk with one cycle guard; pure over a `WorldContext`. Mounting, hitching and
+  band-syncing stay in `DM_Movement.py`, which calls in here.
+- **`Entity_Reference.py`** (`resolution/`) — which entities a line of text literally names: key,
+  `name` or any alias, whole-word, with `skip_modifier_aliases` for "kick the spice cart" vs "pin the
+  merchant". `first_named`/`find_named`/`named_in_reading_order` serve dialogue, attacks,
+  mount/hitch/formation and lore checks. Exact matching only — fuzzy/embedding matching of an address
+  phrase stays in `nlp/`.
+- **`Data_Validation.py`** (`resolution/`) — `DataValidator(world, entity_templates,
+  locations).validate()` returns `Problem` records for everything loaded; `DMCore.validate_loaded_data()`
+  publishes each as a `log_error`. See `docs/data-conventions.md`.
 - **`Combat_Actions.py`** (`resolution/`) — what a combatant does, as functions over a
   `WorldContext`: `calculate_damage` and its kill consequences (XP, murder check, `create_spawn`),
   `resolve_targets`, ability/behavior selection, `resolve_behavior_action`, challenge rating, XP, the
   lore check, and the status/range gates they rest on (`is_action_prevented`, `is_in_range`,
   `has_medium_access`, `evaluate_proximity_statuses`, `is_identified`). The few things it needs from
   sibling mixins — `is_hostile`, `note_kill`, attitude nudges, `move_toward_or_away`, `transfer_item` —
-  come through `ctx.hooks` (`CombatHooks`; `DM_Combat.py`'s `DMCoreCombatHooks` is the DMCore adapter).
-  Keep that list short (six today); past about ten, convert the owning mixin instead of widening it.
+  come through `ctx.hooks` (`CombatHooks`; `DM_Combat.py`'s `DMCoreCombatHooks` is the DMCore adapter),
+  plus the five `Ability_Effects.py` needs (`summon_creature`, `remove_entity_from_scene`,
+  `consume_materials`, `move_entity`, `enter_location`). That is eleven: past about ten, convert the
+  owning mixin instead of widening it.
   `World_Context.py` is the `WorldContext` itself: entities/rules/skills/event_bus plus
   `scenario_entities`/`player_name`/`universal_abilities`/`hooks`.
 - **`events/`** (repo root) — the declared payloads of the events that carry the most structure,
@@ -105,7 +133,9 @@ rather than assuming a particular path.
   `sentence-transformers` (`all-MiniLM-L6-v2`) model and every precomputed skill/item/target/
   intent/destination embedding tensor, and is the one place in this file that still touches the
   EventBus for granular "mapped input to X" diagnostics, since encoding/scoring is where those
-  facts become known. `NLPCore` itself owns no classification logic.
+  facts become known. `NLPCore` itself owns no classification logic, and takes its `matcher` as an
+  optional argument (a `FakeMatcher` in tests, so the confirmation/arrest answer protocol runs with no
+  model load).
 - **`Intent_Classification.py`** (`nlp/`) — pure, EventBus-independent: `IntentClassifier.classify()`
   returns `(processed_text, events)` — a list of
   one or more `{"event", "payload"}` dicts for the glue layer to publish, rather than publishing

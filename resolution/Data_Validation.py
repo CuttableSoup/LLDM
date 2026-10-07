@@ -1,6 +1,7 @@
+from dataclasses import dataclass
+
 from resolution.Combat_Actions import MOVEMENT_ACTIONS, TRANSFER_ACTIONS
-from dm.DM_Rules import PLAYER_PLACEHOLDER
-from dm.DM_Types import DMCoreProtocol
+from resolution.World_Context import PLAYER_PLACEHOLDER
 from resolution.Law_Resolution import AUTOMATIC, CRIMES
 import resolution.Combat_Actions as Combat_Actions
 
@@ -54,17 +55,28 @@ DICE_TABLE_FIELDS = ("damage_value", "armor_value", "resistance_value", "vulnera
 CONDITION_DURATIONS = ("rounds", "rooms", "blocks", "days", "permanent")
 
 
-class ValidationMixin(DMCoreProtocol):
+@dataclass(frozen=True)
+class Problem:
+    """!
+    @brief One thing wrong with loaded data. message is the full human-readable line
+        DMCore publishes as "log_error"; owner is the "entity 'wolf' ability 'bite'"-style label
+        it opens with, where the check had one.
+    """
+
+    message: str
+    owner: str = None
+
+
+class DataValidator:
     """!
     @brief Load-time checks over everything load_rules/load_scenario_definition just loaded
-        (DMCore mixin -- only ever composed into DMCore, never instantiated on its own; relies
-        on self.entities/self.entity_templates/self.locations/self.skills/self.rules/
-        self.event_bus, set up by DMCore.__init__). See docs/data-conventions.md's own
+        (a standalone module -- DMCore builds one over its live WorldContext, entity templates and
+        locations, calls validate(), and publishes each returned Problem as a "log_error"). See docs/data-conventions.md's own
         "Load-time validation" and docs/extended-goals.md's "The TOML rule set itself needs
         standardizing" for the design this resolves.
 
-        Two kinds of check, both non-blocking -- a problem is a single "log_error" publish,
-        never a raised exception, the same "malformed data degrades quietly, on purpose"
+        Two kinds of check, both non-blocking -- a problem is one Problem record in the returned
+        list, never a raised exception, the same "malformed data degrades quietly, on purpose"
         convention load_rules' own per-file try/except and DM_Rules.py's pre-existing
         _validate_equipped_slots already follow:
         - *Referential integrity* (the original pass) -- does a name/skill/room/location a
@@ -92,19 +104,48 @@ class ValidationMixin(DMCoreProtocol):
         Entirely setting-agnostic -- every check below reads only whatever's currently loaded
         into self.entities/self.entity_templates/self.locations/self.skills/self.rules for
         whichever setting booted, no Fantasy-specific assumption anywhere, so it applies
-        unchanged to Rules/Zombie/ too. Inherits DMCoreProtocol purely so type checkers can
-        resolve these shared attributes/cross-mixin methods -- see DM_Types.py.
-    """
+        unchanged to Rules/Zombie/ too.     """
 
-    def validate_loaded_data(self):
+    def __init__(self, world, entity_templates, locations):
         """!
-        @brief Runs every check, once per full (re)load -- called from
-            DMCore.__init__ right after load_scenario_definition (every entity/template/
-            location/skill/rule is loaded by then, nothing yet instanced) and from
-            DM_Persistence.py's load_game at the same point, so a resumed save is re-checked
-            against whatever Rules/<setting>/ looks like now, not whatever it looked like when
-            the save was written.
+        @param world The WorldContext whose entities/rules/skills/universal_abilities are checked.
+        @param entity_templates The loaded [[entity_template]] catalog, name -> template.
+        @param locations The loaded locations, key -> location.
         """
+        self.world = world
+        self.entity_templates = entity_templates
+        self.locations = locations
+        self.problems = []
+
+    @property
+    def entities(self):
+        return self.world.entities
+
+    @property
+    def rules(self):
+        return self.world.rules
+
+    @property
+    def skills(self):
+        return self.world.skills
+
+    @property
+    def universal_abilities(self):
+        return self.world.universal_abilities
+
+    def _report(self, message, owner=None):
+        self.problems.append(Problem(message, owner))
+
+    def validate(self):
+        """!
+        @brief Runs every check, once per full (re)load -- DMCore calls it right after
+            load_scenario_definition (every entity/template/location/skill/rule is loaded by
+            then, nothing yet instanced) and from load_game at the same point, so a resumed save
+            is re-checked against whatever Rules/<setting>/ looks like now, not whatever it
+            looked like when the save was written.
+        @return The list of Problem records found, empty if the data is clean.
+        """
+        self.problems = []
         self._validate_equipped_slots()
         self._validate_container_contents()
         self._validate_skill_references()
@@ -116,6 +157,7 @@ class ValidationMixin(DMCoreProtocol):
         self._validate_location_shapes()
         self._validate_status_shapes()
         self._validate_law_shapes()
+        return self.problems
 
     # -----------------------------------------------------------------------------------------
     # Skill references
@@ -132,7 +174,7 @@ class ValidationMixin(DMCoreProtocol):
         if not isinstance(skill_name, str):
             return
         if skill_name not in self.skills:
-            self.event_bus.publish("log_error", f"{owner_label} references unknown skill '{skill_name}'.")
+            self._report(f"{owner_label} references unknown skill '{skill_name}'.")
 
     def _check_skill_field(self, owner_label, skill_field):
         """!
@@ -214,9 +256,7 @@ class ValidationMixin(DMCoreProtocol):
                     if not isinstance(action_name, str) or action_name in MOVEMENT_ACTIONS or action_name in TRANSFER_ACTIONS:
                         continue
                     if not self._resolves_as_named_ability(entity, action_name):
-                        self.event_bus.publish(
-                            "log_error",
-                            f"{namespace_label} '{name}' behavior names unknown action '{action_name}'.",
+                        self._report(f"{namespace_label} '{name}' behavior names unknown action '{action_name}'.",
                         )
 
     # -----------------------------------------------------------------------------------------
@@ -229,8 +269,7 @@ class ValidationMixin(DMCoreProtocol):
         if not isinstance(entity_name, str):
             return
         if entity_name not in self.entities:
-            self.event_bus.publish(
-                "log_error", f"{owner_label} {field_label} references unknown entity '{entity_name}'."
+            self._report(f"{owner_label} {field_label} references unknown entity '{entity_name}'."
             )
 
     def _check_materials(self, owner_label, materials):
@@ -270,15 +309,11 @@ class ValidationMixin(DMCoreProtocol):
                 if item is None:
                     continue  # already flagged by _validate_entity_references' own referential check
                 if allowed_supertypes and item.get("supertype") not in allowed_supertypes:
-                    self.event_bus.publish(
-                        "log_error",
-                        f"entity '{name}' authors inventory item '{item_name}' whose supertype "
+                    self._report(f"entity '{name}' authors inventory item '{item_name}' whose supertype "
                         f"isn't in its own container_allowed_supertypes {allowed_supertypes}.",
                     )
                 elif allowed_subtypes and item.get("subtype") not in allowed_subtypes:
-                    self.event_bus.publish(
-                        "log_error",
-                        f"entity '{name}' authors inventory item '{item_name}' whose subtype "
+                    self._report(f"entity '{name}' authors inventory item '{item_name}' whose subtype "
                         f"isn't in its own container_allowed_subtypes {allowed_subtypes}.",
                     )
 
@@ -319,9 +354,7 @@ class ValidationMixin(DMCoreProtocol):
                         if "name" in summon:
                             self._check_entity_name(ability_label, "summon.name", summon.get("name"))
                         elif "template" in summon and summon.get("template") not in self.entity_templates:
-                            self.event_bus.publish(
-                                "log_error",
-                                f"{ability_label} summon.template references unknown entity_template "
+                            self._report(f"{ability_label} summon.template references unknown entity_template "
                                 f"'{summon.get('template')}'.",
                             )
 
@@ -339,8 +372,7 @@ class ValidationMixin(DMCoreProtocol):
             return
         rule_name = bonus.split(".")[-1]
         if rule_name not in self.rules:
-            self.event_bus.publish(
-                "log_error", f"{owner_label} damage_value.bonus references unknown rule '{bonus}'."
+            self._report(f"{owner_label} damage_value.bonus references unknown rule '{bonus}'."
             )
 
     # -----------------------------------------------------------------------------------------
@@ -357,9 +389,7 @@ class ValidationMixin(DMCoreProtocol):
         for name, template in self.entity_templates.items():
             for field in TEMPLATE_FORBIDDEN_FIELDS:
                 if field in template:
-                    self.event_bus.publish(
-                        "log_error",
-                        f"entity_template '{name}' authors '{field}', which generation always "
+                    self._report(f"entity_template '{name}' authors '{field}', which generation always "
                         f"overwrites at instancing time -- remove it.",
                     )
 
@@ -380,9 +410,7 @@ class ValidationMixin(DMCoreProtocol):
             if "template" in entry:
                 template_name = entry.get("template")
                 if template_name not in self.entity_templates:
-                    self.event_bus.publish(
-                        "log_error",
-                        f"{owner_label} entities references unknown entity_template '{template_name}'.",
+                    self._report(f"{owner_label} entities references unknown entity_template '{template_name}'.",
                     )
             else:
                 entity_name = entry.get("name")
@@ -405,27 +433,24 @@ class ValidationMixin(DMCoreProtocol):
 
             start_room = location.get("start_room")
             if start_room and start_room not in rooms:
-                self.event_bus.publish("log_error", f"{label} start_room references unknown room '{start_room}'.")
+                self._report(f"{label} start_room references unknown room '{start_room}'.")
 
             return_to = location.get("return_to")
             if return_to and return_to not in self.locations:
-                self.event_bus.publish("log_error", f"{label} return_to references unknown location '{return_to}'.")
+                self._report(f"{label} return_to references unknown location '{return_to}'.")
 
             self._check_entity_entries(label, location.get("entities"))
 
             for exit_entry in location.get("exit", []):
                 destination = exit_entry.get("destination")
                 if destination not in self.locations:
-                    self.event_bus.publish(
-                        "log_error", f"{label} exit references unknown destination location '{destination}'."
+                    self._report(f"{label} exit references unknown destination location '{destination}'."
                     )
                     continue
                 arrival_room = exit_entry.get("arrival_room")
                 destination_rooms = self.locations[destination].get("rooms", {})
                 if arrival_room and arrival_room not in destination_rooms:
-                    self.event_bus.publish(
-                        "log_error",
-                        f"{label} exit to '{destination}' arrival_room references unknown room '{arrival_room}'.",
+                    self._report(f"{label} exit to '{destination}' arrival_room references unknown room '{arrival_room}'.",
                     )
 
             for room_key, room in rooms.items():
@@ -434,9 +459,7 @@ class ValidationMixin(DMCoreProtocol):
                 for room_exit in room.get("exit", []):
                     room_destination = room_exit.get("destination")
                     if room_destination not in rooms:
-                        self.event_bus.publish(
-                            "log_error",
-                            f"{room_label} exit references unknown room '{room_destination}' "
+                        self._report(f"{room_label} exit references unknown room '{room_destination}' "
                             f"(rooms only connect to siblings within the same location).",
                         )
 
@@ -446,7 +469,7 @@ class ValidationMixin(DMCoreProtocol):
     def _log(self, owner_label, message):
         """!@brief Shared one-line log_error publish -- every shape check below ends with
         this, so the "label + message" join only has to be written once."""
-        self.event_bus.publish("log_error", f"{owner_label} {message}")
+        self._report(f"{owner_label} {message}", owner_label)
 
     def _is_varied_value_shape(self, value):
         """!
@@ -993,3 +1016,26 @@ class ValidationMixin(DMCoreProtocol):
                     for field_name in ("band", "arrival_band"):
                         if field_name in room_exit and not isinstance(room_exit[field_name], (int, float)):
                             self._log(room_label, f"[[location.room.exit]] {field_name} should be a number.")
+
+    def _validate_equipped_slots(self):
+        """!
+        @brief Cross-checks every loaded entity's own [entity.equipped] slot keys against
+            WorldContext.get_equip_slots for its supertype/subtype, reporting any slot name not
+            on that list (ex: a "tail" slot on a humanoid) -- Combat_Actions.py would otherwise
+            silently read a slot key nothing declared. Runs after load_scenario_definition, not
+            from load_rules, since a scenario-local entity isn't loaded until then and needs
+            this same check too.
+        """
+        for name, entity in self.entities.items():
+            equipped = entity.get("equipped")
+            if not equipped:
+                continue
+            valid_slots = self.world.get_equip_slots(name)
+            for slot in equipped:
+                if slot not in valid_slots:
+                    self._report(
+                        f"Entity '{name}' equips slot '{slot}', not valid for "
+                        f"supertype/subtype {entity.get('supertype')}/{entity.get('subtype')} "
+                        f"(valid slots: {valid_slots or 'none'}).",
+                        f"Entity '{name}'",
+                    )

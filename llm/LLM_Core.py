@@ -4,6 +4,7 @@ import urllib.request
 import threading
 from contextlib import contextmanager
 
+from intents.registry import ARRIVAL_INTENTS
 from llm.LLM_Backend import get_backend
 from llm.LLM_Rag import RagIndex
 from llm import Narration_Prompts
@@ -295,7 +296,15 @@ class LLMCore:
         self._submit(Narration_Prompts.clarification(self.narrator, data))
 
     def generate_item_interaction_response(self, data):
-        """!@brief Item interaction response trigger -- see Narration_Prompts.item_interaction."""
+        """!
+        @brief Item interaction response trigger -- see Narration_Prompts.item_interaction. An
+            arrival (a successful move/travel) first refreshes the narrator's scene state from the
+            payload -- the one place it is written from an item interaction -- so this and every
+            later prompt describe the place the party is in now.
+        """
+        if data.get("found") and data.get("intent") in ARRIVAL_INTENTS:
+            self.scenario_description = data.get("room_description") or data.get("location_description", "")
+            self.scenario_characters = data.get("characters", [])
         self._submit(Narration_Prompts.item_interaction(self.narrator, data))
 
     def generate_encounter_response(self, data):

@@ -123,12 +123,9 @@ def narrate_travel(llm_core, data):
         scene_name = f"{location_name} ({room_name})"
     else:
         scene_name = room_name or location_name
-    llm_core.scenario_description = data.get("room_description") or data.get("location_description", "")
-    llm_core.scenario_characters = data.get("characters", [])
-    characters_text = (
-        "\nCharacters present: " + " | ".join(llm_core.scenario_characters)
-        if llm_core.scenario_characters else ""
-    )
+    description = data.get("room_description") or data.get("location_description", "")
+    characters = data.get("characters", [])
+    characters_text = "\nCharacters present: " + " | ".join(characters) if characters else ""
     blocks_spent = data.get("blocks_spent")
     if blocks_spent:
         time_state = data.get("time") or {}
@@ -144,6 +141,6 @@ def narrate_travel(llm_core, data):
     polity_text = f" They've crossed into the borders of {polity}." if polity else ""
     return (
         f"The player travels to: \"{scene_name}\".{journey_text}{polity_text}\n"
-        f"{llm_core.scenario_description}{characters_text}\n"
+        f"{description}{characters_text}\n"
         f"{llm_core.scene_length_instruction('arriving in this new place')}"
     )

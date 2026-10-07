@@ -144,6 +144,8 @@ from resolution.NPC_Generation import (
 from gui.Textual_Core import TextualCore
 from textual.widgets import Button, RichLog
 from resolution.World_Context import WorldContext
+import resolution.Ability_Effects as Ability_Effects
+import resolution.Conveyance as Conveyance
 import resolution.Combat_Actions as Combat_Actions
 
 
@@ -169,6 +171,15 @@ def _new_tk_root_with_retry(attempts=3, delay=0.5):
             if attempt == attempts - 1:
                 raise
             time.sleep(delay)
+
+
+
+def apply_effects(core, result, skill_name, named_ability, ability, target_name, via_test=False, input_text=None):
+    """!@brief Ability_Effects.apply_ability_effects for the player's own turn -- the one interface
+        every ability-effect test crosses (resolution/Ability_Effects.py)."""
+    Ability_Effects.apply_ability_effects(
+        core.world, core.player_name, result, skill_name, named_ability, ability, target_name, via_test, input_text,
+    )
 
 
 class TestEventBus(unittest.TestCase):
@@ -2285,7 +2296,7 @@ class TestDamageCalculation(DMTestCase):
         result = RolledOutcome(entity="gladstone", skill="melee", roll=0, difficulty=0, success=True)
         ability = {"damage_value": {"dice": 0, "pips": 0, "bonus": 5}, "damage_tags": []}
 
-        self.dm_core._apply_damage_if_hit(result, "melee", None, ability, "wolf", via_test=False)
+        apply_effects(self.dm_core, result, "melee", None, ability, "wolf", via_test=False)
 
         self.assertEqual(result.effects[0].net_damage, 5)
         magnitude = 5 / self.dm_core.entities["wolf"]["max_hp"]
@@ -2309,7 +2320,7 @@ class TestDamageCalculation(DMTestCase):
         result = RolledOutcome(entity="gladstone", skill="melee", roll=0, difficulty=0, success=True)
         ability = {"damage_value": {"dice": 0, "pips": 0, "bonus": 5}, "damage_tags": []}
 
-        self.dm_core._apply_damage_if_hit(result, "melee", None, ability, "wolf", via_test=False)
+        apply_effects(self.dm_core, result, "melee", None, ability, "wolf", via_test=False)
 
         magnitude = result.effects[0].net_damage / self.dm_core.entities["wolf"]["max_hp"]
         disposition = self.dm_core.get_attitude("thane", self.dm_core.player_name)[0]
@@ -2322,7 +2333,7 @@ class TestDamageCalculation(DMTestCase):
         result = RolledOutcome(entity="gladstone", skill="melee", roll=0, difficulty=0, success=True)
         ability = {"damage_value": {"dice": 0, "pips": 0, "bonus": 5}, "damage_tags": []}
 
-        self.dm_core._apply_damage_if_hit(result, "melee", None, ability, "wolf", via_test=False)
+        apply_effects(self.dm_core, result, "melee", None, ability, "wolf", via_test=False)
 
         self.assertNotIn("action_attitude_deltas", self.dm_core.entities["thane"])
 
@@ -2400,7 +2411,7 @@ class TestResolveTargets(DMTestCase):
         }
         result = RolledOutcome(entity="gladstone", skill="melee", roll=0, difficulty=0, success=True)
 
-        self.dm_core._apply_damage_if_hit(result, "melee", None, ability, "wolf", via_test=False)
+        apply_effects(self.dm_core, result, "melee", None, ability, "wolf", via_test=False)
 
         defenders = {effect.defender for effect in result.effects}
         self.assertEqual(defenders, {"wolf", "wolf_2"})
@@ -2428,7 +2439,7 @@ class TestResolveTargets(DMTestCase):
         }
         result = RolledOutcome(entity="gladstone", skill="arcane", roll=0, difficulty=0, success=True)
 
-        self.dm_core._apply_damage_if_hit(result, "arcane", None, ability, None, via_test=False)
+        apply_effects(self.dm_core, result, "arcane", None, ability, None, via_test=False)
 
         self.assertEqual(len(result.effects), 1)
         self.assertEqual(result.effects[0].defender, "gladstone")
@@ -2467,31 +2478,31 @@ class TestSaveForHalf(DMTestCase):
         # difficulty = 0 would force a *pass* if this were ever checked against wolf -- proving
         # the primary target still always takes full, un-saved-against damage regardless.
         result = RolledOutcome(entity="gladstone", skill="melee", roll=0, difficulty=0, success=True)
-        self.dm_core._apply_damage_if_hit(result, "melee", None, self._blast(0), "wolf", via_test=False)
+        apply_effects(self.dm_core, result, "melee", None, self._blast(0), "wolf", via_test=False)
         self.assertEqual(self._effect_for(result, "wolf").net_damage, 10)
 
     def test_secondary_target_takes_full_damage_on_a_failed_save(self):
         self._stub_roll_dice(0)  # forces wolf_2's own 2d6 reflexes save below difficulty 10
         result = RolledOutcome(entity="gladstone", skill="melee", roll=0, difficulty=0, success=True)
-        self.dm_core._apply_damage_if_hit(result, "melee", None, self._blast(10), "wolf", via_test=False)
+        apply_effects(self.dm_core, result, "melee", None, self._blast(10), "wolf", via_test=False)
         self.assertEqual(self._effect_for(result, "wolf_2").net_damage, 10)
 
     def test_secondary_target_takes_half_damage_on_a_passed_save_without_evasion(self):
         result = RolledOutcome(entity="gladstone", skill="melee", roll=0, difficulty=0, success=True)
-        self.dm_core._apply_damage_if_hit(result, "melee", None, self._blast(0), "wolf", via_test=False)
+        apply_effects(self.dm_core, result, "melee", None, self._blast(0), "wolf", via_test=False)
         self.assertEqual(self._effect_for(result, "wolf_2").net_damage, 5)
 
     def test_secondary_target_with_evasion_takes_no_damage_on_a_passed_save(self):
         self.dm_core.entities["wolf_2"]["negates_save_for_half"] = ["reflexes"]
         result = RolledOutcome(entity="gladstone", skill="melee", roll=0, difficulty=0, success=True)
-        self.dm_core._apply_damage_if_hit(result, "melee", None, self._blast(0), "wolf", via_test=False)
+        apply_effects(self.dm_core, result, "melee", None, self._blast(0), "wolf", via_test=False)
         self.assertNotIn("wolf_2", [e.defender for e in result.effects])
 
     def test_evasion_does_nothing_on_a_failed_save(self):
         self._stub_roll_dice(0)  # forces wolf_2's own 2d6 reflexes save below difficulty 10
         self.dm_core.entities["wolf_2"]["negates_save_for_half"] = ["reflexes"]
         result = RolledOutcome(entity="gladstone", skill="melee", roll=0, difficulty=0, success=True)
-        self.dm_core._apply_damage_if_hit(result, "melee", None, self._blast(10), "wolf", via_test=False)
+        apply_effects(self.dm_core, result, "melee", None, self._blast(10), "wolf", via_test=False)
         self.assertEqual(self._effect_for(result, "wolf_2").net_damage, 10)
 
     def test_evasion_does_not_apply_to_a_save_for_half_keyed_to_a_different_skill(self):
@@ -2505,7 +2516,7 @@ class TestSaveForHalf(DMTestCase):
             "save_for_half": {"skill": "fortitude"}, "difficulty": 0,
         }
         result = RolledOutcome(entity="gladstone", skill="melee", roll=0, difficulty=0, success=True)
-        self.dm_core._apply_damage_if_hit(result, "melee", None, ability, "wolf", via_test=False)
+        apply_effects(self.dm_core, result, "melee", None, ability, "wolf", via_test=False)
         self.assertEqual(self._effect_for(result, "wolf_2").net_damage, 5)
 
     def test_ability_with_no_save_for_half_is_unaffected(self):
@@ -2514,7 +2525,7 @@ class TestSaveForHalf(DMTestCase):
             "targets": {"number": 0, "aoe": 0, "side": "all"},
         }
         result = RolledOutcome(entity="gladstone", skill="melee", roll=0, difficulty=0, success=True)
-        self.dm_core._apply_damage_if_hit(result, "melee", None, ability, "wolf", via_test=False)
+        apply_effects(self.dm_core, result, "melee", None, ability, "wolf", via_test=False)
         self.assertEqual(self._effect_for(result, "wolf").net_damage, 10)
         self.assertEqual(self._effect_for(result, "wolf_2").net_damage, 10)
 
@@ -2989,6 +3000,66 @@ class TestMediumAccess(DMTestCase):
         self.assertIsNone(Combat_Actions.resolve_behavior_action(self.dm_core.world, "wolf", "gladstone"))
 
 
+class TestAbilityEffectsForNpcs(DMTestCase):
+    """!
+    @brief resolution/Ability_Effects.py is one implementation for every actor -- an NPC that uses
+        an ability gets the same effects the player gets from it (summon, teleport, spell
+        materials), each gated by what the ability itself authors. Crossed through
+        apply_ability_effects with "wolf" (the arena's hostile creature) as the actor.
+    """
+
+    def _landed(self):
+        return RolledOutcome(entity="wolf", skill="melee", roll=10, difficulty=1, success=True)
+
+    def _cast(self, ability, result=None, target="gladstone"):
+        result = result or self._landed()
+        Ability_Effects.apply_ability_effects(
+            self.dm_core.world, "wolf", result, "melee", ability, ability, target,
+        )
+        return result
+
+    def test_an_npcs_summon_lands_at_the_npcs_own_band(self):
+        self.dm_core.entities["wolf"]["band"] = 2
+        before = set(self.dm_core.scenario_entities)
+
+        result = self._cast({"name": "call the pack", "summon": {"name": "spectral wolf", "duration": 2}})
+
+        summoned = [e.name for e in result.effects if isinstance(e, SummonEffect)]
+        self.assertEqual(len(summoned), 1)
+        self.assertEqual(set(self.dm_core.scenario_entities) - before, set(summoned))
+        self.assertEqual(Combat_Resolution.get_band(self.dm_core.world, summoned[0]), 2)
+
+    def test_an_npc_can_teleport_between_bands_but_never_relocate_the_scene(self):
+        location = self.dm_core.current_location_key
+
+        result = self._cast({"name": "blink", "teleport_to_band": 3, "teleport_to_location": {"location": "elsewhere"}})
+
+        teleports = [e for e in result.effects if isinstance(e, TeleportEffect)]
+        self.assertEqual([(e.entity, e.band, e.location) for e in teleports], [("wolf", 3, None)])
+        self.assertEqual(Combat_Resolution.get_band(self.dm_core.world, "wolf"), 3)
+        self.assertEqual(self.dm_core.current_location_key, location)
+
+    def test_an_npc_without_the_materials_still_casts_and_spends_nothing(self):
+        self.dm_core.entities["wolf"]["inventory"] = []
+
+        result = self._cast({"name": "hex", "materials": [{"item": "bat guano", "quantity": 1}], "summon": {"name": "spectral wolf", "duration": 1}})
+
+        self.assertEqual(len([e for e in result.effects if isinstance(e, SummonEffect)]), 1)
+        self.assertEqual(self.dm_core.entities["wolf"]["inventory"], [])
+
+    def test_an_ability_that_authors_no_effects_does_nothing_beyond_damage(self):
+        result = self._cast({"name": "growl"})
+
+        self.assertEqual(result.effects, [])
+
+    def test_a_failed_roll_applies_no_effect_at_all(self):
+        result = RolledOutcome(entity="wolf", skill="melee", roll=1, difficulty=10, success=False)
+
+        self._cast({"name": "blink", "teleport_to_band": 3}, result)
+
+        self.assertEqual(result.effects, [])
+
+
 class TestTeleport(DMTestCase):
     """!
     @brief teleport_to_band/teleport_to_location (ability fields) + _apply_teleport_if_hit
@@ -3002,7 +3073,7 @@ class TestTeleport(DMTestCase):
         ability = {"name": "dimension door", "teleport_to_band": 3}
         result = RolledOutcome(entity="gladstone", skill="arcane", roll=10, difficulty=1, success=True)
 
-        self.dm_core._apply_teleport_if_hit(result, ability)
+        apply_effects(self.dm_core, result, None, ability, None, None)
 
         self.assertEqual(Combat_Resolution.get_band(self.dm_core.world, "gladstone"), 3)
         effects = [e for e in result.effects if isinstance(e, TeleportEffect)]
@@ -3014,7 +3085,7 @@ class TestTeleport(DMTestCase):
         ability = {"name": "dimension door", "teleport_to_band": 99}
         result = RolledOutcome(entity="gladstone", skill="arcane", roll=10, difficulty=1, success=True)
 
-        self.dm_core._apply_teleport_if_hit(result, ability)
+        apply_effects(self.dm_core, result, None, ability, None, None)
 
         self.assertEqual(Combat_Resolution.get_band(self.dm_core.world, "gladstone"), 4)  # arena_grounds' own ceiling
 
@@ -3022,7 +3093,7 @@ class TestTeleport(DMTestCase):
         ability = {"name": "teleport", "teleport_to_location": {"location": "crypt"}}
         result = RolledOutcome(entity="gladstone", skill="arcane", roll=10, difficulty=1, success=True)
 
-        self.dm_core._apply_teleport_if_hit(result, ability)
+        apply_effects(self.dm_core, result, None, ability, None, None)
 
         self.assertEqual(self.dm_core.current_location_key, "crypt")
         effects = [e for e in result.effects if isinstance(e, TeleportEffect)]
@@ -3034,7 +3105,7 @@ class TestTeleport(DMTestCase):
         ability = {"name": "dimension door", "teleport_to_band": 3}
         result = RolledOutcome(entity="gladstone", skill="arcane", roll=1, difficulty=10, success=False)
 
-        self.dm_core._apply_teleport_if_hit(result, ability)
+        apply_effects(self.dm_core, result, None, ability, None, None)
 
         self.assertEqual(Combat_Resolution.get_band(self.dm_core.world, "gladstone"), 1)  # unchanged
         self.assertEqual(result.effects, [])
@@ -3042,7 +3113,7 @@ class TestTeleport(DMTestCase):
     def test_no_effect_with_no_named_ability(self):
         result = RolledOutcome(entity="gladstone", skill="blades", roll=10, difficulty=1, success=True)
 
-        self.dm_core._apply_teleport_if_hit(result, None)
+        apply_effects(self.dm_core, result, None, None, None, None)
 
         self.assertEqual(result.effects, [])
 
@@ -3426,7 +3497,7 @@ class TestHitch(DMTestCase):
             "intent": "hitch", "item_name": None, "input": "i hitch the horse to the cart",
         })
 
-        self.assertEqual(self.dm_core._resolve_travel_speed("cart"), 40)  # creatures.toml's own horse
+        self.assertEqual(Conveyance.travel_speed(self.dm_core.world, "cart"), 40)  # creatures.toml's own horse
 
     def test_unhitch_removes_a_bare_string_mount_field_entirely(self):
         self._add_horse()
@@ -4581,7 +4652,7 @@ class TestWorldMapExpansion(DMTestCase):
         self.dm_core.scenario_entities.append("rowboat")
         self.dm_core.entities["gladstone"]["mount"] = "rowboat"
 
-        self.assertEqual(self.dm_core._resolve_conveyance_tags("gladstone"), {"aquatic"})
+        self.assertEqual(Conveyance.terrain_tags(self.dm_core.world, "gladstone"), {"aquatic"})
 
     def test_sandpoint_expansion_added_the_exploring_sandpoint_landmarks(self):
         # sandpoint + magnimar (2) plus the 52 numbered "Exploring Sandpoint" landmarks pulled
@@ -4780,8 +4851,10 @@ class TestFreeStandingIntentHandlers(unittest.TestCase):
             "characters": ["thane"],
         }, llm_core)
         self.assertIn("the crypt entrance", prompt)
-        self.assertEqual(llm_core.scenario_description, "Cold air rises from below.")
-        self.assertEqual(llm_core.scenario_characters, ["thane"])
+        self.assertIn("Cold air rises from below.", prompt)
+        self.assertIn("Characters present: thane", prompt)
+        # narrate only reads: LLMCore is the one writer of the narrator's scene state.
+        self.assertEqual(llm_core.scenario_description, "")
 
     def test_narrate_move_explains_each_failure_reason(self):
         for reason, expected_phrase in (
@@ -4803,7 +4876,8 @@ class TestFreeStandingIntentHandlers(unittest.TestCase):
         }, llm_core)
         self.assertIn("border stones", prompt)
         self.assertIn("1 block(s) of travel time", prompt)
-        self.assertEqual(llm_core.scenario_description, "A ring of weathered stones.")
+        self.assertIn("A ring of weathered stones.", prompt)
+        self.assertEqual(llm_core.scenario_description, "")
 
     def test_narrate_travel_omits_elapsed_time_for_an_ordinary_exit_graph_hop(self):
         llm_core = self._FakeLLMCore()
@@ -4956,6 +5030,23 @@ class TestGenerateItemInteractionResponseDispatchesFreeStandingIntents(LLMTestCa
             "characters": [], "input": "go forward",
         })
         self.assertEqual(self.llm_core.scenario_description, "Dust hangs in the still air.")
+
+    def test_a_failed_move_leaves_the_narrators_scene_untouched(self):
+        self.llm_core.scenario_description = "A large arena."
+        self.llm_core.generate_item_interaction_response({
+            "intent": "move", "found": False, "reason": "no_exit", "direction": "forward",
+            "room_description": "Somewhere else.", "input": "go forward",
+        })
+        self.assertEqual(self.llm_core.scenario_description, "A large arena.")
+
+    def test_travel_grounds_ongoing_scenario_description_on_the_llmcore_itself(self):
+        self.llm_core.generate_item_interaction_response({
+            "intent": "travel", "found": True, "location_name": "border stones",
+            "location_description": "A ring of weathered stones.", "characters": ["warden"],
+            "time": {"is_day": True, "day": 0}, "input": "travel to the stones",
+        })
+        self.assertEqual(self.llm_core.scenario_description, "A ring of weathered stones.")
+        self.assertEqual(self.llm_core.scenario_characters, ["warden"])
 
 
 class TestDeniedItemInteractionNarration(LLMTestCase):
@@ -6004,7 +6095,7 @@ class TestAbilityOutcomeProgram(DMTestCase):
         trip = self.dm_core.entities["trip"]
         result = RolledOutcome(entity="gladstone", skill="athletics", roll=15, difficulty=5, success=True)
 
-        self.dm_core._run_ability_outcome_program(result, "athletics", None, trip, "target_dummy", via_test=False)
+        apply_effects(self.dm_core, result, "athletics", None, trip, "target_dummy", via_test=False)
 
         self.assertIn("prone", self.dm_core.entities["target_dummy"]["active_conditions"])
 
@@ -6012,7 +6103,7 @@ class TestAbilityOutcomeProgram(DMTestCase):
         trip = self.dm_core.entities["trip"]
         result = RolledOutcome(entity="gladstone", skill="athletics", roll=1, difficulty=15, success=False)
 
-        self.dm_core._run_ability_outcome_program(result, "athletics", None, trip, "target_dummy", via_test=False)
+        apply_effects(self.dm_core, result, "athletics", None, trip, "target_dummy", via_test=False)
 
         self.assertNotIn("prone", self.dm_core.entities["target_dummy"].get("active_conditions", {}))
 
@@ -6024,7 +6115,7 @@ class TestAbilityOutcomeProgram(DMTestCase):
         intimidate = self.dm_core.entities["intimidate"]
         result = RolledOutcome(entity="gladstone", skill="intimidation", roll=15, difficulty=5, success=True)
 
-        self.dm_core._run_ability_outcome_program(result, "intimidation", None, intimidate, "target_dummy", via_test=False)
+        apply_effects(self.dm_core, result, "intimidation", None, intimidate, "target_dummy", via_test=False)
 
         self.assertIn("shaken", self.dm_core.entities["target_dummy"]["active_conditions"])
 
@@ -6037,7 +6128,7 @@ class TestAbilityOutcomeProgram(DMTestCase):
         intimidate = self.dm_core.entities["intimidate"]
         result = RolledOutcome(entity="gladstone", skill="intimidation", roll=15, difficulty=5, success=True)
 
-        self.dm_core._run_ability_outcome_program(result, "intimidation", None, intimidate, "target_dummy", via_test=False)
+        apply_effects(self.dm_core, result, "intimidation", None, intimidate, "target_dummy", via_test=False)
 
         self.assertNotIn("action_attitude_deltas", self.dm_core.entities["target_dummy"])
 
@@ -6045,7 +6136,7 @@ class TestAbilityOutcomeProgram(DMTestCase):
         intimidate = self.dm_core.entities["intimidate"]
         result = RolledOutcome(entity="gladstone", skill="intimidation", roll=15, difficulty=5, success=True)
 
-        self.dm_core._run_ability_outcome_program(result, "intimidation", None, intimidate, "target_dummy", via_test=False)
+        apply_effects(self.dm_core, result, "intimidation", None, intimidate, "target_dummy", via_test=False)
 
         self.assertNotIn("shaken", self.dm_core.entities["target_dummy"].get("active_conditions", {}))
 
@@ -6053,7 +6144,7 @@ class TestAbilityOutcomeProgram(DMTestCase):
         intimidate = self.dm_core.entities["intimidate"]
         result = RolledOutcome(entity="gladstone", skill="intimidation", roll=2, difficulty=15, success=False)
 
-        self.dm_core._run_ability_outcome_program(result, "intimidation", None, intimidate, "target_dummy", via_test=False)
+        apply_effects(self.dm_core, result, "intimidation", None, intimidate, "target_dummy", via_test=False)
 
         deltas = self.dm_core.entities["target_dummy"]["action_attitude_deltas"]["gladstone"]
         self.assertEqual(deltas, [-1.5, 3.0, -1.5])  # failed_intimidation's own deltas @ magnitude 0.3
@@ -6062,7 +6153,7 @@ class TestAbilityOutcomeProgram(DMTestCase):
         trip = self.dm_core.entities["trip"]
         result = RolledOutcome(entity="gladstone", skill="athletics", roll=15, difficulty=5, success=True)
 
-        self.dm_core._run_ability_outcome_program(result, "athletics", None, trip, "target_dummy", via_test=True)
+        apply_effects(self.dm_core, result, "athletics", None, trip, "target_dummy", via_test=True)
 
         self.assertNotIn("prone", self.dm_core.entities["target_dummy"].get("active_conditions", {}))
 
@@ -6070,7 +6161,7 @@ class TestAbilityOutcomeProgram(DMTestCase):
         bull_rush = self.dm_core.entities["bull rush"]
         result = RolledOutcome(entity="gladstone", skill="athletics", roll=15, difficulty=5, success=True)
 
-        self.dm_core._run_ability_outcome_program(result, "athletics", None, bull_rush, "target_dummy", via_test=False)
+        apply_effects(self.dm_core, result, "athletics", None, bull_rush, "target_dummy", via_test=False)
 
         self.assertIn("staggered", self.dm_core.entities["target_dummy"]["active_conditions"])
 
@@ -6078,7 +6169,7 @@ class TestAbilityOutcomeProgram(DMTestCase):
         grapple = self.dm_core.entities["grapple"]
         result = RolledOutcome(entity="gladstone", skill="athletics", roll=15, difficulty=5, success=True)
 
-        self.dm_core._run_ability_outcome_program(result, "athletics", None, grapple, "target_dummy", via_test=False)
+        apply_effects(self.dm_core, result, "athletics", None, grapple, "target_dummy", via_test=False)
 
         self.assertIn("grappled", self.dm_core.entities["target_dummy"]["active_conditions"])
 
@@ -6086,7 +6177,7 @@ class TestAbilityOutcomeProgram(DMTestCase):
         dirty_trick = self.dm_core.entities["dirty trick"]
         result = RolledOutcome(entity="gladstone", skill="trickery", roll=15, difficulty=5, success=True)
 
-        self.dm_core._run_ability_outcome_program(result, "trickery", None, dirty_trick, "target_dummy", via_test=False)
+        apply_effects(self.dm_core, result, "trickery", None, dirty_trick, "target_dummy", via_test=False)
 
         self.assertIn("dazzled", self.dm_core.entities["target_dummy"]["active_conditions"])
 
@@ -6094,7 +6185,7 @@ class TestAbilityOutcomeProgram(DMTestCase):
         feint = self.dm_core.entities["feint"]
         result = RolledOutcome(entity="gladstone", skill="trickery", roll=15, difficulty=5, success=True)
 
-        self.dm_core._run_ability_outcome_program(result, "trickery", None, feint, "target_dummy", via_test=False)
+        apply_effects(self.dm_core, result, "trickery", None, feint, "target_dummy", via_test=False)
 
         self.assertIn("flat_footed", self.dm_core.entities["target_dummy"]["active_conditions"])
 
@@ -6106,7 +6197,7 @@ class TestAbilityOutcomeProgram(DMTestCase):
             ability = self.dm_core.entities[name]
             result = RolledOutcome(entity="gladstone", skill=skill_name, roll=1, difficulty=15, success=False)
 
-            self.dm_core._run_ability_outcome_program(result, skill_name, None, ability, "target_dummy", via_test=False)
+            apply_effects(self.dm_core, result, skill_name, None, ability, "target_dummy", via_test=False)
 
             self.assertNotIn(condition_name, self.dm_core.entities["target_dummy"].get("active_conditions", {}))
 
@@ -6118,7 +6209,7 @@ class TestAbilityOutcomeProgram(DMTestCase):
         suggestion = self.dm_core.entities["suggestion"]
         result = RolledOutcome(entity="gladstone", skill="arcane", roll=15, difficulty=5, success=True)
 
-        self.dm_core._run_ability_outcome_program(
+        apply_effects(self.dm_core, 
             result, "arcane", None, suggestion, "target_dummy", via_test=False,
             input_text="tell him to open the gate",
         )
@@ -6132,7 +6223,7 @@ class TestAbilityOutcomeProgram(DMTestCase):
         suggestion = self.dm_core.entities["suggestion"]
         result = RolledOutcome(entity="gladstone", skill="arcane", roll=1, difficulty=15, success=False)
 
-        self.dm_core._run_ability_outcome_program(
+        apply_effects(self.dm_core, 
             result, "arcane", None, suggestion, "target_dummy", via_test=False,
             input_text="tell him to open the gate",
         )
@@ -6143,7 +6234,7 @@ class TestAbilityOutcomeProgram(DMTestCase):
         suggestion = self.dm_core.entities["suggestion"]
         result = RolledOutcome(entity="gladstone", skill="arcane", roll=15, difficulty=5, success=True)
 
-        self.dm_core._run_ability_outcome_program(result, "arcane", None, suggestion, "target_dummy", via_test=False)
+        apply_effects(self.dm_core, result, "arcane", None, suggestion, "target_dummy", via_test=False)
 
         self.assertNotIn("prompt_directive", self.dm_core.entities["target_dummy"])
 
@@ -6153,7 +6244,7 @@ class TestAbilityOutcomeProgram(DMTestCase):
         }
         result = RolledOutcome(entity="gladstone", skill="arcane", roll=15, difficulty=5, success=True)
 
-        self.dm_core._run_ability_outcome_program(
+        apply_effects(self.dm_core, 
             result, "arcane", None, scripted, "target_dummy", via_test=False, input_text="whatever the player typed",
         )
 
@@ -6167,7 +6258,7 @@ class TestAbilityOutcomeProgram(DMTestCase):
         suggestion = self.dm_core.entities["suggestion"]
         result = RolledOutcome(entity="gladstone", skill="arcane", roll=15, difficulty=5, success=True)
 
-        self.dm_core._run_ability_outcome_program(
+        apply_effects(self.dm_core, 
             result, "arcane", None, suggestion, "crate", via_test=False, input_text="open yourself",
         )
 
@@ -6178,7 +6269,7 @@ class TestAbilityOutcomeProgram(DMTestCase):
         suggestion = self.dm_core.entities["suggestion"]
         result = RolledOutcome(entity="gladstone", skill="arcane", roll=15, difficulty=5, success=True)
 
-        self.dm_core._run_ability_outcome_program(
+        apply_effects(self.dm_core, 
             result, "arcane", None, suggestion, "target_dummy", via_test=False, input_text="get up",
         )
 
@@ -6300,7 +6391,7 @@ class TestMorePathfinderManeuvers(DMTestCase):
             entity=actor, skill=skill_name, roll=15 if success else 1, difficulty=5 if success else 15,
             success=success,
         )
-        self.dm_core._run_ability_outcome_program(result, skill_name, None, ability, target_name, via_test=False)
+        apply_effects(self.dm_core, result, skill_name, None, ability, target_name, via_test=False)
         return result
 
     def test_sunder_condition_disarms_a_creatures_weapon(self):
@@ -6721,7 +6812,7 @@ class TestDispelMagic(DMTestCase):
     def test_apply_dispel_if_hit_banishes_a_matching_target(self):
         ability = {"dispel": {"supertypes": ["spell"], "subtypes": ["spell"]}}
         result = RolledOutcome(entity="gladstone", skill="arcane", roll=10, difficulty=0, success=True)
-        self.dm_core._apply_dispel_if_hit(result, ability, "flame wall")
+        apply_effects(self.dm_core, result, None, ability, None, "flame wall")
         self.assertNotIn("flame wall", self.dm_core.scenario_entities)
         self.assertEqual([e.name for e in result.effects if isinstance(e, DispelEffect)], ["flame wall"])
 
@@ -6730,14 +6821,14 @@ class TestDispelMagic(DMTestCase):
         # Pathfinder "used on the wrong thing just wastes the action" shape, not a hard gate.
         ability = {"dispel": {"supertypes": ["spell"], "subtypes": ["spell"]}}
         result = RolledOutcome(entity="gladstone", skill="arcane", roll=10, difficulty=0, success=True)
-        self.dm_core._apply_dispel_if_hit(result, ability, "gladstone")
+        apply_effects(self.dm_core, result, None, ability, None, "gladstone")
         self.assertIn("gladstone", self.dm_core.scenario_entities)
         self.assertEqual(result.effects, [])
 
     def test_apply_dispel_if_hit_does_nothing_on_a_failed_roll(self):
         ability = {"dispel": {"supertypes": ["spell"], "subtypes": ["spell"]}}
         result = RolledOutcome(entity="gladstone", skill="arcane", roll=1, difficulty=10, success=False)
-        self.dm_core._apply_dispel_if_hit(result, ability, "flame wall")
+        apply_effects(self.dm_core, result, None, ability, None, "flame wall")
         self.assertIn("flame wall", self.dm_core.scenario_entities)
 
     def test_casting_dispel_magic_end_to_end_banishes_the_flame_wall(self):
@@ -6778,7 +6869,7 @@ class TestCureConditionType(DMTestCase):
     def test_apply_cure_if_hit_dismisses_a_matching_condition(self):
         ability = {"cure": {"subtypes": ["disease"]}}
         result = RolledOutcome(entity="gladstone", skill="miracles", roll=10, difficulty=0, success=True)
-        self.dm_core._apply_cure_if_hit(result, ability, "gladstone")
+        apply_effects(self.dm_core, result, None, ability, None, "gladstone")
         self.assertFalse(Combat_Resolution.has_condition(self.dm_core.world, "gladstone", "filth fever"))
         self.assertEqual([e.conditions for e in result.effects if isinstance(e, CureEffect)], [["filth fever"]])
 
@@ -6787,14 +6878,14 @@ class TestCureConditionType(DMTestCase):
         # the same "used on the wrong thing just wastes the action" shape dispel already has.
         ability = {"cure": {"subtypes": ["curse"]}}
         result = RolledOutcome(entity="gladstone", skill="miracles", roll=10, difficulty=0, success=True)
-        self.dm_core._apply_cure_if_hit(result, ability, "gladstone")
+        apply_effects(self.dm_core, result, None, ability, None, "gladstone")
         self.assertTrue(Combat_Resolution.has_condition(self.dm_core.world, "gladstone", "filth fever"))
         self.assertEqual([e.conditions for e in result.effects if isinstance(e, CureEffect)], [[]])
 
     def test_apply_cure_if_hit_does_nothing_on_a_failed_roll(self):
         ability = {"cure": {"subtypes": ["disease"]}}
         result = RolledOutcome(entity="gladstone", skill="miracles", roll=1, difficulty=10, success=False)
-        self.dm_core._apply_cure_if_hit(result, ability, "gladstone")
+        apply_effects(self.dm_core, result, None, ability, None, "gladstone")
         self.assertTrue(Combat_Resolution.has_condition(self.dm_core.world, "gladstone", "filth fever"))
         self.assertEqual(result.effects, [])
 
@@ -7972,7 +8063,7 @@ class TestActionPrevented(DMTestCase):
         }
         pin = self.dm_core.entities["pin"]
         result = RolledOutcome(entity="gladstone", skill="athletics", roll=15, difficulty=5, success=True)
-        self.dm_core._run_ability_outcome_program(result, "athletics", None, pin, "wolf", via_test=False)
+        apply_effects(self.dm_core, result, "athletics", None, pin, "wolf", via_test=False)
 
         self.assertIn("pinned", self.dm_core.entities["wolf"]["active_conditions"])
         self.assertTrue(Combat_Actions.is_action_prevented(self.dm_core.world, "wolf"))
@@ -10893,7 +10984,7 @@ class TestZombieArchetypeCharacterCreation(unittest.TestCase):
         self.assertEqual(player["skills"]["firearms"], {"dice": 8, "pips": 0})  # 3D + 5D
 
     def test_archetype_chargen_boots_with_zero_validation_errors(self):
-        # Belt-and-suspenders against DM_Validation.py flagging the new starting_items/
+        # Belt-and-suspenders against Data_Validation.py flagging the new starting_items/
         # starting_equipped item names as unresolvable, or any other referential-integrity
         # regression from this real, non-Fantasy chargen path.
         errors = []
@@ -11478,11 +11569,11 @@ class TestBulk(DMTestCase):
     def test_get_max_bulk_is_min_bulk_plus_strength_dice_times_mod_multiplier(self):
         # Fantasy's own rules.toml [bulk] table: min_bulk = 3, mod_multiplier = 2 -- gladstone's
         # own strength is 2D (characters.toml), so 3 + 2*2 = 7.
-        self.assertEqual(self.dm_core.get_max_bulk("gladstone"), 7)
+        self.assertEqual(Conveyance.max_bulk(self.dm_core.world, "gladstone"), 7)
 
     def test_get_current_bulk_sums_the_inventorys_own_bulk_fields(self):
         # longsword(1) + chain mail(1) + 3x health potion(0 each) + iron filings(0) = 2.
-        self.assertEqual(self.dm_core.get_current_bulk("gladstone"), 2)
+        self.assertEqual(Conveyance.current_bulk(self.dm_core.world, "gladstone"), 2)
 
     def test_take_is_denied_once_it_would_exceed_max_bulk(self):
         self._pad_gladstones_bulk_to_the_cap()
@@ -11535,7 +11626,7 @@ class TestBulk(DMTestCase):
 
     def test_get_max_bulk_returns_none_when_the_setting_authors_no_bulk_rule(self):
         del self.dm_core.rules["bulk"]
-        self.assertIsNone(self.dm_core.get_max_bulk("gladstone"))
+        self.assertIsNone(Conveyance.max_bulk(self.dm_core.world, "gladstone"))
 
     def test_take_is_never_denied_when_the_setting_authors_no_bulk_rule(self):
         del self.dm_core.rules["bulk"]
@@ -11558,7 +11649,7 @@ class TestBulk(DMTestCase):
     def test_get_carrying_capacity_is_max_bulk_for_a_leaf_provider(self):
         self._add_horse()
         # creatures.toml's own horse: strength 4D -> Fantasy's [bulk] formula, 3 + 4*2 = 11.
-        self.assertEqual(self.dm_core.get_carrying_capacity("horse"), 11)
+        self.assertEqual(Conveyance.carrying_capacity(self.dm_core.world, "horse"), 11)
 
     def test_get_carrying_capacity_sums_a_carts_own_pulling_team(self):
         first = self._add_horse()
@@ -11569,7 +11660,7 @@ class TestBulk(DMTestCase):
         }
         self.dm_core.scenario_entities.append("cart")
 
-        self.assertEqual(self.dm_core.get_carrying_capacity("cart"), 22)  # 11 + 11
+        self.assertEqual(Conveyance.carrying_capacity(self.dm_core.world, "cart"), 22)  # 11 + 11
 
     def test_get_carrying_capacity_drops_a_dead_puller_from_the_sum(self):
         first = self._add_horse()
@@ -11581,7 +11672,7 @@ class TestBulk(DMTestCase):
         }
         self.dm_core.scenario_entities.append("cart")
 
-        self.assertEqual(self.dm_core.get_carrying_capacity("cart"), 11)  # only the live one
+        self.assertEqual(Conveyance.carrying_capacity(self.dm_core.world, "cart"), 11)  # only the live one
 
     def test_get_current_bulk_folds_in_a_mounted_riders_own_body_and_gear(self):
         self._add_horse()
@@ -11591,7 +11682,7 @@ class TestBulk(DMTestCase):
         # gladstone's own gear (longsword + chain mail = 2, see
         # test_get_current_bulk_sums_the_inventorys_own_bulk_fields) counts too by default
         # (rules.toml's own [bulk] table: count_rider_gear = true).
-        self.assertEqual(self.dm_core.get_current_bulk("horse"), 5 + 2)
+        self.assertEqual(Conveyance.current_bulk(self.dm_core.world, "horse"), 5 + 2)
 
     def test_get_current_bulk_excludes_rider_gear_when_count_rider_gear_is_false(self):
         self.dm_core.rules["bulk"]["count_rider_gear"] = False
@@ -11599,17 +11690,17 @@ class TestBulk(DMTestCase):
         self.dm_core.entities["gladstone"]["mount"] = "horse"
         self.dm_core.entities["gladstone"]["bulk"] = 5
 
-        self.assertEqual(self.dm_core.get_current_bulk("horse"), 5)
+        self.assertEqual(Conveyance.current_bulk(self.dm_core.world, "horse"), 5)
 
     def test_would_exceed_mount_capacity_true_once_a_riders_own_load_overflows_it(self):
         self._add_horse()
         self.dm_core.entities["horse"]["max_bulk"] = 1
-        self.assertTrue(self.dm_core._would_exceed_mount_capacity("horse", "gladstone"))
+        self.assertTrue(Conveyance.would_exceed_capacity(self.dm_core.world, "horse", "gladstone"))
 
     def test_would_exceed_mount_capacity_false_when_uncapped(self):
         self._add_horse()
         del self.dm_core.rules["bulk"]  # horse authors no "max_bulk" override of its own
-        self.assertFalse(self.dm_core._would_exceed_mount_capacity("horse", "gladstone"))
+        self.assertFalse(Conveyance.would_exceed_capacity(self.dm_core.world, "horse", "gladstone"))
 
 
 class TestGiveAndTrade(DMTestCase):
@@ -12086,7 +12177,7 @@ class TestContainerRestrictions(DMTestCase):
 
     def test_containers_own_nested_bulk_never_counts_against_the_carrier(self):
         self.dm_core.entities["gladstone"]["inventory"].append("bag of holding")
-        before = self.dm_core.get_current_bulk("gladstone")
+        before = Conveyance.current_bulk(self.dm_core.world, "gladstone")
 
         # Filling the bag right up to its own container_capacity (40) still only ever costs
         # gladstone the bag's own flat "bulk" (2) -- get_current_bulk never recurses into an
@@ -12096,7 +12187,7 @@ class TestContainerRestrictions(DMTestCase):
         }
         self.dm_core.entities["bag of holding"]["inventory"].append("anvil")
 
-        self.assertEqual(self.dm_core.get_current_bulk("gladstone"), before)
+        self.assertEqual(Conveyance.current_bulk(self.dm_core.world, "gladstone"), before)
 
     def test_give_denies_wrong_item_type_without_moving_anything(self):
         self._load_ad_hoc_scenario([{"name": "gladstone", "band": 1}, {"name": "spellbook", "band": 1}])
@@ -12751,8 +12842,82 @@ class TestEquipSlots(DMTestCase):
         self.assertEqual(self.dm_core.get_equip_slots("gladstone"), ["rhand", "chest"])
 
 
+class TestEntityReference(unittest.TestCase):
+    """!@brief resolution/Entity_Reference.py -- which entities a line of text literally names,
+        crossed directly with plain dicts (no DMCore)."""
+
+    ENTITIES = {
+        "player": {"name": "Hero", "supertype": "character"},
+        "sandpoint_townsfolk_2": {"name": "Fishmonger", "supertype": "creature"},
+        "spice_merchant": {
+            "name": "Orsin", "supertype": "creature", "aliases": ["spice merchant", "spice", "merchant"],
+        },
+        "chest": {"name": "Old Chest", "supertype": "object"},
+    }
+    KEYS = list(ENTITIES)
+
+    def test_an_entity_is_named_by_key_display_name_or_alias(self):
+        from resolution.Entity_Reference import first_named
+        for text in ("greet sandpoint_townsfolk_2", "greet the fishmonger", "ask orsin"):
+            with self.subTest(text=text):
+                self.assertIsNotNone(first_named(text, self.ENTITIES, self.KEYS, exclude="player"))
+        self.assertEqual(first_named("talk to the barkeep", self.ENTITIES, self.KEYS), None)
+
+    def test_whole_words_only(self):
+        from resolution.Entity_Reference import first_named
+        self.assertIsNone(first_named("the fishmongers guild", self.ENTITIES, self.KEYS))
+
+    def test_the_player_and_other_supertypes_can_be_excluded(self):
+        from resolution.Entity_Reference import first_named
+        self.assertIsNone(first_named("look at hero", self.ENTITIES, self.KEYS, exclude="player"))
+        self.assertIsNone(first_named("open the old chest", self.ENTITIES, self.KEYS, supertype="creature"))
+
+    def test_a_modifier_only_alias_can_be_skipped(self):
+        from resolution.Entity_Reference import first_named
+        self.assertEqual(first_named("kick the spice cart", self.ENTITIES, self.KEYS), "spice_merchant")
+        self.assertIsNone(first_named("kick the spice cart", self.ENTITIES, self.KEYS, skip_modifier_aliases=True))
+        self.assertEqual(
+            first_named("pin the merchant", self.ENTITIES, self.KEYS, skip_modifier_aliases=True), "spice_merchant",
+        )
+
+    def test_reading_order_follows_the_text_not_the_declaration_order(self):
+        from resolution.Entity_Reference import named_in_reading_order
+        self.assertEqual(
+            named_in_reading_order("hitch the old chest to the fishmonger", self.ENTITIES, self.KEYS),
+            ["chest", "sandpoint_townsfolk_2"],
+        )
+
+
+class TestDataValidator(unittest.TestCase):
+    """!@brief resolution/Data_Validation.py crossed directly -- loaded data in, Problem records
+        out, no DMCore, event bus or scenario boot."""
+
+    def _validate(self, entities):
+        from resolution.Data_Validation import DataValidator
+        world = WorldContext(
+            entities=entities, rules={"equip_slot": [{"supertype": "character", "slots": ["main_hand"]}]},
+            skills={"blades": {}},
+        )
+        return DataValidator(world, {}, {}).validate()
+
+    def test_clean_data_returns_no_problems(self):
+        self.assertEqual(self._validate({
+            "hero": {"name": "hero", "supertype": "character", "equipped": {"main_hand": "stick"}, "skill": "blades"},
+            "stick": {"name": "stick", "supertype": "object"},
+        }), [])
+
+    def test_problems_come_back_as_records_instead_of_log_events(self):
+        problems = self._validate({
+            "hero": {"name": "hero", "supertype": "character", "equipped": {"tail": "x"}, "skill": "nope"},
+        })
+        messages = [p.message for p in problems]
+        self.assertTrue(any("slot 'tail'" in m for m in messages), messages)
+        self.assertTrue(any("unknown skill 'nope'" in m for m in messages), messages)
+        self.assertTrue(all(isinstance(p.message, str) for p in problems))
+
+
 class TestValidation(DMTestCase):
-    """DM_Validation.py's referential-integrity *and* field-shape/type checks. Each
+    """Data_Validation.py's referential-integrity *and* field-shape/type checks. Each
     synthetic-data test injects a minimal bad entity/entity_template/location directly into
     self.dm_core's own dicts (rather than authoring a throwaway TOML file) and re-runs
     validate_loaded_data() -- since the real arena fixture is already proven clean below, any
@@ -12762,7 +12927,7 @@ class TestValidation(DMTestCase):
         # Every real scenario this repo ships, across every setting -- a regression guard that a
         # future data edit doesn't quietly introduce a dangling reference, and proof the
         # validator is genuinely setting-agnostic (no Fantasy-specific assumption anywhere in
-        # DM_Validation.py).
+        # Data_Validation.py).
         for setting in ("Fantasy", "Zombie", "Pathfinder"):
             for scenario_key, _name, _description in list_available_scenarios(setting):
                 errors = []
@@ -14874,14 +15039,14 @@ class TestNarratedPopulation(DMTestCase):
     def test_validation_flags_a_narrated_location_in_a_setting_that_never_enabled_it(self):
         errors = self._capture("log_error")
         self.dm_core.rules["narration_population"] = {"enabled": False}
-        self.dm_core._validate_location_shapes()
+        self.dm_core.validate_loaded_data()
 
         self.assertTrue([e for e in errors if "town_square" in e and "no effect" in e])
 
     def test_validation_flags_a_bad_population_value(self):
         errors = self._capture("log_error")
         self.dm_core._current_location()["population"] = "crowded"
-        self.dm_core._validate_location_shapes()
+        self.dm_core.validate_loaded_data()
 
         self.assertTrue([e for e in errors if "population should be" in e])
 
@@ -15484,27 +15649,25 @@ class TestConfirmationAnswers(unittest.TestCase):
         -- exercised without loading NLPCore's models."""
 
     def _nlp(self):
-        from types import SimpleNamespace
         bus = ValidatingEventBus()
         answers = []
         bus.subscribe("confirmation_answered", answers.append)
-        nlp = SimpleNamespace(event_bus=bus, _awaiting_confirmation=True)
+        nlp = NLPCore(bus, FakeMatcher())
+        nlp._awaiting_confirmation = True
         return nlp, answers
 
     def test_yes_and_no_are_consumed_and_anything_else_drops_the_question(self):
-        from nlp.NLP_Core import NLPCore
         for text, answer, consumed in (("Yes, do it.", "yes", True), ("no!", "no", True), ("where's the inn?", None, False)):
             with self.subTest(text=text):
                 nlp, answers = self._nlp()
-                self.assertEqual(NLPCore._answer_confirmation(nlp, text), consumed)
+                self.assertEqual(nlp._answer_confirmation(text), consumed)
                 self.assertEqual(answers[0]["answer"], answer)
                 self.assertFalse(nlp._awaiting_confirmation)
 
     def test_nothing_pending_means_nothing_consumed(self):
-        from nlp.NLP_Core import NLPCore
         nlp, answers = self._nlp()
         nlp._awaiting_confirmation = False
-        self.assertFalse(NLPCore._answer_confirmation(nlp, "yes"))
+        self.assertFalse(nlp._answer_confirmation("yes"))
         self.assertEqual(answers, [])
 
 
@@ -16106,58 +16269,54 @@ class TestEnforcementHelpers(unittest.TestCase):
 
 class TestArrestReplies(unittest.TestCase):
     """!@brief NLPCore reads the input after an arrest demand as the reply (_answer_arrest) --
-        exercised without loading NLPCore's models."""
+        exercised through a real NLPCore built on a FakeMatcher, so no model loads."""
 
     def _nlp(self, choices=("pay", "surrender", "bribe", "bluff", "resist")):
-        from types import SimpleNamespace
         bus = ValidatingEventBus()
         answers = []
         bus.subscribe("arrest_answered", answers.append)
-        return SimpleNamespace(event_bus=bus, _arrest_choices=list(choices)), answers
+        nlp = NLPCore(bus, FakeMatcher())
+        nlp._arrest_choices = list(choices)
+        return nlp, answers
 
     def test_a_reply_opening_with_an_option_is_that_option(self):
-        from nlp.NLP_Core import NLPCore
         nlp, answers = self._nlp()
         with patch("nlp.NLP_Core.classify_arrest_reply") as model:
-            self.assertTrue(NLPCore._answer_arrest(nlp, "Bribe him with 5 gold"))
+            self.assertTrue(nlp._answer_arrest("Bribe him with 5 gold"))
         model.assert_not_called()
         self.assertEqual(answers, [{"choice": "bribe", "input": "Bribe him with 5 gold"}])
         self.assertIsNone(nlp._arrest_choices)
 
     def test_an_i_before_the_option_still_reads_as_the_option(self):
         # Found by playtest: "I resist." went to the model.
-        from nlp.NLP_Core import NLPCore
         for text, choice in (("I resist.", "resist"), ("I'll pay him", "pay"), ("ok, i surrender", "surrender")):
             with self.subTest(text=text):
                 nlp, answers = self._nlp()
                 with patch("nlp.NLP_Core.classify_arrest_reply") as model:
-                    self.assertTrue(NLPCore._answer_arrest(nlp, text))
+                    self.assertTrue(nlp._answer_arrest(text))
                 model.assert_not_called()
                 self.assertEqual(answers[0]["choice"], choice)
 
     def test_anything_else_asks_the_model(self):
-        from nlp.NLP_Core import NLPCore
         nlp, answers = self._nlp()
         with patch("nlp.NLP_Core.classify_arrest_reply", return_value=("surrender", "")):
-            self.assertTrue(NLPCore._answer_arrest(nlp, "fine, take me in"))
+            self.assertTrue(nlp._answer_arrest("fine, take me in"))
         self.assertEqual(answers[0]["choice"], "surrender")
 
         nlp, answers = self._nlp()
         with patch("nlp.NLP_Core.classify_arrest_reply", return_value=(None, "unavailable")):
-            self.assertFalse(NLPCore._answer_arrest(nlp, "what's the charge?"))
+            self.assertFalse(nlp._answer_arrest("what's the charge?"))
         self.assertEqual(answers[0]["choice"], "other")
 
     def test_an_option_already_tried_is_not_an_answer(self):
-        from nlp.NLP_Core import NLPCore
         nlp, answers = self._nlp(choices=("pay", "surrender", "resist"))
         with patch("nlp.NLP_Core.classify_arrest_reply", return_value=("other", "")):
-            self.assertFalse(NLPCore._answer_arrest(nlp, "bluff again"))
+            self.assertFalse(nlp._answer_arrest("bluff again"))
         self.assertEqual(answers[0]["choice"], "other")
 
     def test_saving_leaves_the_question_open(self):
-        from nlp.NLP_Core import NLPCore
         nlp, answers = self._nlp()
-        self.assertFalse(NLPCore._answer_arrest(nlp, "save game1"))
+        self.assertFalse(nlp._answer_arrest("save game1"))
         self.assertEqual(answers, [])
         self.assertEqual(nlp._arrest_choices[0], "pay")
 

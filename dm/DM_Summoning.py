@@ -34,7 +34,7 @@ class SummoningMixin(DMCoreProtocol):
         ADaM-conjured creatures/containers/traps, which shared it.
     """
 
-    def _summon_creature(self, summon_spec):
+    def _summon_creature(self, summon_spec, caster_name=None):
         """!
         @brief Instances summon_spec's own named entity/template as a fresh, independent scene
             participant at the caster's own current band -- never claims self.current_target
@@ -50,11 +50,12 @@ class SummoningMixin(DMCoreProtocol):
             -- whichever key it carries is forwarded to _instance_entities unchanged, so a
             "template" entry still goes through NPC generation exactly like a scenario's own
             {template = ...} entry would.
+        @param caster_name Who is casting -- the summon lands at their band; the player when omitted.
         @return The new instance's own (possibly disambiguated) entity name, or None if
                 summon_spec's own name/template doesn't resolve to anything real
                 (_instance_entities' own log_error already reports why).
         """
-        entry = {"band": Combat_Resolution.get_band(self.world, self.player_name)}
+        entry = {"band": Combat_Resolution.get_band(self.world, caster_name or self.player_name)}
         if "template" in summon_spec:
             entry["template"] = summon_spec["template"]
         else:

@@ -30,7 +30,7 @@ acclaim = -3
 A location may add `[[location.law]]` entries. One with the same `crime` and `match` as a
 polity law replaces it; any other is added (`Law_Resolution.merge_laws`). `rules.toml`'s `[law]`
 table holds what every polity shares: the skills witnesses roll, the spell-identification
-base, and the recognition bands. `DM_Validation.py` checks all of it.
+base, and the recognition bands. `Data_Validation.py` checks all of it.
 
 Shipped data: Pathfinder's Varisia has theft, assault and murder laws with placeholder numbers
 and no bans (bans are a per-setting lore choice). Fantasy has one test-only polity, "Test

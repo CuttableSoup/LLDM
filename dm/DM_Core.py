@@ -5,14 +5,14 @@ import re
 import threading
 
 from dm.DM_ActionOutcome import (
-    ActionPreventedOutcome, CureEffect, DamageEffect, DefenderDetailsEffect, DispelEffect, LanguageBarrierOutcome,
-    LootEffect, MissingSpellMaterialsOutcome, OutOfRangeOutcome, RevealEffect, RolledOutcome, SummonEffect,
-    TeleportEffect, rolled_outcome_from_roll,
+    ActionPreventedOutcome, DamageEffect, DefenderDetailsEffect, LanguageBarrierOutcome,
+    LootEffect, MissingSpellMaterialsOutcome, OutOfRangeOutcome, RevealEffect, RolledOutcome,
+    rolled_outcome_from_roll,
 )
 from dm.DM_CharacterCreation import CharacterCreationMixin
 from dm.DM_Combat import DMCoreCombatHooks
 from dm.DM_Crafting import CraftingMixin
-from dm.DM_Dialogue import WORD_BOUNDARY, DialogueMixin
+from dm.DM_Dialogue import DialogueMixin
 from dm.DM_Encounters import EncounterMixin
 from dm.DM_Enforcement import EnforcementMixin
 from dm.DM_Help import HelpMixin
@@ -28,14 +28,17 @@ from dm.DM_Status import StatusMixin
 from dm.DM_Summoning import SummoningMixin
 from dm.DM_Time import ClockSlice, TimeMixin
 from dm.DM_Travel import KnownLocationsSlice, TravelMixin
-from dm.DM_Validation import ValidationMixin
+from resolution.Data_Validation import DataValidator
+from intents.item_named import DEFAULT_ITEM_INTENT, ITEM_NAMED
 from intents.registry import HANDLERS as FREE_STANDING_INTENT_HANDLERS
 from persistence.slot import FileSlotStore, Persistable
 from resolution.AdHoc_Generation import TRIVIAL_DIFFICULTY, rate_difficulty
-from resolution.Combat_Resolution import matches_supertype_or_subtype, resolve_damage_value
+from resolution.Entity_Reference import first_named
+from resolution.Combat_Resolution import matches_supertype_or_subtype
 from resolution.Program_Interpreter import run_program
 from resolution.World_Context import WorldContext
 import resolution.Combat_Resolution as Combat_Resolution
+import resolution.Ability_Effects as Ability_Effects
 import resolution.Combat_Actions as Combat_Actions
 
 # Multi-instance combat targeting (see DMCore._resolve_named_instance_ambiguity): NLPCore's own
@@ -126,7 +129,7 @@ class SessionSlice(Persistable):
 
 
 
-class DMCore(InventoryMixin, SocialMixin, StatusMixin, MovementMixin, RulesMixin, PersistenceMixin, CharacterCreationMixin, NpcGenerationMixin, DialogueMixin, HelpMixin, ImprovisationMixin, EncounterMixin, SummoningMixin, CraftingMixin, ValidationMixin, TimeMixin, TravelMixin, LawMixin, EnforcementMixin):
+class DMCore(InventoryMixin, SocialMixin, StatusMixin, MovementMixin, RulesMixin, PersistenceMixin, CharacterCreationMixin, NpcGenerationMixin, DialogueMixin, HelpMixin, ImprovisationMixin, EncounterMixin, SummoningMixin, CraftingMixin, TimeMixin, TravelMixin, LawMixin, EnforcementMixin):
     """!
     @brief Main class handling the core mechanics of the RPG system. The implementation is
         composed from domain mixins in sibling files -- DM_Rules.py (rules/scenario
@@ -147,8 +150,8 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, MovementMixin, RulesMixin
         location/room's own [[location.encounter]] weighted-choice table on entry -- see its
         own module docstring), DM_Summoning.py (a spell/ability's own "summon" field --
         conjuring a real, hand-authored entity as a temporary ally, and expiring it after its
-        own duration in combat rounds -- see its own module docstring), and DM_Validation.py
-        (load-time referential-integrity checks over everything load_rules/
+        own duration in combat rounds -- see its own module docstring), and
+        resolution/Data_Validation.py (load-time referential-integrity checks over everything load_rules/
         load_scenario_definition just loaded -- see its own module docstring) -- so that every
         dm_core.<method>(...) call site throughout the codebase and
         test_all.py keeps working unchanged regardless of which file actually defines a given
@@ -198,6 +201,19 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, MovementMixin, RulesMixin
     @universal_abilities.setter
     def universal_abilities(self, value):
         self.world.universal_abilities = value
+
+    def validate_loaded_data(self):
+        """!
+        @brief Checks everything just loaded (resolution/Data_Validation.py) and publishes each
+            problem it finds as a "log_error" -- never raises, never blocks loading. Runs once per
+            full (re)load: from __init__ and from load_game, so a resumed save is re-checked
+            against whatever Rules/<setting>/ looks like now.
+        @return The list of Problem records, for a caller that wants them rather than the log.
+        """
+        problems = DataValidator(self.world, self.entity_templates, self.locations).validate()
+        for problem in problems:
+            self.event_bus.publish("log_error", problem.message)
+        return problems
 
     def __init__(
         self, event_bus, scenario_name="debug", character=None, setting="Fantasy", start_location=None,
@@ -780,46 +796,6 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, MovementMixin, RulesMixin
 
         return modified
 
-    def _resolve_save_for_half(self, ability, defender_name):
-        """!
-        @brief Rolls defender_name's own flat save against ability's "save_for_half" =
-            {skill}, checked at ability's own "difficulty" (default 10, the same flat-check
-            default _resolve_roll's own difficulty-authored branch uses) -- the Pathfinder
-            Reflex-half shape for an AoE-widened secondary target (see _apply_damage_if_hit's
-            own call site, which never calls this for target_name itself). A failed save
-            changes nothing (a deep copy of ability, full damage as normal). A passed save
-            halves it, UNLESS defender_name's own "negates_save_for_half" (a list of skill
-            names) names this exact save's own "skill" -- Pathfinder's real Evasion is textually
-            a Reflex-save-only trait (no damage at all on a passed Reflex save specifically, not
-            any save-for-half effect in general), so the *skill it applies to* is data on the
-            entity, not a name this method hardcodes -- an entity authors
-            negates_save_for_half = ["reflexes"] for ordinary Evasion, and nothing stops a
-            different trait from naming "fortitude"/"willpower" instead for some other
-            save-for-half effect. The raw damage on a passed, non-negated save is rolled once
-            here (resolve_damage_value, the same roll calculate_damage would otherwise make
-            internally) and folded into a per-target copy of ability whose own "damage_value"
-            becomes a flat {dice: 0, pips: 0, bonus: <halved>} -- calculate_damage still runs its
-            own resistance/vulnerability/damage_bonus_vs on top of that fixed number exactly as
-            it would any other raw_damage, just never re-rolls it. Never mutates the shared
-            ability itself, the same "ephemeral per-cast copy" precedent _apply_ability_modifier
-            above already keeps.
-        @param ability The resolved AoE ability -- already confirmed to carry "save_for_half".
-        @param defender_name The secondary target rolling its own save.
-        @return A per-target copy of ability (unchanged on a failed save, halved damage_value on
-            a passed one), or None if defender_name's own "negates_save_for_half" names this
-            save's own skill -- the caller skips calculate_damage entirely for that target then.
-        """
-        spec = ability["save_for_half"]
-        check = Combat_Resolution.resolve_action(self.world, defender_name, spec["skill"], difficulty=ability.get("difficulty", 10))
-        if not check["success"]:
-            return copy.deepcopy(ability)
-        if spec["skill"] in self.entities.get(defender_name, {}).get("negates_save_for_half", []):
-            return None
-        raw_damage = resolve_damage_value(self.world, self.player_name, ability.get("damage_value", {}))
-        halved = copy.deepcopy(ability)
-        halved["damage_value"] = {"dice": 0, "pips": 0, "bonus": raw_damage // 2}
-        return halved
-
     def _try_item_test_action(self, explicit_target, skill_name, input_text, dice_penalty=0):
         """!
         @brief Tries to resolve explicit_target as a named item one level deeper than the
@@ -1228,90 +1204,27 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, MovementMixin, RulesMixin
 
     def _finish_rolled_outcome(self, result, skill_name, named_ability, ability, target_name, via_test, input_text=None):
         """!
-        @brief The single post-roll step for the player's own action: everything that might
-            apply once a roll has actually happened, in one call instead of the four separately
-            isinstance-gated ones this replaces. Guards the RolledOutcome type exactly once --
-            each of the four steps below then only checks its own distinct predicate (success,
-            target, via_test, ability, named_ability materials, hidden), since none of those
-            ever share the same gate (ex: material consumption and defender details fire on a
-            failed roll too, deliberately -- see their own docstrings). Order matters: materials
-            are spent before damage/summon effects are appended, mirroring a botched craft
-            attempt's own "consume regardless of outcome" precedent. Scoped to the player's own
-            _on_turn_detected pipeline only -- resolve_behavior_action (Combat_Actions.py, a
-            creature's own turn) has no attitude to nudge and no spell materials/summons of its
-            own to resolve, so it keeps its own narrower, separate damage-only handling rather
-            than routing through this.
+        @brief The single post-roll step for the player's own action: the ability's effects
+            (Ability_Effects.apply_ability_effects -- the same module every other entity's combat
+            turn uses), then the two things only the player's turn does: a spell cast in view may
+            be recognized by witnesses (DM_Law.py), and the defender's flavor text is attached for
+            narration.
         @param result The roll result from _resolve_roll, mutated in place.
         @param skill_name The skill being used, already resolved from any named ability.
         @param named_ability The resolved ability entity (technique/spell), or None.
         @param ability The attack ability from _resolve_roll, if already resolved there.
         @param target_name self.current_target, or None.
         @param via_test True if the roll was a flat [entity.test] check.
-        @param input_text The player's raw turn text, forwarded only to _run_ability_outcome_program
-            (see its own docstring for why) -- optional, defaulting to None so every existing
-            direct caller (ex: test_unit.py's own ability-outcome-program tests) keeps working
-            unchanged.
+        @param input_text The player's raw turn text, forwarded to the ability's own program.
         """
         if not isinstance(result, RolledOutcome):
             return
-        self._consume_spell_materials_if_rolled(result, named_ability)
-        self._apply_damage_if_hit(result, skill_name, named_ability, ability, target_name, via_test)
-        self._apply_summon_if_hit(result, named_ability)
-        self._apply_dispel_if_hit(result, named_ability, target_name)
-        self._apply_cure_if_hit(result, named_ability, target_name)
-        self._apply_teleport_if_hit(result, named_ability)
-        self._run_ability_outcome_program(result, skill_name, named_ability, ability, target_name, via_test, input_text)
+        Ability_Effects.apply_ability_effects(
+            self.world, self.player_name, result, skill_name, named_ability, ability, target_name, via_test, input_text,
+        )
         # A spell cast in view, pass or fail -- witnesses may recognize a banned one (DM_Law.py).
         self.observe_ability_use(self.player_name, named_ability)
         self._attach_defender_details(result, target_name)
-
-    def _run_ability_outcome_program(self, result, skill_name, named_ability, ability, target_name, via_test, input_text=None):
-        """!
-        @brief Runs the resolved ability's own on_pass/on_fail program once a real
-            ability-based roll has resolved -- closes the "22
-            dead skills" gap: a skill whose only mechanical effect is a condition/attitude nudge
-            (ex: intimidate, trip/disarm/sunder) now actually does something on a pass/fail,
-            without a new Python branch per skill. Never fires for a flat [entity.test] check
-            (that has its own, separate on_pass/on_fail attachment point -- see
-            _run_test_outcome_program) or for a roll with no resolvable ability at all (ex: a
-            bare skill check with nothing named/equipped matching it).
-        @param result The roll result from _resolve_roll, already confirmed to be a RolledOutcome.
-        @param skill_name The skill being used, already resolved from any named ability.
-        @param named_ability The resolved ability entity (technique/spell), or None.
-        @param ability The attack ability _resolve_roll already resolved, if any -- only the
-            test/no-target branches leave it None, in which case it's re-derived here exactly
-            like _apply_damage_if_hit's own fallback does.
-        @param target_name self.current_target, or None.
-        @param via_test True if the roll was a flat [entity.test] check.
-        @param input_text The player's raw turn text, threaded into the program's own ctx as
-            "input" -- read by ops that want the actual free-text content of this turn rather
-            than a fixed, scripted value (ex: spells.toml's "suggestion", whose own on_pass omits
-            a literal "text" specifically so Program_Interpreter.py's "inject_directive" op falls
-            back to this). Optional, defaulting to None -- a program that never references
-            ctx["input"] is entirely unaffected either way.
-        """
-        if via_test:
-            return
-        if ability is None:
-            ability = named_ability or Combat_Actions.find_attack_ability(self.world, self.player_name, skill_name)
-        if not ability:
-            return
-        program = ability.get("on_pass" if result.success else "on_fail")
-        if not program:
-            return
-        # resolve_targets (Combat_Actions.py) is [target_name] alone (or [None], untargeted) for
-        # every ability with no authored "targets" table -- one run, unchanged from before this
-        # existed -- or the wider AoE/multi-target/discriminated pool its own {number, aoe,
-        # side} table describes, run once per resolved target so ex: a discriminating area
-        # effect's own on_pass (a condition applied via Program_Interpreter's apply_condition
-        # op) actually lands on every ally/enemy it caught, not just target_name.
-        for program_target in Combat_Actions.resolve_targets(self.world, self.player_name, target_name, ability):
-            run_program(
-                # "roll" -- this roll's own total, for an op that keeps it (ex: "disguise", whose
-                # quality is what a witness's observation must beat; see DM_Law.py).
-                program, {"actor": self.player_name, "target": program_target, "input": input_text, "roll": result.roll},
-                self.entities, self.rules, self.event_bus,
-            )
 
     def _run_test_outcome_program(self, test, success, entity_name):
         """!
@@ -1328,70 +1241,6 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, MovementMixin, RulesMixin
         program = test.get("on_pass" if success else "on_fail")
         if program:
             run_program(program, {"actor": self.player_name, "target": entity_name}, self.entities, self.rules, self.event_bus)
-
-    def _apply_damage_if_hit(self, result, skill_name, named_ability, ability, target_name, via_test):
-        """!
-        @brief Rolls and attaches bonus weapon/ability damage if the roll succeeded against a
-            target and wasn't a flat [entity.test] check -- a test-path success (ex: a
-            lockpick) must never also roll bonus weapon damage even if skill_name happens to
-            match an equipped weapon/ability (ex: a future finesse-based dagger matching the
-            chest's finesse-skill lock test). Also gated on the resolved ability actually
-            carrying a "damage_value" -- a named ability with none (ex: a summoning spell, see
-            _apply_summon_if_hit) is a real, matched ability but not an attack, and must not
-            get a spurious "damage": {"net_damage": 0, ...} entry just because it happened to
-            resolve against a target/current_target that was present at the time.
-        @param result The roll result from _resolve_roll, mutated in place with "damage" if hit.
-        @param skill_name The skill being used, already resolved from any named ability.
-        @param named_ability The resolved ability entity (technique/spell), or None.
-        @param ability The attack ability from _resolve_roll, if already resolved there --
-            only the test/no-target branches leave it None, in which case it's re-derived here.
-        @param target_name self.current_target, or None.
-        @param via_test True if the roll was a flat [entity.test] check.
-        """
-        if result.success and not via_test:
-            if ability is None:
-                ability = named_ability or Combat_Actions.find_attack_ability(self.world, self.player_name, skill_name)
-            if ability and "damage_value" in ability:
-                # resolve_targets (Combat_Actions.py) is [target_name] alone for every ability with
-                # no authored "targets" table -- unchanged single-target behavior, [None] if
-                # there's also no target_name at all (skipped below, nothing to hit) -- or the
-                # wider AoE/multi-target/discriminated/self-only pool its own {number, aoe,
-                # side} table describes (ex: techniques.toml's cleave, a fireball-style blast, a
-                # self-only ward that needs no named target at all). Each real hit gets its own
-                # damage roll/DamageEffect/attitude nudge, same as a lone target already did.
-                for defender_name in Combat_Actions.resolve_targets(self.world, self.player_name, target_name, ability):
-                    if not defender_name:
-                        continue
-                    hit_ability = ability
-                    # save_for_half only ever governs an AoE-widened secondary target, never
-                    # target_name itself -- that one already resolved through the ordinary
-                    # opposed hit-or-miss roll above, the same "primary target unaffected" scope
-                    # a real Reflex-save spell has (only the *caught* creatures get a save, not
-                    # the caster's own to-hit). See _resolve_save_for_half's own docstring.
-                    if defender_name != target_name and ability.get("save_for_half"):
-                        hit_ability = self._resolve_save_for_half(ability, defender_name)
-                        if hit_ability is None:
-                            continue
-                    damage = Combat_Actions.calculate_damage(self.world, self.player_name, defender_name, hit_ability)
-                    result.effects.append(DamageEffect(
-                        defender=damage["defender"], net_damage=damage["net_damage"],
-                        remaining_hp=damage["remaining_hp"],
-                    ))
-                    # "combat_hit" attitude drift (DM_Social.py's nudge_attitude_from_event) -- how
-                    # hard the hit landed relative to the defender's own max_hp, not a flat
-                    # per-swing amount, so a graze barely registers and a near-kill genuinely
-                    # scares them (the "threat" axis) even while disposition stays pinned at
-                    # is_hostile's own floor. _nudge_combat_hit_attitude is the shared call-site
-                    # shape resolve_behavior_action (Combat_Actions.py, an entity's own combat-turn
-                    # attack) also uses -- only who's attacking differs, never the shape.
-                    self._nudge_combat_hit_attitude(defender_name, self.player_name, damage.get("net_damage", 0))
-                # "on_action" statuses (ex: Frightful Presence) -- see DM_Status.py's
-                # evaluate_proximity_statuses. Fired once per player turn that actually landed
-                # at least one hit with a damage-dealing ability, not once per resolved target
-                # -- the actor's own qualifying requirements don't change per-target, so
-                # re-evaluating them once per resolve_targets() entry would be redundant work
-                # for the same result.
-                Combat_Actions.evaluate_proximity_statuses(self.world, self.player_name, "on_action")
 
     def _nudge_combat_hit_attitude(self, target_name, attacker_name, net_damage):
         """!
@@ -1441,152 +1290,6 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, MovementMixin, RulesMixin
                 continue
             if self.is_hostile(observer_name, target_name):
                 self.nudge_attitude_from_event(observer_name, attacker_name, "shared_enemy", magnitude)
-
-    def _apply_summon_if_hit(self, result, named_ability):
-        """!
-        @brief Conjures a temporary ally (_summon_creature, DM_Summoning.py) if this turn's
-            named ability is a summoning spell/technique (its own "summon" field -- a
-            {"name"|"template", "duration"} table) and the roll succeeded -- mirrors
-            _apply_damage_if_hit's own "only on a successful roll" gate, just for a different
-            kind of on-hit effect. Checked regardless of target_name/via_test: a summon isn't
-            "against" anyone the way damage is, so it fires the same way whether this was a
-            flat auto-success resolve_action (no current_target at all) or a contested opposed
-            roll against a hostile current_target (the caster's own casting resisted by the
-            target's willpower/arcane, the same as any other opposed skill use).
-        @param result The roll result from _resolve_roll, mutated in place with "summoned"
-            (the new instance's own name) if a creature was actually conjured.
-        @param named_ability The resolved ability entity (technique/spell), or None.
-        """
-        if not result.success or not named_ability:
-            return
-        summon_spec = named_ability.get("summon")
-        if not summon_spec:
-            return
-        summoned_name = self._summon_creature(summon_spec)
-        if summoned_name:
-            result.effects.append(SummonEffect(name=summoned_name))
-
-    def _apply_dispel_if_hit(self, result, named_ability, target_name):
-        """!
-        @brief Banishes target_name outright (remove_entity_from_scene) if this turn's named
-            ability is a dispel-shaped cast (its own "dispel" field -- a {"supertypes",
-            "subtypes"} filter, the same shape/matching rule damage_bonus_vs already uses --
-            matches_supertype_or_subtype, Combat_Resolution.py) and the roll succeeded, but only
-            if target_name's own supertype/subtype actually matches; a mismatched target simply
-            isn't dispellable by this cast (ex: pointing "dispel magic" -- {supertypes = ["spell"],
-            subtypes = ["spell"]} -- at an ordinary creature does nothing) -- the same "used on
-            the wrong thing just wastes the action" shape Pathfinder's real Dispel Magic already
-            has, rather than a hard pre-roll gate the way missing spell materials/out-of-range
-            are. Mirrors _apply_summon_if_hit exactly, just removing an entity instead of
-            conjuring one. Player-only, same scope every other cast-time effect (summon/teleport)
-            already keeps.
-        @param result The roll result from _resolve_roll, mutated in place with a DispelEffect
-            if something was actually banished.
-        @param named_ability The resolved ability entity (technique/spell), or None.
-        @param target_name self.current_target, or None.
-        """
-        if not result.success or not named_ability or not target_name:
-            return
-        dispel_spec = named_ability.get("dispel")
-        if not dispel_spec:
-            return
-        target = self.entities.get(target_name, {})
-        if not matches_supertype_or_subtype(target, dispel_spec):
-            return
-        self.remove_entity_from_scene(target_name)
-        result.effects.append(DispelEffect(name=target_name))
-
-    def _apply_cure_if_hit(self, result, named_ability, target_name):
-        """!
-        @brief Dismisses every one of target_name's own active conditions matching this turn's
-            named ability's own "cure" field (a {"supertypes", "subtypes"} filter against the
-            [[condition]] catalog rather than the entity catalog -- matches_supertype_or_subtype
-            has no entity-specific logic, so a [[condition]] entry authoring those same two
-            optional fields works identically) if the roll succeeded. Mirrors
-            _apply_dispel_if_hit exactly, just removing a condition instead of banishing an
-            entity: {subtypes = ["disease"]} is the Pathfinder "Remove Disease" shape (cures
-            whichever disease is active without the caster needing to name it),
-            {supertypes = ["affliction"]} a broader panacea also catching poison/curse. A
-            target with nothing matching simply has nothing cured -- the same "used on the
-            wrong thing just wastes it" shape dispel already has, still reported (as an empty
-            CureEffect) rather than silently skipped. Player-only, same scope every other
-            cast-time effect (summon/dispel/teleport) already keeps.
-        @param result The roll result from _resolve_roll, mutated in place with a CureEffect
-            if this turn's named ability authors "cure" at all.
-        @param named_ability The resolved ability entity (technique/spell), or None.
-        @param target_name self.current_target, or None.
-        """
-        if not result.success or not named_ability or not target_name:
-            return
-        cure_spec = named_ability.get("cure")
-        if not cure_spec:
-            return
-        cured = Combat_Resolution.dismiss_matching_conditions(self.world, target_name, cure_spec)
-        result.effects.append(CureEffect(target=target_name, conditions=cured))
-
-    def _apply_teleport_if_hit(self, result, named_ability):
-        """!
-        @brief Relocates the player outright if this turn's named ability authors a teleport-
-            shaped field and the roll succeeded -- mirrors _apply_summon_if_hit's own "only on
-            a successful roll" gate and its "not really 'against' anyone" scope (checked
-            regardless of target_name/via_test, same as a summon).
-
-            "teleport_to_band" (an int) jumps the player directly to that band within the
-            CURRENT room -- move_entity (DM_Movement.py) is called with the signed delta needed
-            to land there, reusing its own existing floor/ceiling clamping unchanged (Dimension
-            Door). Deliberately not a new elevation/spatial mechanic or a "jump past
-            intervening bands" movement op -- a teleport doesn't need to reuse the incremental
-            advance/retreat walk at all, since band is just a field; setting it directly (via a
-            computed delta, so the existing clamp keeps working unmodified) is the whole trick.
-
-            "teleport_to_location" ({location, room, band}) instead jumps to a different,
-            already-known location outright via _enter_location -- the exact same mechanism
-            ordinary location-to-location travel already uses, just called directly rather than
-            through _resolve_travel_intent, so it skips that path's own hostile-gate/grid-cost
-            checks entirely (instant, no travel-time charged, and works even mid-combat --
-            Teleport's whole appeal is escaping a losing fight). _enter_location's own "unknown
-            location_key" tolerance (an empty/freeform location, not an error) is unchanged here
-            -- same "malformed data degrades quietly" precedent every other loader follows.
-
-            Player-only, same scope _apply_summon_if_hit/_consume_spell_materials_if_rolled
-            already keep -- not wired into resolve_behavior_action, so an NPC's own behavior
-            can't teleport itself (or the player) today.
-        @param result The roll result from _resolve_roll, mutated in place with a
-            TeleportEffect if a relocation actually happened.
-        @param named_ability The resolved ability entity (technique/spell), or None.
-        """
-        if not result.success or not named_ability:
-            return
-
-        destination_band = named_ability.get("teleport_to_band")
-        if destination_band is not None:
-            new_band = self.move_entity(self.player_name, destination_band - Combat_Resolution.get_band(self.world, self.player_name))
-            if new_band is not None:
-                result.effects.append(TeleportEffect(entity=self.player_name, band=new_band))
-
-        destination = named_ability.get("teleport_to_location")
-        if destination:
-            self._enter_location(
-                destination["location"], arrival_room=destination.get("room"), arrival_band=destination.get("band", 1),
-            )
-            result.effects.append(TeleportEffect(entity=self.player_name, location=destination["location"]))
-
-    def _consume_spell_materials_if_rolled(self, result, named_ability):
-        """!
-        @brief Consumes a named ability's own "materials" (DM_Crafting.py's _consume_materials,
-            reused directly -- same {item, quantity} shape and consumption primitive a craft
-            recipe's own materials already uses) once a real roll actually happened for it --
-            unconditionally, success or failure alike, same as a craft attempt's own materials
-            (a fizzled cast still burns the reagent). Only ever called once _finish_rolled_outcome
-            has already confirmed result is a RolledOutcome, so a no-roll short-circuit
-            (missing_spell_materials -- _resolve_roll's own gate already refused the cast before
-            getting here -- or out_of_range) never reaches this method at all.
-        @param result The _resolve_roll result for this action.
-        @param named_ability The resolved ability entity (technique/spell), or None.
-        """
-        if not named_ability or not named_ability.get("materials"):
-            return
-        self._consume_materials(self.player_name, named_ability["materials"])
 
     def _attach_defender_details(self, result, target_name):
         """!
@@ -1817,37 +1520,18 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, MovementMixin, RulesMixin
             resolve(self, data, resolved)
             return
 
-        if intent == "use":
-            # Also unrelated to target_name/the locked gate -- using something already in the
-            # player's own inventory has nothing to do with any scene target at all.
-            self._resolve_use_intent(item_name, resolved)
-            return
-
-        if intent == "equip":
-            self._resolve_equip_intent(item_name, resolved)
-            return
-
-        if intent == "unequip":
-            self._resolve_unequip_intent(item_name, resolved)
-            return
-
-        if intent == "drop":
-            self._resolve_drop_intent(item_name, resolved)
-            return
-
-        if intent in ("examine", "take") and item_name in self._current_ground_items():
+        # An item-named intent (intents/item_named.py): the manifest declares which pre-conditions
+        # apply, so the order here is the same for every one of them.
+        spec = ITEM_NAMED.get(intent, DEFAULT_ITEM_INTENT)
+        if spec.ground_aware and item_name in self._current_ground_items():
+            # Reaching something lying on the ground never goes through target_name at all, so it
+            # is never gated on a target's own state (a dropped item has no container guarding it).
             self._resolve_ground_intent(intent, item_name, resolved)
             return
-
-        if not already_owned and target_name and self.is_locked(target_name):
+        if spec.gated and not already_owned and target_name and self.is_locked(target_name):
             resolved(False, reason="locked", container=target_name)
             return
-
-        if intent in ("open", "close"):
-            self._resolve_open_close_intent(intent, target_name, resolved)
-            return
-
-        self._resolve_transfer_intent(intent, item_name, target_name, resolved)
+        spec.resolve(self, intent, item_name, target_name, resolved)
 
     def _run_interact_program(self, intent, item_name, target_name):
         """!
@@ -2111,17 +1795,10 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, MovementMixin, RulesMixin
         @param input_text The player's raw (lowercased) input.
         @return An entity key, or None.
         """
-        text = input_text or ""
-        for name in self.scenario_entities:
-            entity = self.entities.get(name, {})
-            if name == self.player_name or entity.get("supertype") != "creature":
-                continue
-            aliases = [alias.lower() for alias in entity.get("aliases", [])]
-            modifiers = {word for alias in aliases if " " in alias for word in alias.split()[:-1]}
-            phrases = [name, entity.get("name", "")] + [alias for alias in aliases if alias not in modifiers]
-            if any(phrase and re.search(WORD_BOUNDARY % re.escape(phrase.lower()), text) for phrase in phrases):
-                return name
-        return None
+        return first_named(
+            input_text, self.entities, self.scenario_entities, exclude=self.player_name,
+            supertype="creature", skip_modifier_aliases=True,
+        )
 
     def _pronoun_attack_target(self, input_text):
         """!

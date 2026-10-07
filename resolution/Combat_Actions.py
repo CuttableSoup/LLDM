@@ -16,9 +16,11 @@
 
 import re
 
+import resolution.Ability_Effects as Ability_Effects
 import resolution.Combat_Resolution as Combat_Resolution
 import resolution.Inventory_Resolution as Inventory_Resolution
-from dm.DM_ActionOutcome import DamageEffect, MovementOutcome, TransferOutcome, rolled_outcome_from_roll
+from resolution.Entity_Reference import first_named
+from dm.DM_ActionOutcome import MovementOutcome, TransferOutcome, rolled_outcome_from_roll
 from resolution.Challenge_Rating import calculate_challenge_rating, calculate_party_challenge_rating, skill_rating
 from resolution.Inventory_Resolution import SIGNIFICANT_VALUE
 
@@ -63,6 +65,26 @@ class CombatHooks:
 
     def transfer_item(self, from_name, to_name, item_name):
         """!@brief Moves one item between inventories (DM_Inventory.py)."""
+        raise NotImplementedError
+
+    def summon_creature(self, summon_spec, caster_name):
+        """!@return The new instance's name, or None -- conjures a temporary ally at caster_name's band (DM_Summoning.py)."""
+        raise NotImplementedError
+
+    def remove_entity_from_scene(self, entity_name):
+        """!@brief Banishes an entity from the scene (DM_Improvisation.py)."""
+        raise NotImplementedError
+
+    def consume_materials(self, entity_name, materials):
+        """!@brief Spends {item, quantity} spell materials from an entity's inventory (DM_Crafting.py)."""
+        raise NotImplementedError
+
+    def move_entity(self, entity_name, delta):
+        """!@return The entity's new band, or None -- shifts its band by delta, clamped (DM_Movement.py)."""
+        raise NotImplementedError
+
+    def enter_location(self, location_key, arrival_room, arrival_band):
+        """!@brief Relocates the party to an already-known location outright (DM_Rules.py)."""
         raise NotImplementedError
 
 
@@ -703,21 +725,7 @@ def resolve_behavior_action(ctx, entity_name, target_name):
     roll = Combat_Resolution.resolve_opposed_action(ctx, entity_name, skill_name, target_name, ability=ability)
     result = rolled_outcome_from_roll(roll)
 
-    if result.success:
-        damage = calculate_damage(ctx, entity_name, target_name, ability)
-        result.effects.append(DamageEffect(
-            defender=damage["defender"], net_damage=damage["net_damage"],
-            remaining_hp=damage["remaining_hp"],
-        ))
-        # "combat_hit"/"shared_enemy" attitude drift (DM_Core.py's own
-        # _nudge_combat_hit_attitude) -- the same call-site shape _apply_damage_if_hit
-        # already uses for the player's own attacks, generalized to any entity's resolved
-        # attack (ex: an ally striking a shared foe, or a monster hitting the player).
-        ctx.hooks.nudge_combat_hit_attitude(target_name, entity_name, damage.get("net_damage", 0))
-        # "on_action" statuses (ex: Frightful Presence) -- fired on a landed hit, the
-        # honest simplification of Pathfinder's "fires on the attack attempt" (see
-        # evaluate_proximity_statuses, DM_Status.py).
-        evaluate_proximity_statuses(ctx, entity_name, "on_action")
+    Ability_Effects.apply_ability_effects(ctx, entity_name, result, skill_name, ability, ability, target_name)
 
     return result
 
@@ -962,15 +970,10 @@ def _resolve_lore_check_intent(ctx, input_text, resolved):
     @param resolved The item_interaction_resolved publisher closure from
         DMCore._on_item_interaction_detected.
     """
-    candidates = [
-        name for name in ctx.scenario_entities
-        if name != ctx.player_name
-        and re.search(rf"\b{re.escape(name.lower())}\b", input_text or "")
-    ]
-    if not candidates:
+    target_name = first_named(input_text, ctx.entities, ctx.scenario_entities, exclude=ctx.player_name)
+    if not target_name:
         resolved(False, reason="not_present")
         return
-    target_name = candidates[0]
 
     lore_skill = _resolve_lore_skill(ctx, target_name)
     if not lore_skill:
@@ -1058,3 +1061,42 @@ def _award_xp_for_defeat(ctx, entity_name):
         "log_info",
         f"{entity_name} defeated -- {awarded} XP awarded to {', '.join(party_members)}.",
     )
+
+
+def basic_combat_kit(name, attack_skill, attack_dice):
+    """!
+    @brief The minimal "can fight back" kit: one innate attack on attack_skill plus the
+        behavior to use it -- shared by a hostile generated creature (above) and an NPC that
+        turned hostile in play with no combat behavior of its own (DM_Social.py's
+        _arm_if_turned_hostile).
+    @param name The entity's display name, for the ability's own name.
+    @param attack_skill The skill the attack rolls on.
+    @param attack_dice That skill's own dice, halved (min 1) for the damage roll.
+    @return (abilities, behavior) -- two lists in the [[entity.abilities]]/[[entity.behavior]] shape.
+    """
+    ability_name = f"{name} attack"
+    abilities = [{
+        "name": ability_name,
+        "supertype": "innate",
+        "subtype": "weapon",
+        "skill": attack_skill,
+        "damage_value": {"dice": max(1, attack_dice // 2), "pips": 0, "bonus": 0},
+        "damage_tags": ["physical"],
+    }]
+    # Mirrors debug.toml's own wolf/bandit shape exactly -- flee once genuinely hurt
+    # (hp_per_remain under 0.40, the same cutoff statuses.toml's "wounded" tier bottoms out at),
+    # otherwise keep attacking until effectively dead.
+    behavior = [
+        {
+            "requirements": [
+                {"field": "hp_per_remain", "operator": ">=", "value": 0.01},
+                {"field": "hp_per_remain", "operator": "<", "value": 0.40},
+            ],
+            "action": "retreat",
+        },
+        {
+            "requirements": [{"field": "hp_per_remain", "operator": ">=", "value": 0.01}],
+            "action": ability_name,
+        },
+    ]
+    return abilities, behavior

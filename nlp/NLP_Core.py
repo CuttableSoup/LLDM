@@ -968,13 +968,16 @@ class NLPCore:
         classification logic of its own; see Intent_Classification.py for that.
     """
 
-    def __init__(self, event_bus):
+    def __init__(self, event_bus, matcher=None):
         """!
         @brief Initializes the NLP core and loads semantic models.
         @param event_bus The central event bus instance.
+        @param matcher The IntentMatcher adapter to classify with -- a SentenceTransformerMatcher
+            (which also owns the sentiment pipeline) when omitted; tests pass a FakeMatcher so the
+            confirmation/arrest answer protocol runs with no model load.
         """
         self.event_bus = event_bus
-        self.matcher = SentenceTransformerMatcher(event_bus)
+        self.matcher = matcher if matcher is not None else SentenceTransformerMatcher(event_bus)
         self.classifier = IntentClassifier(self.matcher)
 
         self.event_bus.subscribe("rules_loaded", self._on_rules_loaded)

@@ -249,8 +249,8 @@ A spell/technique/innate ability's own `summon = {"name"|"template", "duration"}
 (`entity_schema.toml`) opts a successful cast into conjuring a temporary ally, alongside (or
 instead of) dealing damage — `spells.toml`'s `summon spectral wolf` (`creatures.toml`'s own
 `spectral wolf`, on gladstone's `abilities` list) is the shipped example.
-`DM_Core.py`'s `_apply_summon_if_hit`, called from `_finish_rolled_outcome` (the single post-roll
-step `_on_turn_detected` calls once per action-kind clause) right after `_apply_damage_if_hit`,
+`Ability_Effects.py`'s `apply_ability_effects`, called from `_finish_rolled_outcome` (the single post-roll
+step `_on_turn_detected` calls once per action-kind clause) right after `apply_ability_effects`,
 fires whenever the turn's own `named_ability` carries a `summon` table
 and the roll succeeded — regardless of `target_name`/`via_test`, since a summon isn't "against"
 anyone the way damage is: casting with no `current_target` at all resolves as an ordinary flat,
@@ -296,7 +296,7 @@ its own `summon_expires_in`, since the whole entity dict round-trips, not a whit
 the same mechanism covers `DM_Improvisation.py`'s own ADaM-conjured creatures/containers/traps
 too, not just summons.
 
-**`_apply_damage_if_hit`'s own gating.** A resolved ability only appends a `DamageEffect` to the
+**`apply_ability_effects`'s own gating.** A resolved ability only appends a `DamageEffect` to the
 `RolledOutcome`'s own `effects` if it actually carries a `damage_value` field
 (`"damage_value" in ability`, not just a truthy `ability`) — a named ability with none (a
 summon, or any non-damaging spell) never rolls through `calculate_damage`'s own

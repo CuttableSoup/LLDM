@@ -73,7 +73,7 @@ while "Fight me!" (0.58) was refused outright. Naming the victim is intent enoug
 (0.645) still lands without asking. Being plain attitude, the narrator's own `describe_attitude` sees it, a gift can slowly
 walk it back, and it saves like any other drift. Only someone devoted (100) *and* sweet-talked
 to the talk cap stays above -100 — they take the punch without swinging back. Each combat round,
-`_arm_if_turned_hostile` (`DM_Social.py`) hands `basic_combat_kit` (`AdHoc_Generation.py`, the
+`_arm_if_turned_hostile` (`DM_Social.py`) hands `basic_combat_kit` (`Combat_Actions.py`, the
 same kit a hostile generated creature gets) to any
 entity hostile *only because of its action drift* that has no `[[entity.behavior]]` (every
 narrated bystander, most townsfolk), so it fights back. The kit rolls on its best *physical*
@@ -451,7 +451,7 @@ absent/inert unless a piece of content actually authors it.
   on every *other* living entity within `apply.radius` bands (default 0 -- same band only) of
   the actor, filtered by `apply.side` (default `"enemies"`, same vocabulary `targets` uses).
   Fired once per turn that lands a real hit, from both `resolve_behavior_action` (an NPC's own
-  turn) and `_apply_damage_if_hit` (`DM_Core.py`, the player's own turn) -- the Pathfinder "Fear
+  turn) and `apply_ability_effects` (`DM_Core.py`, the player's own turn) -- the Pathfinder "Fear
   aura/Frightful Presence" shape (fires off the attacker's own trait, not off damage taken).
   Honest simplification: fires on a landed hit, not on the bare attack attempt real Frightful
   Presence uses, since there's no untargeted "roar" action to hook instead; and runs no stale-
@@ -515,8 +515,8 @@ absent/inert unless a piece of content actually authors it.
   status already uses. `statuses.toml`'s own `"flame wall zone"` (matched to `spells.toml`'s
   `"flame wall"`, conjured by its own `"wall of fire"` spell via `summon`) is the shipped
   example.
-- **`dispel`** (an ability field, `{supertypes, subtypes}`) -- `_apply_dispel_if_hit`
-  (`DM_Core.py`, mirroring `_apply_summon_if_hit` exactly, just removing an entity instead of
+- **`dispel`** (an ability field, `{supertypes, subtypes}`) -- `apply_ability_effects`
+  (`DM_Core.py`, mirroring `apply_ability_effects` exactly, just removing an entity instead of
   conjuring one) banishes `current_target` outright (`remove_entity_from_scene`) on a
   successful cast, but only if the target's own supertype/subtype actually matches either list
   -- the same `matches_supertype_or_subtype` OR-of-two-lists check `damage_bonus_vs` already
@@ -563,7 +563,7 @@ absent/inert unless a piece of content actually authors it.
   against the condition catalog instead of the entity one -- no new matching code, just two new
   optional fields. `Combat_Resolution.dismiss_matching_conditions` walks an entity's own
   `active_conditions`, dismissing every one whose `[[condition]]` entry matches `cure`'s filter;
-  `DM_Core.py`'s `_apply_cure_if_hit` (mirroring `_apply_dispel_if_hit` exactly, just removing a
+  `DM_Core.py`'s `_apply_cure_if_hit` (mirroring `apply_ability_effects` exactly, just removing a
   condition instead of banishing an entity) calls it on a successful cast against
   `current_target`, appending a `CureEffect` naming whatever was actually cured (possibly
   empty). The Pathfinder "Remove Disease"/"Neutralize Poison"/panacea shape -- the caster
@@ -803,13 +803,13 @@ only touches allies would author `{aoe = <radius>, side = "allies"}`.
 
 **`side = "self"` is a fourth, short-circuiting case** — `resolve_targets` returns
 `[attacker_name]` outright, before even looking at `target_name`/`aoe`/`number`. This is what
-lets a personal ward/self-buff skip needing a named target at all (`_apply_damage_if_hit`'s
+lets a personal ward/self-buff skip needing a named target at all (`apply_ability_effects`'s
 own outer gate no longer requires `target_name` either, for exactly this case — a `resolve_
 targets` result of `[None]`, the ordinary untargeted-ability case, is simply skipped in the
 loop) and guarantees it never spills onto an adjacent ally the way an ordinary
 `{aoe = 0, side = "allies"}` still could if one happens to share `target_name`'s own band.
 
-Both `_apply_damage_if_hit` and `_run_ability_outcome_program` (`DM_Core.py`) call
+Both `apply_ability_effects` and `apply_ability_effects` (`DM_Core.py`) call
 `resolve_targets` and loop over its result: each resolved defender gets its own
 `calculate_damage`/`DamageEffect`/`combat_hit` attitude nudge, and the ability's own
 `on_pass`/`on_fail` program (if any) runs once per resolved target rather than once against

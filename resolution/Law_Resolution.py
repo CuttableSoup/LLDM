@@ -17,7 +17,7 @@ import resolution.Social_Resolution as Social_Resolution
 from resolution.Inventory_Resolution import _settle
 from resolution.World_Context import WorldContext
 
-# Every crime kind a [[polity.law]] may name -- DM_Validation.py rejects anything else.
+# Every crime kind a [[polity.law]] may name -- Data_Validation.py rejects anything else.
 CRIMES = ("theft", "assault", "murder", "banned_ability", "banned_presence", "resisting_arrest")
 
 # A recognition band naming this instead of a difficulty tier means "no roll at all" -- a

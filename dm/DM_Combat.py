@@ -33,3 +33,18 @@ class DMCoreCombatHooks(CombatHooks):
 
     def transfer_item(self, from_name, to_name, item_name):
         return self.core.transfer_item(from_name, to_name, item_name)
+
+    def summon_creature(self, summon_spec, caster_name):
+        return self.core._summon_creature(summon_spec, caster_name)
+
+    def remove_entity_from_scene(self, entity_name):
+        self.core.remove_entity_from_scene(entity_name)
+
+    def consume_materials(self, entity_name, materials):
+        self.core._consume_materials(entity_name, materials)
+
+    def move_entity(self, entity_name, delta):
+        return self.core.move_entity(entity_name, delta)
+
+    def enter_location(self, location_key, arrival_room, arrival_band):
+        self.core._enter_location(location_key, arrival_room=arrival_room, arrival_band=arrival_band)

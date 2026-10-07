@@ -20,14 +20,13 @@
 
 import re
 
-# AdHoc_Generation.py is the one project-internal import this module makes -- it's pure/
-# DMCore-independent (no DMCore/game-state coupling of its own), so importing its shared
-# intent-vocabulary constants doesn't compromise this module's own independence. See
+# intents/improvisation.py's shared intent-vocabulary constants are plain data with no DMCore/
+# game-state coupling, so importing them doesn't compromise this module's own independence. See
 # IMPROVISABLE_INTENTS, below, for what these three are actually used for here.
 from intents.advance_retreat import TOWARD_PATTERN
 from intents.registry import MATCHES
 from intents.travel import LEAVE_PATTERN
-from resolution.AdHoc_Generation import GROUND_AWARE_INTENTS, PLAYER_CENTRIC_INTENTS, TARGET_CENTRIC_INTENTS
+from intents.improvisation import GROUND_AWARE_INTENTS, PLAYER_CENTRIC_INTENTS, TARGET_CENTRIC_INTENTS
 
 # The free-standing intents' keyword phrases, regexes and semantic-router prototypes live with
 # the intent that owns them (intents/<name>.py's MATCH, collected in intents/registry.py's
@@ -444,10 +443,9 @@ NO_ITEM_LOOKUP_INTENTS = frozenset({"open", "close"})
 # store shouldn't need every possible good pre-authored to sell it): DM_Improvisation.py stocks
 # the created item directly into the current scene target's own inventory for this one intent,
 # rather than the ground/player inventory every other intent here uses. Computed as the union
-# of AdHoc_Generation.py's own PLAYER_CENTRIC_INTENTS/GROUND_AWARE_INTENTS/TARGET_CENTRIC_
-# INTENTS -- imported from there, not DM_Improvisation.py, since AdHoc_Generation.py is the one
-# module both this file and DM_Improvisation.py already treat as pure/DMCore-independent, so
-# this module's own independence from DMCore/game state stays intact.
+# of intents/improvisation.py's own PLAYER_CENTRIC_INTENTS/GROUND_AWARE_INTENTS/TARGET_CENTRIC_
+# INTENTS -- imported from there, not DM_Improvisation.py, so this module's own independence from
+# DMCore/game state stays intact.
 IMPROVISABLE_INTENTS = PLAYER_CENTRIC_INTENTS | GROUND_AWARE_INTENTS | TARGET_CENTRIC_INTENTS
 
 # map_to_item checks these before any embedding match -- currency is a plain integer field

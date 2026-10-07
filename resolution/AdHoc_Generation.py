@@ -33,6 +33,7 @@ import random
 from llm.LLM_Backend import get_backend
 from llm.LLM_Client import call_chat_completion as _real_call_chat_completion
 from resolution.Challenge_Rating import DEFAULT_HP_DIVISOR
+from resolution.Combat_Actions import basic_combat_kit
 from resolution.NPC_Generation import fit_skills_to_cr
 
 # None: the current LLM backend (local Ollama or OpenRouter -- see LLM_Backend.py).
@@ -40,21 +41,6 @@ DEFAULT_API_URL = None
 # None: the current backend's own generation_timeout (LLM_Backend.py).
 DEFAULT_TIMEOUT = None
 
-# The item-interaction verbs eligible for the ad hoc creation fallback, partitioned by which
-# entity's own inventory a created item actually needs to land in for DM_Core.py's ordinary,
-# unchanged item-interaction dispatcher to resolve the *original* triggering intent correctly
-# (see DM_Improvisation.py's own _on_improvisation_requested -- "give"/"equip"/"unequip"/"use"/
-# "drop" always check the player's own inventory regardless of direction; "trade" is the one
-# intent that checks the *current target's* inventory as its source, since buying something
-# means the seller has to have it, not the buyer). Live here -- not in DM_Improvisation.py,
-# which actually branches on each set, and not in NLP_Core.py, which only ever needs their
-# union -- because this is the one module both already treat as pure/DMCore-independent, so
-# both can import the same three sets without NLP_Core.py picking up any DMCore/game-state
-# coupling. NLP_Core.py computes its own IMPROVISABLE_INTENTS as the union of these three at
-# import time, rather than hand-copying a fourth constant, so the two can't drift apart.
-PLAYER_CENTRIC_INTENTS = frozenset({"give", "equip", "unequip", "use", "drop"})
-GROUND_AWARE_INTENTS = frozenset({"examine", "take"})
-TARGET_CENTRIC_INTENTS = frozenset({"trade"})
 
 # Tags already in real use across Rules/Fantasy/*.toml (creatures.toml/items.toml's own
 # damage_tags/resistance_tags/vulnerability_tags) -- enum-constraining the LLM's own tool
@@ -301,10 +287,9 @@ def _call_tool_or_decline(messages, tools, accepted_function_names, call_chat_co
     @param accepted_function_names The set of function names this caller treats as success (ex:
         {"create_item", "describe_scenery"} for generate_ad_hoc_item's own two-outcome case,
         {"remove_entity"} for decide_entity_removal's single-outcome case).
-    @param call_chat_completion The already-resolved callable -- the caller resolves
-        call_chat_completion or _real_call_chat_completion itself, at call time, before reaching
-        here, preserving the existing patch("resolution.AdHoc_Generation._real_call_chat_completion", ...)
-        seam.
+    @param call_chat_completion The LLM-calling callable, or None for this module's own
+        _real_call_chat_completion, resolved here at call time so
+        patch("resolution.AdHoc_Generation._real_call_chat_completion", ...) stays the one seam.
     @param api_url/timeout Forwarded to call_chat_completion; a None timeout is the backend's own
         generation_timeout.
     @param max_tokens Optional completion budget, forwarded only when given -- the reasoning model
@@ -320,6 +305,9 @@ def _call_tool_or_decline(messages, tools, accepted_function_names, call_chat_co
             _extract_tool_call raised, else arguments.get("reason", "declined") (guarded for a
             non-dict arguments) for an explicit decline or any unrecognized function name.
     """
+    # Resolved here, at call time, so patch("resolution.AdHoc_Generation._real_call_chat_completion", ...)
+    # is the one seam every function below shares.
+    call_chat_completion = call_chat_completion or _real_call_chat_completion
     timeout = timeout or get_backend().generation_timeout
     extra = {"max_tokens": max_tokens} if max_tokens else {}
     if reasoning_effort:
@@ -421,7 +409,6 @@ def generate_ad_hoc_item(
             "location" is meaningless (always "ground") for a container/trap, which the caller
             places in the scene itself rather than on the ground or in inventory.
     """
-    call_chat_completion = call_chat_completion or _real_call_chat_completion
     prompt = (
         f"The player, in a tabletop RPG scene, tries to \"{intent}\" something described as: "
         f"\"{phrase}\". Current scene: {scene_description or 'unknown'}.\n"
@@ -586,7 +573,6 @@ def rate_difficulty(
     """
     if not tiers:
         return None, "no_tiers"
-    call_chat_completion = call_chat_completion or _real_call_chat_completion
     names = [TRIVIAL_DIFFICULTY] + [tier["name"] for tier in tiers]
     tier_lines = "\n".join(
         f"- {tier['name']} ({tier.get('difficulty')}): {tier.get('description', '')}" for tier in tiers
@@ -697,7 +683,6 @@ def adjudicate_player_input(
             the thing it's about), with reason ""; or None if the model was unreachable,
             declined, or answered outside INPUT_KINDS, with reason saying why.
     """
-    call_chat_completion = call_chat_completion or _real_call_chat_completion
     timeout = timeout or get_backend().adjudication_timeout
     kind_lines = "\n".join(f"- {kind}: {meaning}" for kind, meaning in INPUT_KINDS.items())
     action_lines = "\n".join(f"- {action}: {meaning}" for action, meaning in GAME_ACTIONS.items())
@@ -797,7 +782,6 @@ def classify_arrest_reply(
     @return (choice, reason) -- choice is one of choices or "other", with reason ""; or None if
             the model was unreachable or declined, with reason saying why.
     """
-    call_chat_completion = call_chat_completion or _real_call_chat_completion
     timeout = timeout or get_backend().adjudication_timeout
     allowed = [choice for choice in ARREST_REPLIES if choice == "other" or choice in (choices or ARREST_REPLIES)]
     lines = "\n".join(f"- {choice}: {ARREST_REPLIES[choice]}" for choice in allowed)
@@ -883,7 +867,6 @@ def decide_entity_removal(
             "request for one of these regardless of how it's phrased or how reasonable it sounds."
         )
 
-    call_chat_completion = call_chat_completion or _real_call_chat_completion
     prompt = (
         f"The player, addressing the Game Master directly, says: \"{phrase}\". Current scene: "
         f"{scene_description or 'unknown'}. Currently present/available to remove: "
@@ -1009,7 +992,6 @@ def generate_ad_hoc_creature(
     if not npc_keywords:
         return {"created": False, "reason": "no_keywords"}
 
-    call_chat_completion = call_chat_completion or _real_call_chat_completion
     prompt = (
         f"The player, addressing the Game Master directly, asks for a creature or character to "
         f"be conjured into the scene, described as: \"{phrase}\". Current scene: "
@@ -1116,45 +1098,6 @@ def _build_creature_entity(arguments, npc_keywords, target_cr, skills_catalog, h
     return {"created": True, "entity": entity}
 
 
-def basic_combat_kit(name, attack_skill, attack_dice):
-    """!
-    @brief The minimal "can fight back" kit: one innate attack on attack_skill plus the
-        behavior to use it -- shared by a hostile generated creature (above) and an NPC that
-        turned hostile in play with no combat behavior of its own (DM_Social.py's
-        _arm_if_turned_hostile).
-    @param name The entity's display name, for the ability's own name.
-    @param attack_skill The skill the attack rolls on.
-    @param attack_dice That skill's own dice, halved (min 1) for the damage roll.
-    @return (abilities, behavior) -- two lists in the [[entity.abilities]]/[[entity.behavior]] shape.
-    """
-    ability_name = f"{name} attack"
-    abilities = [{
-        "name": ability_name,
-        "supertype": "innate",
-        "subtype": "weapon",
-        "skill": attack_skill,
-        "damage_value": {"dice": max(1, attack_dice // 2), "pips": 0, "bonus": 0},
-        "damage_tags": ["physical"],
-    }]
-    # Mirrors debug.toml's own wolf/bandit shape exactly -- flee once genuinely hurt
-    # (hp_per_remain under 0.40, the same cutoff statuses.toml's "wounded" tier bottoms out at),
-    # otherwise keep attacking until effectively dead.
-    behavior = [
-        {
-            "requirements": [
-                {"field": "hp_per_remain", "operator": ">=", "value": 0.01},
-                {"field": "hp_per_remain", "operator": "<", "value": 0.40},
-            ],
-            "action": "retreat",
-        },
-        {
-            "requirements": [{"field": "hp_per_remain", "operator": ">=", "value": 0.01}],
-            "action": ability_name,
-        },
-    ]
-    return abilities, behavior
-
-
 def generate_referenced_npc(
     address_phrase, scene_description, present_names, recent_narration, target_cr, npc_keywords,
     skills_catalog, call_chat_completion=None, api_url=DEFAULT_API_URL, timeout=DEFAULT_TIMEOUT,
@@ -1200,7 +1143,6 @@ def generate_referenced_npc(
     if not npc_keywords or not address_phrase:
         return {"created": False, "reason": "no_keywords" if not npc_keywords else "no_phrase"}
 
-    call_chat_completion = call_chat_completion or _real_call_chat_completion
     present_text = ", ".join(name for name in present_names if name) or "no one else"
     narration_text = " ".join(recent_narration or []) or "nothing yet"
     prompt = (
@@ -1361,7 +1303,6 @@ def extract_narrated_people(
     if not npc_keywords or not narration or max_people < 1:
         return []
 
-    call_chat_completion = call_chat_completion or _real_call_chat_completion
     present_text = ", ".join(name for name in present_names if name) or "no one else"
     hint_line = f"People who belong here: {population_hint}.\n" if population_hint else ""
     messages = [
@@ -1549,7 +1490,6 @@ def decide_entity_edit(
     if not editable_entities:
         return {"edited": False, "reason": "nothing_here"}
 
-    call_chat_completion = call_chat_completion or _real_call_chat_completion
     prompt = (
         f"The player, addressing the Game Master directly, says: \"{phrase}\". Current scene: "
         f"{scene_description or 'unknown'}. Currently present/available to edit: "

@@ -32,7 +32,7 @@ entity_name, text, source_name, duration_blocks=None)` writes it, plugged into t
 (`resolution/Program_Interpreter.py`) — `spells.toml`'s `suggestion` is the shipped example,
 whose own `on_pass = { do = "inject_directive", entity = "target", duration = 1 }` omits a
 literal `text` so the op falls back to `ctx["input"]`, the caster's own raw turn text (threaded
-in by `DM_Core.py`'s `_run_ability_outcome_program` specifically for this — the `[entity.test]`
+in by `Ability_Effects.py`'s `apply_ability_effects` specifically for this — the `[entity.test]`
 attachment point is *not* threaded the same way, since an item/lock has no NPC prompt to affect).
 Because `describe_character` already backs every NPC-facing prompt except live combat/behavior-
 turn narration (the `scenario_loaded` roster, `DefenderDetailsEffect` on every resolved roll,
@@ -100,7 +100,7 @@ hates. Safe to call unconditionally over every scene entity: a tableless creatur
 `nudge_attitude_from_event`'s own "no `[entity.attitudes]` table" gate silently no-ops for
 exactly that case, so a mindless hostile creature never actually accumulates a bond it has no
 data to hold. Two call sites share this shape, `attacker_name` being whichever side actually
-landed the hit: `_apply_damage_if_hit` after a landed *player* hit, and `Combat_Actions.py`'s
+landed the hit: `apply_ability_effects` after a landed *player* hit, and `Combat_Actions.py`'s
 `resolve_behavior_action` after any *other* entity's own successful combat-turn attack (ex: a
 monster hitting the player, or an ally striking a shared foe) — a generalization
 `_nudge_shared_enemy_bonds` needed no changes of its own to support, since it already looped

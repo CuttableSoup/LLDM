@@ -6,9 +6,9 @@
     its own hand-synced if/elif ladder over the same eight intents. Adding a free-standing
     intent means adding one row here and one new sibling module -- never touching DM_Core.py or
     LLM_Core.py again. Item-named intents (examine/take/give/trade/use/equip/unequip/drop/open/
-    close) are out of scope for this registry -- they share real pre-condition logic (scene
-    target resolution, the locked-container gate, _run_interact_program) ahead of their own
-    dispatch in DM_Core.py, which a per-intent split would only duplicate.
+    close) are the other manifest, intents/item_named.py's ITEM_NAMED: they share real pre-condition
+    logic (scene target resolution, the locked-container gate, _run_interact_program) that DM_Core.py
+    keeps once, driven by each ItemIntent's own "gated"/"ground_aware" flags.
 """
 from intents import advance_retreat, formation, hitch, lore_check, mount, rest, speak_language, travel
 from intents.advance_retreat import narrate_advance_retreat, resolve_advance_retreat
@@ -49,3 +49,9 @@ for _module in (
     lore_check, formation, speak_language, rest, mount, hitch, advance_retreat, travel,
 ):
     MATCHES.update(_module.MATCH)
+
+# Free-standing intents whose success puts the party somewhere new -- LLMCore refreshes the
+# narrator's scene state from the resolved payload before narrating one (the single writer of
+# that state; the intents' own narrate() only reads), so every later prompt in the new place stops
+# citing the previous one's description.
+ARRIVAL_INTENTS = frozenset({"move", "travel"})

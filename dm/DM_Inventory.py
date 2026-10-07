@@ -3,6 +3,7 @@ from resolution.Inventory_Resolution import SIGNIFICANT_VALUE  # noqa: F401 -- r
 from dm.DM_Types import DMCoreProtocol
 import resolution.Combat_Resolution as Combat_Resolution
 import resolution.Combat_Actions as Combat_Actions
+import resolution.Conveyance as Conveyance
 
 
 
@@ -204,21 +205,21 @@ class InventoryMixin(DMCoreProtocol):
     def _bulk_would_be_exceeded(self, item_name):
         """!
         @brief Checks whether adding item_name's own "bulk" to the player's current load
-            (get_current_bulk) would push it past get_max_bulk -- the gate "take"/"trade"/a
+            (Conveyance.current_bulk) would push it past Conveyance.max_bulk -- the gate "take"/"trade"/a
             ground "take" all share before actually moving the item (reason "bulk_exceeded").
             Only ever checked against the player -- "a player cannot carry more than their max
             bulk" is deliberately not enforced on any other entity (an NPC/creature's own
             inventory is never capacity-checked).
         @param item_name The item entity that would be added to the player's own inventory.
         @return True if the move would exceed the player's own max bulk; always False if the
-                current setting authors no [bulk] rules.toml table at all (get_max_bulk
+                current setting authors no [bulk] rules.toml table at all (Conveyance.max_bulk
                 returns None -- see DM_Rules.py).
         """
-        max_bulk = self.get_max_bulk(self.player_name)
+        max_bulk = Conveyance.max_bulk(self.world, self.player_name)
         if max_bulk is None:
             return False
         added_bulk = self.entities.get(item_name, {}).get("bulk", 0)
-        return self.get_current_bulk(self.player_name) + added_bulk > max_bulk
+        return Conveyance.current_bulk(self.world, self.player_name) + added_bulk > max_bulk
 
     def _current_ground_items(self):
         """!
@@ -458,7 +459,7 @@ class InventoryMixin(DMCoreProtocol):
             trading for currency itself, or aiming "take"/"give"/"trade" at the target's own
             name rather than something inside it, is always "not_takeable" regardless of amount.
             "take"/"trade" are also denied "bulk_exceeded" (_bulk_would_be_exceeded) if the item
-            would push the player's own carried bulk past get_max_bulk -- "give" is never
+            would push the player's own carried bulk past Conveyance.max_bulk -- "give" is never
             bulk-gated (only the player's own carrying capacity is enforced, never a target's).
             Every intent that actually moves the item ("give"/"trade"/"take") is additionally
             denied "wrong_item_type"/"container_capacity_exceeded" if destination_name's own

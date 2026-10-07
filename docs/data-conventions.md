@@ -24,16 +24,17 @@ Part of the [LLDM](../CLAUDE.md) docs — how Rules/Fantasy/*.toml is structured
 
 ## Load-time validation
 
-`DM_Validation.py`'s `ValidationMixin.validate_loaded_data()` runs once per full (re)load —
-called from `DMCore.__init__` right after `load_scenario_definition` (every entity/
+`resolution/Data_Validation.py`'s `DataValidator.validate()` runs once per full (re)load, returning
+a list of `Problem` records (never raising, never touching the bus) that
+`DMCore.validate_loaded_data()` publishes as `log_error`s — called from `DMCore.__init__` right after `load_scenario_definition` (every entity/
 entity_template/location/skill/rule is loaded by then, nothing yet instanced), and from
 `DM_Persistence.py`'s `load_game` at the same point, so a resumed save is re-checked against
 whatever `Rules/<setting>/` looks like now, not whatever it looked like when the save was
 written. It runs two independent passes, both driven off the same loaded data:
 
 **Referential integrity** — does a name/skill/room/location a field claims to point at actually
-resolve to something real. Checks: `[entity.equipped]` slot keys against `get_equip_slots`
-(`_validate_equipped_slots`, moved here from the end of `load_rules` so a scenario-local entity
+resolve to something real. Checks: `[entity.equipped]` slot keys against `WorldContext.get_equip_slots`
+(`_validate_equipped_slots`, now a `DataValidator` check, moved here from the end of `load_rules` so a scenario-local entity
 gets checked too); every `skill` field (an entity/ability's own, plus `[entity.test]`/
 `[entity.craft]`/`[entity.notice]`) against `self.skills`; every `[[entity.behavior]]` `action`
 against the real `resolve_named_ability` resolution (skipping `MOVEMENT_ACTIONS`/
@@ -82,6 +83,6 @@ unchanged to `Rules/Zombie/`.
 `aliases` (list of strings) on any `[[entity]]`; `population` (`"narrated"`/`"none"`),
 `population_hint` (string) and `population_max` (positive int) on a `[[location]]`; and a
 setting-wide `[narration_population]` table in `rules.toml`. See `docs/npc-generation.md` for what
-each does. `DM_Validation.py`'s `_validate_location_shapes` type-checks the location fields and
+each does. `Data_Validation.py`'s `_validate_location_shapes` type-checks the location fields and
 flags `population = "narrated"` in a setting whose `[narration_population]` is absent or disabled,
 since that would silently do nothing.

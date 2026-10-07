@@ -31,6 +31,7 @@ from dm.DM_ActionOutcome import (
     MissingStationOutcome, MovementOutcome, NotCraftableOutcome, OutOfRangeOutcome, RevealEffect,
     RolledOutcome, SummonEffect, TeleportEffect, TransferOutcome,
 )
+from intents.item_named import DEFAULT_ITEM_INTENT, ITEM_NAMED, coin_text as _coin_text
 from intents.registry import HANDLERS as FREE_STANDING_INTENT_HANDLERS
 from resolution.Inventory_Resolution import format_currency
 
@@ -73,13 +74,6 @@ FAILED_ATTEMPT_MESSAGES = {
     "improvisation_declined": "\"{phrase}\" isn't something you can {intent} here.",
     "improvisation_unavailable": "Couldn't work that out just now -- try again.",
 }
-
-def _coin_text(data, key):
-    """!
-    @brief An item_interaction_resolved payload's price/amount as coin text -- DMCore's own
-        price_text/amount_text (the setting's denominations) when it sent one, else plain coins.
-    """
-    return data.get(f"{key}_text") or format_currency(data.get(key, 0))
 
 def _format_loot_effect(effect, actor):
     gained = []
@@ -924,116 +918,8 @@ def item_interaction(state, data):
             f"stating only that reason -- don't invent any other person, item, or detail to "
             f"explain it."
         )
-    elif intent == "examine":
-        # "revealed" is only ever set once DMCore.is_identified(item_name) is true (a
-        # passed [entity.test], ex: an arcane check) -- a plain look never carries it, so
-        # a hidden property (ex: the cursed dagger's curse) only ever reaches this prompt
-        # after a real roll actually earned it.
-        revealed = data.get("revealed")
-        revealed_text = f" Known properties: {', '.join(revealed)}." if revealed else ""
-        prompt = (
-            f"The player examines \"{item_name}\".\n"
-            f"Description: {data.get('description', '')}{revealed_text}\n"
-            f"Narrate what they observe in 2-3 sentences as the Game Master. This is only "
-            f"looking -- nothing is taken, moved, or changed."
-        )
-    elif intent == "open":
-        # Real contents (see DMCore._resolve_open_close_intent), never mechanical data --
-        # without this the LLM had nothing to narrate from and invented plausible-sounding
-        # treasure instead of what's actually inside.
-        contents = data.get("contents") or []
-        if contents:
-            contents_text = "; ".join(contents)
-            prompt = (
-                f"The player opens {container}, revealing: {contents_text}.\n"
-                f"Narrate this in 1-2 sentences as the Game Master, describing only what's "
-                f"actually there -- don't invent anything else."
-            )
-        else:
-            prompt = (
-                f"The player opens {container}, and it's empty.\n"
-                f"Narrate this in 1-2 sentences as the Game Master."
-            )
-    elif intent == "close":
-        prompt = (
-            f"The player closes {container}.\n"
-            f"Narrate this in 1-2 sentences as the Game Master."
-        )
-    elif intent == "equip":
-        # "replaced" is the item that previously occupied this slot, if any -- real state
-        # from DMCore._resolve_equip_intent, not invented, same rule every other roll/
-        # transfer-bearing narration here already follows.
-        replaced = data.get("replaced")
-        replaced_text = f", replacing \"{replaced}\"" if replaced else ""
-        prompt = (
-            f"The player equips \"{item_name}\"{replaced_text}.\n"
-            f"Narrate this in 1-2 sentences as the Game Master."
-        )
-    elif intent == "unequip":
-        prompt = (
-            f"The player unequips \"{item_name}\".\n"
-            f"Narrate this in 1-2 sentences as the Game Master."
-        )
-    elif intent == "drop":
-        prompt = (
-            f"The player drops \"{item_name}\".\n"
-            f"Narrate this in 1-2 sentences as the Game Master."
-        )
-    elif intent == "use":
-        # "healed"/"poisoned"/"remaining_hp"/"charges_left"/"replaced_with" are
-        # DMCore._resolve_use_intent's own real roll/consumption results, never invented --
-        # same "feed the LLM the real mechanical outcome" rule every other roll-bearing
-        # narration already follows. "healed"/"poisoned" are each 0 when the item carries no
-        # such effect -- worded to not claim an effect that didn't happen. An ad hoc-
-        # conjured consumable (DM_Improvisation.py) can carry either, so this is also where
-        # a "helpful-looking" improvised potion turning out to be poison actually reads as
-        # a real twist to the player, not a silent stat change.
-        healed = data.get("healed", 0)
-        poisoned = data.get("poisoned", 0)
-        if healed:
-            effect_text = f", restoring {healed} HP (now at {data.get('remaining_hp', 0)} HP)"
-        elif poisoned:
-            effect_text = f", dealing {poisoned} poison damage (now at {data.get('remaining_hp', 0)} HP)"
-        else:
-            effect_text = ""
-        charges_left = data.get("charges_left", 0)
-        if charges_left > 0:
-            aftermath = f" It has {charges_left} charge(s) left."
-        elif data.get("replaced_with"):
-            aftermath = f" All used up, it's left behind only a {data['replaced_with']}."
-        else:
-            aftermath = " It's completely used up."
-        prompt = (
-            f"The player uses \"{item_name}\"{effect_text}.{aftermath}\n"
-            f"Narrate this in 1-2 sentences as the Game Master."
-        )
-    elif item_name == "currency":
-        if intent == "give":
-            prompt = (
-                f"The player gives {_coin_text(data, 'amount')} to {container}.\n"
-                f"Narrate this in 1-2 sentences as the Game Master."
-            )
-        else:
-            prompt = (
-                f"The player takes {_coin_text(data, 'amount')} and adds it to their own.\n"
-                f"Narrate this in 1-2 sentences as the Game Master."
-            )
-    elif intent == "give":
-        prompt = (
-            f"The player gives \"{item_name}\" to {container}.\n"
-            f"Narrate this in 1-2 sentences as the Game Master."
-        )
-    elif intent == "trade":
-        prompt = (
-            f"The player pays {_coin_text(data, 'price')} to {container} in exchange "
-            f"for \"{item_name}\".\n"
-            f"Narrate this brief transaction in 1-2 sentences as the Game Master."
-        )
     else:
-        prompt = (
-            f"The player takes \"{item_name}\" and adds it to their own inventory.\n"
-            f"Narrate this in 1-2 sentences as the Game Master."
-        )
+        prompt = ITEM_NAMED.get(intent, DEFAULT_ITEM_INTENT).narrate(data)
     return Narration(
         prompt, rag_query=data.get("input"), present_entities=data.get("present_entities"),
         label=f"item_interaction:{intent}", log=log,

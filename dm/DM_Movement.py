@@ -1,7 +1,9 @@
 import re
 
 import resolution.Combat_Resolution as Combat_Resolution
+from resolution.Entity_Reference import find_named, first_named, mentions_any, named_in_reading_order
 from dm.DM_Types import DMCoreProtocol
+import resolution.Conveyance as Conveyance
 
 
 class MovementMixin(DMCoreProtocol):
@@ -9,8 +11,7 @@ class MovementMixin(DMCoreProtocol):
     @brief Band positioning, player-issued advance/retreat, and range gating (DMCore mixin --
         only ever composed into DMCore, never instantiated on its own; relies on
         self.entities/self.rules/self.scenario/self.scenario_entities/self.player_name/
-        self.current_target/self.event_bus/self.get_current_hp/self.is_hostile/
-        self._resolve_mount_targets/self._would_exceed_mount_capacity, set up by
+        self.current_target/self.event_bus/self.get_current_hp/self.is_hostile, set up by
         DMCore.__init__ or implemented by DM_Status.py/DM_Social.py/DM_Rules.py).
 
         **Objective bands, not distance-from-player.** Every scenario entity -- the player
@@ -196,7 +197,7 @@ class MovementMixin(DMCoreProtocol):
                 (only the player and the party formation did); what changed as a result. None
                 (a distinct sentinel from the legitimate empty-list "no one else here to react"
                 case) if the player is currently mounted on something overloaded
-                (_is_mount_overloaded, DM_Rules.py) -- checked fresh every attempt, not just
+                (Conveyance.is_overloaded, DM_Rules.py) -- checked fresh every attempt, not just
                 once at mount/hitch time, so gear picked up mid-ride can ground an
                 already-underway trip too.
         """
@@ -204,8 +205,8 @@ class MovementMixin(DMCoreProtocol):
         if not target_name or target_name == self.player_name:
             return []
 
-        mounts = self._resolve_mount_targets(self.player_name)
-        if mounts and self._is_mount_overloaded(mounts[0]):
+        mounts = Conveyance.mount_targets(self.world, self.player_name)
+        if mounts and Conveyance.is_overloaded(self.world, mounts[0]):
             return None
 
         before_gaps = {
@@ -260,14 +261,14 @@ class MovementMixin(DMCoreProtocol):
         @brief Keeps a mount/rider pair on the same band after either one moves under its own
             power -- called after every band change advance_or_retreat/move_toward_or_away
             themselves drive. Syncs in both directions: whatever mover_name itself currently
-            rides (_resolve_mount_targets(mover_name)) is snapped to mover_name's own new
+            rides (Conveyance.mount_targets(mover_name)) is snapped to mover_name's own new
             band -- a rider's own advance/retreat carries their mount along -- and whoever
             currently rides mover_name (the reverse relationship: any scene entity whose own
             "mount" resolves to mover_name) is snapped the same way -- a mount's own
             behavior-driven advance/retreat (ex: creatures.toml's horse fleeing once spooked)
             carries its rider along too, "no check" against being thrown, the same
             entity_schema.toml "mount" comment this whole design settled on. A stale/dead
-            mount reference is silently skipped either way (_resolve_mount_targets' own
+            mount reference is silently skipped either way (Conveyance.mount_targets' own
             liveness filter), never an error.
 
             Deliberately scoped to mover_name alone, not every entity transitively linked to
@@ -279,54 +280,35 @@ class MovementMixin(DMCoreProtocol):
         @param mover_name The entity whose band just changed.
         """
         new_band = Combat_Resolution.get_band(self.world, mover_name)
-        for ridden_name in self._resolve_mount_targets(mover_name):
+        for ridden_name in Conveyance.mount_targets(self.world, mover_name):
             self.entities[ridden_name]["band"] = new_band
         for name in self.scenario_entities:
-            if name != mover_name and mover_name in self._resolve_mount_targets(name):
+            if name != mover_name and mover_name in Conveyance.mount_targets(self.world, name):
                 self.entities[name]["band"] = new_band
-
-    def _is_valid_conveyance(self, entity_name):
-        """!
-        @brief Whether entity_name is actually part of the overland-conveyance system at all --
-            the same two cases _resolve_travel_speed (DM_Travel.py) itself branches on: it
-            authors its own "travel_speed" directly (a leaf provider, ex: creatures.toml's own
-            "horse", a car), or it currently defers to something that does via a live "mount"
-            chain of its own (ex: a cart already hitched to a horse). Gates both
-            _resolve_mount_intent's own target and _resolve_hitch_intent's own puller --
-            without it, an ordinary NPC with neither field has no mechanical effect once
-            "mounted" (everyone without a real travel_speed already falls back to [travel]'s
-            own default_speed regardless), but nothing should let the fiction imply riding or
-            hitching something that was never authored to work that way.
-        @param entity_name The candidate mount ("mount") or puller ("hitch").
-        @return True if entity_name authors travel_speed directly, or already has at least one
-            live entity in its own "mount" chain.
-        """
-        entity = self.entities.get(entity_name, {})
-        return "travel_speed" in entity or bool(self._resolve_mount_targets(entity_name))
 
     def _resolve_mount_intent(self, input_text, resolved):
         """!
         @brief Handles "mount"/"ride" -- the player climbs onto a named, currently-present,
             living, non-hostile entity (ex: creatures.toml's own "horse"), taking on its own
             effective travel_speed/carrying capacity from that point on (DM_Travel.py's
-            _resolve_travel_speed, DM_Rules.py's get_carrying_capacity) until dismounted.
+            Conveyance.travel_speed, DM_Rules.py's Conveyance.carrying_capacity) until dismounted.
             Which entity is named is resolved the same "search the raw input for a
             currently-present entity's own name" way _resolve_formation_intent already uses
             for a party member's own name -- no embedding match, since a mount either is or
             isn't literally named.
 
             Denied "already_mounted" if the player already has a *live* mount
-            (_resolve_mount_targets -- a stale reference to something that's since died or
+            (Conveyance.mount_targets -- a stale reference to something that's since died or
             left the scene doesn't block a fresh attempt); "not_present" if no
             currently-present entity's name appears in the input at all; "target_down" if the
             named entity is present but at 0 HP; "target_hostile" if is_hostile(target,
             player) is true (can't just climb onto something actively trying to kill you);
             "not_a_mount" if the target isn't actually part of the overland-conveyance system
-            at all (_is_valid_conveyance -- ex: a friendly NPC with no authored travel_speed
+            at all (Conveyance.is_conveyance -- ex: a friendly NPC with no authored travel_speed
             and nothing hitched to it, since nothing should let the fiction imply climbing onto
             an ordinary person); "bulk_exceeded" if mounting would push the target's own
             current load past its own carrying capacity (DM_Rules.py's
-            _would_exceed_mount_capacity). On success, snaps the player's own band to the
+            Conveyance.would_exceed_capacity). On success, snaps the player's own band to the
             mount's -- mounting happens wherever the mount currently stands, not the other way
             around. No dice rolled either way.
         @param input_text The raw (lowercased, prefix-stripped) player input, searched for a
@@ -334,19 +316,14 @@ class MovementMixin(DMCoreProtocol):
         @param resolved The item_interaction_resolved publisher closure from
             DMCore._on_item_interaction_detected.
         """
-        if self._resolve_mount_targets(self.player_name):
+        if Conveyance.mount_targets(self.world, self.player_name):
             resolved(False, reason="already_mounted")
             return
 
-        candidates = [
-            name for name in self.scenario_entities
-            if name != self.player_name
-            and re.search(rf"\b{re.escape(name.lower())}\b", input_text or "")
-        ]
-        if not candidates:
+        target_name = first_named(input_text, self.entities, self.scenario_entities, exclude=self.player_name)
+        if not target_name:
             resolved(False, reason="not_present")
             return
-        target_name = candidates[0]
 
         if Combat_Resolution.get_current_hp(self.world, target_name) <= 0:
             resolved(False, reason="target_down")
@@ -354,10 +331,10 @@ class MovementMixin(DMCoreProtocol):
         if self.is_hostile(target_name, self.player_name):
             resolved(False, reason="target_hostile")
             return
-        if not self._is_valid_conveyance(target_name):
+        if not Conveyance.is_conveyance(self.world, target_name):
             resolved(False, reason="not_a_mount")
             return
-        if self._would_exceed_mount_capacity(target_name, self.player_name):
+        if Conveyance.would_exceed_capacity(self.world, target_name, self.player_name):
             resolved(False, reason="bulk_exceeded")
             return
 
@@ -395,13 +372,7 @@ class MovementMixin(DMCoreProtocol):
         @param input_text The raw (lowercased, prefix-stripped) player input.
         @return A list of distinct entity names, in the order they were first named.
         """
-        positions = []
-        for name in self.scenario_entities:
-            match = re.search(rf"\b{re.escape(name.lower())}\b", input_text or "")
-            if match:
-                positions.append((match.start(), name))
-        positions.sort(key=lambda pair: pair[0])
-        return [name for _, name in positions]
+        return named_in_reading_order(input_text, self.entities, self.scenario_entities)
 
     def _resolve_hitch_intent(self, input_text, resolved):
         """!
@@ -421,7 +392,7 @@ class MovementMixin(DMCoreProtocol):
             _named_present_entities_in_order, not a guess based on either entity's own stats,
             so *direction* stays predictable regardless of what either entity's data looks
             like. Whether the resulting pairing is actually *allowed* is a separate question,
-            gated below on each entity's own data (_is_valid_conveyance for the puller, an
+            gated below on each entity's own data (Conveyance.is_conveyance for the puller, an
             authored "mount" field for the vehicle) -- reading order alone decides which slot
             each name lands in, never whether the hitch itself is legal.
 
@@ -429,7 +400,7 @@ class MovementMixin(DMCoreProtocol):
             "target_down" if either is at 0 HP; "target_hostile" if is_hostile(puller, player)
             is true (the same "can't just walk up and hitch something actively trying to kill
             you" reasoning _resolve_mount_intent already applies); "not_a_puller" if the puller
-            isn't actually part of the overland-conveyance system at all (_is_valid_conveyance
+            isn't actually part of the overland-conveyance system at all (Conveyance.is_conveyance
             -- the same gate _resolve_mount_intent applies to its own target, ex: an ordinary
             NPC has no travel_speed and pulls nothing); "not_a_vehicle" if the vehicle was never
             authored with a "mount" field of its own at all (not merely absent right now the
@@ -438,7 +409,7 @@ class MovementMixin(DMCoreProtocol):
             ordinary NPC that nothing ever declared hitchable doesn't retroactively become one
             just because something got hitched to it; "already_hitched" if the puller is
             already in the vehicle's own "mount". No bulk/capacity check of any kind -- hitching
-            only ever *adds* pulling capacity (DM_Rules.py's get_carrying_capacity sums a
+            only ever *adds* pulling capacity (DM_Rules.py's Conveyance.carrying_capacity sums a
             vehicle's whole team), never something that needs gating the way loading actual
             cargo/a rider does.
         @param input_text The raw (lowercased, prefix-stripped) player input, searched for two
@@ -458,7 +429,7 @@ class MovementMixin(DMCoreProtocol):
         if self.is_hostile(puller_name, self.player_name):
             resolved(False, reason="target_hostile")
             return
-        if not self._is_valid_conveyance(puller_name):
+        if not Conveyance.is_conveyance(self.world, puller_name):
             resolved(False, reason="not_a_puller")
             return
 
@@ -613,9 +584,8 @@ class MovementMixin(DMCoreProtocol):
         for exit_def in location.get("exit", []):
             destination = self.locations.get(exit_def.get("destination"), {})
             candidates = [destination.get("name", "")] + list(exit_def.get("aliases", []))
-            for phrase in candidates:
-                if phrase and re.search(rf"\b{re.escape(phrase.lower())}\b", input_text or ""):
-                    return exit_def
+            if mentions_any(input_text, candidates):
+                return exit_def
         if destination_key:
             for exit_def in location.get("exit", []):
                 if exit_def.get("destination") == destination_key:
@@ -737,10 +707,7 @@ class MovementMixin(DMCoreProtocol):
             name for name in self.scenario_entities
             if name != self.player_name and self.entities.get(name, {}).get("is_party")
         ]
-        named = [
-            name for name in party_present
-            if re.search(rf"\b{re.escape(name.lower())}\b", input_text or "")
-        ]
+        named = [key for key, _ in find_named(input_text, self.entities, party_present)]
         addressed = named or party_present
 
         if not addressed:

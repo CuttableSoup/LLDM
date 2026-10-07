@@ -4,6 +4,8 @@ import re
 from dm.DM_Types import DMCoreProtocol
 from persistence.slot import Persistable
 import resolution.Combat_Resolution as Combat_Resolution
+from resolution.Entity_Reference import mentions_any
+import resolution.Conveyance as Conveyance
 
 # A single, reused scratch location key for a mid-journey ambush -- never a freshly-minted
 # key per pause (see _enter_encounter_site), so a long playthrough with many interrupted
@@ -17,7 +19,7 @@ class TravelMixin(DMCoreProtocol):
         instantiated on its own; relies on self.rules/self.entities/self.locations/
         self.scenario_entities/self.current_location_key/self.known_locations/self.event_bus/
         self.rooms/self.player_name/self.watch_rotation_index/self.pending_downtime/
-        self._is_party_member/self.is_hostile/self.get_current_hp/self._resolve_mount_targets/
+        self._is_party_member/self.is_hostile/self.get_current_hp/
         self._enter_location/
         self._current_room/self._describe_scenario_characters/self.advance_blocks/
         self.is_daytime/self._resolve_one_encounter/self.resolve_action/
@@ -47,7 +49,7 @@ class TravelMixin(DMCoreProtocol):
         with no authored terrain/road anywhere along it still reduces to exactly the old "distance
         / speed, rounded up" arithmetic. _route_is_passable is checked once, up front, before any
         of this runs at all -- a straight line crossing terrain the whole traveling party's own
-        _resolve_conveyance_tags can't satisfy denies the entire attempt (reason
+        Conveyance.terrain_tags can't satisfy denies the entire attempt (reason
         "impassable_terrain"), no partial routing or pathfinding around it.
 
         Each block spent also samples whichever [[region]] contains the *midpoint* of that one
@@ -91,41 +93,11 @@ class TravelMixin(DMCoreProtocol):
         """
         return self.rules.get("travel", {"default_speed": 4})
 
-    def _resolve_travel_speed(self, entity_name, _visited=None):
-        """!
-        @brief entity_name's own effective overland speed -- its own authored "travel_speed"
-            directly if it has one (a leaf provider, ex: creatures.toml's own "horse", a car),
-            else the *minimum* _resolve_travel_speed across every currently-present entity
-            named in its own "mount" field (see entity_schema.toml's own "mount" comment) --
-            ex: a rider defers to their cart, which in turn defers to whichever horse(s)
-            currently pull it, so a rider's own effective speed walks that whole chain rather
-            than needing to name the team directly. Falls back to [travel]'s own default_speed
-            if entity_name has neither a travel_speed nor a live mount to defer to.
-            _visited guards against a malformed cyclic "mount" chain (never authored in
-            shipped data).
-        @param entity_name The entity to resolve.
-        @param _visited Internal recursion guard; never pass explicitly.
-        @return The resolved travel speed -- always a real number, never None.
-        """
-        default_speed = self._travel_rules().get("default_speed", 4)
-        visited = _visited or set()
-        if entity_name in visited:
-            return default_speed
-        visited = visited | {entity_name}
-
-        entity = self.entities.get(entity_name, {})
-        if "travel_speed" in entity:
-            return entity["travel_speed"]
-        mounts = self._resolve_mount_targets(entity_name)
-        if not mounts:
-            return default_speed
-        return min(self._resolve_travel_speed(name, visited) for name in mounts)
-
     def _party_travel_speed(self):
         """!
         @brief The whole party's travel speed for grid distance/block math -- the slowest
             currently-present is_player/is_party member's own effective travel speed
-            (_resolve_travel_speed -- their own "travel_speed" field, or whatever they're
+            (Conveyance.travel_speed -- their own "travel_speed" field, or whatever they're
             currently mounted on), falling back to [travel]'s own default_speed for anyone
             who has neither.
         @return The lowest travel speed among present party members (default_speed if somehow
@@ -133,7 +105,7 @@ class TravelMixin(DMCoreProtocol):
         """
         default_speed = self._travel_rules().get("default_speed", 4)
         speeds = [
-            self._resolve_travel_speed(name)
+            Conveyance.travel_speed(self.world, name)
             for name in self.scenario_entities
             if self._is_party_member(name)
         ]
@@ -251,36 +223,10 @@ class TravelMixin(DMCoreProtocol):
                 return polity
         return None
 
-    def _resolve_conveyance_tags(self, entity_name, _visited=None):
-        """!
-        @brief entity_name's own effective terrain passability -- its own authored
-            "terrain_tags" (a list, default []) unioned with the recursively-resolved tags of
-            everything currently named in its own "mount" field (see entity_schema.toml's own
-            "mount" comment), the exact same chain-walking shape _resolve_travel_speed already
-            uses for speed: a rider inherits whatever a boat/griffon they're mounted on can
-            cross, without needing to name it directly. _visited guards against a malformed
-            cyclic "mount" chain (never authored in shipped data), same as
-            _resolve_travel_speed's own guard.
-        @param entity_name The entity to resolve.
-        @param _visited Internal recursion guard; never pass explicitly.
-        @return A set of terrain tags (ex: {"aquatic"}) -- never None, empty if this entity and
-            everything in its mount chain has no terrain_tags of its own.
-        """
-        visited = _visited or set()
-        if entity_name in visited:
-            return set()
-        visited = visited | {entity_name}
-
-        entity = self.entities.get(entity_name, {})
-        tags = set(entity.get("terrain_tags", []))
-        for mount_name in self._resolve_mount_targets(entity_name):
-            tags |= self._resolve_conveyance_tags(mount_name, visited)
-        return tags
-
     def _party_conveyance_tags(self):
         """!
         @brief The whole party's combined terrain passability -- the union of every currently-
-            present is_player/is_party member's own _resolve_conveyance_tags, mirroring
+            present is_player/is_party member's own Conveyance.terrain_tags, mirroring
             _party_travel_speed's own "every present party member" scope (though union, not
             minimum: passability isn't paced to the slowest member the way speed is -- a route
             already denies outright the moment *any* present member can't cross it, checked
@@ -288,7 +234,7 @@ class TravelMixin(DMCoreProtocol):
         @return {entity_name: set-of-tags} for every currently-present party member.
         """
         return {
-            name: self._resolve_conveyance_tags(name)
+            name: Conveyance.terrain_tags(self.world, name)
             for name in self.scenario_entities
             if self._is_party_member(name)
         }
@@ -454,9 +400,8 @@ class TravelMixin(DMCoreProtocol):
             if key not in self.known_locations:
                 continue
             candidates = [location.get("name", "")] + list(location.get("aliases", []))
-            for phrase in candidates:
-                if phrase and re.search(rf"\b{re.escape(phrase.lower())}\b", input_text or ""):
-                    return key
+            if mentions_any(input_text, candidates):
+                return key
         return None
 
     def _roll_night_watch(self, environment):
@@ -514,7 +459,7 @@ class TravelMixin(DMCoreProtocol):
         @param destination_grid {x, y} of the named destination.
         @return False if any sampled point along the line is impassable terrain
             (_terrain_blocks_travel) that no currently-present party member's own
-            _resolve_conveyance_tags can satisfy; True otherwise (including the whole line
+            Conveyance.terrain_tags can satisfy; True otherwise (including the whole line
             crossing no mapped terrain at all).
         """
         dx = destination_grid["x"] - origin_grid["x"]
@@ -539,7 +484,7 @@ class TravelMixin(DMCoreProtocol):
             a known, gridded destination, (reason "blocked_by_enemies") under the exact same
             room-occupant gate DM_Movement.py's own exit-graph path already runs, (reason
             "mount_overloaded") if the player's own mount is currently carrying more than it
-            can bear (_is_mount_overloaded, DM_Rules.py) -- checked fresh here, not just once
+            can bear (Conveyance.is_overloaded, DM_Rules.py) -- checked fresh here, not just once
             at mount/hitch time, same reasoning DM_Movement.py's own advance_or_retreat
             applies to band movement -- or (reason "impassable_terrain") if the straight-line
             route crosses terrain no currently-present party member can cross
@@ -561,8 +506,8 @@ class TravelMixin(DMCoreProtocol):
             resolved(False, reason="blocked_by_enemies")
             return
 
-        mounts = self._resolve_mount_targets(self.player_name)
-        if mounts and self._is_mount_overloaded(mounts[0]):
+        mounts = Conveyance.mount_targets(self.world, self.player_name)
+        if mounts and Conveyance.is_overloaded(self.world, mounts[0]):
             resolved(False, reason="mount_overloaded")
             return
 

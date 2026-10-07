@@ -1,8 +1,9 @@
 import os
 import re
 
+from intents.improvisation import GROUND_AWARE_INTENTS, TARGET_CENTRIC_INTENTS
 from resolution.AdHoc_Generation import (
-    DEFAULT_NARRATED_FREEFORM, GROUND_AWARE_INTENTS, extract_narrated_people, TARGET_CENTRIC_INTENTS, decide_entity_edit,
+    DEFAULT_NARRATED_FREEFORM, extract_narrated_people, decide_entity_edit,
     decide_entity_removal, generate_ad_hoc_creature, generate_ad_hoc_item,
     generate_referenced_npc,
 )
@@ -18,7 +19,7 @@ import resolution.Combat_Actions as Combat_Actions
 # container/trap is opened/examined-as-itself the same way a hand-authored one is (see
 # DM_Core.py's own _on_item_interaction_detected, which resolves "open"/"close" and a bare
 # "examine <the target itself>" against self._get_target_name(), not a ground/inventory lookup).
-# Unrelated to GROUND_AWARE_INTENTS/TARGET_CENTRIC_INTENTS (imported from AdHoc_Generation.py,
+# Unrelated to GROUND_AWARE_INTENTS/TARGET_CENTRIC_INTENTS (imported from intents/improvisation.py,
 # above) -- Intent_Classification.py has no mirror of this one, so it stays local.
 SCENE_PLACED_SUBTYPES = frozenset({"container", "trap"})
 

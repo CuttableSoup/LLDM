@@ -30,13 +30,10 @@ def resolve_move(core, data, resolved):
 
 def narrate_move(llm_core, data):
     """!
-    @brief Narrates "move" (see resolve_move). On success, folds the new room's own name/
-        description/characters into ongoing narration grounding (llm_core.scenario_description/
-        scenario_characters) the same way generate_scene_intro does for a brand-new scenario --
-        otherwise every later action prompt in the new room would keep citing the *previous*
-        room's flavor text.
-    @param llm_core The LLMCore instance -- its own scenario_description/scenario_characters
-        are updated here on success, read by every later narration prompt until the next move.
+    @brief Narrates "move" (see resolve_move). Reads the arrival from the payload and writes
+        nothing: LLMCore refreshes the narrator's scene state from the same payload before this
+        runs (see intents/registry.py's ARRIVAL_INTENTS).
+    @param llm_core The narrator state, used only for its scene_length_instruction.
     @param data The "item_interaction_resolved" payload ({found, reason?, direction, room_name?,
         room_description?, characters?, input}).
     @return The narration prompt.
@@ -50,15 +47,12 @@ def narrate_move(llm_core, data):
             f"(input: \"{data.get('input', '')}\"), but {reason_text} -- no roll involved.\n"
             f"Narrate a brief, in-character explanation in 1-2 sentences as the Game Master."
         )
-    llm_core.scenario_description = data.get("room_description", "")
-    llm_core.scenario_characters = data.get("characters", [])
-    characters_text = (
-        "\nCharacters present: " + " | ".join(llm_core.scenario_characters)
-        if llm_core.scenario_characters else ""
-    )
+    description = data.get("room_description", "")
+    characters = data.get("characters", [])
+    characters_text = "\nCharacters present: " + " | ".join(characters) if characters else ""
     return (
         f"The player heads {data.get('direction', 'onward')}, arriving at: "
         f"\"{data.get('room_name', '')}\".\n"
-        f"{llm_core.scenario_description}{characters_text}\n"
+        f"{description}{characters_text}\n"
         f"{llm_core.scene_length_instruction('arriving in this new area')}"
     )

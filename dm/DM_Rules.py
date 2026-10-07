@@ -7,15 +7,8 @@ from dm.DM_Types import DMCoreProtocol
 from resolution.Program_Interpreter import run_program
 from paths import PROJECT_ROOT
 import resolution.Combat_Actions as Combat_Actions
-
-# Reserved sentinel a scenario/room "entities" entry can use in place of a literal character
-# name to mean "whichever entity is currently the player" (self.player_name) -- resolved in
-# _instance_entities, below. This is what lets every scenario file stay agnostic of which
-# template is_player=true actually names, and of apply_character_creation's own optional
-# rename (DM_CharacterCreation.py) -- a scenario never has to be updated just because a
-# playthrough's character has a different name than the one its own template started with.
-PLAYER_PLACEHOLDER = "player"
-
+import resolution.Conveyance as Conveyance
+from resolution.World_Context import PLAYER_PLACEHOLDER  # resolved in _instance_entities, below
 
 def scenario_file_path(scenario_name, setting="Fantasy"):
     """!
@@ -292,184 +285,13 @@ class RulesMixin(DMCoreProtocol):
         }
 
     def get_equip_slots(self, entity_name):
-        """!
-        @brief Resolves the valid [entity.equipped] slot names for entity_name, from
-            rules.toml's own [[equip_slot]] table: a "subtype"-specific entry for this
-            entity's own supertype beats a supertype-only entry (no "subtype" key at all),
-            same override precedence as get_attitude's name/supertype/default lookup.
-        @param entity_name The name of the entity (template or live instance) to look up.
-        @return The list of valid slot names, or [] if no [[equip_slot]] entry matches this
-                entity's own supertype/subtype at all.
-        """
-        entity = self.entities.get(entity_name, {})
-        supertype = entity.get("supertype")
-        subtype = entity.get("subtype")
-
-        supertype_only_slots = None
-        for rule in self.rules.get("equip_slot", []):
-            if rule.get("supertype") != supertype:
-                continue
-            if "subtype" in rule:
-                if rule.get("subtype") == subtype:
-                    return list(rule.get("slots", []))
-            elif supertype_only_slots is None:
-                supertype_only_slots = list(rule.get("slots", []))
-
-        return supertype_only_slots if supertype_only_slots is not None else []
-
-    def get_current_bulk(self, entity_name, _visited=None):
-        """!
-        @brief Sums the "bulk" field of every item entity_name is currently carrying (its own
-            "inventory" list -- an equipped item is always also listed there, see
-            entity_schema.toml's own [entity.equipped] comment, so it's never double-counted),
-            plus, now that "bulk" also means something on a creature (see entity_schema.toml's
-            own "bulk"/"mount" comments), the load contributed by every currently-present
-            entity whose own "mount" currently names entity_name -- each rider's own flat
-            "bulk" (body weight), plus their own get_current_bulk (their carried gear) too if
-            rules.toml's [bulk] table opts in via "count_rider_gear" (default true). A rider
-            mounted on a rider mounted on entity_name is handled the same recursive way (their
-            own get_current_bulk already folds in whoever's mounted on *them*); _visited
-            guards against a malformed cyclic "mount" chain (never authored in shipped data).
-        @param entity_name The name of the entity to total.
-        @param _visited Internal recursion guard; never pass explicitly.
-        @return The summed bulk, 0 if entity_name carries nothing or is unknown.
-        """
-        visited = _visited or set()
-        if entity_name in visited:
-            return 0
-        visited = visited | {entity_name}
-
-        entity = self.entities.get(entity_name, {})
-        own_cargo = sum(self.entities.get(item_name, {}).get("bulk", 0) for item_name in entity.get("inventory", []))
-
-        count_rider_gear = self.rules.get("bulk", {}).get("count_rider_gear", True)
-        rider_load = 0
-        for rider_name in self.scenario_entities:
-            if rider_name == entity_name or entity_name not in self._resolve_mount_targets(rider_name):
-                continue
-            rider = self.entities.get(rider_name, {})
-            rider_load += rider.get("bulk", 0)
-            if count_rider_gear:
-                rider_load += self.get_current_bulk(rider_name, visited)
-
-        return own_cargo + rider_load
-
-    def _resolve_mount_targets(self, entity_name):
-        """!
-        @brief entity_name's own currently-present, still-living "mount" entries (see
-            entity_schema.toml's own "mount") -- a bare string or a list, normalized to a
-            list here. An absent "mount" field, or one naming something no longer in the
-            scene or reduced to 0 HP, is silently dropped rather than raising -- losing a
-            mount, by any means, just unwinds the relationship with no error (see
-            entity_schema.toml's own "mount" comment).
-        @param entity_name The entity whose own "mount" field to resolve.
-        @return A list of zero or more real, present, living entity names.
-        """
-        raw = self.entities.get(entity_name, {}).get("mount")
-        if not raw:
-            return []
-        names = [raw] if isinstance(raw, str) else list(raw)
-        return [name for name in names if name in self.scenario_entities and Combat_Resolution.get_current_hp(self.world, name) > 0]
-
-    def get_carrying_capacity(self, entity_name, _visited=None):
-        """!
-        @brief entity_name's own real-time load-bearing capacity -- get_max_bulk directly if
-            it has no live "mount" of its own (a leaf provider, ex: a horse, a car), else the
-            *sum* of every currently-present mount's own get_carrying_capacity (ex: a cart's
-            own capacity is whatever its currently-hitched team can bear, never a number
-            authored on the cart itself) -- see entity_schema.toml's own "mount" comment for
-            why capacity aggregates by sum where _resolve_travel_speed (DM_Travel.py)
-            aggregates by minimum. A provider that itself resolves to None (uncapped)
-            contributes 0 rather than making the whole sum unknown. _visited guards against a
-            malformed cyclic "mount" chain (never authored in shipped data).
-        @param entity_name The entity to check.
-        @param _visited Internal recursion guard; never pass explicitly.
-        @return The summed capacity, or get_max_bulk's own None if entity_name has no live
-                mount and no capacity of its own either.
-        """
-        visited = _visited or set()
-        if entity_name in visited:
-            return 0
-        visited = visited | {entity_name}
-
-        mounts = self._resolve_mount_targets(entity_name)
-        if not mounts:
-            return self.get_max_bulk(entity_name)
-        return sum(self.get_carrying_capacity(name, visited) or 0 for name in mounts)
-
-    def _would_exceed_mount_capacity(self, mount_name, rider_name):
-        """!
-        @brief Checks whether rider_name mounting (or loading cargo onto) mount_name would
-            push mount_name's own current load past its own get_carrying_capacity -- the same
-            "would this exceed capacity" shape _bulk_would_be_exceeded already checks for the
-            player's own personal inventory, just against a mount's own team-aware capacity
-            instead of a flat get_max_bulk. rider_name's own contribution is computed exactly
-            the way get_current_bulk already folds in a live rider (their own "bulk" plus,
-            if opted in, their own carried gear) -- calling this ahead of actually setting
-            "mount" previews the same number get_current_bulk(mount_name) would report the
-            instant afterward.
-        @param mount_name The entity being mounted/loaded.
-        @param rider_name The entity that would newly be mounted on it.
-        @return True if this would exceed capacity; always False if get_carrying_capacity
-                returns None (uncapped).
-        """
-        capacity = self.get_carrying_capacity(mount_name)
-        if capacity is None:
-            return False
-        rider = self.entities.get(rider_name, {})
-        added = rider.get("bulk", 0)
-        if self.rules.get("bulk", {}).get("count_rider_gear", True):
-            added += self.get_current_bulk(rider_name)
-        return self.get_current_bulk(mount_name) + added > capacity
-
-    def _is_mount_overloaded(self, mount_name):
-        """!
-        @brief Whether mount_name is *currently* carrying more than it can bear
-            (get_current_bulk > get_carrying_capacity) -- unlike _would_exceed_mount_capacity
-            (a one-time preview checked only at the moment of mounting/hitching), this is
-            re-checked every time movement is attempted, so gear picked up mid-ride, a second
-            rider mounting after the first, or a puller dying out of a team can all ground an
-            already-underway trip, not just block a fresh one. DM_Movement.py's
-            advance_or_retreat and DM_Travel.py's _resolve_grid_travel_intent both refuse to
-            move at all while this is true.
-        @param mount_name The entity to check.
-        @return True if overloaded; always False for an uncapped mount
-                (get_carrying_capacity returns None).
-        """
-        capacity = self.get_carrying_capacity(mount_name)
-        if capacity is None:
-            return False
-        return self.get_current_bulk(mount_name) > capacity
-
-    def _mount_chain(self, entity_name, _visited=None):
-        """!
-        @brief Every entity reachable by walking entity_name's own "mount" field forward --
-            whatever it currently defers to, and whatever *that* in turn defers to. Unlike
-            _resolve_mount_targets, not filtered by current scene presence or liveness: this
-            is used to decide who should be *carried along* into a new location/room
-            (_carry_mounts_into_scene), not to resolve a live stat off someone already known
-            to be there -- a mount that's between scenes (ex: about to be re-added by the very
-            call this feeds into) still needs to be found by name here.
-        @param entity_name The entity whose own mount chain to walk.
-        @param _visited Internal recursion guard; never pass explicitly.
-        @return A set of entity names (never includes entity_name itself).
-        """
-        visited = _visited if _visited is not None else {entity_name}
-        raw = self.entities.get(entity_name, {}).get("mount")
-        names = [] if not raw else ([raw] if isinstance(raw, str) else list(raw))
-        chain = set()
-        for name in names:
-            if name in visited:
-                continue
-            visited.add(name)
-            chain.add(name)
-            chain |= self._mount_chain(name, visited)
-        return chain
+        """!@brief The valid [entity.equipped] slot names for entity_name (WorldContext.get_equip_slots)."""
+        return self.world.get_equip_slots(entity_name)
 
     def _carry_mounts_into_scene(self):
         """!
         @brief Ensures whatever the player currently rides/is hitched to (walked
-            transitively via _mount_chain) is actually present in self.scenario_entities --
+            transitively via Conveyance.mount_chain) is actually present in self.scenario_entities --
             called everywhere that list gets rebuilt from scratch on a location/room change
             (_populate_room, _enter_location's freeform branch), since neither of those
             otherwise has any notion of "this ad hoc entity was tagging along" the way an
@@ -483,61 +305,9 @@ class RulesMixin(DMCoreProtocol):
             "mount"/"dismount" are themselves player-only intents today (DM_Movement.py) --
             nothing else can actually have a "mount" field set through ordinary play yet.
         """
-        for name in self._mount_chain(self.player_name):
+        for name in Conveyance.mount_chain(self.world, self.player_name):
             if name not in self.scenario_entities:
                 self.scenario_entities.append(name)
-
-    def get_max_bulk(self, entity_name):
-        """!
-        @brief entity_name's own carrying capacity -- its own authored "max_bulk" field if it
-            has one (ex: Rules/Zombie's "riley"/"car", a flat number with no formula behind it),
-            else resolves rules.toml's own [bulk] table -- min_bulk plus this entity's own
-            "skill" dice times mod_multiplier (ex: Fantasy's min_bulk = 3, mod_multiplier = 2,
-            so a 2D strength character carries 3 + 2*2 = 7 bulk before DM_Inventory.py's own
-            _bulk_would_be_exceeded starts refusing "take"/"trade" with reason
-            "bulk_exceeded"). An authored field always wins over the formula when both are
-            available -- an explicit number is a deliberate override, not something a generic
-            rule should second-guess.
-        @param entity_name The name of the entity to look up.
-        @return The max bulk this entity can carry, or None if it authors no "max_bulk" field
-                of its own and the current setting authors no [bulk] table either (ex: most of
-                Rules/Zombie/) -- callers treat None as "uncapped", never as zero.
-        """
-        entity = self.entities.get(entity_name, {})
-        if "max_bulk" in entity:
-            return entity["max_bulk"]
-        formula = self.rules.get("bulk")
-        if not formula:
-            return None
-        skill_stats = entity.get("skills", {}).get(formula.get("skill"), {})
-        return formula.get("min_bulk", 0) + skill_stats.get("dice", 0) * formula.get("mod_multiplier", 1)
-
-    def _validate_equipped_slots(self):
-        """!
-        @brief Cross-checks every loaded entity's own [entity.equipped] slot keys against
-            get_equip_slots for its supertype/subtype, logging an error for any slot name
-            not on that list (ex: a "tail" slot on a humanoid). Called from
-            DM_Validation.py's validate_loaded_data, after load_scenario_definition -- not
-            from load_rules itself, since a scenario-local entity (declared in a scenario file,
-            not one of the shared Rules/<setting>/*.toml catalogs) isn't loaded until after
-            load_rules finishes, and needs this same check too. Doesn't block loading -- same
-            "malformed data degrades quietly" convention as load_rules' own per-file try/except
-            -- just surfaces the mismatch instead of Combat_Actions.py silently reading a slot key
-            nothing declared.
-        """
-        for name, entity in self.entities.items():
-            equipped = entity.get("equipped")
-            if not equipped:
-                continue
-            valid_slots = self.get_equip_slots(name)
-            for slot in equipped:
-                if slot not in valid_slots:
-                    self.event_bus.publish(
-                        "log_error",
-                        f"Entity '{name}' equips slot '{slot}', not valid for "
-                        f"supertype/subtype {entity.get('supertype')}/{entity.get('subtype')} "
-                        f"(valid slots: {valid_slots or 'none'})."
-                    )
 
     def _resolve_player_name(self, template=None):
         """!

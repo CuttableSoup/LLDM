@@ -1,6 +1,6 @@
 import resolution.Social_Resolution as Social_Resolution
 from dm.DM_Types import DMCoreProtocol
-from resolution.AdHoc_Generation import basic_combat_kit
+from resolution.Combat_Actions import basic_combat_kit
 from resolution.Social_Resolution import ACTION_ATTITUDE_DRIFT_CAP, ATTITUDE_AXES, TALK_ATTITUDE_DRIFT_CAP
 import resolution.Combat_Actions as Combat_Actions
 

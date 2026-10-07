@@ -133,28 +133,28 @@ starts with, since neither could otherwise ever be named before being visited on
 `grid` coordinates, divided by the party's travel speed, rounded up (`_resolve_grid_travel_intent`)
 — no fractional blocks, the same rounding rule HP/dice/bands already follow. `_party_travel_speed`
 paces to the *slowest* currently-present `is_player`/`is_party` member's own **effective** travel
-speed (`_resolve_travel_speed`, `DM_Travel.py`) — a stat fully distinct from combat's own per-band
+speed (`travel_speed`, `DM_Travel.py`) — a stat fully distinct from combat's own per-band
 `speed` (`DM_Movement.py`), which never applies outside a room's own band line.
 
 **Mounts and conveyance.** An entity can author `travel_speed` directly (`Rules/Fantasy/creatures.
 toml`'s `horse`, `Rules/Zombie/items.toml`'s `car`) or defer to another entity via its own `mount`
-field (a string, or a list for something with more than one provider) — `_resolve_travel_speed`
+field (a string, or a list for something with more than one provider) — `travel_speed`
 walks that reference recursively: a rider names their cart, the cart names its own team, so a
 rider's effective speed resolves through the whole chain without needing to name the team
 directly. Speed aggregates a multi-entry `mount` by **minimum** (paced to the slowest puller);
-`DM_Rules.py`'s `get_carrying_capacity` mirrors this for load instead of speed, aggregating by
+`Conveyance.py`'s `carrying_capacity` mirrors this for load instead of speed, aggregating by
 **sum** (every additional puller helps) — see `entity_schema.toml`'s own `mount` comment for why
-the two use opposite operators. `get_current_bulk` folds a mounted rider's own weight (their flat
+the two use opposite operators. `current_bulk` folds a mounted rider's own weight (their flat
 `bulk` field, plus their own carried gear if `[bulk]`'s `count_rider_gear` — default true — is set)
 into whatever they're currently mounted on, so mounting is denied (`"bulk_exceeded"`) the same way
-an over-full inventory is (`DM_Rules.py`'s `_would_exceed_mount_capacity`).
+an over-full inventory is (`Conveyance.py`'s `would_exceed_capacity`).
 
 Reachable in play via the free-standing `"mount"`/`"dismount"` intents (`DM_Movement.py`'s
 `_resolve_mount_intent`/`_resolve_dismount_intent`) — the player climbs onto a named,
 currently-present, living, non-hostile entity, found by the same "search the raw input for a
 known name" pattern formation uses; denied `"already_mounted"`/`"not_present"`/`"target_down"`/
 `"target_hostile"`/`"not_a_mount"`/`"bulk_exceeded"` as appropriate. `"not_a_mount"`
-(`_is_valid_conveyance`) is the eligibility gate that actually keeps this grounded: a target has
+(`is_conveyance`) is the eligibility gate that actually keeps this grounded: a target has
 to author `travel_speed` directly, or already have a live `mount` chain of its own, or it's
 denied even when present/alive/non-hostile — a friendly NPC with neither is not a mount just
 because nothing else about it disqualifies it (mounting one would have no mechanical effect
@@ -165,7 +165,7 @@ afterward in both directions — the
 player's own `advance`/`retreat` carries their mount along, and a mount's own behavior-driven
 move (ex: the horse's own skittish `retreat` below 60% HP) carries its rider along too, no check
 against being thrown. Losing a mount by any means (it dies, it's left behind) just silently
-unwinds the relationship — `_resolve_travel_speed`/`get_carrying_capacity` both skip a stale
+unwinds the relationship — `travel_speed`/`carrying_capacity` both skip a stale
 reference to something no longer present or alive, and dismounting/re-mounting carries no bespoke
 penalty of its own; a deliberate choice against hardcoding a narrative consequence into the
 actor/target-only trigger system (`resolution/Program_Interpreter.py`) that has no generic way to
@@ -183,7 +183,7 @@ otherwise just vanish the instant the player actually arrived anywhere new, even
 travel's own block/speed math (computed *before* `_enter_location` runs) already benefited from it
 for that one leg. `DM_Rules.py`'s `_carry_mounts_into_scene` fixes this directly: called from both
 `self.scenario_entities`-rebuilding sites, it walks the player's own live `"mount"` chain
-(`_mount_chain` — like `_resolve_mount_targets`, but not filtered by presence/liveness, since it's
+(`mount_chain` — like `mount_targets`, but not filtered by presence/liveness, since it's
 finding who to carry *into* the new scene, not resolving a stat off someone already confirmed to be
 there) and appends anyone missing — no re-instancing needed, since a mount already has a live,
 mutable copy in `self.entities` from whenever it was first mounted/hitched. `_sync_mount_bands` is
@@ -194,18 +194,18 @@ player alone (not every present `is_party` member) — "mount"/"dismount"/"hitch
 player-only intents today, so nothing else can actually have a `"mount"` field set through ordinary
 play yet.
 
-**Overload blocks movement, continuously.** `_would_exceed_mount_capacity` (checked once, at the
+**Overload blocks movement, continuously.** `would_exceed_capacity` (checked once, at the
 moment of mounting/hitching) isn't the whole story — gear picked up mid-ride, a second rider
 mounting after the first, or a puller dying out of a team can all push a mount past capacity
-*after* departure. `DM_Rules.py`'s `_is_mount_overloaded` (`get_current_bulk(mount) >
-get_carrying_capacity(mount)`, always `False` for an uncapped mount) is re-checked on every actual
+*after* departure. `Conveyance.py`'s `is_overloaded` (`current_bulk(mount) >
+carrying_capacity(mount)`, always `False` for an uncapped mount) is re-checked on every actual
 movement attempt, not just once: `DM_Movement.py`'s `advance_or_retreat` refuses to move at all
 (returning `None`, a sentinel distinct from the legitimate empty-`moved`-list "no one else here"
 case) while the player's own mount is overloaded, denied by `intents/advance_retreat.py` as reason
 `"mount_overloaded"`; `DM_Travel.py`'s `_resolve_grid_travel_intent` runs the identical check ahead
-of its own distance/block math, denied the same way. Both read `_resolve_mount_targets(player)[0]`
-— the player's *immediate* mount (a horse, or a cart) — since `get_current_bulk`/
-`get_carrying_capacity` are already fully recursive at that one node (a cart's own current load
+of its own distance/block math, denied the same way. Both read `mount_targets(player)[0]`
+— the player's *immediate* mount (a horse, or a cart) — since `current_bulk`/
+`carrying_capacity` are already fully recursive at that one node (a cart's own current load
 already folds in its riders' riders; its own capacity already sums its whole pulling team), so
 there's never a need to walk the chain again just to check for an overload somewhere in it.
 
@@ -221,7 +221,7 @@ second-named is the **vehicle** ("hitch the horse to the cart"), a fixed reading
 rather than a guess based on either entity's own stats, so *direction* stays predictable regardless
 of what either entity's data looks like. Whether the resulting pairing is actually *allowed* is a
 separate question, gated on each entity's own data: the puller has to pass the exact same
-`_is_valid_conveyance` eligibility check `"mount"` applies to its own target (`travel_speed`
+`is_conveyance` eligibility check `"mount"` applies to its own target (`travel_speed`
 directly, or an existing live `mount` chain), denied `"not_a_puller"` otherwise; the vehicle has to
 have already been authored with a `"mount"` *key* at all — present, even if empty (`mount = ""` is
 the shipped placeholder convention for a template meant to serve as a vehicle, ex: a cart with
@@ -231,7 +231,7 @@ hitched to it (closes the two-step version of the same gap `"not_a_mount"` close
 directly: hitching a horse onto an arbitrary NPC, then mounting that NPC, would otherwise still
 work). The puller's name is then promoted onto the vehicle's own `mount` (an authored empty string
 → a bare string; already a non-empty string or list → appended), the exact shape
-`_resolve_mount_targets` already expects. Denied `"not_present"`/`"target_down"`/`"target_hostile"`/
+`mount_targets` already expects. Denied `"not_present"`/`"target_down"`/`"target_hostile"`/
 `"not_a_puller"`/`"not_a_vehicle"`/`"already_hitched"` as appropriate — the liveness/hostility gates
 apply to the puller only, since hitching up something actively trying to kill you makes no more
 sense than climbing onto it. No bulk/capacity check of any kind: hitching only ever *adds* pulling
@@ -303,8 +303,8 @@ same mechanism, kept working unchanged.
 `terrain.toml`'s own `impassable`/`requires_tag` pair is what actually blocks a trip outright,
 closing the gap the rest of this section used to leave open ("Terrain never blocks travel today").
 An entity's own `terrain_tags` field (`entity_schema.toml`), unioned with the recursively-resolved
-tags of everything in its live `mount` chain exactly the way `_resolve_travel_speed` already walks
-that chain for speed (`_resolve_conveyance_tags`), is what a traveling party needs to cross it — a
+tags of everything in its live `mount` chain exactly the way `travel_speed` already walks
+that chain for speed (`terrain_tags`), is what a traveling party needs to cross it — a
 rider inherits a boat's/griffon's own passability the same way they already inherit its speed.
 `_route_is_passable` checks the *entire* straight-line route once, up front, alongside the existing
 `mount_overloaded`/`blocked_by_enemies` gates in `_resolve_grid_travel_intent`, denying

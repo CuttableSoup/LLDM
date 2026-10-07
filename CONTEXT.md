@@ -52,3 +52,21 @@ name resolves it otherwise — the current combat target if one exists, else the
 non-player entity present. Gates access to a locked or closed container.
 _Avoid_: current target (reserved for the combat target specifically), target_name (the
 implementation's own parameter name).
+
+**Ability resolution**:
+What an actor's ability does once its roll has landed — damage, summon, dispel, cure, teleport,
+spell materials and its own on_pass/on_fail program — as one implementation shared by the
+player's turn and every other entity's combat turn. It takes an already-resolved target; deciding
+who an ability points at stays with the caller.
+_Avoid_: attack resolution (an ability need not attack), effect application.
+
+**Entity reference**:
+Which entities a line of player text literally names — by key, display name or alias, whole-word.
+Exact matching only; fuzzy matching of an address phrase is the classifier's job.
+_Avoid_: target resolution (that also picks defaults and fallbacks), name matching.
+
+**Conveyance**:
+The graph an entity's mount field draws (rider on horse, cart hitched to a team) and what is
+asked of it: capacity sums across a team, speed is the slowest link, terrain passability is the
+union.
+_Avoid_: mount system, vehicle.

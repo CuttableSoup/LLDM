@@ -134,7 +134,7 @@ def get_container_rejection_reason(entities, container_name, item_name):
         its "inventory" -- the shared gate transfer_item/place_new_item both check before
         mutating anything, so every existing mover (give/take/trade, loot_entity, ADaM
         placement, a maneuver's own transfer op) respects it uniformly, not just player-typed
-        commands (unlike get_max_bulk's own player-only carry cap, which is checked by
+        commands (unlike Conveyance.max_bulk's own player-only carry cap, which is checked by
         DM_Inventory.py's own callers instead -- a container's own contents are a property of
         the container itself, not of whoever happens to be moving something into it).
     @param entities The live entities dict.

@@ -2,11 +2,7 @@ import re
 
 from dm.DM_Types import DMCoreProtocol
 import resolution.Combat_Resolution as Combat_Resolution
-
-# The whole-word wrapper every literal name scan in this file shares -- a bare substring
-# search would let "anne" match "annexed" and "risa" match "risky".
-WORD_BOUNDARY = r"\b%s\b"
-
+from resolution.Entity_Reference import first_named, mentions
 
 # How many turn-costing, non-dialogue turns a conversation survives before it lapses -- long
 # enough to hand over a coin or glance around mid-talk, short enough that wandering off to pick
@@ -61,15 +57,7 @@ class DialogueMixin(DMCoreProtocol):
         @param input_text The player's raw (already lowercased) input.
         @return The addressed entity's name, or None if nothing present is named at all.
         """
-        text = input_text or ""
-        for name in self.scenario_entities:
-            if name == self.player_name:
-                continue
-            entity = self.entities.get(name, {})
-            for phrase in (name, entity.get("name", ""), *entity.get("aliases", [])):
-                if phrase and re.search(WORD_BOUNDARY % re.escape(phrase.lower()), text):
-                    return name
-        return None
+        return first_named(input_text, self.entities, self.scenario_entities, exclude=self.player_name)
 
     def _set_conversation_partner(self, target_name):
         """!
@@ -313,7 +301,7 @@ class DialogueMixin(DMCoreProtocol):
         known = self.entities.get(self.player_name, {}).get("languages") or ["common"]
         named = [
             language for language in known
-            if re.search(rf"\b{re.escape(language.lower())}\b", input_text or "")
+            if mentions(input_text, language)
         ]
         if not named:
             resolved(False, reason="unknown_language")
