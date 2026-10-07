@@ -30,7 +30,7 @@ from resolution.World_Context import WorldContext
 # and why action-driven drift gets a wider cap than talk-driven drift). Owned here now, the same
 # "pure module owns the constant, the mixin wrapper doesn't redefine it" convention
 # Combat_Resolution.py's own COMPARATORS already sets -- DM_Social.py imports these back rather
-# than re-declaring them, so test_unit.py's own `from DM_Social import ...` keeps resolving
+# than re-declaring them, so the unit tests' own `from DM_Social import ...` keeps resolving
 # unchanged.
 ATTITUDE_AXES = ("disposition", "threat", "familiarity")
 TALK_ATTITUDE_DRIFT_CAP = 40

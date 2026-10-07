@@ -18,6 +18,7 @@
 """
 
 from dm.DM_Types import DMCoreProtocol
+import resolution.World_Map as World_Map
 import resolution.Law_Resolution as Law_Resolution
 import resolution.Combat_Resolution as Combat_Resolution
 import resolution.Combat_Actions as Combat_Actions
@@ -63,7 +64,7 @@ class LawMixin(DMCoreProtocol):
                 return location["polity"]
             grid = location.get("grid")
             if grid:
-                return self._resolve_region_polity(grid["x"], grid["y"])
+                return World_Map.polity_at(self.rules, grid["x"], grid["y"])
             key = location.get("return_to")
         return None
 
@@ -74,7 +75,7 @@ class LawMixin(DMCoreProtocol):
                 known polity applies.
         """
         polity_name = self.current_polity()
-        polity = self._find_polity(polity_name) if polity_name else None
+        polity = World_Map.find_polity(self.rules, polity_name) if polity_name else None
         if not polity:
             return None, []
         location = self.locations.get(self.current_location_key, {})

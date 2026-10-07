@@ -1031,13 +1031,14 @@ class NLPCore:
         """!@brief _on_user_input's body: a pending question's answer first, else classification."""
         if self._answer_confirmation(player_input) or self._answer_arrest(player_input):
             return
-        processed, events = self.classifier.classify(player_input)
+        processed, events, adjudication = self.classifier.classify(player_input)
         self.event_bus.publish("log_info", f"Processing player input: {player_input} -> {processed}")
-        if self.classifier.last_adjudication:
-            verdict, trigger = self.classifier.last_adjudication
-            action = self.classifier.last_adjudicated_action
+        if adjudication.asked:
+            action = adjudication.action
             detail = f" ({action[0]}: {action[1]})" if action else ""
-            self.event_bus.publish("log_info", f"Adjudicated ambiguous input ({trigger}): {verdict}{detail}.")
+            self.event_bus.publish(
+                "log_info", f"Adjudicated ambiguous input ({adjudication.trigger}): {adjudication.verdict}{detail}.",
+            )
         for event in events:
             self.event_bus.publish(event["event"], event["payload"])
 

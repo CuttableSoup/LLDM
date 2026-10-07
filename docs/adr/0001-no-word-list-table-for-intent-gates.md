@@ -1,0 +1,3 @@
+# Keep the intent gates in `classify`; don't collapse them into a keyword rule table
+
+An architecture review proposed replacing the `detect_*` keyword functions in `nlp/Intent_Classification.py` with one ordered rule table. Only five gates (save/load, help, scene query, direction, travel) are uniform single-event lookups; the rest of `classify` is multi-clause and not table-shaped, so a table would move the same five lookups behind another layer, and it pulls toward growing word lists, which the project resolves with the local-model adjudicator instead. The real friction was the per-input adjudication state, handled separately.

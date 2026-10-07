@@ -10,18 +10,15 @@
     split DM_CharacterCreation.py is to this module's own sibling.
 """
 
-import json
 import math
 import os
 import random
 import tomllib
 
 from resolution.Challenge_Rating import DEFAULT_HP_DIVISOR, calculate_challenge_rating, skill_rating
-from llm.LLM_Client import call_chat_completion as _real_call_chat_completion
+from llm.LLM_Client import DEFAULT_TIMEOUT
+from llm.LLM_Decision import decide
 from paths import PROJECT_ROOT
-
-# None: the current LLM backend (local Ollama or OpenRouter -- see LLM_Backend.py).
-DEFAULT_API_URL = None
 
 # A named "key skill" landing at 0D would read as a design bug, not a deliberately weak NPC --
 # 1D (rating 3) is the floor a fitted skill can ever land on.
@@ -310,7 +307,7 @@ def _build_tool_schema(npc_keywords):
         of free text is what makes this reliable with small local models (verified live
         against Ollama during design).
     @param npc_keywords {keyword_name: [skill_name, ...]}, from load_npc_keywords.
-    @return The "tools" list for call_chat_completion.
+    @return The "tools" list for decide().
     """
     return [{
         "type": "function",
@@ -391,7 +388,7 @@ def _fallback_npc_stats(npc_keywords, target_cr, hp_share, skills_catalog, hp_di
 
 def generate_npc_stats(
     npc_keywords, target_cr, skills_catalog, hint=None, qualities=None, variance=0.15, cr_multiplier=1.0,
-    hp_share=0.3, call_chat_completion=None, api_url=DEFAULT_API_URL, skip_llm_generation=False,
+    hp_share=0.3, skip_llm_generation=False,
     hp_divisor=DEFAULT_HP_DIVISOR,
 ):
     """!
@@ -419,13 +416,6 @@ def generate_npc_stats(
         lets a caller ask for a deliberately tougher/weaker NPC without touching target_cr
         itself (ex: a unique boss authored with cr_multiplier = 1.5).
     @param hp_share Forwarded to fit_skills_to_cr.
-    @param call_chat_completion The LLM-calling callable to use -- None (the default) resolves
-        to this module's own _real_call_chat_completion *at call time*, not at def time, so
-        `unittest.mock.patch("resolution.NPC_Generation._real_call_chat_completion", fake)` reliably
-        intercepts it even though nothing here explicitly passes one -- the
-        dependency-injection seam tests use, since DMCore itself has no other one anywhere
-        (see DM_NpcGeneration.py's own module docstring).
-    @param api_url Forwarded to call_chat_completion.
     @param skip_llm_generation If true, skips the network call entirely and goes straight to
         the offline fallback path -- used when reloading a save (DM_Persistence.py), where
         whatever this call produces is about to be overwritten by the saved values anyway.
@@ -435,7 +425,6 @@ def generate_npc_stats(
         (no tool_calls in the response, malformed JSON, network error, or timeout) -- this
         function itself never raises.
     """
-    call_chat_completion = call_chat_completion or _real_call_chat_completion
     rolled_cr = target_cr * cr_multiplier * random.uniform(1 - variance, 1 + variance)
 
     if skip_llm_generation or not npc_keywords:
@@ -454,11 +443,11 @@ def generate_npc_stats(
     ]
 
     try:
-        response = call_chat_completion(
-            api_url, messages, tools=_build_tool_schema(npc_keywords), tool_choice="auto",
+        function_name, arguments = decide(
+            messages, _build_tool_schema(npc_keywords), {"describe_npc"}, timeout=DEFAULT_TIMEOUT,
         )
-        tool_calls = response["choices"][0]["message"]["tool_calls"]
-        arguments = json.loads(tool_calls[0]["function"]["arguments"])
+        if function_name is None:
+            raise ValueError(f"No describe_npc call ({arguments})")
         name = arguments["name"]
         backstory = arguments["backstory"]
         chosen_keywords = [k for k in arguments["keywords"] if k in npc_keywords]

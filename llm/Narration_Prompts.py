@@ -354,7 +354,7 @@ def describe_outcome(outcome, actor="the player"):
         _OUTCOME_FORMATTERS rather than probing an untyped dict for whichever optional keys
         happened to be set, or hand-copying a new isinstance branch per variant -- a new
         ActionOutcome variant only ever needs one new _OUTCOME_FORMATTERS entry (see
-        test_unit.py's own completeness test), mirroring how a new Effect subtype only ever
+        tests/test_llm.py's own completeness test), mirroring how a new Effect subtype only ever
         needs a new _EFFECT_FORMATTERS entry.
     @param outcome One ActionOutcome variant (from an "action_resolved"/"round_resolved"
         payload's own "actions" list, or a "turns" entry's own "outcome").

@@ -1,6 +1,6 @@
 """!
 @file test_integration.py
-@brief Integration tests that hit a real, running Ollama -- as opposed to test_unit.py,
+@brief Integration tests that hit a real, running Ollama -- as opposed to the unit tests,
     which is entirely fast and network-independent. Every TestCase/test function here is
     gated on the same _ollama_reachable() check, so each *skips* (not fails) when nothing's
     listening on 127.0.0.1:11434, rather than dragging the rest of the suite's pass/fail status
@@ -233,7 +233,7 @@ class TestPromptDirectiveConversation(_LivePipelineTestCase):
         set_prompt_directive, injected into every dialogue prompt by DM_Social.py's
         describe_character -- see that method's own module note) and its expiry
         (DM_Time.py's _expire_prompt_directives, added alongside the rest of the block clock).
-        test_unit.py already proves the field itself gets set/cleared correctly and that
+        the unit tests already proves the field itself gets set/cleared correctly and that
         describe_character renders it as a string -- nothing anywhere proves a real model
         actually reads a directive spliced into an NPC's own persona and that the persona
         genuinely reverts once it expires, which is the whole reason this dynamic (not
@@ -289,7 +289,7 @@ class TestRagGroundedNarration(_LivePipelineTestCase):
     """!
     @brief Verifies the real, end-to-end RAG pipeline (Settings/Fantasy/*.pdf -> RagIndex's
         extraction/chunking/embedding -> LLMCore.perform_rag's per-request retrieval) actually
-        fires against a live LLM request -- test_unit.py's TestRagIndex/TestLlmPerformRag cover
+        fires against a live LLM request -- the unit tests' TestRagIndex/TestLlmPerformRag cover
         each piece in isolation with fakes, but this is the only way to confirm the whole chain
         is wired together correctly, the same reasoning TestInnkeeperConversation gives for why
         a live Ollama conversation test earns its keep alongside the offline suite.
@@ -297,7 +297,7 @@ class TestRagGroundedNarration(_LivePipelineTestCase):
         Skipped (not failed) if the index isn't built/cached yet -- the first build takes
         minutes against the real sourcebook (see CLAUDE.md's "RAG / sourcebook grounding"),
         and this suite must never become flaky just because a fresh machine hasn't warmed the
-        cache. Run test_unit.py or boot the app once beforehand to warm it.
+        cache. Run the unit tests or boot the app once beforehand to warm it.
     """
     scenario_name = "debug"
     start_location = "tavern_floor"
@@ -339,7 +339,7 @@ class TestArenaCombatConversation(_LivePipelineTestCase):
         input, checking that real round narration actually flows through a live LLM turn after
         turn -- the mechanics themselves (behavior resolution, damage, targeting) are already
         exhaustively unit-tested with no LLM involved at all, by TestCombatLoop/
-        TestEntityBehavior in test_unit.py. roll_dice is genuinely random (see Combat_Actions.py),
+        TestEntityBehavior in the unit tests. roll_dice is genuinely random (see Combat_Actions.py),
         not seeded here, so every assertion below checks the event/narration *structure* holds
         up round after round rather than who lands a hit or who wins.
     """
@@ -391,7 +391,7 @@ class TestMountingConversation(_LivePipelineTestCase):
         mount, a denied attempt while already mounted, a dismount, and a denied attempt
         against a hostile target. The mechanics themselves (gating, band sync, the recursive
         speed/bulk resolvers) are already exhaustively unit-tested with no LLM involved at all
-        (TestMount/TestGridTravel/TestBulk, test_unit.py); this only checks the whole chain --
+        (TestMount/TestGridTravel/TestBulk, the unit tests); this only checks the whole chain --
         NLP parsing, DMCore state, and LLM narration -- is wired together correctly end to
         end, the same reasoning every other class in this file gives for earning a
         live-Ollama test.
@@ -408,7 +408,7 @@ class TestMountingConversation(_LivePipelineTestCase):
         self._boot()
         # creatures.toml's own "horse"/"wild boar" -- neither is owned by any scenario, so
         # both are instanced here the same way TestEntityBehavior's own troll/spectral wolf
-        # are in test_unit.py. "wild boar" (hostile by default, no [entity.attitudes] table
+        # are in the unit tests. "wild boar" (hostile by default, no [entity.attitudes] table
         # of its own) stands in for arena's own "wolf" as the denied-hostile-mount target.
         [self.horse_name] = self.dm_core._instance_entities([{"name": "horse", "band": 1}])
         self.dm_core.scenario_entities.append(self.horse_name)
@@ -435,7 +435,7 @@ class TestMountingConversation(_LivePipelineTestCase):
         self.assertEqual(self.dm_core.entities[player_name]["mount"], self.horse_name)
         # 40, not 2x rules.toml's own default_speed -- creatures.toml's horse deliberately
         # carries Pathfinder's own 40 miles/day overland figure rather than any multiple of
-        # default_speed (see its own comment there, and test_unit.py's
+        # default_speed (see its own comment there, and the unit tests'
         # test_party_travel_speed_uses_a_mounted_players_own_horse, which asserts the same 40).
         # This line said 48 until the empty-narration fix let the test reach it again.
         self.assertEqual(self.dm_core._party_travel_speed(), 40)  # creatures.toml's own horse
@@ -473,14 +473,14 @@ class TestGridTravelAmbushConversation(_LivePipelineTestCase):
         never typed "travel" at all (DMCore._resume_pending_downtime's own manual publish,
         once the last hostile actually drops). The mechanics themselves (pending_downtime's
         shape, the ephemeral encounter site, ad_hoc persistence) are already exhaustively
-        unit-tested with no LLM involved at all (TestGridTravel, test_unit.py); this only
+        unit-tested with no LLM involved at all (TestGridTravel, the unit tests); this only
         checks the whole chain -- NLP parsing, DMCore state, and LLM narration -- is wired
         together correctly end to end, the same reasoning every other class in this file gives
         for earning a live-Ollama test.
 
         The encounter roll itself (DM_Encounters.py's resolve_varied_value) is forced to
         "wild boar" -- pure Python, unrelated to Ollama, the same determinism
-        test_unit.py's own _stub_encounter_roll gets for free -- so the ambush is guaranteed
+        the unit tests' own _stub_encounter_roll gets for free -- so the ambush is guaranteed
         without needing a live model to cooperate. roll_dice is left genuinely random/unseeded
         (see Combat_Actions.py), matching TestArenaCombatConversation's own precedent: this attacks
         for real through the ordinary pipeline first, and only force-finishes the wild boar
@@ -628,7 +628,7 @@ class TestMultiActionCombatConversation(_LivePipelineTestCase):
         still batching all of it into exactly one round. The penalty math itself
         (dice_penalty reducing the pool, never the defender's own roll) and the
         engaged_combat_target regression are already exhaustively unit-tested with no LLM
-        involved at all (TestMultipleActions, test_unit.py); this is only checking that a
+        involved at all (TestMultipleActions, the unit tests); this is only checking that a
         real, unseeded roll_dice and a real LLM narration call don't trip over the batch
         shape end to end.
     """
@@ -671,7 +671,7 @@ class TestMultiActionCombatConversation(_LivePipelineTestCase):
         # Deliberately no second test here for "a multi-action turn doesn't leak state into the
         # next ordinary turn" -- that's a pure DMCore-state concern (dice_penalty recomputed
         # fresh from len(clauses) every call, engaged_combat_target not sticking around), already
-        # exhaustively proven with no LLM at all by test_unit.py's own TestMultipleActions. A
+        # exhaustively proven with no LLM at all by the unit tests' own TestMultipleActions. A
         # live version of it would cost a second full Ollama round trip for zero narration-
         # specific signal beyond what this test already establishes -- below this file's own bar
         # for what earns a live-Ollama test (see CLAUDE.md's testing notes).
@@ -720,7 +720,7 @@ class TestChestSagaConversation(_LivePipelineTestCase):
         the dungeon chest's entire lifecycle (locked -> picked -> opened -> examined -> taken)
         via literal input, checking real LLM narration lands at each step and actually matches
         the underlying state change -- distinct from TestLockedChest/TestItemInteraction/
-        TestOpenClose in test_unit.py, which call DMCore's methods directly with no NLP or LLM
+        TestOpenClose in the unit tests, which call DMCore's methods directly with no NLP or LLM
         in the loop at all.
     """
     scenario_name = "debug"
@@ -734,9 +734,9 @@ class TestChestSagaConversation(_LivePipelineTestCase):
         # from OS entropy here (rather than leaving the deterministic seed from the test below
         # in place) is what stops this test from silently making every *other* test's dice
         # rolls deterministic too, for the rest of this pytest run. Found the hard way: a
-        # single shared pytest process runs test_integration.py before test_unit.py
+        # single shared pytest process runs test_integration.py before the unit tests
         # (alphabetical collection order), and leaving seed(3) in place made an unrelated
-        # test_unit.py combat roll deterministic enough to kill a wolf that test never expected
+        # the unit tests combat roll deterministic enough to kill a wolf that test never expected
         # to die, silently changing self.dm_core.current_target out from under it.
         random.seed()
 
@@ -887,7 +887,7 @@ class TestCryptDungeonConversation(_LivePipelineTestCase):
         debug.toml) -- a trap's disarm-or-be-damaged check, a real combat kill, a room
         transition narrated through a live LLM call (DMCore._resolve_room_transition_intent /
         LLMCore.generate_item_interaction_response's "move" branch -- nothing in
-        test_unit.py's TestMultiRoomDungeon touches the LLM side of this at all, only the
+        the unit tests' TestMultiRoomDungeon touches the LLM side of this at all, only the
         mechanics), the band-gated *branch* into the hidden alcove and back out again, and a
         second, room-local chest -- distinct from TestChestSagaConversation, which never
         leaves its one room at all.
@@ -996,7 +996,7 @@ class TestSaveAndResumeConversation(unittest.TestCase):
         A drives a real conversation and saves via a literal typed "save as <slot>" command
         (exercising NLPCore's own prefix-detection intercept -- see _detect_save_load_intent --
         not DMCore.save_game called directly, which is all TestSaveLoad/TestLLMSaveLoad in
-        test_unit.py ever do), then session B -- an entirely separate EventBus/NLPCore/LLMCore/
+        the unit tests ever do), then session B -- an entirely separate EventBus/NLPCore/LLMCore/
         DMCore, standing in for a fresh process -- resumes it via a literal "load <slot>"
         command and keeps talking. Costs roughly double a normal test here, since the slow
         sentence-transformers load happens once per session -- the honest price of actually
@@ -1131,7 +1131,7 @@ class TestAdHocRemovalLive(unittest.TestCase):
 @unittest.skipUnless(_ollama_reachable(), "Ollama not reachable at http://127.0.0.1:11434")
 class TestNpcGenerationLive(unittest.TestCase):
     """!
-    @brief A real, live tool-calling round trip against Ollama -- test_unit.py's own
+    @brief A real, live tool-calling round trip against Ollama -- the unit tests' own
         TestNpcGeneration/TestNpcGenerationDMCoreIntegration cover the pure math and the
         DMCore-side wiring with an injected fake, but only a real call actually proves the
         currently-loaded model reliably returns a valid tool_calls response shaped the way
@@ -1156,7 +1156,7 @@ class TestNpcGenerationLive(unittest.TestCase):
         # variance=0.15 (the module default) plus this template's own hp_share/keyword-count
         # slop -- a generous band, since this is checking "the whole pipeline produced a
         # sane, roughly-matched NPC," not pinning down the exact fitting math (already
-        # covered exactly by test_unit.py's own round-trip test).
+        # covered exactly by the unit tests' own round-trip test).
         self.assertLess(
             abs(npc_cr - player_cr), player_cr * 0.5,
             f"generated CR {npc_cr} too far from player CR {player_cr}",
@@ -1180,7 +1180,7 @@ class TestReferencedNpcLive(unittest.TestCase):
         agrees to fill in matters more here than anywhere else in this file.
 
         Two of its three guardrails are structural and already proven offline: the disposition
-        enum excludes "hostile" at the schema level, and test_unit.py's own
+        enum excludes "hostile" at the schema level, and the unit tests' own
         TestReferencedNpcGeneration pins the resulting entity shape with an injected fake. The
         third is pure model judgment and cannot be faked -- **does the currently-loaded model
         actually decline** when the phrase names someone already standing there, or names
@@ -1479,7 +1479,7 @@ async def test_innkeeper_dialogue_through_textual():
     async with app.run_test() as pilot:
         # The scene intro is queued during DMCore.__init__, before the app ever mounted --
         # TextualCore buffers it and on_mount flushes it once mounting finishes (see
-        # test_unit.py's test_events_published_before_mount_are_buffered_then_flushed), but the
+        # the unit tests' test_events_published_before_mount_are_buffered_then_flushed), but the
         # real Ollama call behind it can still take a few seconds, so this waits on the
         # event itself rather than assuming it's already landed.
         await wait_for_response_count(pilot, 1)

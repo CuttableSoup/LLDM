@@ -1,11 +1,11 @@
 import math
-import re
 
 from dm.DM_Types import DMCoreProtocol
 from persistence.slot import Persistable
 import resolution.Combat_Resolution as Combat_Resolution
 from resolution.Entity_Reference import mentions_any
 import resolution.Conveyance as Conveyance
+import resolution.World_Map as World_Map
 
 # A single, reused scratch location key for a mid-journey ambush -- never a freshly-minted
 # key per pause (see _enter_encounter_site), so a long playthrough with many interrupted
@@ -38,7 +38,7 @@ class TravelMixin(DMCoreProtocol):
         is reachable directly by name/alias from any other gridded location, no exit to author.
 
         Distance is Euclidean between two locations' own "grid" coordinates. Each block of travel
-        covers the party's own base speed times whatever _effective_speed_multiplier applies at
+        covers the party's own base speed times whatever World_Map.effective_speed_multiplier applies at
         the party's current leading-edge position -- a [[road]] segment's own multiplier if one
         reaches that point, else whichever [[region]] contains it names as its own "terrain"
         (terrain.toml), else the plain, unmodified 1.0 every point got before either existed (see
@@ -47,7 +47,7 @@ class TravelMixin(DMCoreProtocol):
         discovers it block by block as distance_covered climbs toward the total, since terrain
         along the way can slow (or a road speed up) how far each block actually reaches; a route
         with no authored terrain/road anywhere along it still reduces to exactly the old "distance
-        / speed, rounded up" arithmetic. _route_is_passable is checked once, up front, before any
+        / speed, rounded up" arithmetic. World_Map.route_is_passable is checked once, up front, before any
         of this runs at all -- a straight line crossing terrain the whole traveling party's own
         Conveyance.terrain_tags can't satisfy denies the entire attempt (reason
         "impassable_terrain"), no partial routing or pathfinding around it.
@@ -111,28 +111,6 @@ class TravelMixin(DMCoreProtocol):
         ]
         return min(speeds) if speeds else default_speed
 
-    def _resolve_region(self, x, y):
-        """!
-        @brief Finds whichever world_map.toml [[region]] contains grid point (x, y) --
-            first match wins (regions aren't expected to overlap, but nothing enforces it).
-            The one shared lookup resolve_region_environment/_resolve_region_terrain/
-            _resolve_region_polity all read off of -- "environment" (encounter tables),
-            "terrain" (travel speed/passability), and "polity" (default language/narration)
-            are three independent, all-optional fields on the exact same [[region]] table, see
-            docs/downtime.md's "Terrain, roads, and polities".
-        @param x Grid x coordinate.
-        @param y Grid y coordinate.
-        @return The containing region's own table, or None if no authored region contains
-            this point.
-        """
-        for region in self.rules.get("region", []):
-            if (
-                region.get("min_x", float("-inf")) <= x <= region.get("max_x", float("inf"))
-                and region.get("min_y", float("-inf")) <= y <= region.get("max_y", float("inf"))
-            ):
-                return region
-        return None
-
     def resolve_region_environment(self, x, y):
         """!
         @brief The region containing (x, y)'s own "environment" name.
@@ -142,31 +120,7 @@ class TravelMixin(DMCoreProtocol):
             contains this point -- the "no environment" default that's what "safe" looks like
             everywhere in this design (no watch check, no encounter roll).
         """
-        region = self._resolve_region(x, y)
-        return region.get("environment") if region else None
-
-    def _resolve_region_terrain(self, x, y):
-        """!
-        @brief The region containing (x, y)'s own "terrain" name -- a region authoring no
-            "terrain" field (every region shipped before this existed) resolves to None here,
-            which _effective_speed_multiplier treats as speed_multiplier 1.0/passable, exactly
-            today's unmodified math.
-        @param x Grid x coordinate.
-        @param y Grid y coordinate.
-        @return The containing region's own "terrain" name, or None.
-        """
-        region = self._resolve_region(x, y)
-        return region.get("terrain") if region else None
-
-    def _resolve_region_polity(self, x, y):
-        """!
-        @brief The region containing (x, y)'s own "polity" name.
-        @param x Grid x coordinate.
-        @param y Grid y coordinate.
-        @return The containing region's own "polity" name, or None.
-        """
-        region = self._resolve_region(x, y)
-        return region.get("polity") if region else None
+        return World_Map.environment_at(self.rules, x, y)
 
     def _current_polity_language(self):
         """!
@@ -184,44 +138,8 @@ class TravelMixin(DMCoreProtocol):
         polity_name = self.current_polity()
         if not polity_name:
             return None
-        polity = self._find_polity(polity_name)
+        polity = World_Map.find_polity(self.rules, polity_name)
         return polity.get("language") if polity else None
-
-    def _find_environment(self, name):
-        """!
-        @brief Looks up one environments.toml [[environment]] entry by its own "name".
-        @param name An environment name (ex: "plains"), as named by a [[region]]'s own
-            "environment" field.
-        @return The environment's own table, or None if no environment by that name is loaded.
-        """
-        for environment in self.rules.get("environment", []):
-            if environment.get("name") == name:
-                return environment
-        return None
-
-    def _find_terrain(self, name):
-        """!
-        @brief Looks up one terrain.toml [[terrain]] entry by its own "name".
-        @param name A terrain name (ex: "coastal_forest"), as named by a [[region]]'s own
-            "terrain" field.
-        @return The terrain's own table, or None if no terrain by that name is loaded.
-        """
-        for terrain in self.rules.get("terrain", []):
-            if terrain.get("name") == name:
-                return terrain
-        return None
-
-    def _find_polity(self, name):
-        """!
-        @brief Looks up one polities.toml [[polity]] entry by its own "name".
-        @param name A polity name (ex: "Varisia"), as named by a [[region]]'s own "polity"
-            field.
-        @return The polity's own table, or None if no polity by that name is loaded.
-        """
-        for polity in self.rules.get("polity", []):
-            if polity.get("name") == name:
-                return polity
-        return None
 
     def _party_conveyance_tags(self):
         """!
@@ -230,7 +148,7 @@ class TravelMixin(DMCoreProtocol):
             _party_travel_speed's own "every present party member" scope (though union, not
             minimum: passability isn't paced to the slowest member the way speed is -- a route
             already denies outright the moment *any* present member can't cross it, checked
-            per-member in _route_is_passable, not by first collapsing to one shared set here).
+            per-member in World_Map.route_is_passable, not by first collapsing to one shared set here).
         @return {entity_name: set-of-tags} for every currently-present party member.
         """
         return {
@@ -238,109 +156,6 @@ class TravelMixin(DMCoreProtocol):
             for name in self.scenario_entities
             if self._is_party_member(name)
         }
-
-    @staticmethod
-    def _point_to_segment_distance(x, y, sx, sy, ex, ey):
-        """!
-        @brief Standard clamped point-to-segment distance from (x, y) to the segment running
-            (sx, sy) -> (ex, ey) -- factored out of _resolve_road_multiplier so a multi-segment
-            road (see "_road_points", below) can reuse it once per leg instead of only ever
-            being handed a single segment.
-        @return The perpendicular (or endpoint) distance, in grid units.
-        """
-        dx, dy = ex - sx, ey - sy
-        length_sq = dx * dx + dy * dy
-        if length_sq == 0:
-            t = 0.0
-        else:
-            t = max(0.0, min(1.0, ((x - sx) * dx + (y - sy) * dy) / length_sq))
-        nearest_x, nearest_y = sx + t * dx, sy + t * dy
-        return math.hypot(x - nearest_x, y - nearest_y)
-
-    @staticmethod
-    def _road_points(road):
-        """!
-        @brief A road's own waypoints as a flat [(x, y), ...] list, at least 2 entries -- its
-            own "path" (a list of >= 2 {x, y} tables) if authored, tracing out a road that bends
-            across as many legs as it names, else the single-segment "from"/"to" pair every road
-            authored before "path" existed still uses, kept working unchanged. "path" and
-            "from"/"to" are mutually exclusive by convention (a road only needs one), but "path"
-            wins if both are somehow present.
-        @param road One world_map.toml [[road]] table.
-        @return A list of (x, y) tuples, consecutive pairs of which are this road's own legs.
-        """
-        path = road.get("path")
-        if path:
-            return [(point.get("x", 0), point.get("y", 0)) for point in path]
-        start, end = road.get("from", {}), road.get("to", {})
-        return [(start.get("x", 0), start.get("y", 0)), (end.get("x", 0), end.get("y", 0))]
-
-    def _resolve_road_multiplier(self, x, y):
-        """!
-        @brief The best (highest) speed_multiplier among every world_map.toml [[road]] any of
-            whose own legs (consecutive pairs of _road_points -- a single "from"/"to" segment,
-            or as many as "path" names) passes within "width" grid units of (x, y). A road
-            overrides terrain entirely where it applies (see _effective_speed_multiplier) rather
-            than compounding with it: the whole point of a road is to counteract whatever ground
-            it's built over.
-        @param x Grid x coordinate.
-        @param y Grid y coordinate.
-        @return The matching road's own "speed_multiplier", or None if no road's own "width"
-            reaches this point.
-        """
-        best = None
-        for road in self.rules.get("road", []):
-            points = self._road_points(road)
-            distance = min(
-                self._point_to_segment_distance(x, y, sx, sy, ex, ey)
-                for (sx, sy), (ex, ey) in zip(points, points[1:])
-            )
-            if distance <= road.get("width", 0):
-                multiplier = road.get("speed_multiplier", 1.0)
-                if best is None or multiplier > best:
-                    best = multiplier
-        return best
-
-    def _effective_speed_multiplier(self, x, y):
-        """!
-        @brief The real speed multiplier a block of travel through (x, y) actually gets: a
-            road's own multiplier if one reaches this point (_resolve_road_multiplier), else
-            whichever region's own "terrain" names (_resolve_region_terrain/_find_terrain),
-            else the plain, unmodified 1.0 every point got before either of these existed --
-            the exact "nothing authored" default that keeps debug.toml's own math unchanged.
-        @param x Grid x coordinate.
-        @param y Grid y coordinate.
-        @return A positive float multiplier against the party's own base travel speed.
-        """
-        road_multiplier = self._resolve_road_multiplier(x, y)
-        if road_multiplier is not None:
-            return road_multiplier
-        terrain_name = self._resolve_region_terrain(x, y)
-        terrain = self._find_terrain(terrain_name) if terrain_name else None
-        return terrain.get("speed_multiplier", 1.0) if terrain else 1.0
-
-    def _terrain_blocks_travel(self, x, y, party_tags):
-        """!
-        @brief Whether (x, y)'s own terrain is impassable to every currently-traveling party
-            member -- used only by _route_is_passable's up-front dry run, never mid-trip (no
-            pathfinding/backtracking exists, so a route is checked whole before a single block
-            of it is actually spent). A road never un-blocks impassable terrain (roads only
-            ever appear in _effective_speed_multiplier, not here) -- crossing genuinely
-            impassable ground always needs the right conveyance, road or not.
-        @param x Grid x coordinate.
-        @param y Grid y coordinate.
-        @param party_tags {entity_name: set-of-tags}, from _party_conveyance_tags.
-        @return True if this point is impassable and no present party member's own resolved
-            tags include its "requires_tag".
-        """
-        terrain_name = self._resolve_region_terrain(x, y)
-        terrain = self._find_terrain(terrain_name) if terrain_name else None
-        if not terrain or not terrain.get("impassable"):
-            return False
-        required = terrain.get("requires_tag")
-        if not required:
-            return False
-        return not any(required in tags for tags in party_tags.values())
 
     def _current_environment(self):
         """!
@@ -359,7 +174,7 @@ class TravelMixin(DMCoreProtocol):
         if not grid:
             return None
         environment_name = self.resolve_region_environment(grid["x"], grid["y"])
-        return self._find_environment(environment_name) if environment_name else None
+        return World_Map.find_environment(self.rules, environment_name) if environment_name else None
 
     def _resolve_environment_block(self, environment):
         """!
@@ -370,7 +185,7 @@ class TravelMixin(DMCoreProtocol):
             (DM_Time.py's rest), so the two don't each re-derive it independently and risk
             drifting apart.
         @param environment One environments.toml [[environment]] entry (ex: from
-            _find_environment/_current_environment) -- never None; both callers only invoke
+            World_Map.find_environment/_current_environment) -- never None; both callers only invoke
             this once they've already confirmed one actually applies.
         @return True if this block's own encounter roll turned out hostile (regardless of
             whether a night watch check followed, or how it went) -- callers that don't care
@@ -445,38 +260,6 @@ class TravelMixin(DMCoreProtocol):
                 Combat_Resolution.apply_condition(self.world, name, "surprised", duration="rounds", length=1, dismiss="")
         return surprised
 
-    def _route_is_passable(self, origin_grid, destination_grid):
-        """!
-        @brief Up-front dry run over the whole straight-line path from origin_grid to
-            destination_grid, checked once before _resolve_grid_travel_intent commits to a
-            self.pending_downtime at all -- no pathfinding/backtracking exists, so a route has
-            to be checked whole rather than discovering an impassable stretch mid-trip with no
-            way to resolve it. Sampled at a fixed one-point-per-grid-unit resolution,
-            deliberately independent of party speed/terrain (which is exactly what this check
-            exists to determine) -- fine enough to catch a narrow impassable strip crossing the
-            line without over-sampling a long trip.
-        @param origin_grid {x, y} of the current location.
-        @param destination_grid {x, y} of the named destination.
-        @return False if any sampled point along the line is impassable terrain
-            (_terrain_blocks_travel) that no currently-present party member's own
-            Conveyance.terrain_tags can satisfy; True otherwise (including the whole line
-            crossing no mapped terrain at all).
-        """
-        dx = destination_grid["x"] - origin_grid["x"]
-        dy = destination_grid["y"] - origin_grid["y"]
-        distance = math.hypot(dx, dy)
-        if distance == 0:
-            return True
-        party_tags = self._party_conveyance_tags()
-        steps = max(1, math.ceil(distance))
-        for i in range(steps):
-            t = (i + 0.5) / steps
-            x = origin_grid["x"] + dx * t
-            y = origin_grid["y"] + dy * t
-            if self._terrain_blocks_travel(x, y, party_tags):
-                return False
-        return True
-
     def _resolve_grid_travel_intent(self, input_text, resolved):
         """!
         @brief Handles "travel" from a gridded current location -- see this class's own
@@ -488,7 +271,7 @@ class TravelMixin(DMCoreProtocol):
             at mount/hitch time, same reasoning DM_Movement.py's own advance_or_retreat
             applies to band movement -- or (reason "impassable_terrain") if the straight-line
             route crosses terrain no currently-present party member can cross
-            (_route_is_passable). The "downtime_interrupted" denial/opportunistic-resume check
+            (World_Map.route_is_passable). The "downtime_interrupted" denial/opportunistic-resume check
             lives one level up, in DM_Movement.py's own _resolve_travel_intent -- see that
             method's own docstring for why it has to run before the grid/non-grid branch
             decision, not here.
@@ -512,7 +295,7 @@ class TravelMixin(DMCoreProtocol):
             return
 
         destination_grid = self.locations[destination_key]["grid"]
-        if not self._route_is_passable(origin_grid, destination_grid):
+        if not World_Map.route_is_passable(self.rules, origin_grid, destination_grid, self._party_conveyance_tags()):
             resolved(False, reason="impassable_terrain")
             return
 
@@ -536,7 +319,7 @@ class TravelMixin(DMCoreProtocol):
             to stop partway through and be called again later. Unlike before this method
             existed, the number of blocks a trip takes is no longer fixed up front: each
             iteration covers the party's own base speed times whatever
-            _effective_speed_multiplier applies at the party's *current* leading-edge position
+            World_Map.effective_speed_multiplier applies at the party's *current* leading-edge position
             (clamped to a 0.1 floor so a stretch of slow terrain always eventually finishes --
             there's no backtracking/pathfinding to fall back on if it couldn't), so a road or a
             change in terrain partway along the line can make one trip's blocks_done come out
@@ -565,7 +348,7 @@ class TravelMixin(DMCoreProtocol):
             start_x = origin_grid["x"] + dx * t_start
             start_y = origin_grid["y"] + dy * t_start
             if speed > 0:
-                multiplier = self._effective_speed_multiplier(start_x, start_y)
+                multiplier = World_Map.effective_speed_multiplier(self.rules, start_x, start_y)
                 step = min(speed * max(multiplier, 0.1), distance - covered)
             else:
                 # Degenerate zero/negative speed -- same "just do it in one block" fallback
@@ -582,7 +365,7 @@ class TravelMixin(DMCoreProtocol):
             hostile = False
             environment_name = self.resolve_region_environment(mid_x, mid_y)
             if environment_name:
-                environment = self._find_environment(environment_name)
+                environment = World_Map.find_environment(self.rules, environment_name)
                 if environment:
                     hostile = self._resolve_environment_block(environment)
 
@@ -619,7 +402,7 @@ class TravelMixin(DMCoreProtocol):
         new_location = self.locations.get(self.current_location_key, {})
         new_room = self._current_room()
         new_grid = new_location.get("grid")
-        polity_name = self._resolve_region_polity(new_grid["x"], new_grid["y"]) if new_grid else None
+        polity_name = World_Map.polity_at(self.rules, new_grid["x"], new_grid["y"]) if new_grid else None
         return {
             "interrupted": False,
             "location_name": new_location.get("name", ""),

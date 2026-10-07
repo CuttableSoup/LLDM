@@ -25,7 +25,7 @@ Practical constraints when touching this file:
 
 ## Testing
 
-- **`test_unit.py`** (`tests/`) — offline `unittest.TestCase` classes: one representative test per
+- **The unit tests** (`tests/test_*.py` except `test_integration.py`, split by subject — `test_nlp`, `test_llm`, `test_combat`, `test_abilities`, `test_travel`, `test_items`, `test_social`, `test_law`, `test_generation`, `test_character`, `test_persistence`, `test_validation`, `test_gui`, `test_core`; the shared fixtures `DMTestCase`/`LLMTestCase`/`FakeMatcher` and the module-level patches live in `tests/support.py`, and every file imports its `setUpModule`/`tearDownModule` so those patches apply) — offline `unittest.TestCase` classes: one representative test per
   genuinely distinct mechanism/branch, not one per edge case or flavor variant of an
   already-covered code path. `TestGameBoot` and `TestNlpConfidenceThreshold` load the real
   `sentence-transformers` model via `setUpClass`, narrowed to what actually needs it
@@ -45,6 +45,13 @@ Practical constraints when touching this file:
   double defined alongside it), no model load, EventBus, or DMCore needed. Most other classes
   share fixture setup via `DMTestCase` (`scenario_name` class attribute, plus
   `_capture`/`_capture_any` helpers) and `LLMTestCase`.
+  `tests/test_session.py` drives the whole offline pipeline through `tests/support.py`'s `ScriptedSession`:
+  a real `DMCore` and `NLPCore` on a contract-checking bus, classification by a scripted `FakeMatcher`, and the
+  LLM a scripted transport (unreachable by default, so every structured decision answers "unavailable" and the
+  rules stand) — `say(line)` returns everything the line published, in order, with no model load or network.
+  Scripting the model's replies goes through `scripted_llm`/`script_llm` (the adapter at `LLM_Client`'s
+  synchronous seam, see `llm/LLM_Decision.py`); it does not replace `TestPlayerInputCorpus`, which measures
+  classification quality with the real model.
 - **`test_integration.py`** (`tests/`) — every test needing a real, running Ollama, gated on
   `_ollama_reachable()` so they skip together when nothing's listening on `127.0.0.1:11434`.
   Nothing has to already be running, though: importing this module calls
@@ -58,8 +65,8 @@ Practical constraints when touching this file:
   `DMCore`'s `character` param. `TestNpcGenerationLive` is a plain `unittest.TestCase` (no
   NLPCore/LLMCore) since NPC generation runs synchronously during `DMCore`'s own construction —
   a real tool-calling round trip. The pure fitting math and DMCore-side wiring both live in
-  `test_unit.py` instead (patching `NPC_Generation._real_call_chat_completion` with a
-  deterministic fake), so most of NPC generation stays covered by the fast offline suite — only
+  the unit tests instead (scripting the LLM with `tests/support.py`'s `scripted_llm`/`script_llm`, the
+  adapter at `LLM_Client`'s synchronous seam, with a deterministic reply), so most of NPC generation stays covered by the fast offline suite — only
   the "does the configured model actually return a valid tool call" question needs a live
   Ollama. `TestPromptDirectiveConversation` (a planted `prompt_directive` actually reaching a
   live dialogue prompt, and reverting once it expires) and `TestLocationEncounterConversation`
@@ -68,7 +75,7 @@ Practical constraints when touching this file:
   exercises) both hold themselves to the same bar every other class here already does: added
   only because a fake LLM response can't prove what they're checking. Every class's own
   docstring names the specific real-wiring risk it alone catches — a new one that can't name a
-  comparably specific risk probably belongs in `test_unit.py` instead.
+  comparably specific risk probably belongs in the unit tests instead.
 
 `TestReferencedNpcLive` and `TestCrowdConversation` cover promotion on reference (see
 `docs/adam-improvisation.md`). The first asks the only question a fake cannot: does the loaded
@@ -85,7 +92,7 @@ test counts calls through a delegating wrapper rather than timing the boot — a
 asserted "finished inside 5s", which is true on a GPU host and false on a CPU-bound one whose
 cores are pegged by another test's inference.
 
-`python -m pytest -q` runs both files; `python -m pytest -q tests/test_unit.py` runs the fast,
+`python -m pytest -q` runs both files; `python -m pytest -q --ignore=tests/test_integration.py tests` runs the fast,
 offline subset only.
 
 **If the whole file suddenly gets slow and starts failing on timeouts, check VRAM before
@@ -119,7 +126,7 @@ across worker processes instead of serially -- measured ~8% faster on a 17-test 
 suite (each worker pays its own model load and queues its own Ollama requests, so the win only shows
 up once there are enough tests to amortize that per-worker overhead; a run of one or two tests
 was measured slower under `-n`, not faster). Scoped to `test_integration.py` alone, deliberately
--- `test_unit.py` has its own documented Tk()-root churn fragility (see its
+-- `tests/test_gui.py` has its own documented Tk()-root churn fragility (see its
 `TestCharacterCreationDialog`/`TestGUICore` `setUpClass` notes) that was never tested under
 xdist, so don't fold it into the same `-n auto` invocation without checking that separately
 first. A machine sleeping mid-run can look exactly like a hang (no worker output until it
@@ -127,7 +134,7 @@ resumes) -- rule that out before concluding `-n` broke something.
 
 ## The event contract
 
-Every `EventBus()` in `tests/test_unit.py` is a `ValidatingEventBus` (`tests/event_contract.py`):
+Every `EventBus()` in the unit tests is a `ValidatingEventBus` (`tests/event_contract.py`):
 publishing on a schema'd event (`events/schemas.py`) with an undeclared key, a missing required
 key, or a wrongly-typed value raises at the line that published it, so a producer can't drift
 without a test failing. `TestEventContract` also checks the other half statically — every key

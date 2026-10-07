@@ -1,3 +1,4 @@
+import resolution.Calendar as Calendar
 import resolution.Combat_Resolution as Combat_Resolution
 from dm.DM_Types import DMCoreProtocol
 from persistence.slot import Persistable
@@ -20,21 +21,6 @@ class TimeMixin(DMCoreProtocol):
         derived from it fresh rather than stored redundantly.
     """
 
-    def _time_rules(self):
-        """!
-        @brief rules.toml's own [time] table, defaulted the same shape every other optional
-            rules.toml table falls back to when a setting doesn't author one (ex: [xp]) --
-            24 hours/day, 16 of them daylight, 3 blocks/day (an 8-hour block, matching
-            docs/downtime.md's own worked example), and a "starting_year" of 1 -- day 0's own
-            calendar year (_calendar_date_from_day) before any [[calendar_month]]-authoring
-            setting overrides it (ex: Rules/Fantasy's own 4726, Golarion's current year).
-        @return {hours_per_day, daylight_hours, blocks_per_day, starting_year}.
-        """
-        return self.rules.get(
-            "time",
-            {"hours_per_day": 24, "daylight_hours": 16, "blocks_per_day": 3, "starting_year": 1},
-        )
-
     def get_time_state(self):
         """!
         @brief The current moment on the block clock, derived from self.current_block alone.
@@ -44,99 +30,22 @@ class TimeMixin(DMCoreProtocol):
             *starts* before daylight_hours; one straddling the dusk boundary reads as
             whichever it began in. "year"/"month"/"day_of_month" are only ever non-None for a
             setting that authors rules.toml's own [[calendar_month]] table (see
-            _calendar_date_from_day) -- absent for one that doesn't (ex: Rules/Zombie/), the
+            Calendar.date_from_day) -- absent for one that doesn't (ex: Rules/Zombie/), the
             same "still works unauthored" fallback every other optional table already follows;
             "date_label" is a ready-made human-readable string either way, for narration to
             splice in directly rather than re-deriving this same day-vs-calendar branch itself.
         @return {day, block_in_day, hour, is_day, blocks_per_day, hours_per_day, year, month,
                 day_of_month, date_label}.
         """
-        time_rules = self._time_rules()
-        blocks_per_day = max(1, time_rules.get("blocks_per_day", 3))
-        hours_per_day = time_rules.get("hours_per_day", 24)
-        hours_per_block = hours_per_day / blocks_per_day
-        block_in_day = self.current_block % blocks_per_day
-        hour = block_in_day * hours_per_block
-        day = self.current_block // blocks_per_day
-        calendar_date = self._calendar_date_from_day(day)
-        if calendar_date:
-            date_label = f"day {calendar_date['day_of_month']} of {calendar_date['month']}, Year {calendar_date['year']}"
-        else:
-            date_label = f"day {day}"
-        return {
-            "day": day,
-            "block_in_day": block_in_day,
-            "hour": hour,
-            "is_day": hour < time_rules.get("daylight_hours", 16),
-            "blocks_per_day": blocks_per_day,
-            "hours_per_day": hours_per_day,
-            "year": calendar_date["year"] if calendar_date else None,
-            "month": calendar_date["month"] if calendar_date else None,
-            "day_of_month": calendar_date["day_of_month"] if calendar_date else None,
-            "date_label": date_label,
-        }
+        return Calendar.time_state(self.rules, self.current_block)
 
     def is_daytime(self):
         """!@brief Whether the current block counts as daytime -- see get_time_state."""
         return self.get_time_state()["is_day"]
 
-    def _calendar_date_from_day(self, day_number):
-        """!
-        @brief Converts an absolute day count (get_time_state()'s own "day") into a calendar
-            date against rules.toml's own [[calendar_month]] table (an ordered list of {name,
-            days} entries -- Rules/Fantasy's own table matches Golarion's real calendar, 12
-            months/365 days/no leap year, but nothing here assumes that specific shape; any
-            ordered month list works the same way). day_number 0 is the 1st of the first
-            authored month, [time]'s own "starting_year" (default 1, ex: Rules/Fantasy's own
-            4726 -- see _time_rules); the count wraps into a new year once every authored
-            month's own "days" (summed, not hardcoded to 365) has been used up, repeating the
-            same month order every year.
-        @param day_number An absolute day count (get_time_state()'s own "day").
-        @return {"year", "month", "day_of_month"} (1-indexed day_of_month), or None if this
-            setting authors no [[calendar_month]] table at all (or one summing to 0 days,
-            which can't be divided into).
-        """
-        months = self.rules.get("calendar_month", [])
-        days_per_year = sum(month.get("days", 0) for month in months)
-        if not months or days_per_year <= 0:
-            return None
-        starting_year = self._time_rules().get("starting_year", 1)
-        year = day_number // days_per_year + starting_year
-        day_in_year = day_number % days_per_year
-        for month in months:
-            month_days = month.get("days", 0)
-            if day_in_year < month_days:
-                return {"year": year, "month": month.get("name", ""), "day_of_month": day_in_year + 1}
-            day_in_year -= month_days
-        return None  # unreachable -- day_in_year < days_per_year always lands in some month
-
     def get_calendar_date(self):
-        """!@brief The current calendar date -- see _calendar_date_from_day."""
-        return self._calendar_date_from_day(self.get_time_state()["day"])
-
-    def _day_of_year_from_calendar_date(self, month_name, day_of_month):
-        """!
-        @brief The inverse of _calendar_date_from_day's own month-walk -- how many days into
-            the year month_name's day_of_month falls, against rules.toml's own
-            [[calendar_month]] table. Used only to seed self.current_block from a scenario's
-            own optional "start_month"/"start_day" (see _seed_starting_date) -- ordinary block-
-            clock advancement never calls this, only the one-time initial placement does.
-        @param month_name A [[calendar_month]] "name" (case-sensitive, exactly as authored).
-        @param day_of_month 1-indexed day within that month.
-        @return A 0-indexed day-of-year offset, or None if this setting authors no
-            [[calendar_month]] table at all, month_name doesn't match any entry, or
-            day_of_month falls outside that month's own "days".
-        """
-        months = self.rules.get("calendar_month", [])
-        day_of_year = 0
-        for month in months:
-            month_days = month.get("days", 0)
-            if month.get("name") == month_name:
-                if not (1 <= day_of_month <= month_days):
-                    return None
-                return day_of_year + (day_of_month - 1)
-            day_of_year += month_days
-        return None
+        """!@brief The current calendar date -- see Calendar.date_from_day."""
+        return Calendar.date_from_day(self.rules, self.get_time_state()["day"])
 
     def _seed_starting_date(self):
         """!
@@ -159,7 +68,7 @@ class TimeMixin(DMCoreProtocol):
         if start_month is None:
             return
         start_day = self.scenario.get("start_day", 1)
-        day_of_year = self._day_of_year_from_calendar_date(start_month, start_day)
+        day_of_year = Calendar.day_of_year(self.rules, start_month, start_day)
         if day_of_year is None:
             self.event_bus.publish(
                 "log_error",
@@ -167,7 +76,7 @@ class TimeMixin(DMCoreProtocol):
                 f"resolve against this setting's own [[calendar_month]] table -- ignored.",
             )
             return
-        self.current_block = day_of_year * max(1, self._time_rules().get("blocks_per_day", 3))
+        self.current_block = day_of_year * max(1, Calendar.time_rules(self.rules).get("blocks_per_day", 3))
 
     def advance_blocks(self, blocks=1):
         """!

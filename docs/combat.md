@@ -42,15 +42,17 @@ died.
 matches by raw text similarity, so it always prefers the unsuffixed instance (`"wolf"` over
 `"wolf_2"`, `DM_Rules.py`'s own `_unique_entity_key` suffixing) regardless of which one the
 player meant — same-template instances share an identical description, and a player never
-literally types the suffixed key. `_apply_target_redirect`'s own
-`_resolve_named_instance_ambiguity` (`DM_Core.py`) corrects for this when the matched name has
+literally types the suffixed key. Action target resolution
+(`resolution/Action_Target.py`, see below) corrects for this when the matched name has
 living same-family siblings in the scene: it re-checks the turn's raw input for an ordinal
 (`"the second wolf"`), `"other"`/`"another"`, or a wounded/healthy word (via `hp_per_remain`,
 gated at the same `0.40` cutoff `statuses.toml`'s `"wounded"` tier uses), falling back to the naive
 match otherwise. A name with no live duplicates short-circuits immediately.
 
 **Attacking anyone.** Any living creature can be attacked, not just a hostile one — just not
-always wisely. `_apply_target_redirect` honors an explicitly named *non-hostile* creature only
+always wisely. `resolve_action_target` (`resolution/Action_Target.py` — a pure verdict over a
+read-only scene, `DM_ActionTarget.py` supplying the live one; `_on_turn_detected` applies the
+verdict) honors an explicitly named *non-hostile* creature only
 when the action is an attack (the resolved ability carries `damage_value`, or is authored
 `assault = true` — `maneuvers.toml`'s trip/grapple/bull rush/pin/disarm/sunder/feint/dirty
 trick, aggression that deals no damage; never treat wounds/charm/sleight of hand); for anything else
@@ -61,7 +63,7 @@ already underway is going. `"assaulted"` authors its own `cap` (200) so it can c
 `is_hostile`'s -100 (the shared action cap of 60 never could), and the same turn becomes a combat
 round. Because that can't be taken back, an attack on someone not already hostile whom the input
 never named (the victim only inferred, by pronoun or as the conversation partner) needs a surer
-skill match than an ordinary action: `ASSAULT_CONFIRM_SCORE` (0.8, `DM_Core.py`). Below it the
+skill match than an ordinary action: `ASSAULT_CONFIRM_SCORE` (0.8, `Action_Target.py`, returned as the verdict's `confirm_first`). Below it the
 player is asked first — "Attack Elara? (yes/no)", a `player_notice` plus `confirmation_requested`
 — and the clause is kept, aimed at that victim by name (`DMCore.pending_confirmation`). NLPCore
 reads the next input as the answer (`_answer_confirmation`): a leading yes runs the attack, a no
@@ -82,11 +84,11 @@ offense skill: one the setting's defense-role skill (dodge) opposes, else brawli
 intimidation are offense-role too, and an assaulted merchant used to "fight back" with charisma
 every round. An authored hostile without behavior is
 left as authored. An attack NLPCore matched no name for, while nothing hostile is the current
-target, first tries `_literal_attack_target` — someone present its words describe, by key, name or
+target, first tries its literal match (`Entity_Reference.first_named`) — someone present its words describe, by key, name or
 alias ("pin the merchant's feet" finds a narrated spice merchant through his occupation alias),
 skipping a one-word alias that is only a modifier inside a longer one, so "kick the spice cart"
 assaults nobody — then the conversation partner ("my turn to hit you!"), assaulted the same way; between the two,
-`_pronoun_attack_target` resolves *her/she* or *him/his/he* to the one non-party creature present
+the pronoun step resolves *her/she* or *him/his/he* to the one non-party creature present
 whose `qualities.gender` fits (only when exactly one fits);
 otherwise it has no target at all — never a non-hostile creature left over as `current_target`
 (an object there, like a chest, stays fair game) — and its `RolledOutcome.no_opponent` tells the

@@ -121,7 +121,7 @@ authored automatic success (`spells.toml`: "summoning before a fight starts is t
 runs on the game thread before the roll, with the model's reasoning turned off (`reasoning_effort =
 "none"`: measured on gemma4, 5-15s and occasional token-limit failures with it on, under a second
 with it off), so each unopposed check costs about a second; unit
-tests never make it (`test_unit.py` stubs `_untargeted_difficulty` module-wide to the old 0, and
+tests never make it (`tests/support.py` stubs `_untargeted_difficulty` module-wide to the old 0, and
 `TestUntargetedDifficulty` restores it against a stubbed chat client).
 
 

@@ -14,7 +14,7 @@ SENTIMENT_INTENSITY_SCALE = 1
 # TALK_ATTITUDE_DRIFT_CAP/ACTION_ATTITUDE_DRIFT_CAP/ATTITUDE_AXES now live in Social_Resolution.py
 # (imported above) -- the pure module Program_Interpreter.py's own "attitude" op reaches into
 # with no DMCore instance in hand (see that module's own docstring). Re-exported here unchanged
-# so every existing `from DM_Social import ...` caller (ex: test_unit.py) keeps resolving.
+# so every existing `from DM_Social import ...` caller (ex: the unit tests) keeps resolving.
 
 
 class SocialMixin(DMCoreProtocol):

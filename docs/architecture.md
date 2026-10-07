@@ -137,7 +137,7 @@ rather than assuming a particular path.
   optional argument (a `FakeMatcher` in tests, so the confirmation/arrest answer protocol runs with no
   model load).
 - **`Intent_Classification.py`** (`nlp/`) — pure, EventBus-independent: `IntentClassifier.classify()`
-  returns `(processed_text, events)` — a list of
+  returns `(processed_text, events, adjudication)` — `events` a list of
   one or more `{"event", "payload"}` dicts for the glue layer to publish, rather than publishing
   anything itself (`AdHoc_Generation.py`/`DM_Improvisation.py` is the same pure/glue split).
   Depends on one seam, `IntentMatcher` (embedding-based skill/item/target matching —
@@ -199,6 +199,6 @@ rather than assuming a particular path.
   (not appends) the most recent LLM request/response on every `llm_debug_updated`.
 - **`Textual_Core.py`** (`gui/`) — a parallel, headless-testable mirror of `GUI_Core`'s output, driven
   the same way via `user_input_submitted`. Not part of `LLDM.py`'s boot sequence; run standalone.
-  Used by `test_unit.py` for pilot-driven UI tests.
+  Used by `tests/test_gui.py` for pilot-driven UI tests.
 - **`Logger.py`** — subscribes to `log_info`/`log_error`, prints with timestamps.
 

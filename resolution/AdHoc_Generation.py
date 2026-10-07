@@ -2,7 +2,7 @@
 @file AdHoc_Generation.py
 @brief Pure, DMCore-independent ad hoc entity generation -- same "pure, entity-shape-agnostic"
     precedent NPC_Generation.py/Challenge_Rating.py already set. Independent decisions, each via
-    OpenAI-style function calling against LLM_Client.call_chat_completion (synchronous, raises
+    OpenAI-style function calling through llm/LLM_Decision.py's decide() (synchronous, raises
     on failure -- unlike LLM_Core.py's own async, never-raises fetch_from_llm; see
     LLM_Client.py's own module note): generate_ad_hoc_item conjures a plausible physical object
     into the scene (ex: a stone the player tries to pick up that was never authored in any
@@ -27,17 +27,15 @@
     more here.
 """
 
-import json
 import random
 
 from llm.LLM_Backend import get_backend
-from llm.LLM_Client import call_chat_completion as _real_call_chat_completion
+from llm.LLM_Decision import decide, decline_tool_schema
 from resolution.Challenge_Rating import DEFAULT_HP_DIVISOR
 from resolution.Combat_Actions import basic_combat_kit
 from resolution.NPC_Generation import fit_skills_to_cr
 
 # None: the current LLM backend (local Ollama or OpenRouter -- see LLM_Backend.py).
-DEFAULT_API_URL = None
 # None: the current backend's own generation_timeout (LLM_Backend.py).
 DEFAULT_TIMEOUT = None
 
@@ -75,29 +73,6 @@ CREATURE_POWERS = ("weak", "moderate", "strong")
 POWER_MULTIPLIERS = {"weak": 0.4, "moderate": 1.0, "strong": 2.0}
 
 
-def _decline_tool_schema(description):
-    """!
-    @brief The shared "decline" function both tool schemas below offer alongside their own
-        primary function -- the model's own escape hatch for an implausible request, letting
-        tool_choice="auto" pick between "do it" and "don't" rather than forcing a create/remove
-        call regardless of plausibility.
-    @param description Function-specific guidance on when to pick this over the primary one.
-    @return One OpenAI-style function-schema dict.
-    """
-    return {
-        "type": "function",
-        "function": {
-            "name": "decline",
-            "description": description,
-            "parameters": {
-                "type": "object",
-                "properties": {"reason": {"type": "string"}},
-                "required": ["reason"],
-            },
-        },
-    }
-
-
 def _build_item_tool_schema(valid_equip_slots, valid_skill_names=None):
     """!
     @brief The OpenAI-style "tools" payload for generate_ad_hoc_item's own tool call:
@@ -116,7 +91,7 @@ def _build_item_tool_schema(valid_equip_slots, valid_skill_names=None):
         valid_equip_slots does for "equip_slot"; an empty/falsy value leaves them unconstrained
         free text instead (still validated by the caller before ever being attached to an
         entity).
-    @return The "tools" list for call_chat_completion.
+    @return The "tools" list for decide().
     """
     equip_slot_schema = {"type": "string"}
     if valid_equip_slots:
@@ -222,7 +197,7 @@ def _build_item_tool_schema(valid_equip_slots, valid_skill_names=None):
                 },
             },
         },
-        _decline_tool_schema("Use this instead if the requested object doesn't make sense here."),
+        decline_tool_schema("Use this instead if the requested object doesn't make sense here."),
     ]
 
 
@@ -234,7 +209,7 @@ def _build_removal_tool_schema(removable_entities):
         impossible for the model to name something that doesn't exist (or, since the caller
         excludes it, the player themself) -- not just a runtime check after the fact.
     @param removable_entities The real, currently-valid entity names the model may choose from.
-    @return The "tools" list for call_chat_completion.
+    @return The "tools" list for decide().
     """
     return [
         {
@@ -252,79 +227,8 @@ def _build_removal_tool_schema(removable_entities):
                 },
             },
         },
-        _decline_tool_schema("Use this instead if nothing here should actually be removed."),
+        decline_tool_schema("Use this instead if nothing here should actually be removed."),
     ]
-
-
-def _extract_tool_call(response):
-    """!
-    @brief Shared response-parsing for both functions below -- pulls the function name and
-        parsed arguments out of a raw call_chat_completion response.
-    @param response The parsed JSON response body from call_chat_completion.
-    @return (function_name, arguments_dict).
-    @raises Exception on any malformed/missing shape -- callers catch broadly, same convention
-            NPC_Generation.py's own generate_npc_stats already follows.
-    """
-    tool_call = response["choices"][0]["message"]["tool_calls"][0]
-    arguments = json.loads(tool_call["function"]["arguments"])
-    return tool_call["function"]["name"], arguments
-
-
-def _call_tool_or_decline(messages, tools, accepted_function_names, call_chat_completion, api_url, timeout,
-                          max_tokens=None, reasoning_effort=None, temperature=None):
-    """!
-    @brief Shared LLM-calling boilerplate for every function below -- calls
-        call_chat_completion, extracts the tool call, and resolves whether the model picked one
-        of accepted_function_names or effectively declined. Collapses the one block that used to
-        be byte-for-byte duplicated four times (generate_ad_hoc_item, decide_entity_removal,
-        generate_ad_hoc_creature, decide_entity_edit): each caller below keeps only its own
-        message-building and success-side result-shaping. tool_choice is always "auto" -- every
-        call site already used this same fixed value, so it's baked in here rather than threaded
-        through as a parameter with only one real value in use anywhere.
-    @param messages The full [system, user] messages list -- caller-built, since content differs
-        per function.
-    @param tools The "tools" schema list (always ends with a shared _decline_tool_schema entry).
-    @param accepted_function_names The set of function names this caller treats as success (ex:
-        {"create_item", "describe_scenery"} for generate_ad_hoc_item's own two-outcome case,
-        {"remove_entity"} for decide_entity_removal's single-outcome case).
-    @param call_chat_completion The LLM-calling callable, or None for this module's own
-        _real_call_chat_completion, resolved here at call time so
-        patch("resolution.AdHoc_Generation._real_call_chat_completion", ...) stays the one seam.
-    @param api_url/timeout Forwarded to call_chat_completion; a None timeout is the backend's own
-        generation_timeout.
-    @param max_tokens Optional completion budget, forwarded only when given -- the reasoning model
-        can spend the client's 1024 default on thinking before it ever reaches the tool call
-        (finish_reason "length", no tool_calls), which reads as "unavailable". Omitted by every
-        caller whose call is small enough not to need it.
-    @param reasoning_effort Optional, forwarded only when given -- "none" for a quick enum pick
-        that gains nothing from hidden reasoning (see LLM_Client.call_chat_completion).
-    @param temperature Optional, forwarded only when given -- 0 for a classification that should
-        answer the same way every time (adjudicate_player_input).
-    @return (function_name, arguments) when function_name is in accepted_function_names.
-            (None, reason) otherwise -- reason is "unavailable" if call_chat_completion or
-            _extract_tool_call raised, else arguments.get("reason", "declined") (guarded for a
-            non-dict arguments) for an explicit decline or any unrecognized function name.
-    """
-    # Resolved here, at call time, so patch("resolution.AdHoc_Generation._real_call_chat_completion", ...)
-    # is the one seam every function below shares.
-    call_chat_completion = call_chat_completion or _real_call_chat_completion
-    timeout = timeout or get_backend().generation_timeout
-    extra = {"max_tokens": max_tokens} if max_tokens else {}
-    if reasoning_effort:
-        extra["reasoning_effort"] = reasoning_effort
-    if temperature is not None:
-        extra["temperature"] = temperature
-    try:
-        response = call_chat_completion(api_url, messages, tools=tools, tool_choice="auto", timeout=timeout, **extra)
-        function_name, arguments = _extract_tool_call(response)
-    except Exception:
-        return None, "unavailable"
-
-    if function_name not in accepted_function_names:
-        reason = arguments.get("reason", "declined") if isinstance(arguments, dict) else "declined"
-        return None, reason
-
-    return function_name, arguments
 
 
 def _currency_amount(raw):
@@ -370,7 +274,7 @@ def _resolve_test_skill(requested_skill, valid_skill_names, fallback="finesse"):
 def generate_ad_hoc_item(
     phrase, intent, scene_description, valid_equip_slots=None, valid_skill_names=None,
     recent_narration="", pricing_note="",
-    call_chat_completion=None, api_url=DEFAULT_API_URL, timeout=DEFAULT_TIMEOUT,
+    timeout=DEFAULT_TIMEOUT,
 ):
     """!
     @brief Asks the local LLM whether phrase (the player's own clause, ex: "pick up a stone")
@@ -394,11 +298,7 @@ def generate_ad_hoc_item(
     @param pricing_note The setting's own [currency] pricing_note (rules.toml), saying what unit
         "value" is in (ex: Pathfinder's gold pieces and their silver/copper fractions). Empty
         for a setting that authors none.
-    @param call_chat_completion The LLM-calling callable to use -- None (the default) resolves
-        to this module's own _real_call_chat_completion *at call time*, the same
-        patch("resolution.AdHoc_Generation._real_call_chat_completion", fake) seam NPC_Generation.py
-        established.
-    @param api_url/timeout Forwarded to call_chat_completion.
+    @param timeout Seconds to wait; the backend's own generation_timeout if None.
     @return {"created": False, "reason": str} on decline or any failure (network error,
             malformed response, no tool call, an incomplete create_item call) -- this function
             never raises and never fabricates an item when the LLM is unreachable.
@@ -433,9 +333,9 @@ def generate_ad_hoc_item(
         {"role": "user", "content": prompt},
     ]
 
-    function_name, payload = _call_tool_or_decline(
+    function_name, payload = decide(
         messages, _build_item_tool_schema(valid_equip_slots, valid_skill_names),
-        {"create_item", "describe_scenery"}, call_chat_completion, api_url, timeout,
+        {"create_item", "describe_scenery"}, timeout,
     )
     if function_name is None:
         return {"created": False, "reason": payload}
@@ -553,8 +453,7 @@ DIFFICULTY_REASONING = "none"
 
 
 def rate_difficulty(
-    attempt, skill_name, scene_description, tiers, call_chat_completion=None,
-    api_url=DEFAULT_API_URL, timeout=DIFFICULTY_TIMEOUT,
+    attempt, skill_name, scene_description, tiers, timeout=DIFFICULTY_TIMEOUT,
 ):
     """!
     @brief Asks the model how hard an unopposed check is -- one of the setting's own
@@ -566,7 +465,6 @@ def rate_difficulty(
     @param skill_name The skill the attempt rolls on.
     @param scene_description The current room/location's own description.
     @param tiers The setting's [[difficulty_tier]] list ({name, difficulty, description}).
-    @param call_chat_completion Injectable for tests; defaults to the module's real client.
     @return (tier_name, reason) -- tier_name is None if the model was unreachable, declined, or
             answered outside the enum; reason then says why ("unavailable", a decline's text,
             "invalid_tier").
@@ -614,10 +512,10 @@ def rate_difficulty(
                 },
             },
         },
-        _decline_tool_schema("Call this only if the attempt makes no sense as a task at all."),
+        decline_tool_schema("Call this only if the attempt makes no sense as a task at all."),
     ]
-    function_name, payload = _call_tool_or_decline(
-        messages, tools, {"rate_difficulty"}, call_chat_completion, api_url, timeout,
+    function_name, payload = decide(
+        messages, tools, {"rate_difficulty"}, timeout,
         max_tokens=DIFFICULTY_MAX_TOKENS, reasoning_effort=DIFFICULTY_REASONING,
     )
     if function_name is None:
@@ -660,8 +558,7 @@ ADJUDICATION_MAX_TOKENS = 64
 
 
 def adjudicate_player_input(
-    text, present_names=(), partner=None, recent_narration="", call_chat_completion=None,
-    api_url=DEFAULT_API_URL, timeout=None,
+    text, present_names=(), partner=None, recent_narration="", timeout=None,
 ):
     """!
     @brief Asks the model what a player's line mainly is -- one of INPUT_KINDS -- for the lines
@@ -675,7 +572,6 @@ def adjudicate_player_input(
     @param present_names Who else is in the scene, by display name.
     @param partner Who the player is talking to, or None.
     @param recent_narration The last thing the narrator said, for context.
-    @param call_chat_completion Injectable for tests; defaults to the module's real client.
     @param timeout Seconds before the rules decide alone; None for the backend's own
         adjudication_timeout.
     @return (verdict, reason) -- verdict is {"kind", "game_action", "item"} (the last two None
@@ -730,10 +626,10 @@ def adjudicate_player_input(
                 },
             },
         },
-        _decline_tool_schema("Call this only if the line is empty or unreadable."),
+        decline_tool_schema("Call this only if the line is empty or unreadable."),
     ]
-    function_name, payload = _call_tool_or_decline(
-        messages, tools, {"classify_input"}, call_chat_completion, api_url, timeout,
+    function_name, payload = decide(
+        messages, tools, {"classify_input"}, timeout,
         max_tokens=ADJUDICATION_MAX_TOKENS, reasoning_effort=DIFFICULTY_REASONING,
         # The same line should route the same way every time -- at the client's default 0.7,
         # "i'll bargain with her over the cost of supper" came back action on one run, speech
@@ -765,8 +661,7 @@ ARREST_REPLIES = {
 
 
 def classify_arrest_reply(
-    text, enforcer="the guard", demand_text="", choices=None, call_chat_completion=None,
-    api_url=DEFAULT_API_URL, timeout=None,
+    text, enforcer="the guard", demand_text="", choices=None, timeout=None,
 ):
     """!
     @brief Asks the model which answer to an arrest a player's line is, when it doesn't open with
@@ -812,10 +707,10 @@ def classify_arrest_reply(
                 },
             },
         },
-        _decline_tool_schema("Call this only if the line is empty or unreadable."),
+        decline_tool_schema("Call this only if the line is empty or unreadable."),
     ]
-    function_name, payload = _call_tool_or_decline(
-        messages, tools, {"classify_reply"}, call_chat_completion, api_url, timeout,
+    function_name, payload = decide(
+        messages, tools, {"classify_reply"}, timeout,
         max_tokens=ADJUDICATION_MAX_TOKENS, reasoning_effort=DIFFICULTY_REASONING, temperature=0,
     )
     if function_name is None:
@@ -828,7 +723,7 @@ def classify_arrest_reply(
 
 def decide_entity_removal(
     phrase, scene_description, removable_entities, hostile_entities=None,
-    call_chat_completion=None, api_url=DEFAULT_API_URL, timeout=DEFAULT_TIMEOUT,
+    timeout=DEFAULT_TIMEOUT,
 ):
     """!
     @brief Asks the local LLM whether phrase (the player's own message to ADaM) is asking for
@@ -848,7 +743,7 @@ def decide_entity_removal(
         removal never rolls dice or costs a turn, so an ungated model turns it into a free,
         consequence-free win button against anything currently trying to kill the player. An
         empty/falsy value (ex: no live hostiles in the candidate set at all) adds no extra text.
-    @param call_chat_completion/api_url/timeout See generate_ad_hoc_item's own docstring.
+    @param timeout See generate_ad_hoc_item's own docstring.
     @return {"removed": False, "reason": str} on decline, an empty removable_entities, or any
             failure -- never raises. On success: {"removed": True, "name", "reason"}.
     """
@@ -882,9 +777,9 @@ def decide_entity_removal(
         {"role": "user", "content": prompt},
     ]
 
-    function_name, payload = _call_tool_or_decline(
+    function_name, payload = decide(
         messages, _build_removal_tool_schema(removable_entities), {"remove_entity"},
-        call_chat_completion, api_url, timeout,
+        timeout,
     )
     if function_name is None:
         return {"removed": False, "reason": payload}
@@ -918,7 +813,7 @@ def _build_creature_tool_schema(npc_keywords, allowed_dispositions=CREATURE_DISP
         generate_referenced_npc, which excludes "hostile" so a materialized bystander is
         structurally incapable of coming back able to fight.
     @param decline_hint The decline tool's own "use this instead if..." line.
-    @return The "tools" list for call_chat_completion.
+    @return The "tools" list for decide().
     """
     return [
         {
@@ -952,13 +847,13 @@ def _build_creature_tool_schema(npc_keywords, allowed_dispositions=CREATURE_DISP
                 },
             },
         },
-        _decline_tool_schema(decline_hint),
+        decline_tool_schema(decline_hint),
     ]
 
 
 def generate_ad_hoc_creature(
     phrase, scene_description, target_cr, npc_keywords, skills_catalog,
-    call_chat_completion=None, api_url=DEFAULT_API_URL, timeout=DEFAULT_TIMEOUT,
+    timeout=DEFAULT_TIMEOUT,
     hp_divisor=DEFAULT_HP_DIVISOR, offense_share=0.5,
 ):
     """!
@@ -983,7 +878,7 @@ def generate_ad_hoc_creature(
         immediately, no LLM call.
     @param skills_catalog Forwarded to fit_skills_to_cr -- the setting's own {skill_name:
         {"combat_role", ...}} table (ex: Combat_Actions.py's self.skills).
-    @param call_chat_completion/api_url/timeout See generate_ad_hoc_item's own docstring.
+    @param timeout See generate_ad_hoc_item's own docstring.
     @param hp_divisor/offense_share Forwarded to fit_skills_to_cr.
     @return {"created": False, "reason": str} on decline, an empty npc_keywords, or any failure
             -- never raises. On success: {"created": True, "entity": {full entity dict,
@@ -1008,9 +903,9 @@ def generate_ad_hoc_creature(
         {"role": "user", "content": prompt},
     ]
 
-    function_name, payload = _call_tool_or_decline(
+    function_name, payload = decide(
         messages, _build_creature_tool_schema(npc_keywords), {"create_creature"},
-        call_chat_completion, api_url, timeout,
+        timeout,
     )
     if function_name is None:
         return {"created": False, "reason": payload}
@@ -1100,7 +995,7 @@ def _build_creature_entity(arguments, npc_keywords, target_cr, skills_catalog, h
 
 def generate_referenced_npc(
     address_phrase, scene_description, present_names, recent_narration, target_cr, npc_keywords,
-    skills_catalog, call_chat_completion=None, api_url=DEFAULT_API_URL, timeout=DEFAULT_TIMEOUT,
+    skills_catalog, timeout=DEFAULT_TIMEOUT,
     hp_divisor=DEFAULT_HP_DIVISOR, offense_share=0.5,
 ):
     """!
@@ -1135,8 +1030,7 @@ def generate_referenced_npc(
     @param target_cr The challenge rating to fit toward -- a bystander's, not the player's.
     @param npc_keywords {keyword_name: [skill_name, ...]}, from NPC_Generation.load_npc_keywords.
     @param skills_catalog The setting's own {skill_name: skill} dict, for fit_skills_to_cr.
-    @param call_chat_completion Injectable for tests; defaults to the module's real client.
-    @param api_url/timeout/hp_divisor/offense_share As generate_ad_hoc_creature.
+    @param timeout/hp_divisor/offense_share As generate_ad_hoc_creature.
     @return {"created": False, "reason": ...} on decline/failure/incomplete data -- never
             raises. On success: {"created": True, "entity": {..., "ad_hoc": True}}.
     """
@@ -1169,7 +1063,7 @@ def generate_referenced_npc(
         {"role": "user", "content": prompt},
     ]
 
-    function_name, payload = _call_tool_or_decline(
+    function_name, payload = decide(
         messages,
         _build_creature_tool_schema(
             npc_keywords,
@@ -1180,7 +1074,7 @@ def generate_referenced_npc(
             ),
         ),
         {"create_creature"},
-        call_chat_completion, api_url, timeout,
+        timeout,
     )
     if function_name is None:
         return {"created": False, "reason": payload}
@@ -1226,7 +1120,7 @@ def build_people_tool_schema(npc_keywords, freeform_fields=DEFAULT_NARRATED_FREE
         structural guarantee generate_referenced_npc relies on: nothing this returns can fight.
     @param npc_keywords {keyword_name: [skill_name, ...]}, from NPC_Generation.load_npc_keywords.
     @param freeform_fields Which NARRATED_FREEFORM_FIELDS the narrator may fill in.
-    @return The "tools" list for call_chat_completion.
+    @return The "tools" list for decide().
     """
     properties = {
         field: NARRATED_FREEFORM_FIELDS[field]
@@ -1263,14 +1157,14 @@ def build_people_tool_schema(npc_keywords, freeform_fields=DEFAULT_NARRATED_FREE
                 },
             },
         },
-        _decline_tool_schema("Use this instead if the narration mentions no ordinary bystanders."),
+        decline_tool_schema("Use this instead if the narration mentions no ordinary bystanders."),
     ]
 
 
 def extract_narrated_people(
     narration, scene_description, population_hint, present_names, max_people, target_cr,
     npc_keywords, skills_catalog, freeform_fields=DEFAULT_NARRATED_FREEFORM,
-    call_chat_completion=None, api_url=DEFAULT_API_URL, timeout=NARRATED_EXTRACTION_TIMEOUT,
+    timeout=NARRATED_EXTRACTION_TIMEOUT,
     hp_divisor=DEFAULT_HP_DIVISOR, offense_share=0.5, report=None,
 ):
     """!
@@ -1294,7 +1188,6 @@ def extract_narrated_people(
     @param target_cr A bystander's challenge rating -- see DM_Improvisation.py's BYSTANDER_CR_SHARE.
     @param npc_keywords/skills_catalog See generate_referenced_npc.
     @param freeform_fields Which NARRATED_FREEFORM_FIELDS to ask for and accept.
-    @param call_chat_completion Injectable for tests; defaults to the module's real client.
     @param report Optional callable(reason), called when no report_people call came back --
         reason is "unavailable" (no reachable model / unusable reply) or the decline's own text.
     @return A list of entity dicts (each "ad_hoc", "background", "source" = "narration"), possibly
@@ -1329,9 +1222,9 @@ def extract_narrated_people(
         },
     ]
 
-    function_name, payload = _call_tool_or_decline(
+    function_name, payload = decide(
         messages, build_people_tool_schema(npc_keywords, freeform_fields), {"report_people"},
-        call_chat_completion, api_url, timeout, max_tokens=NARRATED_EXTRACTION_MAX_TOKENS,
+        timeout, max_tokens=NARRATED_EXTRACTION_MAX_TOKENS,
     )
     if function_name is None:
         if report:
@@ -1433,7 +1326,7 @@ def _build_edit_tool_schema(editable_entities):
         mechanical fields like skills/damage_value, which would need far more validation to not
         silently break combat math.
     @param editable_entities The real, currently-valid entity names the model may choose from.
-    @return The "tools" list for call_chat_completion.
+    @return The "tools" list for decide().
     """
     return [
         {
@@ -1463,13 +1356,13 @@ def _build_edit_tool_schema(editable_entities):
                 },
             },
         },
-        _decline_tool_schema("Use this instead if nothing here should actually be edited."),
+        decline_tool_schema("Use this instead if nothing here should actually be edited."),
     ]
 
 
 def decide_entity_edit(
     phrase, scene_description, editable_entities,
-    call_chat_completion=None, api_url=DEFAULT_API_URL, timeout=DEFAULT_TIMEOUT,
+    timeout=DEFAULT_TIMEOUT,
 ):
     """!
     @brief Asks the local LLM whether phrase (the player's own message to ADaM) is asking for
@@ -1481,7 +1374,7 @@ def decide_entity_edit(
         by the caller -- DM_Improvisation.py's _attempt_entity_edit -- deliberately *excluding*
         the player's own name, same posture decide_entity_removal already takes). An empty list
         short-circuits to a decline with no LLM call at all.
-    @param call_chat_completion/api_url/timeout See generate_ad_hoc_item's own docstring.
+    @param timeout See generate_ad_hoc_item's own docstring.
     @return {"edited": False, "reason": str} on decline, an empty editable_entities, or any
             failure -- never raises. On success: {"edited": True, "name", "reason",
             "new_description", "apply_condition", "dismiss_condition"} -- the latter three are
@@ -1506,9 +1399,9 @@ def decide_entity_edit(
         {"role": "user", "content": prompt},
     ]
 
-    function_name, payload = _call_tool_or_decline(
+    function_name, payload = decide(
         messages, _build_edit_tool_schema(editable_entities), {"edit_entity"},
-        call_chat_completion, api_url, timeout,
+        timeout,
     )
     if function_name is None:
         return {"edited": False, "reason": payload}

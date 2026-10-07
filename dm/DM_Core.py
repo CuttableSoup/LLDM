@@ -9,6 +9,7 @@ from dm.DM_ActionOutcome import (
     LootEffect, MissingSpellMaterialsOutcome, OutOfRangeOutcome, RevealEffect, RolledOutcome,
     rolled_outcome_from_roll,
 )
+from dm.DM_ActionTarget import DMCoreActionTargetScene
 from dm.DM_CharacterCreation import CharacterCreationMixin
 from dm.DM_Combat import DMCoreCombatHooks
 from dm.DM_Crafting import CraftingMixin
@@ -33,35 +34,14 @@ from intents.item_named import DEFAULT_ITEM_INTENT, ITEM_NAMED
 from intents.registry import HANDLERS as FREE_STANDING_INTENT_HANDLERS
 from persistence.slot import FileSlotStore, Persistable
 from resolution.AdHoc_Generation import TRIVIAL_DIFFICULTY, rate_difficulty
-from resolution.Entity_Reference import first_named
+from resolution.Action_Target import ASSAULT_CONFIRM_SCORE, resolve_action_target
+from resolution.Item_Outcome import build_item_interaction_outcome
 from resolution.Combat_Resolution import matches_supertype_or_subtype
 from resolution.Program_Interpreter import run_program
 from resolution.World_Context import WorldContext
 import resolution.Combat_Resolution as Combat_Resolution
 import resolution.Ability_Effects as Ability_Effects
 import resolution.Combat_Actions as Combat_Actions
-
-# Multi-instance combat targeting (see DMCore._resolve_named_instance_ambiguity): NLPCore's own
-# map_to_target (NLP_Core.py) picks one specific live instance name by raw text similarity to
-# that instance's own registered name/description phrases -- given two identically-templated
-# creatures ("wolf"/"wolf_2"), it has no way to prefer one over the other just because the
-# player said "the second wolf"/"the other wolf"/"the wounded wolf", since none of those
-# qualifier words are part of any registered phrase. These are deliberately small, literal
-# keyword sets (matching this codebase's own TRAVEL_KEYWORDS/DIALOGUE_KEYWORDS convention in
-# Intent_Classification.py) rather than a general sentiment/adjective system.
-TARGET_ORDINAL_KEYWORDS = {"first": 1, "second": 2, "third": 3, "fourth": 4}
-TARGET_OTHER_KEYWORDS = ("other", "another")
-TARGET_WOUNDED_KEYWORDS = ("wounded", "hurt", "injured")
-# qualities.gender values a gendered pronoun can point at -- see _pronoun_attack_target.
-FEMALE_GENDERS = frozenset({"female", "woman", "girl", "f"})
-MALE_GENDERS = frozenset({"male", "man", "boy", "m"})
-TARGET_HEALTHY_KEYWORDS = ("healthy", "unhurt", "uninjured", "unharmed")
-# The same 0.40 hp_per_remain cutoff statuses.toml's own "wounded" status tier -- and debug.toml's
-# wolf retreat behavior -- already use elsewhere in this codebase (see CLAUDE.md's "Combat"),
-# reused here rather than inventing a second threshold. A candidate has to actually cross this
-# line before "wounded"/"healthy" is honored -- calling a room full of undamaged creatures
-# "wounded" shouldn't silently redirect to whichever one merely has the least HP among equals.
-TARGET_WOUNDED_HP_CUTOFF = 0.40
 
 # The intents whose default scene target is a PERSON rather than a thing, and which may
 # therefore fall back to an ambient crowd member (see _get_target_name's include_background).
@@ -77,16 +57,6 @@ PERSON_TARGET_INTENTS = frozenset({"trade", "give"})
 # narration prompts themselves already live on a measured token budget -- see LLM_Core.py's
 # _fit_history/RESPONSE_TOKEN_RESERVE).
 RECENT_NARRATION_TURNS = 3
-# How sure NLPCore's skill match has to be before an attack may land on someone not already
-# hostile whom the input never named -- the victim only inferred, by pronoun or as the
-# conversation partner. Above the ordinary 0.5 bar, since starting a fight can't be taken back.
-# Found by playtest: "use the fire for dramatic effect" (fireball, 0.57) and a keyword-fallback
-# psionics hit (0.30) on a remark both fell through to the conversation partner, set a market
-# burning and killed two bystanders. Naming the victim is intent enough: "trip silas" (0.645)
-# still lands. Below this the player is asked first ("Attack Elara? (yes/no)") rather than
-# refused -- found by playtest: refusing turned "Fight me!" (0.58) into a dead end, while "let's
-# see what that knife is good for" (0.66) cleared the old 0.65 bar and killed a bystander.
-ASSAULT_CONFIRM_SCORE = 0.8
 RECENT_NARRATION_CHARS = 400
 # LLMCore publishes its own failure notices through the same llm_response_ready channel as
 # real narration (a dead Ollama, an empty completion). They describe the engine, not the
@@ -228,7 +198,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, MovementMixin, RulesMixin
             None (the default) leaves it untouched. Lets a caller land in one specific area of
             a multi-area scenario file (ex: "debug"'s own "arena_grounds") without needing a
             dedicated scenario file per area -- the same override
-            DMTestCase._load_ad_hoc_scenario (tests/test_unit.py) already applies by hand today,
+            DMTestCase._load_ad_hoc_scenario (tests/support.py) already applies by hand today,
             just as a constructor param. Applied right after load_scenario_definition, before
             load_scenario() actually instances anything.
         @param character An optional finished character-creation result
@@ -582,7 +552,6 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, MovementMixin, RulesMixin
             modifier = self._resolve_action_modifier(entry.get("modifier"))
 
             explicit_target = entry.get("target")
-            target_before = self.current_target
             item_result = self._try_item_test_action(explicit_target, skill_name, input_text, dice_penalty)
             if item_result is not None:
                 player_actions.append(item_result)
@@ -592,52 +561,29 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, MovementMixin, RulesMixin
             # A damaging ability, or one authored as an act of aggression that deals none
             # (maneuvers.toml's trip/grapple/bull rush -- entity_schema.toml's "assault").
             is_attack = bool(attack_ability and ("damage_value" in attack_ability or attack_ability.get("assault")))
-            assaulting = self._apply_target_redirect(explicit_target, input_text, allow_non_hostile=is_attack)
-            target_name = self.current_target
-            # Whether the victim was only inferred (a pronoun, or whoever the player is talking
-            # to) rather than named -- see ASSAULT_CONFIRM_SCORE.
-            victim_inferred = False
-            if is_attack and not assaulting and self._is_bystander(target_name):
-                # An attack NLPCore matched no name for, with no fight on: someone present it
-                # describes ("pin the merchant's feet" -- a narrated person's occupation is an
-                # alias), else whoever the player is talking to ("my turn to hit you!"), else
-                # nobody -- never silently a non-hostile creature left over as current_target
-                # (a chest or trap there stays fair game: smashing one is fine).
-                partner = (self.conversation_partner or {}).get("key")
-                target_name = None
-                literal = self._literal_attack_target(input_text)
-                for candidate in (literal, self._pronoun_attack_target(input_text), partner):
-                    if not candidate:
-                        continue
-                    before = self.current_target
-                    assaulting = self._apply_target_redirect(candidate, input_text, allow_non_hostile=True)
-                    if assaulting or self.current_target != before:
-                        target_name = self.current_target
-                        victim_inferred = candidate != literal
-                        break
-            if assaulting and victim_inferred and entry.get("score", 1.0) < ASSAULT_CONFIRM_SCORE:
+            target = resolve_action_target(
+                DMCoreActionTargetScene(self), explicit_target, input_text, is_attack, entry.get("score", 1.0),
+            )
+            if target.confirm_first:
                 # Too unsure a reading to start a fight on unasked -- see ASSAULT_CONFIRM_SCORE.
                 self.event_bus.publish("log_info", (
-                    f"Asking before assaulting '{target_name}' on a weak match ({skill_name}, "
+                    f"Asking before assaulting '{target.target}' on a weak match ({skill_name}, "
                     f"score {entry.get('score', 0.0):.2f} < {ASSAULT_CONFIRM_SCORE})."
                 ))
-                self.current_target = target_before
                 if not declined_assault:
-                    self._request_assault_confirmation(entry, target_name, input_text)
+                    self._request_assault_confirmation(entry, target.target, input_text)
                 declined_assault = True
                 continue
+            self.current_target = target.current_target
+            target_name, assaulting = target.target, target.assaulting
             engaged_combat_target = True
 
             result, ability, via_test = self._resolve_roll(
                 skill_name, named_ability, target_name, dice_penalty, modifier, input_text=input_text,
             )
-            if is_attack and target_name is None and isinstance(result, RolledOutcome):
+            if target.no_opponent and isinstance(result, RolledOutcome):
                 result.no_opponent = True
-            if not is_attack and explicit_target is None and target_name and self._is_bystander(target_name) \
-                    and isinstance(result, RolledOutcome):
-                # Found by playtest: "casually reach out, tapping the heavy metal ring on his
-                # wrist", said to the jailer, rolled polearms against the sheriff -- the default
-                # target -- and the narrator, told "against Belor Hemlock", wrote a sword strike.
+            if target.incidental and isinstance(result, RolledOutcome):
                 result.incidental_target = True
             if assaulting and isinstance(result, RolledOutcome) and not via_test:
                 # Hit or miss, swinging at someone you weren't fighting is "assaulted" at full
@@ -861,128 +807,6 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, MovementMixin, RulesMixin
             if any(re.search(rf"\b{re.escape(keyword)}\b", input_text) for keyword in keywords):
                 return candidate_skill
         return None
-
-    def _apply_target_redirect(self, explicit_target, input_text="", allow_non_hostile=False):
-        """!
-        @brief Honors an explicit, NLP-matched target as a combat redirect -- only if it
-            names a live, in-scene entity that is hostile, or any living creature at all when
-            allow_non_hostile (the action is an attack: anyone can be attacked, and the caller
-            applies the "assaulted" attitude event once it rolls). Naming a confidently-matched non-hostile entity for anything
-            else (ex: a skill check near an ally) is silently ignored rather than making it the
-            target; leaves self.current_target untouched if explicit_target doesn't qualify.
-            Resolves multi-instance ambiguity (see _resolve_named_instance_ambiguity) first,
-            so a disambiguating word in input_text can redirect explicit_target to a same-
-            family sibling instance before the hostile/alive checks below ever run.
-        @param explicit_target NLPCore's best-guess target name (map_to_target), or None.
-        @param input_text The player's raw turn input, forwarded to
-            _resolve_named_instance_ambiguity.
-        @param allow_non_hostile True when the action is an attack (a damage-dealing ability, or
-            one authored "assault = true").
-        @return True if the redirect landed on a non-hostile creature -- the caller applies
-            "assaulted" to it once the attack actually rolls.
-        """
-        explicit_target = self._resolve_named_instance_ambiguity(explicit_target, input_text)
-        if not (
-            explicit_target
-            and explicit_target in self.scenario_entities
-            and explicit_target != self.player_name
-            and Combat_Resolution.get_current_hp(self.world, explicit_target) > 0
-        ):
-            return False
-        if self.is_hostile(explicit_target, self.player_name):
-            self.current_target = explicit_target
-            return False
-        if allow_non_hostile and self.entities.get(explicit_target, {}).get("supertype") == "creature":
-            self.current_target = explicit_target
-            return True
-        return False
-
-    def _instance_family(self, entity_name):
-        """!
-        @brief Strips DM_Rules.py's own _unique_entity_key "_<N>" disambiguating suffix, if
-            present, to recover the shared base name multiple live instances of the same
-            template were instanced under (ex: "wolf_2" -> "wolf"). A name with no numeric
-            suffix -- including one that was never actually duplicated -- returns unchanged.
-        @param entity_name An entity's own self.entities key.
-        @return The base name this instance's family is keyed by.
-        """
-        match = re.match(r"^(.*)_(\d+)$", entity_name)
-        return match.group(1) if match else entity_name
-
-    def _live_instances_sharing_family(self, entity_name):
-        """!
-        @brief Every living, in-scene entity sharing entity_name's own instance family (see
-            _instance_family), in stable creation order -- the bare base name first (if
-            still alive), then "_2", "_3", ... by DM_Rules.py's own _unique_entity_key
-            numbering. A name with no live duplicates returns a single-element list.
-        @param entity_name Any live entity name -- the base name or a "_N" instance alike.
-        @return The ordered list of same-family living entity names.
-        """
-        family = self._instance_family(entity_name)
-
-        def _suffix(name):
-            match = re.match(r"^.*_(\d+)$", name)
-            return int(match.group(1)) if match else 1
-
-        candidates = [
-            name for name in self.scenario_entities
-            if self._instance_family(name) == family and Combat_Resolution.get_current_hp(self.world, name) > 0
-        ]
-        candidates.sort(key=_suffix)
-        return candidates
-
-    def _resolve_named_instance_ambiguity(self, explicit_target, input_text):
-        """!
-        @brief Re-checks input_text for a disambiguating word whenever explicit_target has
-            one or more living same-family siblings still in the scene (ex: a second
-            "wolf") -- map_to_target's own embedding match has no way to prefer a sibling
-            just because the player said "the second wolf"/"the other wolf"/"the wounded
-            wolf" instead of the plain species name, since none of those qualifier words
-            are part of any registered target phrase (see NLP_Core.py's own on_rules_loaded).
-            A single live instance (the overwhelmingly common case) short-circuits
-            immediately with no further work. Checked in order -- ordinal, then other/
-            another, then wounded, then healthy -- and falls back to explicit_target
-            unchanged if input_text carries none of them, or if a wounded/healthy claim
-            doesn't actually match any candidate's real HP (see TARGET_WOUNDED_HP_CUTOFF).
-        @param explicit_target NLPCore's best-guess target name, or None.
-        @param input_text The player's raw turn input.
-        @return explicit_target, or a same-family sibling instance name input_text actually
-            pointed at.
-        """
-        if not explicit_target:
-            return explicit_target
-        candidates = self._live_instances_sharing_family(explicit_target)
-        if len(candidates) <= 1:
-            return explicit_target
-
-        text = input_text.lower()
-
-        for word, position in TARGET_ORDINAL_KEYWORDS.items():
-            if position <= len(candidates) and re.search(rf"\b{word}\b", text):
-                return candidates[position - 1]
-
-        if any(re.search(rf"\b{word}\b", text) for word in TARGET_OTHER_KEYWORDS):
-            others = [name for name in candidates if name != self.current_target]
-            if others:
-                return others[0]
-
-        if any(re.search(rf"\b{word}\b", text) for word in TARGET_WOUNDED_KEYWORDS):
-            wounded = [
-                name for name in candidates
-                if (Combat_Resolution.get_comparable_value(self.world, name, "hp_per_remain") or 1.0) < TARGET_WOUNDED_HP_CUTOFF
-            ]
-            if wounded:
-                return min(wounded, key=lambda name: Combat_Resolution.get_comparable_value(self.world, name, "hp_per_remain"))
-
-        if any(re.search(rf"\b{word}\b", text) for word in TARGET_HEALTHY_KEYWORDS):
-            healthy = [
-                name for name in candidates
-                if (Combat_Resolution.get_comparable_value(self.world, name, "hp_per_remain") or 0.0) >= TARGET_WOUNDED_HP_CUTOFF
-            ]
-            if healthy:
-                return max(healthy, key=lambda name: Combat_Resolution.get_comparable_value(self.world, name, "hp_per_remain"))
-
-        return explicit_target
 
     def _resolve_roll(self, skill_name, named_ability, target_name, dice_penalty=0, modifier=None, input_text=None):
         """!
@@ -1413,10 +1237,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, MovementMixin, RulesMixin
         if result["interrupted"]:
             return
         payload = {k: v for k, v in result.items() if k != "interrupted"}
-        self.event_bus.publish("item_interaction_resolved", {
-            "intent": kind, "item_name": None, "input": "", "found": True,
-            "present_entities": list(self.scenario_entities), **payload,
-        })
+        self._publish_item_interaction(kind, None, "", True, **payload)
 
     def _on_item_interaction_detected(self, data):
         """!
@@ -1483,33 +1304,10 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, MovementMixin, RulesMixin
         )
 
         def resolved(found, **extra):
-            if found:
-                self._run_interact_program(intent, item_name, target_name)
-            # Narration-ready coin text alongside the raw numbers, so LLMCore never has to know
-            # the setting's denominations (see DM_Inventory.py's format_currency).
-            for key in ("price", "amount"):
-                if key in extra:
-                    extra[f"{key}_text"] = self.format_currency(extra[key])
-            self.event_bus.publish("item_interaction_resolved", {
-                "intent": intent, "item_name": item_name, "input": input_text, "found": found,
-                # Room-level presence snapshot -- see scenario_loaded's own publish for why
-                # every DM-published narration-triggering event carries one. Read fresh here
-                # (not captured at the top of this handler) since a "move" intent's own
-                # enter_room call already changed self.scenario_entities to the *new* room's
-                # roster by the time this fires -- correct, since this narration is witnessed
-                # by whoever's present now, not whoever was present when the input arrived.
-                "present_entities": list(self.scenario_entities),
-                # Carried straight through from item_interaction_detected -- set by
-                # IntentClassifier.classify (Intent_Classification.py) when this exempt clause
-                # shares its turn with real dialogue, so LLMCore.generate_item_interaction_
-                # response knows to skip narrating it (see that flag's own module note there).
-                "quiet": data.get("quiet", False),
-                # The player's own words for the item (IntentClassifier's extract_item_phrase),
-                # which a "not here" notice quotes instead of the matched item_name.
-                "phrase": data.get("phrase"),
-                **extra,
-            })
-            self._publish_party_status()
+            self._publish_item_interaction(
+                intent, item_name, input_text, found, quiet=data.get("quiet", False),
+                phrase=data.get("phrase"), target_name=target_name, **extra,
+            )
 
         handler = FREE_STANDING_INTENT_HANDLERS.get(intent)
         if handler:
@@ -1532,6 +1330,32 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, MovementMixin, RulesMixin
             resolved(False, reason="locked", container=target_name)
             return
         spec.resolve(self, intent, item_name, target_name, resolved)
+
+    def _publish_item_interaction(
+        self, intent, item_name, input_text, found, quiet=False, phrase=None, target_name=None, **extra,
+    ):
+        """!
+        @brief The one publisher of "item_interaction_resolved" -- every path an intent can
+            resolve by (a direct turn, a resumed downtime, an improvised beat) ends here, so the
+            payload (resolution/Item_Outcome.py) has the same common fields everywhere. On
+            success it first runs the interacted-with entity's own on_interact program, and it
+            ends by refreshing the party panel, since an item interaction can change anything
+            the panel shows.
+        @param intent/item_name/input_text/found/quiet/phrase See build_item_interaction_outcome.
+        @param target_name The current scene target, which an "open"/"close" interact program
+            runs against (see _run_interact_program).
+        @param extra What the intent adds to the payload.
+        """
+        if found:
+            self._run_interact_program(intent, item_name, target_name)
+        # The roster is read here, after the intent resolved, not when the input arrived: a
+        # "move" has already changed scenario_entities to the *new* room's roster, and this
+        # narration is witnessed by whoever is present now.
+        self.event_bus.publish("item_interaction_resolved", build_item_interaction_outcome(
+            intent, item_name, input_text, found, self.scenario_entities, quiet=quiet, phrase=phrase,
+            format_currency=self.format_currency, **extra,
+        ))
+        self._publish_party_status()
 
     def _run_interact_program(self, intent, item_name, target_name):
         """!
@@ -1771,59 +1595,6 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, MovementMixin, RulesMixin
         @return True if this instance was placed as scene population.
         """
         return bool(self.entities.get(entity_name, {}).get("background"))
-
-    def _is_bystander(self, entity_name):
-        """!
-        @brief Whether an attack that named nobody has no fair target in entity_name (normally
-            current_target): there is none, or it's a creature not hostile to the player. An
-            object (a chest, a trap) is still fair game, and so is anything already fighting.
-        @param entity_name The candidate target, or None.
-        """
-        if entity_name is None:
-            return True
-        entity = self.entities.get(entity_name, {})
-        return entity.get("supertype") == "creature" and not self.is_hostile(entity_name, self.player_name)
-
-    def _literal_attack_target(self, input_text):
-        """!
-        @brief Who present an attack's own words point at -- _literal_dialogue_target's whole-
-            word key/name/alias scan, minus one kind of alias: a single word that is only a
-            modifier inside a longer alias. A narrated spice merchant's aliases are "spice
-            merchant", "spice", and "merchant"; "pin the merchant" must find him, but "kick the
-            spice cart" must not assault him, so "spice" is skipped and "merchant" (the head
-            word, last in the phrase) kept. Creatures only.
-        @param input_text The player's raw (lowercased) input.
-        @return An entity key, or None.
-        """
-        return first_named(
-            input_text, self.entities, self.scenario_entities, exclude=self.player_name,
-            supertype="creature", skip_modifier_aliases=True,
-        )
-
-    def _pronoun_attack_target(self, input_text):
-        """!
-        @brief Who a gendered pronoun in an attack can only mean -- "kick her into the street"
-            with one woman present. Found by playtest: with no name in the input and no
-            conversation running, that kick met only air while the bread vendor stood right
-            there. Only an unambiguous match counts; two women present and "her" means nobody.
-        @param input_text The player's raw (lowercased) input.
-        @return An entity key, or None.
-        """
-        words = set(re.findall(r"[a-z]+", input_text or ""))
-        if words & {"her", "she", "hers"}:
-            wanted = FEMALE_GENDERS
-        elif words & {"him", "his", "he"}:
-            wanted = MALE_GENDERS
-        else:
-            return None
-        matches = [
-            name for name in self.scenario_entities
-            if name != self.player_name and not self._is_party_member(name)
-            and self.entities.get(name, {}).get("supertype") == "creature"
-            and Combat_Resolution.get_current_hp(self.world, name) > 0 and not self.is_hidden(name)
-            and str((self.entities[name].get("qualities") or {}).get("gender", "")).lower() in wanted
-        ]
-        return matches[0] if len(matches) == 1 else None
 
     def _get_target_name(self, include_background=False, include_objects=True):
         """!

@@ -20,6 +20,31 @@ DEFAULT_TIMEOUT = 20
 # call_chat_completion) -- Ollama's OpenAI-compat endpoint 400s without a "model" field.
 DEFAULT_MODEL = "gemma4"
 
+# The synchronous seam (see LLM_Decision.py): chat_completion calls this instead of
+# call_chat_completion's own HTTP request while one is set. None -- the real HTTP adapter -- is
+# the default; tests/support.py's scripted_llm installs a scripted one.
+_transport = None
+
+
+def set_transport(transport):
+    """!
+    @brief Installs a scripted transport (any callable taking call_chat_completion's own
+        arguments and returning a parsed response body), or None to restore the real HTTP one.
+    @return The transport that was installed before, so a caller can put it back.
+    """
+    global _transport
+    previous, _transport = _transport, transport
+    return previous
+
+
+def chat_completion(api_url, messages, **options):
+    """!
+    @brief The synchronous seam every structured decision goes through: the scripted transport if
+        one is installed, else call_chat_completion's real HTTP request. Passes exactly the
+        options the caller gave, so a scripted transport sees the same call a real one would.
+    """
+    return (_transport or call_chat_completion)(api_url, messages, **options)
+
 
 def call_chat_completion(
     api_url, messages, tools=None, tool_choice=None, model=None, temperature=0.7,

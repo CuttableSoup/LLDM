@@ -149,7 +149,7 @@ every one of its former separate scenario files followed on its own before the m
 `characters.toml` keeps only `gladstone` (`_resolve_player_name` scans `self.entities` right
 after `load_rules`, before any scenario loads, so the one template every boot needs resolvable
 via `is_player = true` can never be scenario-local); `creatures.toml` keeps only `fire
-elemental` (used directly by `test_unit.py`'s damage-reduction tests). Items are out of scope
+elemental` (used directly by the unit tests' damage-reduction tests). Items are out of scope
 for this self-containment convention — an area's NPCs can still reference a shared item (ex:
 `debug.toml`'s own `bandit`, in its `field_grounds` area, names `items.toml`'s `short bow`).
 
@@ -161,7 +161,7 @@ named template into an independent instance, tags it with its starting `band`, d
 duplicates (`wolf`, `wolf_2`, ...), and gives each instance its own `entity_id`. An optional
 `start_location` constructor param overrides `self.scenario["start_location"]` right after
 `load_scenario_definition`, before `load_scenario()` ever reads it — the mechanism
-`tests/test_unit.py`'s `DMTestCase` uses to land directly in one specific area of `debug.toml`
+`tests/support.py`'s `DMTestCase` uses to land directly in one specific area of `debug.toml`
 (ex: `start_location="crypt"`) instead of always booting into `debug_hub`. It's an `__init__`-only
 override, not persisted anywhere on the instance — `DM_Persistence.py`'s `load_game` re-derives
 `self.scenario` from scratch via the same `load_scenario_definition`/`load_scenario` path and

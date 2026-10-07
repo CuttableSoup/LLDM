@@ -94,8 +94,8 @@ picked at boot by `load_backend` (`--llm local|google|openrouter` on `LLDM.py`/`
 else `llm_config.toml`'s `backend`, else `local`; the file is gitignored, and
 `llm_config.example.toml` is its template). All three speak the same OpenAI-style
 chat/completions API, so a `Backend` only differs in URL, model, key and a few request fields
-(`Backend.payload`/`headers`): `LLM_Client.call_chat_completion` with `api_url=None` (every
-generator's `DEFAULT_API_URL`) and `LLMCore._request_completion` both read it per request.
+(`Backend.payload`/`headers`): `LLM_Client.call_chat_completion` (reached by every structured decision through
+`LLM_Decision.decide` and the `LLM_Client.chat_completion` seam) and `LLMCore._request_completion` both read it per request.
 
 - `local` — Ollama, launched (and if needed installed) by `Ollama_Launcher.py`, below.
 - `google` — Gemma 4 on Google AI Studio's OpenAI-compatible endpoint, for a machine that can't

@@ -163,11 +163,9 @@ class ImprovisationMixin(DMCoreProtocol):
             pricing_note=self.rules.get("currency", {}).get("pricing_note", ""),
         )
         if result.get("scenery"):
-            self.event_bus.publish("item_interaction_resolved", {
-                "intent": intent, "item_name": phrase, "input": input_text, "found": True,
-                "description": result.get("description", ""),
-                "present_entities": list(self.scenario_entities),
-            })
+            self._publish_item_interaction(
+                intent, phrase, input_text, True, description=result.get("description", ""),
+            )
             return
         if not result.get("created"):
             # "unavailable": the model never answered (timeout, backend down) -- worth simply
@@ -521,11 +519,20 @@ class ImprovisationMixin(DMCoreProtocol):
             talking to them were routed as nobody-here and came back not-understood. An
             extraction still running (the player answered before it finished) is waited on, up
             to POPULATION_WAIT_SECONDS.
+
+            Also the sync point for who is present: scenario_entities changes in about ten
+            places, and classification reads NLPCore's copy of it, so the roster publish runs
+            here -- before classification -- rather than only at the top of the turn handlers,
+            which is after it. _publish_scene_roster's own dirty guard makes the call free when
+            nothing changed, so a mutation site that forgets its own publish costs nothing.
+            (The conversation partner and the location's exits each have one writer that
+            already publishes, so they need no backstop.)
         @param _player_input The raw input (unused).
         """
         with self._population_done:
             self._population_done.wait_for(lambda: self._population_in_flight == 0, POPULATION_WAIT_SECONDS)
         self._apply_pending_population()
+        self._publish_scene_roster()
 
     def _extract_scene_population(self, text, settings=None):
         """!

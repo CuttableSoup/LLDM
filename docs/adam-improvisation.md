@@ -359,8 +359,8 @@ Four layers decide, cheapest and most literal first, each able to veto alone
    stripping its teeth would leave an NPC whose description doesn't match what it is.
 
 `resolution/AdHoc_Generation.py`'s `generate_referenced_npc` is the generator, a sibling of
-`generate_ad_hoc_creature` reusing `_build_creature_tool_schema`, `_call_tool_or_decline`,
-`_decline_tool_schema` and the shared `_build_creature_entity` unchanged. Only the framing and
+`generate_ad_hoc_creature` reusing `_build_creature_tool_schema`, `llm/LLM_Decision.py`'s `decide`,
+`decline_tool_schema` and the shared `_build_creature_entity` unchanged. Only the framing and
 the disposition enum differ: it's passed `NON_HOSTILE_DISPOSITIONS`, a **schema-level**
 constraint rather than a post-filter, and since only a `hostile` creature is ever given
 abilities/behavior, that single narrowing is what makes an automatically-materialized NPC

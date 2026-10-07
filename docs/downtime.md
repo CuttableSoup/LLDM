@@ -26,7 +26,7 @@ hours, not a fixed block-index parity, so a `daylight_hours` that doesn't evenly
 **The calendar.** `rules.toml`'s own optional `[[calendar_month]]` table (`{name, days}` entries,
 in calendar order) is what turns the raw `day` counter above into an actual date — `Rules/Fantasy`'s
 own table matches Golarion's real calendar (Abadius through Kuthona, 365 days, no leap year), but
-`_calendar_date_from_day` (`DM_Time.py`) assumes nothing about that specific shape: any ordered
+`Calendar.date_from_day` (`resolution/Calendar.py`, pure functions over the rules and `current_block`; `DM_Time.py`'s `get_time_state`/`get_calendar_date` delegate to them) assumes nothing about that specific shape: any ordered
 list of `{name, days}` entries works the same way, wrapping into a new year once every authored
 month's own `days` (summed, not hardcoded to 365) has been used up. `day` 0 is the 1st of the
 first authored month, in `[time]`'s own `starting_year` (default `1`; `Rules/Fantasy`'s own `[time]`
@@ -45,7 +45,7 @@ it currently is in this world, true across every scenario) — *which day of tha
 particular story opens on is a per-scenario choice instead, the same way `start_location` already
 is: a scenario's own `[scenario]` table may author `start_month`/`start_day` (1-indexed,
 `start_day` defaulting to `1` when only `start_month` is given), converted once, at boot, into a
-day-of-year offset (`_day_of_year_from_calendar_date`, the inverse of `_calendar_date_from_day`'s
+day-of-year offset (`Calendar.day_of_year`, the inverse of `Calendar.date_from_day`'s
 own month-walk) and used to seed `self.current_block` directly (`DM_Core.__init__`'s own
 `_seed_starting_date`, called right after `load_scenario_definition`). A scenario authoring
 neither field (every scenario shipped before this existed, ex: `debug.toml`) is completely
@@ -271,8 +271,8 @@ interruption (`_finish_pending_travel`). A hostile block instead pauses the whol
 **Terrain, roads, and polities.** A `[[region]]` carries two more independent, all-optional fields
 alongside its own `environment`: `terrain` (a name into the new flat `Rules/Fantasy/terrain.toml`
 catalog) and `polity` (a name into `Rules/Fantasy/polities.toml`) — three separate axes on the same
-table, resolved off one shared `_resolve_region(x, y)` lookup (`resolve_region_environment`/
-`_resolve_region_terrain`/`_resolve_region_polity` are thin wrappers over it). A region authoring
+table, resolved off one shared `World_Map.region_at(rules, x, y)` lookup (`environment_at`/
+`terrain_at`/`polity_at`, in `resolution/World_Map.py` -- pure functions over the rules; `resolve_region_environment` stays on `DMCore` as a thin delegate). A region authoring
 neither of the two new fields (every region shipped before they existed) behaves exactly as it
 always did — this was the one hard constraint the whole design had to preserve, verified directly
 by `debug.toml`'s own shipped `trailhead`-to-`border_stones` trip still costing exactly one block.
@@ -283,7 +283,7 @@ when witness reports reach a polity's record. See [law.md](law.md).
 
 `terrain.toml`'s own `speed_multiplier` (default `1.0`) scales how far one block of travel actually
 covers: `_advance_pending_travel`'s per-block loop no longer computes a fixed block count up front
-from raw distance/speed the way it once did — each iteration samples `_effective_speed_multiplier`
+from raw distance/speed the way it once did — each iteration samples `World_Map.effective_speed_multiplier`
 at the party's *current* leading-edge position (a `[[road]]` entry's own multiplier if the point
 falls within its `width` of that road's line segment, else the containing region's own terrain,
 else the unmodified `1.0` default) and advances by `speed * multiplier` (floored at `0.1`, since
@@ -294,7 +294,7 @@ of building one is to counteract whatever ground it crosses.
 
 A `[[road]]` isn't limited to one straight leg between two endpoints — `path` (a list of 2+
 `{x, y}` points) traces out as many legs as it names, each checked as its own point-to-segment
-distance (`_road_points`/`_point_to_segment_distance`, factored out of `_resolve_road_multiplier`
+distance (`World_Map.road_points`/`point_to_segment_distance`, factored out of `road_multiplier`
 for exactly this reuse), so a road can actually bend to follow a coastline/river/mountain pass
 instead of cutting straight through whatever lies between its endpoints. The plain `from`/`to`
 shape (below, and every road shipped before `path` existed) is just the two-point case of the
@@ -306,7 +306,7 @@ An entity's own `terrain_tags` field (`entity_schema.toml`), unioned with the re
 tags of everything in its live `mount` chain exactly the way `travel_speed` already walks
 that chain for speed (`terrain_tags`), is what a traveling party needs to cross it — a
 rider inherits a boat's/griffon's own passability the same way they already inherit its speed.
-`_route_is_passable` checks the *entire* straight-line route once, up front, alongside the existing
+`World_Map.route_is_passable` checks the *entire* straight-line route once, up front, alongside the existing
 `mount_overloaded`/`blocked_by_enemies` gates in `_resolve_grid_travel_intent`, denying
 (`reason="impassable_terrain"`) the whole attempt before any `pending_downtime` is ever created —
 there's still no pathfinding to route *around* an impassable stretch, only a hard yes/no on the

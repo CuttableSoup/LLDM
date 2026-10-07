@@ -17,8 +17,8 @@ from typing import Any, Required, TypedDict
 
 class ItemInteractionResolved(TypedDict, total=False):
     """!
-    @brief A diceless intent's result (DMCore._on_item_interaction_detected's resolved()
-        closure, plus DM_Improvisation.py's encounter/ad hoc beats) -- what Narration_Prompts'
+    @brief A diceless intent's result, published only by DMCore._publish_item_interaction
+        (resolution/Item_Outcome.py builds it) -- what Narration_Prompts'
         item_interaction and the free-standing intents' narrate() turn into prose.
         The first block is common to every intent; the rest are the per-intent extras (a free-
         standing intent's own module attaches its own -- see intents/<name>.py's resolve()).

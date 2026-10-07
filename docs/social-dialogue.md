@@ -200,7 +200,7 @@ negative/positive at `sentiment_confidence_threshold`'s own floor; the richer pe
 dialogue-framed hypothesis template were tuned against held-out sets spanning hostile/warm/
 informational/sarcastic/valence-crossed lines and resolved this without needing to raise the
 confidence threshold at all — `threat`/`familiarity` were originally validated less exhaustively
-than disposition by hand; `test_unit.py`'s `TestGameBoot` now carries a real, live-model
+than disposition by hand; `tests/test_nlp.py`'s `TestGameBoot` now carries a real, live-model
 regression test for each (the same deliberately valence-crossed cases this section's own tuning
 notes already named — "your skill with that blade is terrifying..." for threat, an "I've known
 you my whole life" vs. "I don't know you" pair for familiarity), so a future embedding/label/

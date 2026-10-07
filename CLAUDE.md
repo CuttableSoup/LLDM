@@ -23,7 +23,7 @@ Runelords geography) plus the `world_map.toml`/`terrain.toml`/`polities.toml`/`e
 entries that exist only to support it. That material used to live directly under `Rules/Fantasy/`
 but was deliberately split out into its own setting so a real Paizo-IP conversion project
 doesn't leak into what ships as the primary Fantasy setting — the test suite still boots against
-`Fantasy` by default (`tests/test_unit.py`'s `DMTestCase.setting`), with only the handful of
+`Fantasy` by default (`tests/support.py`'s `DMTestCase.setting`), with only the handful of
 tests that actually exercise `lost_coast` pointed at `Pathfinder` explicitly. Every setting
 authors its own skills/rules/races from scratch — nothing is shared or inherited between
 settings, deliberately, so one setting's data can never leak into another's (which is exactly why
@@ -72,6 +72,6 @@ this overview.
 - [docs/persistence.md](docs/persistence.md) — the three-file-per-slot save/load contract.
 - [docs/data-conventions.md](docs/data-conventions.md) — how `Rules/Fantasy/*.toml` is structured
   and what `load_rules` special-cases.
-- [docs/testing.md](docs/testing.md) — `test_unit.py` vs. `test_integration.py`, and the Textual
+- [docs/testing.md](docs/testing.md) — the offline unit-test files vs. `test_integration.py`, and the Textual
   headless mirror's own gotchas.
 - [docs/extended-goals.md](docs/extended-goals.md) — not yet started, except where noted.

@@ -18,6 +18,7 @@
     module's own implementation, invisible to callers.
 """
 
+from collections import namedtuple
 import re
 
 # intents/improvisation.py's shared intent-vocabulary constants are plain data with no DMCore/
@@ -510,7 +511,7 @@ class IntentMatcher:
         has no third-party Protocol dependency beyond typing, and duck typing is enough here)
         -- purely documentation of the methods a matcher must provide, plus the two
         catalog-maintenance calls. SentenceTransformerMatcher (NLP_Core.py) is the production
-        adapter; FakeMatcher (test_unit.py) is the test adapter -- two real adapters justify
+        adapter; FakeMatcher (tests/support.py) is the test adapter -- two real adapters justify
         this seam existing at all, not a hypothetical one authored just in case.
     """
 
@@ -839,7 +840,7 @@ def _phrase_matches(phrase, processed_text):
         longer, unrelated word that merely happens to end the same way (ex: "mask", a real
         skill's own keyword -- see this file's own
         test_item_and_dialogue_keywords_never_collide_with_a_real_skill_keyword in
-        test_unit.py, which is what caught this live and is what still enforces it). Every
+        tests/test_nlp.py, which is what caught this live and is what still enforces it). Every
         internal space in a multi-word
         phrase (ex: "close the ") stays literal; only the phrase's own two outer edges get a
         \\b boundary -- the leading/trailing whitespace most phrases in this file are
@@ -1216,6 +1217,35 @@ def detect_save_load_intent(processed_text):
     return None, None
 
 
+class Adjudication:
+    """!
+    @brief The model's say on one input (see IntentClassifier._adjudicate), made at most once per
+        input -- may_ask() is that rule. Lives for one classify() call and is returned with its
+        result, so nothing carries over from one input to the next.
+    @param asked Whether the model was consulted this input (its answer may still have been none).
+    @param verdict "action"/"speech"/"game_question"/"musing", or None for no usable answer.
+    @param trigger Why it was asked: "declarative", "weak_turn", "weak_quoted" or "not_understood".
+    @param action (game_action, item) the model named with an "action" verdict, or None.
+    """
+
+    def __init__(self):
+        self.asked = False
+        self.verdict = None
+        self.trigger = None
+        self.action = None
+
+    def may_ask(self):
+        return not self.asked
+
+    def record(self, verdict, trigger, action=None):
+        self.asked, self.verdict, self.trigger, self.action = True, verdict, trigger, action
+
+
+# What classify() returns: processed_text for the caller's own log line, the events to publish in
+# order, and the input's Adjudication.
+ClassifiedInput = namedtuple("ClassifiedInput", ["processed", "events", "adjudication"])
+
+
 class IntentClassifier:
     """!
     @brief Resolves what a whole turn's raw player input means, and returns the ordered list
@@ -1253,9 +1283,6 @@ class IntentClassifier:
         self.anyone_present = False
         self.present_names = []
         self.recent_narration = ""
-        self.last_adjudication = None
-        # (game_action, item) the model named with its last "action" verdict, or None.
-        self.last_adjudicated_action = None
 
     def on_rules_loaded(self, data):
         """!@brief Forwards a "rules_loaded" payload to the matcher to build its embeddings."""
@@ -1283,7 +1310,7 @@ class IntentClassifier:
         """!@brief Records DMCore's current conversation partner ({"key", ...} or None)."""
         self.conversation_partner = partner
 
-    def _adjudicate(self, processed, trigger):
+    def _adjudicate(self, processed, trigger, adjudication):
         """!
         @brief Asks the matcher's model what a line the rules can only guess at mainly is
             (IntentMatcher.adjudicate), for three cases, each only with someone present:
@@ -1291,8 +1318,8 @@ class IntentClassifier:
             ("let's go down that cut-through."); "weak_turn" -- every skill clause scored below
             WEAK_TURN_SCORE; "not_understood" -- nothing claimed it. The model only picks the
             channel -- except that an "action" may name an item action and its item, kept in
-            last_adjudicated_action for _adjudicated_item_event. Records (verdict, trigger) in
-            last_adjudication for NLPCore's log.
+            the input's Adjudication for _adjudicated_item_event and NLPCore's log.
+        @param adjudication This input's Adjudication, which records the answer.
         @return "action"/"speech"/"game_question"/"musing", or None to leave the rules' call.
         """
         adjudicate = getattr(self.matcher, "adjudicate", None)
@@ -1305,11 +1332,10 @@ class IntentClassifier:
         verdict = verdict or {}
         kind = verdict.get("kind")
         game_action, item = verdict.get("game_action"), verdict.get("item")
-        self.last_adjudication = (kind, trigger)
-        self.last_adjudicated_action = (game_action, item) if kind == "action" and game_action and item else None
+        adjudication.record(kind, trigger, (game_action, item) if kind == "action" and game_action and item else None)
         return kind
 
-    def _adjudicated_item_event(self, processed, raw_input=""):
+    def _adjudicated_item_event(self, processed, adjudication, raw_input=""):
         """!
         @brief The item event for an "action" verdict that named buy/give/take/use and its item,
             when the rules found nothing to claim the line or only guessed a skill -- the item's own catalog entry if
@@ -1322,9 +1348,9 @@ class IntentClassifier:
         @return One {"event", "payload"} dict, or None (no such verdict, money taken, or a
             hypothetical line).
         """
-        if not self.last_adjudicated_action or (self.last_adjudication or (None,))[0] != "action":
+        if not adjudication.action or adjudication.verdict != "action":
             return None
-        game_action, item = self.last_adjudicated_action
+        game_action, item = adjudication.action
         intent = ADJUDICATED_ITEM_INTENTS.get(game_action)
         phrase = process_input(item)
         if not intent or not phrase:
@@ -1373,9 +1399,10 @@ class IntentClassifier:
             docs/adam-improvisation.md's "Ad hoc entity creation and removal" sections for why
             that order is what it is.
         @param raw_input The raw string from "user_input_submitted".
-        @return (processed_text, events) -- processed_text for the caller's own "Processing
-            player input" log line, and events a list of one or more {"event", "payload"}
-            dicts to publish, in order. Almost always length 1; more than one when an
+        @return A ClassifiedInput (processed, events, adjudication) -- processed_text for the
+            caller's own "Processing player input" log line, events a list of one or more
+            {"event", "payload"} dicts to publish, in order, and this input's Adjudication.
+            events is Almost always length 1; more than one when an
             EXEMPT_ITEM_INTENTS clause (ex: "retreat") shares the input with a real turn (ex:
             "attack the wolf and retreat" publishes the retreat's own item_interaction_detected
             immediately, then a separate turn_detected for the attack), or with dialogue (ex:
@@ -1385,19 +1412,18 @@ class IntentClassifier:
         """
         processed = process_input(raw_input)
         events = []
-        self.last_adjudication = None
-        self.last_adjudicated_action = None
+        adjudication = Adjudication()
 
         save_load_intent, slot_name = detect_save_load_intent(processed)
         if save_load_intent:
             events.append({"event": f"{save_load_intent}_requested", "payload": {"slot": slot_name}})
-            return processed, events
+            return ClassifiedInput(processed, events, adjudication)
 
         if detect_help_intent(processed) or detect_out_of_character(processed):
             # A question about the game itself reaches ADaM without "adam" said aloud -- see
             # detect_out_of_character.
             events.append(self._help_event(processed))
-            return processed, events
+            return ClassifiedInput(processed, events, adjudication)
 
         if detect_scene_query_intent(processed):
             # See SCENE_QUERY_KEYWORDS' own module note -- a free-standing, diceless,
@@ -1406,7 +1432,7 @@ class IntentClassifier:
             # to item-interaction detection (and, on no matching item, ad hoc item
             # generation) or an ungrounded clarification response.
             events.append({"event": "scene_query_detected", "payload": {"input": processed}})
-            return processed, events
+            return ClassifiedInput(processed, events, adjudication)
 
         direction = detect_direction(processed)
         if direction:
@@ -1418,7 +1444,7 @@ class IntentClassifier:
                 "intent": "move", "item_name": None, "direction": direction,
                 "input": processed, "score": None,
             }})
-            return processed, events
+            return ClassifiedInput(processed, events, adjudication)
 
         # Only from a sentence that isn't is_hypothetical: found by playtest, "if i take the
         # proof of the goods... can i leave?" set off travel and the narrator invented a barrier.
@@ -1431,12 +1457,12 @@ class IntentClassifier:
             # destination -- see _travel_event); DMCore still gets the raw input and still
             # resolves the destination literally first, so a None here changes nothing.
             events.append(_travel_event(processed, self.matcher))
-            return processed, events
+            return ClassifiedInput(processed, events, adjudication)
         if TOWARD_PATTERN.search(processed) and not is_hypothetical(processed):
             travel = _travel_event(processed, self.matcher)
             if travel["payload"]["destination"]:
                 events.append(travel)
-                return processed, events
+                return ClassifiedInput(processed, events, adjudication)
 
         turn_clauses, remaining_clauses, found_exempt, unmatched_item_verbs = self._classify_item_pass(
             processed, events,
@@ -1473,12 +1499,12 @@ class IntentClassifier:
             # Talk only by its opening words -- ask (see _adjudicate). A question stays talk, with
             # or without its "?" ("where should i put it"): it almost never declares an action,
             # and is_hypothetical already covers the rest.
-            verdict = self._adjudicate(processed, "declarative")
+            verdict = self._adjudicate(processed, "declarative", adjudication)
             if verdict == "action":
                 implicit_dialogue = False
             elif verdict in ("game_question", "musing"):
                 events.append(self._verdict_event(verdict, processed, raw_input))
-                return processed, events
+                return ClassifiedInput(processed, events, adjudication)
         if not turn_clauses and has_listener and not speech_quotes(processed):
             spoken = self._split_spoken_clauses(raw_input, processed)
             if spoken:
@@ -1487,7 +1513,7 @@ class IntentClassifier:
                         if event["event"] == "item_interaction_detected":
                             event["payload"]["quiet"] = True
                 events.extend(spoken)
-                return processed, events
+                return ClassifiedInput(processed, events, adjudication)
 
         if not turn_clauses and (explicit_dialogue or implicit_dialogue):
             if found_exempt:
@@ -1506,14 +1532,14 @@ class IntentClassifier:
             if implicit_dialogue:
                 mixed = self._split_speech_from_action(raw_input, processed)
             else:
-                mixed = self._split_quoted_speech(raw_input, processed)
+                mixed = self._split_quoted_speech(raw_input, processed, adjudication)
             if mixed:
                 events.extend(mixed)
-                return processed, events
+                return ClassifiedInput(processed, events, adjudication)
             events.append(self._dialogue_event(
                 processed, frame_speech(raw_input, processed, explicit_dialogue), implicit_dialogue,
             ))
-            return processed, events
+            return ClassifiedInput(processed, events, adjudication)
 
         best_score = self._classify_skill_pass(
             remaining_clauses, turn_clauses, processed,
@@ -1522,19 +1548,21 @@ class IntentClassifier:
         weak_turn = turn_clauses and has_listener and not found_exempt and all(
             clause["kind"] == "action" and clause.get("score", 1.0) < WEAK_TURN_SCORE for clause in turn_clauses
         )
-        if weak_turn and self.last_adjudication is None:
-            verdict_event = self._verdict_event(self._adjudicate(processed, "weak_turn"), processed, raw_input)
+        if weak_turn and adjudication.may_ask():
+            verdict_event = self._verdict_event(self._adjudicate(processed, "weak_turn", adjudication), processed, raw_input)
             if verdict_event:
                 events.append(verdict_event)
-                return processed, events
+                return ClassifiedInput(processed, events, adjudication)
         # A guessed skill never beats the item action the model named for the same line.
-        item_event = self._adjudicated_item_event(processed, raw_input) if weak_turn else None
+        item_event = self._adjudicated_item_event(processed, adjudication, raw_input) if weak_turn else None
         if item_event:
             events.append(item_event)
-            return processed, events
+            return ClassifiedInput(processed, events, adjudication)
 
-        self._finalize(processed, turn_clauses, found_exempt, unmatched_item_verbs, best_score, events, raw_input)
-        return processed, events
+        self._finalize(
+            processed, turn_clauses, found_exempt, unmatched_item_verbs, best_score, events, adjudication, raw_input,
+        )
+        return ClassifiedInput(processed, events, adjudication)
 
     def _dialogue_event(self, processed, framing, implicit):
         """!
@@ -1697,7 +1725,7 @@ class IntentClassifier:
         turn = {"event": "turn_detected", "payload": {"clauses": turn_clauses, "input": action_text}}
         return [said, turn] if clauses.index(spoken[0]) < clauses.index(rest[0]) else [turn, said]
 
-    def _split_quoted_speech(self, raw_input, processed):
+    def _split_quoted_speech(self, raw_input, processed, adjudication):
         """!
         @brief The quoted-speech counterpart to _split_speech_from_action: 'i yell "hey!" and
             swing a fist at elara' is dialogue for the quoted words plus a turn for the rest, in
@@ -1731,8 +1759,8 @@ class IntentClassifier:
         # line as talk. Found by playtest: "casually reach out, tapping the heavy metal ring on
         # his wrist" beside a quote rolled polearms at 0.52 and was narrated as a sword strike.
         weak = all(clause["kind"] == "action" and clause.get("score", 1.0) < WEAK_TURN_SCORE for clause in turn_clauses)
-        if weak and self.last_adjudication is None:
-            verdict = self._adjudicate(action_text, "weak_quoted")
+        if weak and adjudication.may_ask():
+            verdict = self._adjudicate(action_text, "weak_quoted", adjudication)
             if verdict is not None and verdict != "action":
                 return None
 
@@ -1868,7 +1896,9 @@ class IntentClassifier:
             turn_clauses.append(action)
         return best_score
 
-    def _finalize(self, processed, turn_clauses, found_exempt, unmatched_item_verbs, best_score, events, raw_input=""):
+    def _finalize(
+        self, processed, turn_clauses, found_exempt, unmatched_item_verbs, best_score, events, adjudication, raw_input="",
+    ):
         """!
         @brief Decides the turn's final event once both passes have run, in order: a merged
             turn_detected if anything claimed the turn; nothing at all if an exempt clause
@@ -1925,13 +1955,13 @@ class IntentClassifier:
 
         has_listener = self.conversation_partner is not None or self.anyone_present
         verdict = None
-        if has_listener and self.last_adjudication is None:
-            verdict = self._adjudicate(processed, "not_understood")
+        if has_listener and adjudication.may_ask():
+            verdict = self._adjudicate(processed, "not_understood", adjudication)
             verdict_event = self._verdict_event(verdict, processed, raw_input)
             if verdict_event:
                 events.append(verdict_event)
                 return
-        item_event = self._adjudicated_item_event(processed, raw_input)
+        item_event = self._adjudicated_item_event(processed, adjudication, raw_input)
         if item_event:
             events.append(item_event)
             return
