@@ -38,11 +38,11 @@ import shutil
 import sys
 import threading
 import time
-import resolution.Combat_Resolution as Combat_Resolution
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
+import resolution.Combat_Resolution as Combat_Resolution  # noqa: E402
 from Event_Bus import EventBus  # noqa: E402
 from Logger import Logger  # noqa: E402
 from dm.DM_Core import DMCore  # noqa: E402
@@ -216,7 +216,10 @@ class Harness:
         self.llm = LLMCore(self.bus)
         self.llm.set_setting(args.setting)
         self._count_llm_requests()
-        self.dm = DMCore(self.bus, scenario_name=args.scenario, setting=args.setting)
+        self.dm = DMCore(
+            self.bus, scenario_name=args.scenario, setting=args.setting,
+            start_location=args.start_location,
+        )
         self.player_model = args.player_model
 
     # --- event capture -------------------------------------------------------------------
@@ -267,9 +270,11 @@ class Harness:
                 return queue(*args, **kwargs)
             return wrapper
 
-        # Each _queue_* method starts exactly one background _fetch_and_publish.
-        for name in ("_queue", "_queue", "_queue", "_queue"):
-            setattr(self.llm, name, counted_queue(getattr(self.llm, name)))
+        # _queue starts exactly one background _fetch_and_publish. Wrapped once: it used to be four
+        # _queue_* methods, and a mechanical rename left this looping over "_queue" four times,
+        # so each narration counted four in flight, fetched one, and every turn waited out the
+        # whole 90s timeout.
+        self.llm._queue = counted_queue(self.llm._queue)
         fetch = self.llm._fetch_and_publish
 
         def counted_fetch(*args, **kwargs):
@@ -534,6 +539,8 @@ def main():
     p = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
     p.add_argument("--scenario", default="lost_coast")
     p.add_argument("--setting", default="Pathfinder")
+    p.add_argument("--start-location", default=None,
+                   help="a location key in the scenario to begin in (ex: white_deer); default is the scenario's own start")
     p.add_argument("--turns", type=int, default=50)
     p.add_argument("--persona", default="explorer", help=f"one of {list(PERSONAS)} or free text")
     p.add_argument("--mix", default=None,
