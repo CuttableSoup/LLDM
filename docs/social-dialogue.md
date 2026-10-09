@@ -465,3 +465,73 @@ the model to sound like an ordinary person of the NPC's station, not a storytell
 no quoted speech, and a meta parenthetical. It also logs each turn's `speech` forms and counts
 implicit dialogue.
 
+
+## Wordless gestures
+
+"kiss her", "bow to the captain" and "dance" match no skill, item or keyword, so they used to be
+dropped as not understood. The adjudicator (see [action-resolution.md](action-resolution.md)'s
+"Ambiguous input: asking the model") now has a fifth kind for them, `gesture`: a wordless
+expressive act that attempts nothing and harms no one. It is offered only when the setting authors
+**gesture tones**, so a setting without them (`Rules/Zombie/`) behaves exactly as before. Anything
+that hurts, restrains, shoves or takes from someone stays an `action` (a maneuver or an assault, with
+its confirmation step); words said aloud stay `speech`.
+
+- **Tones are data.** An `[[attitude_event]]` (`rules.toml`) carrying a `tone` field is one; its
+  `description` is what the model is told it means (`Social_Resolution.gesture_tones`, published on
+  `rules_loaded` as `gesture_tones` and held by the matcher). Fantasy and Pathfinder author `warm`,
+  `intimate`, `respectful`, `mocking` and `neutral` (a catch-all that moves nothing, so the model is
+  never forced to call a dance warm or rude). The same call that picks the kind names the tone; a
+  gesture with no tone the setting recognizes comes back as no answer and the rules stand.
+- **Unwelcome gestures.** A tone event may author `unwelcome_below` (a disposition) and
+  `unwelcome_event`. A target already below that toward the player takes the other event instead and
+  the result carries `unwelcome: true` (`gesture_event_name`) — `intimate` below 20 becomes
+  `gesture_unwanted`, so a stranger's kiss costs disposition rather than earning it.
+- **A turn-costing, diceless clause.** The verdict becomes a `turn_detected` with one item-kind
+  clause `{intent: "gesture", tone}` (`IntentClassifier._verdict_event`). It is deliberately not
+  exempt (there is no `IntentMatch` for it: no keyword gate ever produces it), so it takes a turn slot
+  and counts toward the multi-action penalty like any item interaction, and never rolls. It is
+  registered in `intents/registry.py` like a free-standing intent (`intents/gesture.py`), so neither
+  DMCore nor LLMCore has a branch of its own. As with any item-only turn it does not start a combat
+  round.
+- **The engine picks the target, not the model.** `DialogueMixin._gesture_target`: whoever the input
+  names, else the conversation partner, else the one other person present; with two or more and no
+  name it is aimed at no one. Unlike an unaddressed remark it never falls back to the nearest
+  bystander. An object, or no one, is a gesture at nothing (narrated, no attitude change); a dead or
+  absent named target is declined (`reason: "dead"` / `"not_present"`).
+- **Only the target is nudged.** `nudge_attitude_from_event` at full strength on the target's
+  attitude toward the player, through the ordinary `action_attitude_deltas` accumulator and its cap
+  (60), so repeating a gesture cannot run away. Bystanders and witnesses are untouched. The target
+  becomes the conversation partner, and the language barrier does not apply.
+- **Narration** is the narrator's third-person voice (`narrate_gesture`), given the target's
+  persona and its attitude *after* the nudge, so the same kiss reads differently from a friend and a
+  stranger. No spoken dialogue from the player and at most one short line from the target.
+
+A gesture beside a quote (`I stroke his cheek. "Stay with me."`) keeps both halves: when the
+quoted-speech split asks the model about a weak action half and it answers `gesture`, the weak skill
+guess is replaced by the gesture clause and the quote still goes to dialogue, in the order written
+(`_split_quoted_speech`). Found by playtest: before this a gesture verdict there kept the whole line
+as talk (the caress dropped) five times in forty turns, while seven others rolled strength, dodge or
+polearms for it.
+
+A **stage direction** beside talk (`(I slide a wink across the counter.) Just trying to get close to
+you.`, or `*I wink.* Come here.`) is split on its markers: what is inside is the action and what is
+outside is the talk, with no word list to tell which sentence is which (`stage_directions`,
+`_split_speech_from_action`). A starred span always counts; a parenthesised one only when it reads as
+an action (opens on "I" or ends a sentence), so an aside like `walk to the docks (it's far)` is left
+whole. The talk beside a stage direction is also hidden from the verbs that act on the world
+(`mask_talk`, like `mask_speech_quotes` for quotes): "a solid night's rest" in someone's whisper is not
+a request to rest. Found by playtest, where it ran a rest that an enemy nearby then silently refused.
+The splitter runs before the whole line is put to the model, which can only name one kind for it and
+used to say `action`, losing the talk and the gesture both (eleven of forty gooner turns came back
+not understood). If the stage direction matched no skill it is put to the model alone (trigger
+`weak_split`), and a `gesture` verdict makes it a gesture turn beside the dialogue, in the order
+written; any other verdict leaves the line as it was. Item verbs inside a stage direction are not
+trusted ("giving her a knowing smile" is not a give), and a line with a dialogue keyword (`ask…`) is
+left to the dialogue path.
+
+Known limits: a lone gesture in an empty room (`dance`) is never asked about, since the adjudicator
+only runs with someone present; a gesture beside a quote is only asked about when the action half
+matched some skill, however weakly (one that matched nothing keeps the line as talk); and a bare
+verdict claims the whole line, so "bow, then attack the orc" is judged as one line when every
+clause is weak.
+

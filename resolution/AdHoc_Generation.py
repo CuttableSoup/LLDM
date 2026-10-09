@@ -539,6 +539,16 @@ INPUT_KINDS = {
     "game_question": "a question about the game itself -- its rules, dice, mechanics -- not the story",
     "musing": "thinking aloud or wondering with no one to hear it; neither said to anyone nor an attempt",
 }
+# Offered only when the setting authors gesture tones (Social_Resolution.gesture_tones): a wordless
+# expressive act. Anything that hurts, restrains, shoves or takes from someone is an action instead.
+GESTURE_KIND = (
+    "a wordless social or physical expression toward someone, or at no one, that the game would never "
+    "roll dice for and that harms no one -- affection, flirting, greeting, deference, derision or idle "
+    "play: a kiss, a bow, a dance, a caress, leaning close, a lingering look, a rude sign; a touch or "
+    "closeness that only expresses a feeling counts, however suggestive; anything that hurts, "
+    "restrains, shoves, grabs hold of or takes something from someone is an action, and words said "
+    "aloud are speech"
+)
 # Which item action an "action" line is, when it is one -- IntentClassifier routes these to the
 # ordinary item pipeline, and "other" leaves the line to the rules. Paying is buying: currency
 # only ever moves as a trade's price, never through give (which would hand over the whole purse).
@@ -558,7 +568,7 @@ ADJUDICATION_MAX_TOKENS = 64
 
 
 def adjudicate_player_input(
-    text, present_names=(), partner=None, recent_narration="", timeout=None,
+    text, present_names=(), partner=None, recent_narration="", timeout=None, gesture_tones=None,
 ):
     """!
     @brief Asks the model what a player's line mainly is -- one of INPUT_KINDS -- for the lines
@@ -574,14 +584,27 @@ def adjudicate_player_input(
     @param recent_narration The last thing the narrator said, for context.
     @param timeout Seconds before the rules decide alone; None for the backend's own
         adjudication_timeout.
-    @return (verdict, reason) -- verdict is {"kind", "game_action", "item"} (the last two None
-            unless kind is "action" and the model named one of GAME_ACTIONS besides "other" and
-            the thing it's about), with reason ""; or None if the model was unreachable,
-            declined, or answered outside INPUT_KINDS, with reason saying why.
+    @param gesture_tones {tone name: what it means} the setting authors for a wordless gesture;
+        empty or None leaves "gesture" out of the kinds, so a setting without tones is unchanged.
+    @return (verdict, reason) -- verdict is {"kind", "game_action", "item", "tone"} (game_action
+            and item None unless kind is "action" and the model named one of GAME_ACTIONS besides
+            "other" and the thing it's about; tone None unless kind is "gesture"), with reason "";
+            or None if the model was unreachable, declined, or answered outside the kinds, with
+            reason saying why.
     """
     timeout = timeout or get_backend().adjudication_timeout
-    kind_lines = "\n".join(f"- {kind}: {meaning}" for kind, meaning in INPUT_KINDS.items())
+    kinds = dict(INPUT_KINDS)
+    if gesture_tones:
+        # Offered the gesture kind, the model still reads "action" as "anything the character does",
+        # so a bow or a caress went there. Said outright: an action is an attempt that can fail.
+        kinds["action"] += "; an attempt that could succeed or fail, never a mere expression of feeling"
+        kinds["gesture"] = GESTURE_KIND
+    kind_lines = "\n".join(f"- {kind}: {meaning}" for kind, meaning in kinds.items())
     action_lines = "\n".join(f"- {action}: {meaning}" for action, meaning in GAME_ACTIONS.items())
+    tone_prompt = ""
+    if gesture_tones:
+        tone_lines = "\n".join(f"- {tone}: {meaning}" for tone, meaning in gesture_tones.items())
+        tone_prompt = f"If it's a gesture, which tone is it?\n{tone_lines}\n"
     context = [f"People here: {', '.join(present_names) or 'no one else'}."]
     if partner:
         context.append(f"The player is talking to {partner}.")
@@ -600,30 +623,29 @@ def adjudicate_player_input(
             "content": (
                 "\n".join(context) + f"\nThe player typed: \"{text}\"\n"
                 f"What is it mainly?\n{kind_lines}\n"
-                f"If it's an action, which of these is it?\n{action_lines}\n"
+                f"If it's an action, which of these is it?\n{action_lines}\n{tone_prompt}"
                 "For buy, give, take or use, also name the item: the thing itself as a short noun "
                 "phrase, from the line or, when the line only points at it, from what the game "
                 "master last said. Never the money.\nCall classify_input."
             ),
         },
     ]
+    properties = {
+        "kind": {"type": "string", "enum": list(kinds)},
+        "game_action": {"type": "string", "enum": list(GAME_ACTIONS)},
+        "item": {"type": "string"},
+        # No "reason": only ever logged, and it doubled the tokens generated
+        # (62 -> 30), taking a call from ~0.84s to ~0.55s.
+    }
+    if gesture_tones:
+        properties["tone"] = {"type": "string", "enum": list(gesture_tones)}
     tools = [
         {
             "type": "function",
             "function": {
                 "name": "classify_input",
                 "description": "Says what the player's line mainly is.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "kind": {"type": "string", "enum": list(INPUT_KINDS)},
-                        "game_action": {"type": "string", "enum": list(GAME_ACTIONS)},
-                        "item": {"type": "string"},
-                        # No "reason": only ever logged, and it doubled the tokens generated
-                        # (62 -> 30), taking a call from ~0.84s to ~0.55s.
-                    },
-                    "required": ["kind"],
-                },
+                "parameters": {"type": "object", "properties": properties, "required": ["kind"]},
             },
         },
         decline_tool_schema("Call this only if the line is empty or unreadable."),
@@ -639,13 +661,19 @@ def adjudicate_player_input(
     if function_name is None:
         return None, payload
     kind = str(payload.get("kind", "")).strip().lower()
-    if kind not in INPUT_KINDS:
+    if kind not in kinds:
         return None, "invalid_kind"
+    tone = str(payload.get("tone") or "").strip().lower()
+    if kind == "gesture" and tone not in (gesture_tones or ()):
+        # A gesture with no tone the setting recognizes has nothing to apply: the rules stand.
+        return None, "invalid_tone"
+    if kind != "gesture":
+        tone = None
     game_action = str(payload.get("game_action") or "").strip().lower()
     item = str(payload.get("item") or "").strip()
     if kind != "action" or game_action not in GAME_ACTIONS or game_action == "other" or not item:
         game_action = item = None
-    return {"kind": kind, "game_action": game_action, "item": item}, ""
+    return {"kind": kind, "game_action": game_action, "item": item, "tone": tone}, ""
 
 
 # How a player can answer a guard's arrest demand (DM_Enforcement.py) -- see

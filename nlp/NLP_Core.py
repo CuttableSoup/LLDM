@@ -166,6 +166,9 @@ class SentenceTransformerMatcher(IntentMatcher):
         self.target_embeddings = None
         self.target_indices = []
         self.modifier_names = []
+        # {tone: meaning} the setting authors for a wordless gesture (Social_Resolution.gesture_tones),
+        # told to the adjudicator; empty means that kind is never offered.
+        self.gesture_tones = {}
         # Below this cosine-similarity score, treat the input as not matching any skill at
         # all rather than forcing it onto whatever phrase happened to score highest
         self.confidence_threshold = 0.5
@@ -267,6 +270,7 @@ class SentenceTransformerMatcher(IntentMatcher):
         """
         self.skills_data = data.get("skills", {})
         self.skill_names = list(self.skills_data.keys())
+        self.gesture_tones = data.get("gesture_tones", {})
         entities_data = data.get("entities", {})
 
         # Every live supertype == "modifier" entity's own name (ex: "power attack",
@@ -602,9 +606,11 @@ class SentenceTransformerMatcher(IntentMatcher):
         @brief The one matcher call that asks the local LLM instead of embeddings -- see
             IntentMatcher.adjudicate and AdHoc_Generation.py's adjudicate_player_input. A
             failure is logged and left to the rules (None). Otherwise the verdict dict
-            ({"kind", "game_action", "item"}).
+            ({"kind", "game_action", "item", "tone"}).
         """
-        verdict, reason = adjudicate_player_input(text, present_names, partner, recent_narration)
+        verdict, reason = adjudicate_player_input(
+            text, present_names, partner, recent_narration, gesture_tones=self.gesture_tones,
+        )
         if verdict is None:
             self.event_bus.publish("log_warning" if reason == "unavailable" else "log_info",
                                    f"Input adjudication gave no answer ({reason}); the rules stand.")

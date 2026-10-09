@@ -222,6 +222,53 @@ def opens_like_an_action(text):
 # A double-quoted span of at least a few characters -- see speech_quotes. Double quotes only: an
 # apostrophe is a contraction far more often than a quotation mark.
 QUOTED_SPEECH_PATTERN = re.compile(r'"([^"]{2,})"')
+# A parenthesised or *starred* span: a stage direction ("(i wink at her.)", "*i wink at her*"), by the
+# convention players write in.
+STAGE_DIRECTION_PATTERN = re.compile(r"\(([^()]+)\)|\*([^*]+)\*")
+
+
+def stage_directions(text):
+    """!
+    @brief The stage directions in text: (start, end, content) for every starred span, and every
+        parenthesised one that reads as an action -- it opens on "i" or ends a sentence ("(i wink.)").
+        A plain aside ("walk to the docks (it's far)") is not one, so a normal command with brackets
+        is left whole.
+    @param text Processed input.
+    @return A list of (start, end, content), in order.
+    """
+    found = []
+    for match in STAGE_DIRECTION_PATTERN.finditer(text or ""):
+        content = (match.group(1) or match.group(2) or "").strip()
+        first = re.match(r"[a-z']+", content)
+        starred = match.group(0).startswith("*")
+        if starred or (first and first.group() in FIRST_PERSON_OPENERS) or content.endswith((".", "!")):
+            found.append((match.start(), match.end(), content))
+    return found
+
+
+def _blank_spans(text, spans, keep=False):
+    """!@brief text with the given (start, end, ...) spans blanked to spaces, or everything else if keep."""
+    inside = [False] * len(text)
+    for start, end, *_ in spans:
+        for index in range(start, end):
+            inside[index] = True
+    return "".join(char if inside[index] == keep else " " for index, char in enumerate(text))
+
+
+def mask_talk(text):
+    """!
+    @brief What the player DOES in text, for the gates that act on the world: spoken quotes blanked
+        (mask_speech_quotes) and, when the line has stage directions with talk beside them, the talk
+        too -- only the stage directions are left. 'Relax. You could use a solid night's rest.' beside
+        '*i lean in*' is not a request to rest. Found by playtest, where it ran one.
+    @param text Processed input.
+    @return The same text, the same length.
+    """
+    text = mask_speech_quotes(text)
+    spans = stage_directions(text)
+    if spans and re.search(r"[a-z]", _blank_spans(text, spans)):
+        return _blank_spans(text, spans, keep=True)
+    return text
 
 
 def speech_quotes(text):
@@ -233,12 +280,28 @@ def speech_quotes(text):
     @param text Raw or processed input.
     @return The spoken spans, stripped, in order.
     """
-    quotes = []
-    for quote in QUOTED_SPEECH_PATTERN.findall(text or ""):
-        quote = quote.strip()
-        if len(quote.split()) >= 3 or re.search(r"[.!?,]$", quote):
-            quotes.append(quote)
-    return quotes
+    return [quote.strip() for quote in QUOTED_SPEECH_PATTERN.findall(text or "") if _reads_as_speech(quote)]
+
+
+def _reads_as_speech(quote):
+    """!@brief Whether a quoted span is a spoken line (see speech_quotes) rather than a scare quote."""
+    quote = quote.strip()
+    return len(quote.split()) >= 3 or bool(re.search(r"[.!?,]$", quote))
+
+
+def mask_speech_quotes(text):
+    """!
+    @brief text with every spoken quote (and its quotation marks) blanked to spaces, the same length
+        so positions still line up. What a player says is not what they do: found by playtest, 'I
+        let my eyes drift over his chest. "You look like you need a rest."' ran a rest (the clock
+        advanced and the character healed) on the word inside the quote, before dialogue was ever
+        considered. The verb gates that act on the world read this, not the raw line.
+    @param text Processed input.
+    @return The same text with the spoken quotes blanked.
+    """
+    return QUOTED_SPEECH_PATTERN.sub(
+        lambda match: " " * len(match.group(0)) if _reads_as_speech(match.group(1)) else match.group(0), text or "",
+    )
 
 # extract_address_phrase's own three word lists (see that function for why a keyword-shaped
 # mechanism is acceptable here and nowhere else in this file).
@@ -705,6 +768,8 @@ def split_action_clauses(processed_text):
 
 def _free_standing_match(processed_text, match):
     """!@brief Whether processed_text trips one free-standing intent's keyword gate or its extra patterns."""
+    for pattern in match.ignore:
+        processed_text = pattern.sub(" ", processed_text)
     return _keyword_gate(processed_text, match.keywords) or any(p.search(processed_text) for p in match.patterns)
 
 
@@ -871,9 +936,17 @@ def _clause_names_item(clause, item_name):
         return True
     name_words = [word for word in re.findall(r"[a-z]+", item_name.lower()) if len(word) >= 3]
     clause_words = [word for word in re.findall(r"[a-z]+", clause.lower()) if len(word) >= 4]
-    return any(word in clause for word in name_words) or any(
-        clause_word in name_word for clause_word in clause_words for name_word in name_words
-    )
+    hits = [clause.find(word) for word in name_words if word in clause]
+    hits += [
+        clause.find(clause_word) for clause_word in clause_words
+        if any(clause_word in name_word for name_word in name_words)
+    ]
+    if not hits:
+        return False
+    # The thing acted on comes before any "to"/"at": 'give the sword to anne' is about the sword,
+    # but 'dropping my gaze to his spear tip' is about a gaze, and the spear only the place it goes.
+    # Found by playtest: it dropped a spear the player never held (the drop was refused as absent).
+    return not re.search(r"\b(?:to|at|toward|towards)\b", clause[:min(hits)])
 
 
 def detect_dialogue_intent(processed_text):
@@ -1223,9 +1296,10 @@ class Adjudication:
         input -- may_ask() is that rule. Lives for one classify() call and is returned with its
         result, so nothing carries over from one input to the next.
     @param asked Whether the model was consulted this input (its answer may still have been none).
-    @param verdict "action"/"speech"/"game_question"/"musing", or None for no usable answer.
+    @param verdict "action"/"speech"/"game_question"/"musing"/"gesture", or None for no usable answer.
     @param trigger Why it was asked: "declarative", "weak_turn", "weak_quoted" or "not_understood".
     @param action (game_action, item) the model named with an "action" verdict, or None.
+    @param tone The setting's gesture tone the model named with a "gesture" verdict, or None.
     """
 
     def __init__(self):
@@ -1233,12 +1307,13 @@ class Adjudication:
         self.verdict = None
         self.trigger = None
         self.action = None
+        self.tone = None
 
     def may_ask(self):
         return not self.asked
 
-    def record(self, verdict, trigger, action=None):
-        self.asked, self.verdict, self.trigger, self.action = True, verdict, trigger, action
+    def record(self, verdict, trigger, action=None, tone=None):
+        self.asked, self.verdict, self.trigger, self.action, self.tone = True, verdict, trigger, action, tone
 
 
 # What classify() returns: processed_text for the caller's own log line, the events to publish in
@@ -1332,7 +1407,10 @@ class IntentClassifier:
         verdict = verdict or {}
         kind = verdict.get("kind")
         game_action, item = verdict.get("game_action"), verdict.get("item")
-        adjudication.record(kind, trigger, (game_action, item) if kind == "action" and game_action and item else None)
+        adjudication.record(
+            kind, trigger, (game_action, item) if kind == "action" and game_action and item else None,
+            verdict.get("tone") if kind == "gesture" else None,
+        )
         return kind
 
     def _adjudicated_item_event(self, processed, adjudication, raw_input=""):
@@ -1371,8 +1449,22 @@ class IntentClassifier:
             "intent": intent, "phrase": phrase, "input": processed,
         }}
 
-    def _verdict_event(self, verdict, processed, raw_input):
-        """!@brief The event a non-action verdict routes to, or None ("action", or no verdict)."""
+    def _verdict_event(self, verdict, processed, raw_input, adjudication=None):
+        """!
+        @brief The event a non-action verdict routes to, or None ("action", or no verdict).
+        @param adjudication This input's Adjudication, which holds the tone a "gesture" carries.
+        """
+        if verdict == "gesture":
+            # A wordless act, claimed whole: an item-kind clause (so it takes a turn slot like any
+            # item interaction, and never rolls) that no keyword gate produces -- only this verdict
+            # does. DMCore picks the target; the model only names the tone.
+            tone = adjudication.tone if adjudication else None
+            if not tone:
+                return None
+            return {"event": "turn_detected", "payload": {
+                "clauses": [{"kind": "item", "intent": "gesture", "item_name": None, "phrase": None, "tone": tone}],
+                "input": processed,
+            }}
         if verdict == "speech":
             return self._dialogue_event(processed, frame_speech(raw_input, processed, False), True)
         if verdict == "game_question":
@@ -1434,7 +1526,10 @@ class IntentClassifier:
             events.append({"event": "scene_query_detected", "payload": {"input": processed}})
             return ClassifiedInput(processed, events, adjudication)
 
-        direction = detect_direction(processed)
+        # What the player says aloud is not what they do (see mask_speech_quotes): the gates that
+        # move them or act on the world read the line with its spoken quotes blanked.
+        acting = mask_talk(processed)
+        direction = detect_direction(acting)
         if direction:
             # A different axis from "advance"/"retreat" below -- see DIRECTION_PHRASES'
             # module note. No item name to resolve at all, so map_to_item never runs for
@@ -1450,7 +1545,7 @@ class IntentClassifier:
         # proof of the goods... can i leave?" set off travel and the narrator invented a barrier.
         if any(
             detect_travel_intent(sentence) and not is_hypothetical(sentence)
-            for sentence in re.findall(r"[^.!?;]+[.!?;]*", processed)
+            for sentence in re.findall(r"[^.!?;]+[.!?;]*", acting)
         ):
             # Same tier as the direction check above, but for location-to-location travel.
             # Unlike every other gate here, this one does consult the matcher (for the named
@@ -1458,7 +1553,7 @@ class IntentClassifier:
             # resolves the destination literally first, so a None here changes nothing.
             events.append(_travel_event(processed, self.matcher))
             return ClassifiedInput(processed, events, adjudication)
-        if TOWARD_PATTERN.search(processed) and not is_hypothetical(processed):
+        if TOWARD_PATTERN.search(acting) and not is_hypothetical(processed):
             travel = _travel_event(processed, self.matcher)
             if travel["payload"]["destination"]:
                 events.append(travel)
@@ -1495,16 +1590,35 @@ class IntentClassifier:
             not explicit_dialogue and not found_exempt and has_listener
             and detect_implicit_speech(processed)
         )
+        split_tried = False
+        if has_listener and not turn_clauses and not explicit_dialogue and not found_exempt and stage_directions(processed):
+            # "(i wink at her.) just trying to get close to you." -- the stage direction does not have to
+            # look like talk for the rest of the line to be talk.
+            split_tried = True
+            mixed = self._split_speech_from_action(raw_input, processed, adjudication)
+            if mixed:
+                events.extend(mixed)
+                return ClassifiedInput(processed, events, adjudication)
         if implicit_dialogue and not turn_clauses and "?" not in processed and _opening_verb(processed) not in QUESTION_OPENERS:
+            # A line that is part stage direction, part talk -- "(i pause, letting my stare linger.)
+            # wouldn't dream of it." -- is split before the whole line is put to the model, which
+            # can only name one kind for it and says "action", losing the talk and the gesture both.
+            split_tried = True
+            mixed = self._split_speech_from_action(raw_input, processed, adjudication)
+            if mixed:
+                events.extend(mixed)
+                return ClassifiedInput(processed, events, adjudication)
             # Talk only by its opening words -- ask (see _adjudicate). A question stays talk, with
             # or without its "?" ("where should i put it"): it almost never declares an action,
             # and is_hypothetical already covers the rest.
             verdict = self._adjudicate(processed, "declarative", adjudication)
             if verdict == "action":
                 implicit_dialogue = False
-            elif verdict in ("game_question", "musing"):
-                events.append(self._verdict_event(verdict, processed, raw_input))
-                return ClassifiedInput(processed, events, adjudication)
+            elif verdict in ("game_question", "musing", "gesture"):
+                gesture_event = self._verdict_event(verdict, processed, raw_input, adjudication)
+                if gesture_event:
+                    events.append(gesture_event)
+                    return ClassifiedInput(processed, events, adjudication)
         if not turn_clauses and has_listener and not speech_quotes(processed):
             spoken = self._split_spoken_clauses(raw_input, processed)
             if spoken:
@@ -1530,7 +1644,7 @@ class IntentClassifier:
                     if event["event"] == "item_interaction_detected":
                         event["payload"]["quiet"] = True
             if implicit_dialogue:
-                mixed = self._split_speech_from_action(raw_input, processed)
+                mixed = None if split_tried else self._split_speech_from_action(raw_input, processed, adjudication)
             else:
                 mixed = self._split_quoted_speech(raw_input, processed, adjudication)
             if mixed:
@@ -1549,7 +1663,9 @@ class IntentClassifier:
             clause["kind"] == "action" and clause.get("score", 1.0) < WEAK_TURN_SCORE for clause in turn_clauses
         )
         if weak_turn and adjudication.may_ask():
-            verdict_event = self._verdict_event(self._adjudicate(processed, "weak_turn", adjudication), processed, raw_input)
+            verdict_event = self._verdict_event(
+                self._adjudicate(processed, "weak_turn", adjudication), processed, raw_input, adjudication,
+            )
             if verdict_event:
                 events.append(verdict_event)
                 return ClassifiedInput(processed, events, adjudication)
@@ -1607,7 +1723,7 @@ class IntentClassifier:
             },
         }
 
-    def _split_speech_from_action(self, raw_input, processed):
+    def _split_speech_from_action(self, raw_input, processed, adjudication=None):
         """!
         @brief Splits an implicit-speech input that also declares an action -- "stomach for
             snacks? never mind, i'll just take the goods instead!" -- into a turn for the action
@@ -1620,41 +1736,73 @@ class IntentClassifier:
             interaction with a matched item, or a skill matched semantically (a keyword-fallback
             hit, or an item verb naming no real item, is too weak to take a turn away from talk). Anything less leaves the whole input
             as dialogue, exactly as before -- "forget the lumber. let's find a private place."
-            stays talk.
+            stays talk -- except that an action half nothing matched is put to the model once
+            ("weak_split"), and a "gesture" verdict keeps it as a gesture turn beside the talk.
+            Found by playtest: "(i slide a wink across the counter.) just trying to get close to
+            you." matched no skill, so the wink was dropped, or the whole line came back as an
+            unresolved action.
+        @param adjudication This input's Adjudication, for the one model question.
         @return [event, ...] for both halves, or None to keep the input whole.
         """
         original = _original_casing(raw_input, processed)
-        speech, action = [], []
-        for match in re.finditer(r"[^.!?;]+[.!?;]*", processed):
-            sentence = match.group().strip()
-            if not sentence:
-                continue
-            first_word = re.match(r"[a-z']*", sentence).group()
-            is_speech = detect_implicit_speech(sentence) or first_word in SPEECH_FRAGMENT_OPENERS
-            (speech if is_speech else action).append(match)
-        if not speech or not action:
-            return None
+        spans = stage_directions(processed)
+        talk = _blank_spans(processed, spans)
+        stage_mode = bool(spans and re.search(r"[a-z]", talk))
+        if stage_mode:
+            # A player who writes "(...)" is writing a stage direction by convention: what is inside is
+            # the action and what is outside is the talk, with no word list to guess which sentence
+            # is which ("wouldn't dream of it." opens like an action, and is plainly speech here).
+            # Found by playtest: this is how the gooner persona writes every turn.
+            action_text = " ".join(content for _start, _end, content in spans)
+            speech_text = re.sub(r"\s+", " ", talk).strip()
+            utterance = re.sub(r"\s+", " ", _blank_spans(original, spans)).strip()
+            speech_first = bool(re.search(r"[a-z]", processed[:spans[0][0]]))
+        else:
+            speech, action = [], []
+            # A closing parenthesis ends the stage direction it closes, not the talk that follows it.
+            for match in re.finditer(r"[^.!?;]+[.!?;]*\)*", processed):
+                sentence = match.group().strip()
+                if not sentence:
+                    continue
+                first_word = re.match(r"[a-z']*", sentence).group()
+                is_speech = detect_implicit_speech(sentence) or first_word in SPEECH_FRAGMENT_OPENERS
+                (speech if is_speech else action).append(match)
+            if not speech or not action:
+                return None
+            action_text = " ".join(match.group().strip() for match in action)
+            speech_text = " ".join(match.group().strip() for match in speech)
+            utterance = " ".join(original[match.start():match.end()].strip() for match in speech)
+            speech_first = speech[0].start() < action[0].start()
 
-        action_text = " ".join(match.group().strip() for match in action)
         exempt_events = []
         turn_clauses, remaining, _found_exempt, unmatched = self._classify_item_pass(action_text, exempt_events)
-        if unmatched:
+        if unmatched and not stage_mode:
             # An item verb naming nothing real ("i'll just take the goods") -- the skill pass
             # would only guess at it ("never mind" -> psionics), too weak to split talk over.
             return None
-        self._classify_skill_pass(remaining, turn_clauses, action_text)
+        if unmatched:
+            # Inside a stage direction the same verb is a false positive more often than not ("giving
+            # her a knowing smile" is not a give), so nothing is trusted and the model decides below.
+            turn_clauses = []
+        else:
+            self._classify_skill_pass(remaining, turn_clauses, action_text)
         turn_clauses = [
             clause for clause in turn_clauses
             if clause["kind"] == "item" or clause.get("score", 0.0) >= MIXED_ACTION_MIN_SCORE
         ]
+        if not turn_clauses and adjudication is not None and adjudication.may_ask():
+            gesture_text = action_text.strip("() ")
+            if self._adjudicate(gesture_text, "weak_split", adjudication) == "gesture":
+                gesture = self._verdict_event("gesture", gesture_text, raw_input, adjudication)
+                if gesture:
+                    turn_clauses = gesture["payload"]["clauses"]
+                    action_text = gesture_text
         if not turn_clauses:
             return None
 
-        speech_text = " ".join(match.group().strip() for match in speech)
-        utterance = " ".join(original[match.start():match.end()].strip() for match in speech)
         dialogue = self._dialogue_event(speech_text, {"speech_form": "verbatim", "utterance": utterance}, True)
         turn = {"event": "turn_detected", "payload": {"clauses": turn_clauses, "input": action_text}}
-        return [dialogue, turn] if speech[0].start() < action[0].start() else [turn, dialogue]
+        return [dialogue, turn] if speech_first else [turn, dialogue]
 
     def _split_spoken_clauses(self, raw_input, processed):
         """!
@@ -1756,12 +1904,20 @@ class IntentClassifier:
             return None
         # The same check an ordinary weak turn gets (see classify's weak_turn): a skill guessed
         # below WEAK_TURN_SCORE is put to the model, and anything but "action" keeps the whole
-        # line as talk. Found by playtest: "casually reach out, tapping the heavy metal ring on
-        # his wrist" beside a quote rolled polearms at 0.52 and was narrated as a sword strike.
+        # line as talk -- except a "gesture", whose wordless half is kept as its own turn beside
+        # the quote. Found by playtest: "casually reach out, tapping the heavy metal ring on
+        # his wrist" beside a quote rolled polearms at 0.52 and was narrated as a sword strike;
+        # and a flirt's caress beside a whisper was dropped as talk five times in forty turns,
+        # while seven more rolled strength, dodge or polearms for it.
         weak = all(clause["kind"] == "action" and clause.get("score", 1.0) < WEAK_TURN_SCORE for clause in turn_clauses)
         if weak and adjudication.may_ask():
             verdict = self._adjudicate(action_text, "weak_quoted", adjudication)
-            if verdict is not None and verdict != "action":
+            if verdict == "gesture":
+                gesture = self._verdict_event(verdict, action_text, raw_input, adjudication)
+                if not gesture:
+                    return None
+                turn_clauses = gesture["payload"]["clauses"]
+            elif verdict is not None and verdict != "action":
                 return None
 
         dialogue = self._dialogue_event(processed, {"speech_form": "verbatim", "utterance": " ".join(quotes)}, False)
@@ -1798,9 +1954,11 @@ class IntentClassifier:
         unmatched_item_verbs = []
         hypothetical = hypothetical_spans(processed)
         cursor = 0
+        # Spoken quotes are talk, not verbs (mask_speech_quotes): same length, so positions agree.
+        scanned = mask_talk(processed)
 
-        for clause in split_action_clauses(processed):
-            start = processed.find(clause, cursor)
+        for clause in split_action_clauses(scanned):
+            start = scanned.find(clause, cursor)
             cursor = start + len(clause)
             clause_intent = detect_item_intent(normalize_declared_verb(clause))
             if clause_intent in HYPOTHETICAL_BLOCKED_INTENTS and any(a <= start < b for a, b in hypothetical):
@@ -1957,7 +2115,7 @@ class IntentClassifier:
         verdict = None
         if has_listener and adjudication.may_ask():
             verdict = self._adjudicate(processed, "not_understood", adjudication)
-            verdict_event = self._verdict_event(verdict, processed, raw_input)
+            verdict_event = self._verdict_event(verdict, processed, raw_input, adjudication)
             if verdict_event:
                 events.append(verdict_event)
                 return

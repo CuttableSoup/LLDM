@@ -26,12 +26,15 @@ class IntentMatch:
         that move the player or the clock.
     @param before_items Gated ahead of the item-named intents (only lore_check -- its long
         phrases would otherwise lose to a shorter item verb inside them).
+    @param ignore Regexes whose matches are blanked out of the text before the keyword gate runs, for a
+        keyword that has a second meaning ("rest" is also what a hand does on a shoulder).
     @param item_pass False for an intent the keyword gate in detect_item_intent doesn't handle
         (travel has its own gate, checked ahead of item detection).
     """
 
     keywords: tuple = ()
     patterns: tuple = ()
+    ignore: tuple = ()
     prototypes: tuple = ()
     exempt: bool = False
     question_blocked: bool = False

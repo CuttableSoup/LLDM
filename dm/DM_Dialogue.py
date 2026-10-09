@@ -2,6 +2,8 @@ import re
 
 from dm.DM_Types import DMCoreProtocol
 import resolution.Combat_Resolution as Combat_Resolution
+import resolution.Social_Resolution as Social_Resolution
+from resolution.Action_Target import FEMALE_GENDERS, MALE_GENDERS
 from resolution.Entity_Reference import first_named, mentions
 
 # How many turn-costing, non-dialogue turns a conversation survives before it lapses -- long
@@ -309,6 +311,90 @@ class DialogueMixin(DMCoreProtocol):
 
         self.entities[self.player_name]["current_language"] = named[0]
         resolved(True, language=named[0])
+
+    def _gesture_target(self, input_text):
+        """!
+        @brief Who a wordless gesture is aimed at: whoever the input names, else the conversation
+            partner, else the one person a gendered pronoun can only mean, else the one other person
+            in the scene if there is exactly one -- and no one otherwise. Deliberately not _resolve_dialogue_target's default-listener fallback: a
+            remark can land on whoever is nearest, but a kiss or a bow must not.
+        @param input_text The player's raw (already lowercased) input.
+        @return An entity key, or None.
+        """
+        named = self._literal_dialogue_target(input_text)
+        if named:
+            return named
+        partner = self._current_conversation_partner()
+        if partner:
+            return partner
+        # "pull him into a kiss": a gendered pronoun means the one person present it can only mean
+        # (the same rule an attack's pronoun follows -- two men present and "him" means nobody).
+        words = set(re.findall(r"[a-z]+", input_text or ""))
+        wanted = (
+            FEMALE_GENDERS if words & {"her", "she", "hers"}
+            else MALE_GENDERS if words & {"him", "his", "he"} else None
+        )
+        if wanted:
+            matches = [
+                name for name in self.scenario_entities
+                if name != self.player_name and not self._is_party_member(name)
+                and self.entities.get(name, {}).get("supertype") == "creature"
+                and Combat_Resolution.get_current_hp(self.world, name) > 0 and not self.is_hidden(name)
+                and str((self.entities[name].get("qualities") or {}).get("gender", "")).lower() in wanted
+            ]
+            if len(matches) == 1:
+                return matches[0]
+        others = [
+            name for name in self.scenario_entities
+            if name != self.player_name and not self._is_party_member(name)
+            and self.entities.get(name, {}).get("supertype") != "object"
+            and Combat_Resolution.get_current_hp(self.world, name) > 0 and not self.is_hidden(name)
+        ]
+        return others[0] if len(others) == 1 else None
+
+    def _resolve_gesture_intent(self, input_text, tone, resolved):
+        """!
+        @brief Handles "gesture" -- a wordless expressive act (a kiss, a bow, a dance) the
+            adjudicator classified (AdHoc_Generation.py's adjudicate_player_input), whose tone is
+            one the setting authors as an [[attitude_event]] "tone". Diceless. Only the target's
+            attitude moves, through that event (or its "unwelcome_event" when they already feel
+            below the event's "unwelcome_below" toward the player) -- never a bystander's. The
+            language barrier does not apply: a bow needs no shared tongue. An object, or no one
+            at all, is simply a gesture at nothing: narrated, moving no attitude. A dead or
+            absent named target is declined, so the narrator doesn't invent a reaction.
+        @param input_text The raw (lowercased, prefix-stripped) player input.
+        @param tone One of Social_Resolution.gesture_tones, as the adjudicator named it.
+        @param resolved The item_interaction_resolved publisher closure from
+            DMCore._on_item_interaction_detected.
+        """
+        target_name = self._gesture_target(input_text)
+        entity = self.entities.get(target_name, {}) if target_name else {}
+        if target_name and entity.get("supertype") == "object":
+            target_name = None
+        if target_name:
+            if target_name in self.scenario_entities and Combat_Resolution.get_current_hp(self.world, target_name) <= 0:
+                resolved(False, reason="dead", target=target_name, tone=tone)
+                return
+            if target_name not in self.scenario_entities or self.is_hidden(target_name):
+                resolved(False, reason="not_present", target=target_name, tone=tone)
+                return
+
+        if not target_name:
+            resolved(True, tone=tone, target=None)
+            return
+
+        event_name, unwelcome = Social_Resolution.gesture_event_name(
+            self.rules, tone, self.get_attitude(target_name, self.player_name)[0],
+        )
+        if event_name:
+            self.nudge_attitude_from_event(target_name, self.player_name, event_name, 1.0)
+        # Aiming a gesture at someone is addressing them: the next unmarked line goes to them.
+        self._set_conversation_partner(target_name)
+        resolved(
+            True, tone=tone, target=target_name, target_label=entity.get("name", target_name),
+            persona=self.describe_character(target_name),
+            attitude=self.describe_attitude(target_name, self.player_name), unwelcome=unwelcome,
+        )
 
     def _detect_language_barrier(self, target_name):
         """!

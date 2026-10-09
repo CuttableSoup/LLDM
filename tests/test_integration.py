@@ -1519,5 +1519,127 @@ async def test_innkeeper_dialogue_through_textual():
         assert len(responses) == len(turns) + 1
 
 
+@unittest.skipUnless(_ollama_reachable(), "Ollama not reachable at http://127.0.0.1:11434")
+class TestGestureAdjudicationLive(unittest.TestCase):
+    """!
+    @brief Whether the loaded model actually sorts wordless gestures from everything else. Every unit
+        test of the gesture path scripts the model's answer, so none can show the thing the feature
+        depends on: that the `gesture` kind's wording separates a kiss from a shove, and "I'm sorry
+        about your husband" from a bow. Each phrase is held out of the prompt's own wording.
+
+        The negatives matter more than the positives. A missed gesture is today's behavior (not
+        understood), but a shove, slap or spoken line taken for a gesture is a confidently wrong
+        outcome: aggression applied as affection, or words swallowed as a wink. So no negative may
+        come back `gesture`, while the positives are held to a rate -- the model is a temperature-0
+        classifier, not an oracle, and "unavailable" skips rather than failing, since a timed-out
+        call says nothing about the prompt.
+    """
+
+    POSITIVES = [
+        ("I kiss her", "intimate"),
+        ("I pull Marta into a long embrace", "intimate"),
+        ("I give her a gentle pat on the shoulder", "warm"),
+        ("I squeeze his hand", "warm"),
+        ("I curtsy deeply", "respectful"),
+        ("I take off my hat and bow my head to the captain", "respectful"),
+        ("I salute the sergeant", "respectful"),
+        ("I spit at his feet", "mocking"),
+        ("I stick my tongue out at him", "mocking"),
+        ("I dance a little jig", "neutral"),
+        # From the gooner playtest, where each was called an action and rolled polearms, fly, dodge or
+        # observation. The tone is only checked where it is not a matter of reading the room.
+        ("I stroll closer, letting my hip brush against his", "intimate"),
+        ("I let my hand glide up the front of his shirt, resting my palm on his chest", "intimate"),
+        ("I step forward until I am nose to nose with him, my eyes on his mouth", None),
+        ("I lean in close to his ear so he can feel my breath", None),
+        ("I shift my weight so my body brushes against his", "intimate"),
+    ]
+    NEGATIVES = [
+        "I shove the guard",
+        "I slap him across the face",
+        "I punch the drunk in the jaw",
+        "I pick the lock on the chest",
+        "I search the room for anything useful",
+        "I buy two apples from her",
+        "I tell her I'm sorry about her husband",
+        "Good evening, how are you today?",
+        "I ask where the road leads",
+        "How does initiative work?",
+        "I wonder what's in the cellar",
+        # Real actions the same playtest produced: restraining and taking are not expressions.
+        "I grab his wrist, pinning his arm against his body so he can't raise the weapon",
+        "I pluck the carved piece from beneath the netting",
+        "I seize her by the collar and drag her out of the doorway",
+    ]
+    # Ratchet: raise whenever the measured rate improves. Run with -s to see the misses.
+    MIN_GESTURE_RECALL = 0.9
+    MIN_TONE_ACCURACY = 0.9
+
+    def _ask(self, tones, line):
+        from resolution.AdHoc_Generation import adjudicate_player_input
+        verdict, reason = adjudicate_player_input(line, ["Marta", "Captain Aldric"], timeout=30, gesture_tones=tones)
+        if verdict is None and reason == "unavailable":
+            self.skipTest("Ollama did not answer; the prompt says nothing about this.")
+        return verdict
+
+    def _tones(self, setting):
+        import tomllib
+        from resolution.Social_Resolution import gesture_tones
+        with open(os.path.join("Rules", setting, "rules.toml"), "rb") as handle:
+            return gesture_tones(tomllib.load(handle))
+
+    def test_gestures_are_recognized_and_nothing_else_is_taken_for_one(self):
+        for setting in ("Fantasy", "Pathfinder"):
+            with self.subTest(setting=setting):
+                tones = self._tones(setting)
+                hits = tone_hits = tone_checked = 0
+                misses = []
+                for line, tone in self.POSITIVES:
+                    verdict = self._ask(tones, line)
+                    if verdict and verdict["kind"] == "gesture":
+                        hits += 1
+                        if tone is None:
+                            continue
+                        tone_checked += 1
+                        tone_hits += verdict["tone"] == tone
+                        if verdict["tone"] != tone:
+                            misses.append(f"{line!r}: tone {verdict['tone']!r}, wanted {tone!r}")
+                    else:
+                        misses.append(f"{line!r}: {verdict and verdict['kind']!r}, wanted a gesture")
+                wrongly_gestures = [
+                    line for line in self.NEGATIVES
+                    if (self._ask(tones, line) or {}).get("kind") == "gesture"
+                ]
+                print(f"\n[{setting}] gesture recall {hits}/{len(self.POSITIVES)}, tone {tone_hits}/{tone_checked or 1}")
+                for miss in misses:
+                    print(f"  miss: {miss}")
+
+                self.assertEqual(wrongly_gestures, [], "a non-gesture was taken for one")
+                self.assertGreaterEqual(hits / len(self.POSITIVES), self.MIN_GESTURE_RECALL, misses)
+                self.assertGreaterEqual(tone_hits / max(tone_checked, 1), self.MIN_TONE_ACCURACY, misses)
+
+    def test_without_tones_the_kind_is_never_offered(self):
+        # Zombie authors none: the same lines can only come back as the old four kinds.
+        for line, _tone in self.POSITIVES:
+            verdict = self._ask({}, line)
+            self.assertNotEqual((verdict or {}).get("kind"), "gesture", line)
+
+    def test_a_gesture_line_is_resolved_not_dropped_through_the_whole_pipeline(self):
+        # The motivating case, end to end with the real classifier, matcher and model.
+        bus = EventBus()
+        events = []
+        for name in ("action_not_understood", "item_interaction_resolved", "turn_detected"):
+            bus.subscribe(name, lambda payload, name=name: events.append((name, payload)))
+        nlp_core = NLPCore(bus)
+        core = DMCore(bus, scenario_name="debug", start_location="tavern_floor", setting="Fantasy")
+        bus.publish("user_input_submitted", "I kiss the innkeeper")
+        names = [name for name, _ in events]
+        self.assertNotIn("action_not_understood", names, events)
+        resolved = [payload for name, payload in events if name == "item_interaction_resolved"]
+        self.assertEqual([p["intent"] for p in resolved], ["gesture"], events)
+        self.assertTrue(core.entities["innkeeper"].get("action_attitude_deltas"))
+
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -7,6 +7,7 @@ from dm.DM_Core import DMCore
 from dm.DM_Rules import RulesMixin, list_available_settings
 from tests.event_contract import ValidatingEventBus
 from nlp.Intent_Classification import (
+    _clause_names_item,
     ADDRESS_ARTICLES,
     ADDRESS_NON_ADDRESSEES,
     ADDRESS_TERMINATORS,
@@ -973,6 +974,106 @@ class TestIntentClassification(unittest.TestCase):
         _processed, events, _adjudication = classifier.classify(line)
         self.assertEqual([event["event"] for event in events], ["turn_detected", "dialogue_detected"])
 
+    def test_a_gesture_beside_a_quote_keeps_both_halves(self):
+        # Found by playtest (gooner persona): a caress beside a whisper was kept whole as talk five
+        # times in forty turns, the gesture half dropped; seven more rolled strength/dodge for it.
+        line = 'I smirk and reach out, tapping the ring on his wrist. "Maybe I\'ll prove it."'
+        action_text = "smirk and reach out, tapping the ring on his wrist."
+        verdict = {"kind": "gesture", "game_action": None, "item": None, "tone": "warm"}
+        classifier, _matcher = self._adjudicating({action_text: verdict}, actions={"reach out": ("polearms", 0.52)})
+
+        _processed, events, adjudication = classifier.classify(line)
+
+        self.assertEqual([event["event"] for event in events], ["turn_detected", "dialogue_detected"])
+        turn = events[0]["payload"]
+        # The weak skill guess is replaced, not rolled beside the gesture; the turn's text is the
+        # action half alone, so the target is never read out of the quote.
+        self.assertEqual(
+            turn["clauses"], [{"kind": "item", "intent": "gesture", "item_name": None, "phrase": None, "tone": "warm"}],
+        )
+        self.assertEqual(turn["input"], action_text)
+        self.assertEqual((adjudication.verdict, adjudication.tone, adjudication.trigger), ("gesture", "warm", "weak_quoted"))
+
+        # Speech first when only its tag precedes the quote, as for any other action beside a quote.
+        spoken_first = 'I whisper "Maybe I\'ll prove it." and reach out, tapping the ring on his wrist.'
+        classifier, _matcher = self._adjudicating(
+            {"reach out, tapping the ring on his wrist.": verdict}, actions={"reach out": ("polearms", 0.52)},
+        )
+        _processed, events, _adjudication = classifier.classify(spoken_first)
+        self.assertEqual(sorted(event["event"] for event in events), ["dialogue_detected", "turn_detected"])
+
+        # An "action" verdict still rolls, and any other verdict still keeps the line as talk.
+        classifier, _matcher = self._adjudicating({action_text: "action"}, actions={"reach out": ("polearms", 0.52)})
+        self.assertEqual([e["event"] for e in classifier.classify(line)[1]], ["turn_detected", "dialogue_detected"])
+        classifier, _matcher = self._adjudicating({action_text: "speech"}, actions={"reach out": ("polearms", 0.52)})
+        self.assertEqual([e["event"] for e in classifier.classify(line)[1]], ["dialogue_detected"])
+
+    def test_a_stage_direction_beside_talk_keeps_both_halves(self):
+        # Found by the gooner persona, which writes every turn as "(stage direction) words": the model
+        # could only name one kind for the whole line and said "action", losing the talk and the
+        # gesture both, and eleven of forty turns came back not understood.
+        gesture = {"kind": "gesture", "game_action": None, "item": None, "tone": "warm"}
+        stare = "i pause, letting my stare linger on her for a beat too long."
+        wink = "i wink."
+        classifier, _matcher = self._adjudicating({stare: gesture, wink: gesture})
+
+        # Stage direction first: it opens like an action, so the talk is told apart by the parentheses.
+        _processed, events, adjudication = classifier.classify(f"(I pause, letting my stare linger on her for a beat too long.) Wouldn't dream of it.")
+        self.assertEqual([event["event"] for event in events], ["turn_detected", "dialogue_detected"])
+        self.assertEqual(
+            events[0]["payload"]["clauses"],
+            [{"kind": "item", "intent": "gesture", "item_name": None, "phrase": None, "tone": "warm"}],
+        )
+        self.assertEqual(events[1]["payload"]["utterance"], "Wouldn't dream of it.")
+        self.assertEqual((adjudication.verdict, adjudication.trigger), ("gesture", "weak_split"))
+
+        # Stage direction last: the talk comes first, in the order written.
+        _processed, events, _adjudication = classifier.classify("You know it. (I wink.)")
+        self.assertEqual([event["event"] for event in events], ["dialogue_detected", "turn_detected"])
+
+        # Only the stage direction is put to the model, never the talk.
+        asked = [text for text, *_ in classifier.matcher.adjudicated]
+        self.assertEqual(asked, [stare, wink])
+
+    def test_a_starred_emote_is_a_stage_direction_and_the_talk_beside_it_is_never_a_command(self):
+        # Found by the gooner persona's third style, "*i lean in.* relax. a solid night's rest.": the
+        # word "rest" in the talk ran a real rest, which an enemy nearby then silently refused, so the
+        # turn produced no narration at all.
+        gesture = {"kind": "gesture", "game_action": None, "item": None, "tone": "intimate"}
+        pressed = "i keep my body pressed close to hers, whispering right against her ear."
+        classifier, _matcher = self._adjudicating({pressed: gesture})
+
+        _processed, events, _adjudication = classifier.classify(
+            f"*I keep my body pressed close to hers, whispering right against her ear.* "
+            f"Relax. You look like you could use a solid night's rest."
+        )
+
+        self.assertEqual([event["event"] for event in events], ["turn_detected", "dialogue_detected"])
+        self.assertEqual(events[0]["payload"]["clauses"][0]["intent"], "gesture")
+        self.assertEqual(events[1]["payload"]["utterance"], "Relax. You look like you could use a solid night's rest.")
+
+    def test_a_bracketed_aside_is_not_a_stage_direction(self):
+        from nlp.Intent_Classification import mask_talk, stage_directions
+        self.assertEqual(stage_directions("walk to the docks (it's far)"), [])
+        self.assertEqual([content for _s, _e, content in stage_directions("(i wink.) hi")], ["i wink."])
+        self.assertEqual([content for _s, _e, content in stage_directions("*sighs* ok")], ["sighs"])
+        # Only stage directions survive the talk mask, and only when there is talk beside them.
+        self.assertEqual(mask_talk("walk to the docks (it's far)"), "walk to the docks (it's far)")
+        self.assertEqual(mask_talk("*i lean in.* relax. a rest.").strip(), "*i lean in.*")
+        self.assertEqual(mask_talk("*i lean in.*"), "*i lean in.*")
+
+    def test_a_stage_direction_alone_or_beside_a_dialogue_keyword_is_unchanged(self):
+        classifier, _matcher = self._adjudicating({})
+        _processed, events, _adjudication = classifier.classify("(I draw my sword.)")
+        self.assertEqual(events[0]["event"], "action_not_understood")
+        _processed, events, _adjudication = classifier.classify("(I smile.) Ask Finn about rooms.")
+        self.assertEqual([event["event"] for event in events], ["dialogue_detected"])
+
+    def test_a_stage_direction_the_model_does_not_call_a_gesture_leaves_the_line_as_it_was(self):
+        classifier, _matcher = self._adjudicating({"i wink.": "speech"})
+        _processed, events, _adjudication = classifier.classify("(I wink.) Just trying to get close to you.")
+        self.assertNotIn("turn_detected", [event["event"] for event in events])
+
     def test_a_weak_turn_or_an_unclaimed_line_is_checked_with_the_model(self):
         classifier, _matcher = self._adjudicating({
             "count to three for me finn": "speech", "explain how wounds heal": "game_question",
@@ -988,6 +1089,51 @@ class TestIntentClassification(unittest.TestCase):
         # Nothing carries over: an input that asks nobody gets a fresh, unasked record.
         _processed, events, adjudication = classifier.classify("take the longsword")
         self.assertFalse(adjudication.asked)
+
+    def test_a_gesture_verdict_becomes_a_turn_costing_item_clause_carrying_its_tone(self):
+        # "kiss her" matches no skill and no item: the model's call is all that stands between it
+        # and being dropped. The clause is an item-kind one, so it takes a turn slot and never rolls.
+        verdict = {"kind": "gesture", "game_action": None, "item": None, "tone": "intimate"}
+        classifier, _matcher = self._adjudicating({"kiss finn": verdict, "bow to finn": verdict})
+
+        for text in ("Kiss Finn", "Bow to Finn"):
+            _processed, events, adjudication = classifier.classify(text)
+            self.assertEqual([event["event"] for event in events], ["turn_detected"], text)
+            [clause] = events[0]["payload"]["clauses"]
+            self.assertEqual(
+                clause, {"kind": "item", "intent": "gesture", "item_name": None, "phrase": None, "tone": "intimate"},
+            )
+            self.assertEqual((adjudication.verdict, adjudication.tone, adjudication.trigger), ("gesture", "intimate", "not_understood"))
+
+    def test_a_gesture_verdict_also_displaces_a_weak_skill_guess(self):
+        verdict = {"kind": "gesture", "game_action": None, "item": None, "tone": "warm"}
+        classifier, _matcher = self._adjudicating(
+            {"hug finn": verdict}, actions={"hug finn": ("brawling", 0.54)},
+        )
+
+        _processed, events, adjudication = classifier.classify("Hug Finn")
+
+        [clause] = events[0]["payload"]["clauses"]
+        self.assertEqual((clause["intent"], clause["tone"]), ("gesture", "warm"))
+        self.assertEqual(adjudication.trigger, "weak_turn")
+
+    def test_a_confident_skill_match_is_never_asked_about(self):
+        verdict = {"kind": "gesture", "game_action": None, "item": None, "tone": "warm"}
+        classifier, matcher = self._adjudicating(
+            {"hug finn": verdict}, actions={"hug finn": ("brawling", 0.8)},
+        )
+
+        _processed, events, adjudication = classifier.classify("Hug Finn")
+
+        self.assertEqual(events[0]["payload"]["clauses"], [{"kind": "action", "skill": "brawling", "score": 0.8}])
+        self.assertFalse(adjudication.asked)
+
+    def test_no_listener_means_a_gesture_is_never_asked_about(self):
+        alone = FakeMatcher()
+        alone.adjudications = {"dance": {"kind": "gesture", "game_action": None, "item": None, "tone": "neutral"}}
+        _processed, events, _adjudication = IntentClassifier(alone).classify("Dance")
+        self.assertEqual(events[0]["event"], "action_not_understood")
+        self.assertFalse(getattr(alone, "adjudicated", []))
 
     def test_no_model_answer_leaves_the_rules_call(self):
         classifier, _matcher = self._adjudicating({}, actions={"count to three for me finn": ("appraise", 0.54)})
@@ -1467,7 +1613,7 @@ class TestInputAdjudication(unittest.TestCase):
         script_llm(self, stub)
         verdict, _reason = adjudicate_player_input(
             "Let's go down that cut-through.", ["Finn"], "Finn", "Finn points at an alley.")
-        self.assertEqual(verdict, {"kind": "action", "game_action": None, "item": None})
+        self.assertEqual(verdict, {"kind": "action", "game_action": None, "item": None, "tone": None})
         prompt = sent[0][-1]["content"]
         for expected in ("Finn", "talking to Finn", "Finn points at an alley.", "cut-through"):
             self.assertIn(expected, prompt)
@@ -1489,7 +1635,7 @@ class TestInputAdjudication(unittest.TestCase):
             return adjudicate_player_input("x")[0]
 
         self.assertEqual(ask(self._answer("action", game_action="buy", item=" the smoked peppers ")),
-                         {"kind": "action", "game_action": "buy", "item": "the smoked peppers"})
+                         {"kind": "action", "game_action": "buy", "item": "the smoked peppers", "tone": None})
         # Only an action names one, only a real one other than "other", and only with its item.
         for answer in (self._answer("speech", game_action="buy", item="peppers"),
                        self._answer("action", game_action="other", item="peppers"),
@@ -1497,6 +1643,42 @@ class TestInputAdjudication(unittest.TestCase):
                        self._answer("action", game_action="buy")):
             verdict = ask(answer)
             self.assertEqual((verdict["game_action"], verdict["item"]), (None, None))
+
+
+    TONES = {"warm": "a kind act", "mocking": "a rude act"}
+
+    def test_a_gesture_is_offered_only_when_the_setting_authors_tones_and_carries_its_tone(self):
+        from resolution.AdHoc_Generation import adjudicate_player_input
+        sent = []
+        stub = lambda api_url, messages, **kwargs: (sent.append((messages, kwargs)), self._answer("gesture", tone="warm"))[1]
+        script_llm(self, stub)
+
+        verdict, _reason = adjudicate_player_input("hug her", ["Finn"], gesture_tones=self.TONES)
+
+        self.assertEqual(verdict, {"kind": "gesture", "game_action": None, "item": None, "tone": "warm"})
+        prompt = sent[0][0][-1]["content"]
+        self.assertIn("- gesture:", prompt)
+        self.assertIn("- mocking: a rude act", prompt)
+        tool = sent[0][1]["tools"][0]["function"]["parameters"]["properties"]
+        self.assertEqual(tool["tone"]["enum"], ["warm", "mocking"])
+        self.assertIn("gesture", tool["kind"]["enum"])
+
+        # No tones authored: the kind does not exist, so the same answer is off-list.
+        verdict, reason = adjudicate_player_input("hug her", ["Finn"])
+        self.assertEqual((verdict, reason), (None, "invalid_kind"))
+        self.assertNotIn("- gesture:", sent[1][0][-1]["content"])
+
+    def test_a_gesture_with_no_known_tone_leaves_the_rules_to_decide(self):
+        from resolution.AdHoc_Generation import adjudicate_player_input
+        for answer in (self._answer("gesture"), self._answer("gesture", tone="sad")):
+            script_llm(self, lambda *a, **k: answer)
+            self.assertEqual(adjudicate_player_input("x", gesture_tones=self.TONES), (None, "invalid_tone"))
+
+    def test_only_a_gesture_keeps_a_tone(self):
+        from resolution.AdHoc_Generation import adjudicate_player_input
+        script_llm(self, lambda *a, **k: self._answer("speech", tone="warm"))
+        verdict, _reason = adjudicate_player_input("x", gesture_tones=self.TONES)
+        self.assertIsNone(verdict["tone"])
 
 
 class TestEntityReference(unittest.TestCase):
@@ -1614,6 +1796,69 @@ class TestAddressPhraseExtraction(unittest.TestCase):
                 self.assertNotIn(phrase, ADDRESS_NON_ADDRESSEES)
                 self.assertNotIn(phrase, ADDRESS_TERMINATORS)
                 self.assertNotIn(phrase, ADDRESS_ARTICLES)
+
+
+class TestSpokenWordsAreNotCommands(unittest.TestCase):
+    """!
+    @brief What the player says aloud must not trip the verbs that act on the world, and an item verb's
+        object is what it acts on -- both found by the gooner playtest (a "rest" inside a whispered line
+        ran a real rest, healing the character; "dropping my gaze to his spear tip" tried to drop a
+        spear). FakeMatcher: no model load.
+    """
+
+    @staticmethod
+    def _classify(line, **matcher_kwargs):
+        classifier = IntentClassifier(FakeMatcher(**matcher_kwargs))
+        classifier.set_present_entities([{"key": "Finn", "name": "Finn", "subtype": "human", "aliases": []}])
+        return classifier.classify(line)[1]
+
+    def test_spoken_quotes_are_blanked_to_the_same_length_and_scare_quotes_are_kept(self):
+        from nlp.Intent_Classification import mask_speech_quotes
+        text = 'eyes on his mouth. "you look like you need a rest." the "tide"'
+        masked = mask_speech_quotes(text)
+        self.assertEqual(len(masked), len(text))
+        self.assertNotIn("rest", masked)
+        self.assertIn('"tide"', masked)
+
+    def test_a_verb_inside_a_spoken_quote_does_nothing_but_get_said(self):
+        for line in (
+            'I let my eyes drift over his chest. "You look like you need a rest."',
+            'I nod at Finn. "Head to the docks, everyone."',
+            'I whisper "Take the sword and drop it, then sleep." to Finn',
+        ):
+            with self.subTest(line=line):
+                events = self._classify(line)
+                self.assertEqual([event["event"] for event in events], ["dialogue_detected"])
+
+    def test_the_same_verb_outside_a_quote_still_acts(self):
+        events = self._classify("I make camp for the night")
+        self.assertEqual(events[0]["payload"]["intent"], "rest")
+
+    def test_rest_as_what_a_hand_does_is_not_resting(self):
+        # Found by the gooner playtest: "my fingers rest on the buckle" ran three real rests in forty
+        # turns -- the clock advanced and the party healed.
+        for line in (
+            "I let my hand rest on his forearm", "I rest my hands gently on his shoulders",
+            "my hand ghosting up to rest on his forearm", "I sigh, letting the sword rest at my side",
+        ):
+            with self.subTest(line=line):
+                self.assertIsNone(detect_item_intent(line))
+        for line in ("I rest", "we rest for the night", "rest here a while", "make camp and rest on the hill"):
+            with self.subTest(line=line):
+                self.assertEqual(detect_item_intent(line), "rest")
+
+    def test_an_item_verb_acts_on_its_direct_object_not_on_where_it_points(self):
+        # "dropping my gaze to his spear tip" is about a gaze; the spear is only where it goes.
+        events = self._classify(
+            'I sigh loudly, dropping my gaze to his spear tip. "You are so cagey."',
+            items={"dropping my gaze to his spear tip.": ("spear", 0.56)},
+        )
+        self.assertEqual([event["event"] for event in events], ["dialogue_detected"])
+
+        self.assertFalse(_clause_names_item("drop my gaze to his spear tip", "spear"))
+        self.assertTrue(_clause_names_item("give the sword to anne", "longsword"))
+        self.assertTrue(_clause_names_item("give anne the sword", "longsword"))
+        self.assertTrue(_clause_names_item("drop the spear", "spear"))
 
 
 class TestAdjudicationRecord(unittest.TestCase):

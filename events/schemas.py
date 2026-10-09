@@ -65,10 +65,16 @@ class ItemInteractionResolved(TypedDict, total=False):
     members: list
     stance: str
     language: str
-    target: str
+    target: str | None
     skill: str
     puller: str
     vehicle: str
+    # -- gesture
+    tone: str
+    target_label: str
+    persona: str
+    attitude: str
+    unwelcome: bool
 
 
 class DialogueResolved(TypedDict, total=False):
@@ -96,6 +102,7 @@ class ItemClause(TypedDict, total=False):
     intent: Required[str]
     item_name: str | None
     phrase: str | None
+    tone: str
 
 
 class ActionClause(TypedDict, total=False):

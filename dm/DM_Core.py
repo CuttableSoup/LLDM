@@ -42,6 +42,7 @@ from resolution.World_Context import WorldContext
 import resolution.Combat_Resolution as Combat_Resolution
 import resolution.Ability_Effects as Ability_Effects
 import resolution.Combat_Actions as Combat_Actions
+import resolution.Social_Resolution as Social_Resolution
 
 # The intents whose default scene target is a PERSON rather than a thing, and which may
 # therefore fall back to an ambient crowd member (see _get_target_name's include_background).
@@ -391,6 +392,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, MovementMixin, RulesMixin
             "entities": self.entities,
             "equip_slots": self.rules.get("equip_slot", []),
             "scenario_entities": self.scenario_entities,
+            "gesture_tones": Social_Resolution.gesture_tones(self.rules),
         })
         self.event_bus.publish("scenario_loaded", {
             # For a multi-room dungeon this narrates the *starting room* specifically (ex:
@@ -541,7 +543,7 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, MovementMixin, RulesMixin
                 # covers the skill/ability portion of the turn.
                 self._on_item_interaction_detected({
                     "intent": entry.get("intent"), "item_name": entry.get("item_name"), "input": input_text,
-                    "phrase": entry.get("phrase"),
+                    "phrase": entry.get("phrase"), "tone": entry.get("tone"),
                 })
                 continue
 

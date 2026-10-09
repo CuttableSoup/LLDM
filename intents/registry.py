@@ -13,6 +13,7 @@
 from intents import advance_retreat, formation, hitch, lore_check, mount, rest, speak_language, travel
 from intents.advance_retreat import narrate_advance_retreat, resolve_advance_retreat
 from intents.formation import narrate_formation, resolve_formation
+from intents.gesture import narrate_gesture, resolve_gesture
 from intents.hitch import narrate_hitch, narrate_unhitch, resolve_hitch, resolve_unhitch
 from intents.lore_check import narrate_lore_check, resolve_lore_check
 from intents.mount import narrate_dismount, narrate_mount, resolve_dismount, resolve_mount
@@ -36,6 +37,9 @@ HANDLERS = {
     "hitch": (resolve_hitch, narrate_hitch),
     "unhitch": (resolve_unhitch, narrate_unhitch),
     "lore_check": (resolve_lore_check, narrate_lore_check),
+    # Reached only by the adjudicator's "gesture" verdict (no IntentMatch, so not in MATCHES): a
+    # turn-costing, diceless item-kind clause -- see intents/gesture.py.
+    "gesture": (resolve_gesture, narrate_gesture),
 }
 
 # intent string -> IntentMatch, in the order the classifier gates them: lore_check ahead of the

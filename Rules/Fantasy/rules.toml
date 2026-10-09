@@ -475,6 +475,69 @@ disposition = -3
 threat = 0
 familiarity = -2
 
+# Wordless gestures (nlp/Intent_Classification.py's "gesture" verdict, intents/gesture.py): an
+# [[attitude_event]] carrying a "tone" is one the adjudicator may pick for a line like "kiss her" or
+# "bow to the captain", its "description" being what the model is told the tone means. Applied once,
+# at full strength, to the target alone -- never a bystander. A tone may author "unwelcome_below" (a
+# disposition) and "unwelcome_event": below it the target takes that event instead, because the same
+# kiss is not the same act from a stranger. A setting authoring no tones has no gestures at all.
+[[attitude_event]]
+name = "gesture_warm"
+tone = "warm"
+description = "a kind, friendly or affectionate act: a hug, a pat on the shoulder, a gentle touch, a warm smile"
+disposition = 6
+threat = 3
+familiarity = 4
+unwelcome_below = -20
+unwelcome_event = "gesture_unwelcome"
+
+[[attitude_event]]
+name = "gesture_intimate"
+tone = "intimate"
+description = "a romantic or physically intimate act: a kiss, an embrace, holding someone close"
+disposition = 8
+threat = 0
+familiarity = 10
+unwelcome_below = 20
+unwelcome_event = "gesture_unwanted"
+
+[[attitude_event]]
+name = "gesture_respectful"
+tone = "respectful"
+description = "a show of respect or deference: a bow, a curtsy, a salute, doffing a hat, kneeling"
+disposition = 5
+threat = 0
+familiarity = 1
+
+[[attitude_event]]
+name = "gesture_mocking"
+tone = "mocking"
+description = "a derisive or insulting wordless act: a rude gesture, spitting at someone's feet, an exaggerated mocking bow, turning your back on them"
+disposition = -8
+threat = 2
+familiarity = -3
+
+# A wordless act that carries no feeling toward anyone (dancing, juggling, stretching) -- here so
+# the model is never forced to call it warm or rude. Moves nothing.
+[[attitude_event]]
+name = "gesture_neutral"
+tone = "neutral"
+description = "a wordless act with no feeling aimed at anyone: dancing, juggling, stretching, idle fidgeting"
+
+# What gesture_warm / gesture_intimate become when the target already feels too coldly toward the
+# player for them to land.
+[[attitude_event]]
+name = "gesture_unwelcome"
+disposition = -4
+threat = -3
+familiarity = -2
+
+[[attitude_event]]
+name = "gesture_unwanted"
+disposition = -12
+threat = -10
+familiarity = -6
+
 # Which [entity.equipped] slot names are valid for a given kind of entity -- entity_schema.
 # toml's own [entity.equipped] comment notes slot names are freeform strings today (nothing in
 # DM_*.py validates them against anything); this table is reference data for that validation to

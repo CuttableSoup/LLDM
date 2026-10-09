@@ -145,6 +145,39 @@ def set_prompt_directive(entities, entity_name, text, source_name=None, duration
     entity["prompt_directive"] = directive
 
 
+def gesture_tones(rules):
+    """!
+    @brief The wordless-gesture tones a setting authors: every [[attitude_event]] carrying a
+        "tone" field is one, its "description" being what the adjudicator is told it means. A
+        setting authoring none has no gestures (the adjudicator never offers the kind).
+    @param rules The loaded rules dict.
+    @return {tone name: description}, in declaration order.
+    """
+    return {
+        event["tone"]: event.get("description", event["tone"])
+        for event in rules.get("attitude_event", []) if event.get("tone")
+    }
+
+
+def gesture_event_name(rules, tone, disposition):
+    """!
+    @brief Which [[attitude_event]] a gesture of this tone applies, given how the target already
+        feels about the player. A tone event may author "unwelcome_below" (a disposition) and
+        "unwelcome_event" (another event's name): a kiss from someone who already dislikes you is
+        not the warm thing the same kiss is from a friend.
+    @param rules The loaded rules dict.
+    @param tone One of gesture_tones.
+    @param disposition The target's current disposition toward the player.
+    @return (event_name, unwelcome), or (None, False) for a tone the setting doesn't author.
+    """
+    event = next((candidate for candidate in rules.get("attitude_event", []) if candidate.get("tone") == tone), None)
+    if not event:
+        return None, False
+    if "unwelcome_below" in event and event.get("unwelcome_event") and disposition < event["unwelcome_below"]:
+        return event["unwelcome_event"], True
+    return event["name"], False
+
+
 def nudge_attitude_from_event(entities, rules, entity_name, toward_name, event_name, magnitude):
     """!
     @brief Applies a small, capped, persistent drift to entity_name's own three-axis attitude

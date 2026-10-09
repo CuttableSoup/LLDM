@@ -476,6 +476,196 @@ class TestCurrentLanguage(DMTestCase):
         self.assertEqual(self.dm_core._current_language(), "elvish")
 
 
+class TestGestures(DMTestCase):
+    """!
+    @brief DM_Dialogue.py's _resolve_gesture_intent and intents/gesture.py -- a wordless act the
+        adjudicator classified, resolved as a diceless item-kind clause. scenario "tavern", the
+        same friendly-innkeeper fixture TestFreeformDialogue uses.
+    """
+    scenario_name = "debug"
+    start_location = "tavern_floor"
+
+    def setUp(self):
+        super().setUp()
+        self.item_events = self._capture("item_interaction_resolved")
+
+    def _gesture(self, input_text, tone):
+        self.dm_core._on_turn_detected({
+            "clauses": [{"kind": "item", "intent": "gesture", "item_name": None, "phrase": None, "tone": tone}],
+            "input": input_text,
+        })
+        return self.item_events[-1]
+
+    def _drift(self, who="innkeeper"):
+        return self.dm_core.entities[who].get("action_attitude_deltas", {}).get(self.dm_core.player_name)
+
+    def test_a_gesture_nudges_the_named_target_through_its_tones_event(self):
+        result = self._gesture("bow to the innkeeper", "respectful")
+
+        self.assertTrue(result["found"])
+        self.assertEqual((result["intent"], result["target"], result["tone"]), ("gesture", "innkeeper", "respectful"))
+        self.assertEqual(self._drift(), [5, 0, 1])
+        self.assertFalse(result["unwelcome"])
+        self.assertTrue(result["persona"])
+        self.assertTrue(result["attitude"])
+
+    def test_the_target_becomes_the_conversation_partner(self):
+        self._gesture("bow to the innkeeper", "respectful")
+        self.assertEqual(self.dm_core.conversation_partner["key"], "innkeeper")
+
+    def test_a_gesture_never_rolls_dice(self):
+        rolled = []
+        original = Combat_Resolution.roll_dice
+        Combat_Resolution.roll_dice = lambda dice, pips: rolled.append((dice, pips)) or 3
+        self.addCleanup(setattr, Combat_Resolution, "roll_dice", original)
+
+        self._gesture("hug the innkeeper", "warm")
+
+        self.assertEqual(rolled, [])
+
+    def test_an_intimate_gesture_from_someone_who_dislikes_you_is_unwanted(self):
+        self.dm_core.entities["innkeeper"]["attitudes"] = {"default": [-30, 0, 0]}
+
+        result = self._gesture("kiss the innkeeper", "intimate")
+
+        self.assertTrue(result["unwelcome"])
+        self.assertEqual(self._drift(), [-12, -10, -6])
+
+    def test_an_intimate_gesture_from_a_friend_lands_as_intended(self):
+        self.dm_core.entities["innkeeper"]["attitudes"] = {"default": [40, 0, 0]}
+
+        result = self._gesture("kiss the innkeeper", "intimate")
+
+        self.assertFalse(result["unwelcome"])
+        self.assertEqual(self._drift(), [8, 0, 10])
+
+    def test_only_the_target_is_nudged(self):
+        self._load_ad_hoc_scenario([
+            {"name": "innkeeper", "band": 1}, {"name": "fire elemental", "band": 1},
+        ])
+        before = {name: dict(entity.get("action_attitude_deltas", {})) for name, entity in self.dm_core.entities.items()}
+
+        result = self._gesture("hug the innkeeper", "warm")
+
+        # A reloaded scene instances the innkeeper under a suffixed key; the result names it.
+        self.assertIn(result["target"], self.dm_core.scenario_entities)
+        self.assertTrue(self._drift(result["target"]))
+        for name, entity in self.dm_core.entities.items():
+            if name != result["target"]:
+                self.assertEqual(entity.get("action_attitude_deltas", {}), before[name], name)
+
+    def test_with_two_people_and_no_name_a_gesture_is_aimed_at_no_one(self):
+        self._load_ad_hoc_scenario([
+            {"name": "innkeeper", "band": 1}, {"name": "fire elemental", "band": 1},
+        ])
+
+        result = self._gesture("dance", "neutral")
+
+        self.assertTrue(result["found"])
+        self.assertIsNone(result["target"])
+        self.assertIsNone(self._drift())
+
+    def test_a_gendered_pronoun_means_the_one_person_it_can_only_mean(self):
+        # Found by playtest: "pull him into a deep kiss" met no one with three people in the scene.
+        self._load_ad_hoc_scenario([
+            {"name": "innkeeper", "band": 1}, {"name": "fire elemental", "band": 1},
+        ])
+
+        her = self._gesture("kiss her", "intimate")
+        self.dm_core._set_conversation_partner(None)  # the first gesture made her the partner
+        him = self._gesture("kiss him", "intimate")
+
+        self.assertEqual(self.dm_core.entities[her["target"]]["name"], self.dm_core.entities["innkeeper"]["name"])
+        self.assertIsNone(him["target"])  # nobody present is male: "him" means nobody
+
+    def test_the_only_other_person_present_is_the_target_without_being_named(self):
+        result = self._gesture("curtsy", "respectful")
+        self.assertEqual(result["target"], "innkeeper")
+
+    def test_a_dead_target_is_declined_and_nothing_moves(self):
+        self.dm_core.entities["innkeeper"]["hp"] = 0
+
+        result = self._gesture("hug the innkeeper", "warm")
+
+        self.assertFalse(result["found"])
+        self.assertEqual(result["reason"], "dead")
+        self.assertIsNone(self._drift())
+
+    def test_a_tone_the_setting_does_not_author_narrates_without_moving_attitude(self):
+        result = self._gesture("hug the innkeeper", "ecstatic")
+
+        self.assertTrue(result["found"])
+        self.assertIsNone(self._drift())
+
+    def test_a_gesture_costs_a_turn_slot_like_any_item_interaction(self):
+        penalties = []
+        original = self.dm_core._resolve_roll
+        self.dm_core._resolve_roll = lambda *args, **kwargs: (penalties.append((args, kwargs)), original(*args, **kwargs))[1]
+
+        self.dm_core._on_turn_detected({
+            "clauses": [
+                {"kind": "item", "intent": "gesture", "item_name": None, "phrase": None, "tone": "respectful"},
+                {"kind": "action", "skill": "charisma"},
+            ],
+            "input": "bow to the innkeeper and persuade her",
+        })
+
+        [(args, kwargs)] = penalties
+        self.assertEqual(kwargs.get("dice_penalty", args[3] if len(args) > 3 else None), 1)  # two clauses, one die
+
+    def test_narration_describes_the_real_reaction_and_never_a_made_up_one(self):
+        from intents.gesture import narrate_gesture
+        prompt = narrate_gesture(None, {
+            "found": True, "tone": "intimate", "target": "innkeeper", "target_label": "Marta",
+            "persona": "a stout innkeeper", "attitude": "She is wary of you.", "unwelcome": True,
+            "input": "kiss the innkeeper",
+        })
+        for expected in ("Marta", "a stout innkeeper", "She is wary of you.", "unwelcome", "no roll"):
+            self.assertIn(expected, prompt)
+        self.assertIn("at no one", narrate_gesture(None, {"found": True, "tone": "neutral", "input": "dance"}))
+        self.assertIn("dead", narrate_gesture(None, {"found": False, "reason": "dead", "target": "marta", "input": "hug marta"}))
+
+
+class TestGestureTones(unittest.TestCase):
+    """!@brief Social_Resolution.gesture_tones/gesture_event_name over plain rules dicts, and every
+        shipped setting that authors tones."""
+
+    RULES = {"attitude_event": [
+        {"name": "combat_hit", "disposition": -20},
+        {"name": "gesture_warm", "tone": "warm", "description": "a kind act", "disposition": 6,
+         "unwelcome_below": -20, "unwelcome_event": "gesture_unwelcome"},
+        {"name": "gesture_unwelcome", "disposition": -4},
+        {"name": "gesture_plain", "tone": "plain"},
+    ]}
+
+    def test_a_tone_is_an_attitude_event_carrying_a_tone_field(self):
+        self.assertEqual(Social_Resolution.gesture_tones(self.RULES), {"warm": "a kind act", "plain": "plain"})
+        self.assertEqual(Social_Resolution.gesture_tones({}), {})
+
+    def test_unwelcome_only_below_the_events_own_threshold(self):
+        pick = lambda tone, disposition: Social_Resolution.gesture_event_name(self.RULES, tone, disposition)
+        self.assertEqual(pick("warm", 0), ("gesture_warm", False))
+        self.assertEqual(pick("warm", -20), ("gesture_warm", False))
+        self.assertEqual(pick("warm", -21), ("gesture_unwelcome", True))
+        self.assertEqual(pick("plain", -90), ("gesture_plain", False))
+        self.assertEqual(pick("missing", 0), (None, False))
+
+    def test_every_tone_and_unwelcome_event_a_setting_authors_exists(self):
+        import tomllib
+        for setting in ("Fantasy", "Pathfinder"):
+            with open(f"Rules/{setting}/rules.toml", "rb") as handle:
+                rules = tomllib.load(handle)
+            names = {event["name"] for event in rules["attitude_event"]}
+            tones = Social_Resolution.gesture_tones(rules)
+            self.assertTrue({"warm", "intimate", "respectful", "mocking", "neutral"} <= set(tones), setting)
+            for event in rules["attitude_event"]:
+                if event.get("unwelcome_event"):
+                    self.assertIn(event["unwelcome_event"], names, setting)
+        # A setting that authors none (Zombie) keeps today's behavior: no gesture kind at all.
+        with open("Rules/Zombie/rules.toml", "rb") as handle:
+            self.assertEqual(Social_Resolution.gesture_tones(tomllib.load(handle)), {})
+
+
 class TestHelpChannel(DMTestCase):
     """!
     @brief DM_Help.py's HelpMixin -- the reserved "ADaM" out-of-character help channel. Unlike

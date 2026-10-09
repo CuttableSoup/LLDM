@@ -71,8 +71,8 @@ for the whole batch, not once per entry (see "Multiple actions").
 `IntentClassifier`'s rules (opening words, speech verbs, hypotheticals, skill-match scores) decide
 most lines on their own. For the lines they can only guess at, it asks the local model what the
 line mainly is (`_adjudicate` → `IntentMatcher.adjudicate` → `AdHoc_Generation.py`'s
-`adjudicate_player_input`): `action`, `speech`, `game_question` or `musing`. Only with someone
-present, and in three cases:
+`adjudicate_player_input`): `action`, `speech`, `game_question`, `musing` or, in a setting that
+authors gesture tones, `gesture`. Only with someone present, and in four cases:
 
 - **declarative**: the rules called a line talk on its opening words alone, and it has no "?" and
   doesn't open on a question word ("let's go down that cut-through.", "i'll just grab something
@@ -86,7 +86,8 @@ present, and in three cases:
 - **not_understood**: nothing else claimed the line.
 
 The model only picks the channel; the existing machinery still does the matching (`speech` →
-dialogue, `game_question` → ADaM, `musing` → the not-understood reply). It's one enum-constrained
+dialogue, `game_question` → ADaM, `musing` → the not-understood reply, `gesture` → a turn-costing,
+diceless `gesture` clause, see [social-dialogue.md](social-dialogue.md)'s "Wordless gestures"). It's one enum-constrained
 tool call with reasoning off and temperature 0 (at the client's default 0.7 the same line routed
 differently run to run), told what the scene's people, the conversation partner and the latest
 narration (`set_recent_narration`, fed from `llm_response_ready`) are. It answers in about 0.7s,

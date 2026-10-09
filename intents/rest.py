@@ -5,6 +5,8 @@
     target or the locked-container gate, unlike every item-named intent. See docs/downtime.md.
 """
 
+import re
+
 from intents.match import IntentMatch
 
 # -- What the classifier matches (see intents/registry.py's MATCHES) --
@@ -21,6 +23,15 @@ from intents.match import IntentMatch
 # here would have. Deliberately no "take a rest" -- TAKE_KEYWORDS' own "take " is checked
 # well ahead of this tuple and would swallow it as an item "take" first.
 REST_KEYWORDS = ("rest", "make camp", "set up camp", "sleep", "camp for the night")
+# "rest" is also what a hand or a gaze does -- "my fingers rest on the buckle", "rest my hands on his
+# shoulders". Found by playtest: three such lines in forty turns each ran a real rest (the clock
+# advanced, the party healed). Resting to recover takes no object of its own ("rest", "rest here",
+# "rest for the night"), so "rest" followed by a preposition of placement or a possessive is blanked
+# before the gate runs; the other keywords ("make camp", "sleep") still match around it.
+REST_IGNORE = (
+    re.compile(r"\brest\s+(?:on|upon|against|atop|my|his|her|their|your|its|our)\b"),
+    re.compile(r"\brest\s+(?:at|by|beside|across|along)\s+(?:my|his|her|their|your|its|our)\b"),
+)
 # Semantic-router phrases (nlp/Intent_Classification.py's INTENT_PROTOTYPES).
 PROTOTYPES = {
     "rest": (
@@ -29,7 +40,9 @@ PROTOTYPES = {
     ),
 }
 MATCH = {
-    "rest": IntentMatch(keywords=REST_KEYWORDS, prototypes=PROTOTYPES["rest"], exempt=True, question_blocked=True),
+    "rest": IntentMatch(
+        keywords=REST_KEYWORDS, prototypes=PROTOTYPES["rest"], exempt=True, question_blocked=True, ignore=REST_IGNORE,
+    ),
 }
 
 

@@ -86,6 +86,49 @@ class TestScriptedSession(unittest.TestCase):
 
         self.assertFalse(session.core.is_hostile("thane", session.core.player_name))
 
+    def test_a_gesture_nobody_codified_is_resolved_instead_of_dropped(self):
+        # "kiss" matches no skill, item or keyword; the model's verdict is what carries it.
+        matcher = FakeMatcher()
+        matcher.adjudications = {
+            "kiss the innkeeper": {"kind": "gesture", "game_action": None, "item": None, "tone": "intimate"},
+        }
+        session = ScriptedSession(self, matcher, start_location="tavern_floor")
+
+        events = session.say("I kiss the innkeeper")
+
+        self.assertNotIn("action_not_understood", session.names(events))
+        [resolved] = session.payloads(events, "item_interaction_resolved")
+        self.assertEqual((resolved["intent"], resolved["tone"], resolved["found"]), ("gesture", "intimate", True))
+        self.assertEqual(session.core.conversation_partner["key"], "innkeeper")
+        self.assertTrue(session.core.entities["innkeeper"]["action_attitude_deltas"][session.core.player_name])
+
+    def test_without_a_verdict_the_same_line_is_still_not_understood(self):
+        session = ScriptedSession(self, FakeMatcher(), start_location="tavern_floor")
+
+        events = session.say("I kiss the innkeeper")
+
+        self.assertIn("action_not_understood", session.names(events))
+        self.assertNotIn("item_interaction_resolved", session.names(events))
+
+
+    def test_a_gesture_beside_a_quote_is_resolved_and_the_quote_is_still_spoken(self):
+        line = 'I smirk and reach out, tapping the ring on his wrist. "Maybe I\'ll prove it."'
+        matcher = FakeMatcher(actions={"reach out": ("polearms", 0.52)})
+        matcher.adjudications = {
+            "smirk and reach out, tapping the ring on his wrist.":
+                {"kind": "gesture", "game_action": None, "item": None, "tone": "warm"},
+        }
+        session = ScriptedSession(self, matcher, start_location="tavern_floor")
+
+        events = session.say(line)
+
+        [gesture] = session.payloads(events, "item_interaction_resolved")
+        self.assertEqual((gesture["intent"], gesture["target"], gesture["found"]), ("gesture", "innkeeper", True))
+        [spoken] = session.payloads(events, "dialogue_resolved")
+        self.assertEqual(spoken["target"], "innkeeper")
+        self.assertNotIn("action_resolved", session.names(events))  # nothing rolled polearms
+
+
 
 if __name__ == "__main__":
     unittest.main()
