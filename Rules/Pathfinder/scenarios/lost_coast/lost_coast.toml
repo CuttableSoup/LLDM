@@ -68,6 +68,7 @@ grid = { x = 210, y = 0 }
 jail = "the_hells"
 entities = [
     { name = "dockhand", band = 1 },
+    { name = "Ottilie Marsh", band = 1 },
 ]
 
 [[location.exit]]
@@ -125,3 +126,29 @@ default = [ 30, 20, 0 ]
 
 [entity.skills]
 observation = { dice = 2, pips = 0 }
+
+# The return coach: Sandpoint's own coach (sandpoint.toml's Hesper Cobb) run the other way, same
+# fare and pace. Stands in the city hub, so the ride leaves from Magnimar's own grid point.
+[[entity]]
+name = "Ottilie Marsh"
+supertype = "creature"
+subtype = "humanoid"
+aliases = [ "ottilie", "marsh", "the coachwoman", "the driver", "the coach driver" ]
+description = "A wiry coachwoman in a sea-stained oilskin, flicking a whip at the quay where the coast-road coach loads for Sandpoint."
+voice = "Brisk and dry; counts coins twice and the road's miles once."
+quotes = [ "Sandpoint by the coast road, sixteen hours -- fare first, and mind the step." ]
+
+max_hp = 12
+
+[entity.attitudes]
+default = [ 30, 30, 0 ]
+
+[entity.skills]
+navigation = { dice = 3, pips = 0 }
+
+[[entity.service]]
+name = "a seat on the coach to Sandpoint"
+aliases = [ "a ride to sandpoint", "a ride", "passage to sandpoint", "a seat", "the coach to sandpoint", "the coach", "transport to sandpoint", "a lift to sandpoint" ]
+price = 1.8
+travel_to = "sandpoint"
+travel_speed = 30

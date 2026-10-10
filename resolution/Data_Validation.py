@@ -892,7 +892,8 @@ class DataValidator:
         """!
         @brief An entity's [[entity.service]] list (docs/services.md): each needs a name and a
             non-negative price; aliases are strings; `rest`/`overnight`/`joins_party` are booleans;
-            `blocks` is a whole number; `content` is a known tag; `attitude_event` names an
+            `blocks` is a whole number; `travel_to` names a gridded [[location]] and
+            `travel_speed` is positive; `content` is a known tag; `attitude_event` names an
             [[attitude_event]] that exists; `on_buy` is an ordinary program.
         """
         if services is None:
@@ -918,6 +919,15 @@ class DataValidator:
                 self._check_field_type(label, flag, service.get(flag), bool)
             self._check_field_type(label, "min_disposition", service.get("min_disposition"), (int, float))
             self._check_field_type(label, "follow_offset", service.get("follow_offset"), (int, float))
+            destination = service.get("travel_to")
+            if destination is not None:
+                if not isinstance(destination, str) or "grid" not in self.locations.get(destination, {}):
+                    self._log(label, f"travel_to {destination!r} should name a [[location]] with a grid point.")
+                speed = service.get("travel_speed")
+                if speed is not None and (isinstance(speed, bool) or not isinstance(speed, (int, float)) or speed <= 0):
+                    self._log(label, "travel_speed should be a positive number of miles per block.")
+            elif service.get("travel_speed") is not None:
+                self._log(label, "travel_speed has no effect without travel_to.")
             blocks = service.get("blocks")
             if blocks is not None and (isinstance(blocks, bool) or not isinstance(blocks, int) or blocks < 0):
                 self._log(label, "blocks should be a whole number of blocks, 0 or more.")

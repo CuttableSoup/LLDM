@@ -22,8 +22,8 @@ content = "sexual"           # narration follows the player's content choice
 
 Other fields: `blocks` (pass N blocks), `joins_party` + `follow_offset` (the provider joins and
 follows the party), `attitude_event` (an `[[attitude_event]]` applied to them), `on_buy` (an
-ordinary program run with `actor` = the player, `target` = the provider). No haggling: the price is
-fixed.
+ordinary program run with `actor` = the player, `target` = the provider). `travel_to` + `travel_speed` (a ride, below).
+No haggling: the price is fixed.
 
 ## How it is bought
 
@@ -45,7 +45,7 @@ fixed.
 
 Refusals are stated reasons and nothing is charged: `cant_afford`, `too_cold` (their disposition is
 below `min_disposition`), `hostile`, `enemies_near` (a time-passing service with a hostile in the
-scene), `already_joined`. Otherwise, in order: the price moves from the player to the provider as a
+scene), `already_joined`, and for a ride `already_there`, `no_route`, `downtime_interrupted` (below). Otherwise, in order: the price moves from the player to the provider as a
 real currency transfer; `attitude_event`; time passes (`overnight`/`blocks`, as a rest when `rest`);
 `joins_party` makes them a party member (`is_party`, `hired`, snapped into formation); `on_buy` runs.
 One `item_interaction_resolved` with `intent = "service"` carries the result.
@@ -53,6 +53,37 @@ One `item_interaction_resolved` with `intent = "service"` carries the result.
 **A hire is persistent.** `hired` entities are carried into every new scene
 (`_carry_mounts_into_scene`, `DM_Rules.py`) and round-trip through save/load (`hired` and
 `follow_offset` in the instance state — written only for hires).
+
+## A ride (`travel_to`)
+
+A service with `travel_to = "<location key>"` carries the party to that location: the Sandpoint
+coachman, Hesper Cobb, sells "a seat on the coach to Magnimar" for 1.8 gp (3 cp a mile over 60).
+Nothing about the trip is special-cased; the purchase hands off to the ordinary grid trip
+(`DM_Travel.py`'s `_start_pending_travel`, the same call the player's own "travel" makes), so terrain,
+roads, the per-block encounter roll, a night watch and an ambush pausing the trip all apply, and a
+paused trip resumes and is narrated by `_resume_pending_downtime` once the fight is over.
+
+- **Pace.** `travel_speed` (miles per block) replaces the party's own pace for the trip; without it
+  the party's slowest member sets it. The coach holds 30 where a party walks 24, so Sandpoint to
+  Magnimar is two blocks, not three. The pace is kept on `pending_downtime["speed"]`, so a trip
+  resumed after an ambush, or after a save, keeps it.
+- **Where it starts.** A landmark inside a town has no grid point, so the ride starts from the
+  nearest gridded place up the `return_to` chain: the coach stand leaves from Sandpoint.
+- **Who comes.** The party travels together; a hired sword (`hired`) is carried into the new scene as
+  ever. The driver stays at the stand.
+- **Paid first.** The fare is taken before the road, so an ambush costs the ride's price like any
+  other mishap. Refusals take nothing: `enemies_near` (any hostile in the scene), `downtime_interrupted`
+  (a trip or rest is already paused), `already_there` (the ride's start is its destination), `no_route`
+  (the destination or the start has no grid point).
+- **Narration.** `narrate_service` is told the arrival (`travelled`, `location_name`,
+  `location_description`, `blocks_spent`), or that the ride was cut short (`interrupted`); a
+  completed ride is not also narrated as "time passes".
+- **Validation.** `travel_to` must name a `[[location]]` with a `grid`; `travel_speed` must be
+  positive and only means something beside `travel_to`.
+
+Authored in Pathfinder's `sandpoint.toml` (the Coach Stand, reachable from the town hub) with a return
+coach, Ottilie Marsh, at Magnimar's hub in `lost_coast.toml`; nothing is
+Pathfinder-specific in the engine, so any setting with gridded locations can sell one.
 
 ## The provider quotes the real price
 
@@ -82,3 +113,5 @@ anyone might be a minor the narrator cuts away at once — a line in the prompt 
 Haggling (a skill contest moving the price within a range); recurring wages for a hire; dismissing
 a hire; a service with a stock or a daily limit; a private room as a real place (an overnight
 service passes time, it does not move the player).
+A ride that passes through a stop on the way;
+a fare that scales with the distance rather than being authored.

@@ -245,6 +245,10 @@ aliases = [ "chopper's isle", "the isle" ]
 destination = "old_light"
 aliases = [ "the old light", "the lighthouse", "the ruined tower" ]
 
+[[location.exit]]
+destination = "coach_stand"
+aliases = [ "the coach stand", "the coaching stand", "the coach house" ]
+
 [[location]]
 key = "cathedral"
 name = "Sandpoint Cathedral"
@@ -367,6 +371,19 @@ name = "Rovanky Tannery"
 description = "A tannery at the edge of town, its leather and fur goods prized despite a perfectionist owner's short temper with hired help."
 entities = [
     { name = "Larz Rovanky" },
+]
+return_to = "sandpoint"
+
+# The coast-road coach: a ride to Magnimar sold by the coachman as [[entity.service]] (travel_to --
+# docs/services.md). Not a landmark from the sourcebook; it is here so the party has a paid way
+# down the road other than walking it.
+[[location]]
+key = "coach_stand"
+name = "The Coach Stand"
+aliases = [ "the coach house" ]
+description = "A muddy yard behind the stables at the south end of town, where a battered coach and its pair of road-weary horses wait for anyone with the fare to Magnimar."
+entities = [
+    { name = "Hesper Cobb" },
 ]
 return_to = "sandpoint"
 
@@ -841,6 +858,34 @@ aliases = [ "his services", "his blade", "a sellsword", "a mercenary", "the merc
 price = 5
 joins_party = true
 follow_offset = 0
+
+[[entity]]
+name = "Hesper Cobb"
+supertype = "creature"
+subtype = "humanoid"
+aliases = [ "hesper", "cobb", "the coachman", "the driver", "the coach driver" ]
+description = "A broad, sunburnt coachman with a whip coiled at his belt, who has driven the Lost Coast road so long he can tell the hour by the potholes."
+voice = "Gravelly and matter-of-fact; talks in miles and meals, never haggles, and does not leave a minute early."
+quotes = [ "Magnimar by the coast road: sixteen hours' ride, fare paid before the horses move." ]
+
+max_hp = 14
+
+[entity.attitudes]
+default = [ 30, 30, 0 ]
+
+[entity.skills]
+navigation = { dice = 3, pips = 0 }
+survival = { dice = 2, pips = 1 }
+
+# The coast-road coach to Magnimar, 60 miles: 3 cp a mile for a seat is 1.8 gp. The coach holds a
+# steadier 30 miles a block than a party walks (24), so the ride is two blocks, not three. It is the
+# ordinary grid trip underneath -- the road's encounters and a night ambush still apply.
+[[entity.service]]
+name = "a seat on the coach to Magnimar"
+aliases = [ "a ride to magnimar", "a ride", "passage to magnimar", "a seat", "the coach to magnimar", "the coach", "transport to magnimar", "a lift to magnimar" ]
+price = 1.8
+travel_to = "magnimar"
+travel_speed = 30
 
 [[entity]]
 name = "Veznutt Parooh"

@@ -299,17 +299,34 @@ class TravelMixin(DMCoreProtocol):
             resolved(False, reason="impassable_terrain")
             return
 
-        distance = math.hypot(destination_grid["x"] - origin_grid["x"], destination_grid["y"] - origin_grid["y"])
+        result = self._start_pending_travel(destination_key, origin_grid)
+        if result["interrupted"]:
+            return
+        resolved(True, **{k: v for k, v in result.items() if k != "interrupted"})
 
+    def _start_pending_travel(self, destination_key, origin_grid, speed=None):
+        """!
+        @brief Begins a grid trip from origin_grid to destination_key's own grid point and runs
+            it as far as it goes clean -- the one place a trip's pending_downtime is created, shared
+            by the player's own "travel" (_resolve_grid_travel_intent) and a paid carriage
+            (DM_Services.py's _buy_service). The caller has already checked the route.
+        @param destination_key A [[location]] key with a "grid" field.
+        @param origin_grid The {x, y} the trip starts from.
+        @param speed Miles per block for this trip, or None for the party's own travel speed (a
+            hired coach sets it; it is kept on pending_downtime so a trip resumed after an ambush
+            keeps its pace, and round-trips through save/load with it).
+        @return _advance_pending_travel's result.
+        """
+        destination_grid = self.locations[destination_key]["grid"]
+        distance = math.hypot(destination_grid["x"] - origin_grid["x"], destination_grid["y"] - origin_grid["y"])
         self.pending_downtime = {
             "kind": "travel", "destination_key": destination_key,
             "origin_grid": origin_grid, "destination_grid": destination_grid,
             "distance": distance, "distance_covered": 0.0, "blocks_done": 0,
         }
-        result = self._advance_pending_travel()
-        if result["interrupted"]:
-            return
-        resolved(True, **{k: v for k, v in result.items() if k != "interrupted"})
+        if speed:
+            self.pending_downtime["speed"] = speed
+        return self._advance_pending_travel()
 
     def _advance_pending_travel(self):
         """!
@@ -340,7 +357,7 @@ class TravelMixin(DMCoreProtocol):
         distance = pending["distance"]
         dx = destination_grid["x"] - origin_grid["x"]
         dy = destination_grid["y"] - origin_grid["y"]
-        speed = self._party_travel_speed()
+        speed = pending.get("speed") or self._party_travel_speed()
 
         while pending["distance_covered"] < distance:
             covered = pending["distance_covered"]

@@ -63,6 +63,9 @@ def narrate_service(llm_core, data):
             "enemies_near": "there are enemies about, and this is no time for it",
             "already_joined": f"{provider} is already travelling with the player",
             "no_such_service": "nobody here offers that",
+            "no_route": f"{provider} cannot take the player from here to there",
+            "already_there": "the player is already there",
+            "downtime_interrupted": "the player's journey is still unfinished",
         }
         return (
             f"The player tries to buy \"{service}\" from {provider} (input: \"{data.get('input', '')}\"), but "
@@ -73,7 +76,15 @@ def narrate_service(llm_core, data):
     facts = [f"The player pays {provider} {price} for \"{service}\"."]
     if data.get("joined"):
         facts.append(f"{provider} now travels with the player's party.")
-    if data.get("time"):
+    if data.get("travelled"):
+        facts.append(
+            f"{provider} carries the player to {data.get('location_name') or 'their destination'} "
+            f"({data.get('location_description') or 'no description'}), arriving after "
+            f"{data.get('blocks_spent', 1)} block(s) on the road."
+        )
+    elif data.get("interrupted"):
+        facts.append("The journey sets out, but is cut short on the road before it can arrive.")
+    if data.get("time") and not data.get("travelled"):
         facts.append("Time passes.")
     if data.get("healed"):
         facts.append("The party is rested and recovers.")

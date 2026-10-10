@@ -75,6 +75,8 @@ class ItemInteractionResolved(TypedDict, total=False):
     provider_label: str
     content: str | None
     joined: bool
+    travelled: bool
+    interrupted: bool
     # -- gesture
     tone: str
     target_label: str

@@ -6,6 +6,7 @@ from intents.service import ADULTS_ONLY, CONTENT_LEVELS, narrate_service
 from resolution.Data_Validation import DataValidator
 from resolution.World_Context import WorldContext
 from tests.event_contract import ValidatingEventBus
+import resolution.Combat_Resolution as Combat_Resolution
 from tests.support import DMTestCase, FakeMatcher, ScriptedSession
 # Module-level hooks start the shared patches (tests/support.py) for every test in this file.
 from tests.support import setUpModule, tearDownModule  # noqa: F401
@@ -422,6 +423,301 @@ class TestServiceConversationFlow(unittest.TestCase):
         self.assertNotIn("rest", [event["payload"].get("intent") for event in events])
         # A short aside at the end of an ordinary command is still not a stage direction.
         self.assertEqual(stage_directions("walk to the docks (it's far)"), [])
+
+
+class TestCoachToMagnimar(DMTestCase):
+    """!
+    @brief The shipped Sandpoint coach (Hesper Cobb, `travel_to = "magnimar"`): a paid ride that is
+        the ordinary grid trip underneath, so the road's own rules -- a faster pace, an ambush
+        pausing it, a save mid-journey -- are checked against the real lost_coast data.
+    """
+    scenario_name = "lost_coast"
+    setting = "Pathfinder"  # lost_coast is Golarion-sourced content, kept isolated under Rules/Pathfinder/
+    start_location = "coach_stand"
+
+    def setUp(self):
+        super().setUp()
+        self.item_events = self._capture("item_interaction_resolved")
+        self.driver = "Hesper Cobb"
+        self.player = self.dm_core.entities[self.dm_core.player_name]
+        self.player["currency"] = 10
+        self._stub_encounter_roll("nothing")
+
+    def _stub_encounter_roll(self, result):
+        import dm.DM_Encounters as DM_Encounters
+        original = DM_Encounters.resolve_varied_value
+        DM_Encounters.resolve_varied_value = lambda choices: result
+        self.addCleanup(setattr, DM_Encounters, "resolve_varied_value", original)
+
+    def _buy(self, phrase="a seat on the coach to magnimar", input_text=None):
+        self.dm_core._on_improvisation_requested({
+            "intent": "trade", "phrase": phrase, "item_phrase": phrase, "input": input_text or f"buy {phrase}",
+        })
+        return self.item_events[-1]
+
+    def test_the_driver_is_at_the_stand_and_the_data_is_clean(self):
+        self.assertIn(self.driver, self.dm_core.scenario_entities)
+        world = WorldContext(
+            entities=self.dm_core.entities, rules=self.dm_core.rules, skills=self.dm_core.skills,
+        )
+        problems = [p.message for p in DataValidator(world, self.dm_core.entity_templates, self.dm_core.locations).validate()]
+        self.assertEqual([m for m in problems if "service" in m or "travel_to" in m or "coach" in m], [])
+
+    def test_the_stand_is_reachable_from_the_town_hub(self):
+        self.dm_core._enter_location("sandpoint")
+        self.dm_core._on_item_interaction_detected({
+            "intent": "travel", "item_name": None, "input": "go to the coach stand",
+        })
+        self.assertEqual(self.dm_core.current_location_key, "coach_stand")
+        self.assertIn(self.driver, self.dm_core.scenario_entities)
+
+    def test_the_seat_takes_the_fare_and_arrives_in_magnimar_in_two_blocks(self):
+        before_block = self.dm_core.current_block
+        driver_before = self.dm_core.entities[self.driver].get("currency", 0)
+
+        result = self._buy()
+
+        self.assertEqual((result["intent"], result["found"], result["service"]), ("service", True, "a seat on the coach to Magnimar"))
+        self.assertTrue(result["travelled"])
+        self.assertFalse(result["interrupted"])
+        self.assertEqual(self.dm_core.current_location_key, "magnimar")
+        self.assertEqual(result["location_name"], "Magnimar")
+        self.assertEqual(result["polity"], "Varisia")
+        # 60 miles at the coach's 30 a block, not the party's own 24: two blocks, not three.
+        self.assertEqual(result["blocks_spent"], 2)
+        self.assertEqual(self.dm_core.current_block - before_block, 2)
+        self.assertAlmostEqual(self.player["currency"], 10 - 1.8)
+        self.assertAlmostEqual(self.dm_core.entities[self.driver].get("currency", 0), driver_before + 1.8)
+        self.assertIsNone(self.dm_core.pending_downtime)
+        # The driver stays where the coach stand is.
+        self.assertNotIn(self.driver, self.dm_core.scenario_entities)
+
+    def test_a_ride_arrives_before_walking_would(self):
+        self._buy()
+        coach_blocks = self.item_events[-1]["blocks_spent"]
+        self.dm_core._enter_location("sandpoint")
+        self.dm_core._on_item_interaction_detected({"intent": "travel", "item_name": None, "input": "i travel to magnimar"})
+        self.assertEqual(self.item_events[-1]["blocks_spent"], 3)
+        self.assertLess(coach_blocks, 3)
+
+    def test_other_ways_of_asking_for_the_ride_find_it(self):
+        for phrase in ("a ride to magnimar", "passage to magnimar", "the coach", "a seat"):
+            with self.subTest(phrase=phrase):
+                self.dm_core._enter_location("coach_stand")
+                self.player["currency"] = 10
+                result = self._buy(phrase, f"i'd like {phrase}")
+                self.assertEqual(result["intent"], "service")
+                self.assertTrue(result["found"], result)
+                self.assertEqual(self.dm_core.current_location_key, "magnimar")
+
+    def test_the_driver_quotes_the_fare_the_engine_charges(self):
+        description = self.dm_core.describe_character(self.driver)
+        self.assertIn("a seat on the coach to Magnimar", description)
+        self.assertIn(self.dm_core.format_currency(1.8), description)
+
+    def test_a_player_who_cannot_pay_goes_nowhere_and_pays_nothing(self):
+        self.player["currency"] = 1.0
+        before_block = self.dm_core.current_block
+
+        result = self._buy()
+
+        self.assertEqual((result["found"], result["reason"]), (False, "cant_afford"))
+        self.assertEqual(self.dm_core.current_location_key, "coach_stand")
+        self.assertEqual(self.dm_core.current_block, before_block)
+        self.assertAlmostEqual(self.player["currency"], 1.0)
+
+    def test_enemies_nearby_refuse_the_ride(self):
+        self.dm_core.entities[self.driver]["service"][0]["price"] = 1
+        self._load_ad_hoc_scenario([{"name": "Hesper Cobb", "band": 1}, {"name": "goblin", "band": 1}])
+        driver = next(
+            name for name in self.dm_core.scenario_entities
+            if self.dm_core.entities[name].get("name") == "Hesper Cobb"
+        )
+        self.dm_core.entities[driver]["service"] = [
+            {"name": "a ride", "price": 1, "travel_to": "magnimar"},
+        ]
+        self.dm_core.locations["magnimar"] = {"key": "magnimar", "grid": {"x": 210, "y": 0}}
+        self.player["currency"] = 10
+
+        result = self._buy("a ride")
+
+        self.assertEqual((result["found"], result["reason"]), (False, "enemies_near"))
+        self.assertAlmostEqual(self.player["currency"], 10)
+
+    def test_a_ride_to_where_you_already_are_is_refused(self):
+        self.dm_core.entities[self.driver]["service"][0]["travel_to"] = "sandpoint"
+
+        result = self._buy()
+
+        self.assertEqual((result["found"], result["reason"]), (False, "already_there"))
+        self.assertAlmostEqual(self.player["currency"], 10)
+
+    def test_a_destination_with_no_grid_point_is_refused(self):
+        self.dm_core.entities[self.driver]["service"][0]["travel_to"] = "garrison"
+
+        result = self._buy()
+
+        self.assertEqual((result["found"], result["reason"]), (False, "no_route"))
+        self.assertAlmostEqual(self.player["currency"], 10)
+
+    def test_a_second_ride_is_refused_while_a_journey_is_paused(self):
+        self._stub_encounter_roll("goblin")
+        self._buy()
+        self.assertIsNotNone(self.dm_core.pending_downtime)
+        self.player["currency"] = 10
+
+        # With the ambusher still standing there, the fight comes first...
+        beset = self._buy()
+        self.assertEqual((beset["found"], beset["reason"]), (False, "enemies_near"))
+
+        # ...and once it is dead but the trip has not been resumed, the unfinished trip is the reason.
+        Combat_Resolution.apply_damage(self.dm_core.world, "goblin", 999)
+        again = self._buy()
+
+        self.assertEqual((again["found"], again["reason"]), (False, "downtime_interrupted"))
+        self.assertAlmostEqual(self.player["currency"], 10)
+
+    def test_an_ambush_on_the_road_pauses_the_ride_and_it_resumes_at_the_coachs_pace(self):
+        self._stub_encounter_roll("goblin")
+        before_block = self.dm_core.current_block
+
+        result = self._buy()
+
+        # Paid, set out, and caught on the road: the purchase is narrated as interrupted.
+        self.assertTrue(result["found"])
+        self.assertTrue(result["interrupted"])
+        self.assertFalse(result["travelled"])
+        self.assertAlmostEqual(self.player["currency"], 10 - 1.8)
+        self.assertEqual(self.dm_core.pending_downtime["kind"], "travel")
+        self.assertEqual(self.dm_core.pending_downtime["speed"], 30)
+        self.assertIn("goblin", self.dm_core.scenario_entities)
+
+        self._stub_encounter_roll("nothing")
+        Combat_Resolution.apply_damage(self.dm_core.world, "goblin", 999)
+        self.dm_core._resolve_combat_round({"actions": []})
+
+        self.assertIsNone(self.dm_core.pending_downtime)
+        self.assertEqual(self.dm_core.current_location_key, "magnimar")
+        self.assertEqual(self.dm_core.current_block - before_block, 2)
+        arrival = self.item_events[-1]
+        self.assertEqual((arrival["intent"], arrival["found"], arrival["location_name"]), ("travel", True, "Magnimar"))
+
+    def test_a_paused_ride_keeps_its_pace_through_a_save(self):
+        import shutil
+        self._stub_encounter_roll("goblin")
+        self._buy()
+        slot = "test_coach_pending_slot"
+        self.addCleanup(shutil.rmtree, self.dm_core._save_slot_dir(slot), ignore_errors=True)
+        self.dm_core.save_game(slot)
+
+        self.dm_core.load_game(slot)
+
+        self.assertEqual(self.dm_core.pending_downtime["speed"], 30)
+        self.assertEqual(self.dm_core.pending_downtime["destination_key"], "magnimar")
+
+    def test_a_hired_sword_rides_along_and_is_still_in_the_party_on_arrival(self):
+        sword = "Jorrick Dane"
+        self.dm_core._enter_location("white_deer")
+        self.assertIn(sword, self.dm_core.scenario_entities)
+        self.player["currency"] = 20
+        self.dm_core._on_improvisation_requested({
+            "intent": "trade", "phrase": "his sword", "item_phrase": "his sword", "input": "hire jorrick",
+        })
+        self.assertTrue(self.dm_core.entities[sword]["hired"])
+        self.dm_core._enter_location("coach_stand")
+        self.assertIn(sword, self.dm_core.scenario_entities)
+
+        result = self._buy()
+
+        self.assertTrue(result["found"], result)
+        self.assertEqual(self.dm_core.current_location_key, "magnimar")
+        self.assertIn(sword, self.dm_core.scenario_entities)
+        self.assertTrue(self.dm_core._is_party_member(sword))
+
+    def test_a_return_coach_runs_the_road_the_other_way(self):
+        self._buy()
+        self.assertEqual(self.dm_core.current_location_key, "magnimar")
+        self.assertIn("Ottilie Marsh", self.dm_core.scenario_entities)
+        before_block = self.dm_core.current_block
+
+        result = self._buy("a seat on the coach to sandpoint")
+
+        self.assertTrue(result["found"], result)
+        self.assertEqual(self.dm_core.current_location_key, "sandpoint")
+        self.assertEqual(result["blocks_spent"], 2)
+        self.assertEqual(self.dm_core.current_block - before_block, 2)
+        self.assertAlmostEqual(self.player["currency"], 10 - 1.8 * 2)
+
+    def test_the_whole_pipeline_from_a_typed_line(self):
+        session = ScriptedSession(self, FakeMatcher(), scenario_name="lost_coast", start_location="coach_stand", setting="Pathfinder")
+        session.core.entities[session.core.player_name]["currency"] = 10
+
+        events = session.say("buy a seat on the coach to magnimar")
+
+        resolved = session.payloads(events, "item_interaction_resolved")
+        self.assertEqual([r["intent"] for r in resolved], ["service"], session.names(events))
+        self.assertTrue(resolved[0]["found"])
+        self.assertEqual(session.core.current_location_key, "magnimar")
+        self.assertNotIn("action_not_understood", session.names(events))
+
+
+class TestCoachNarration(unittest.TestCase):
+    """!@brief intents/service.py -- the ride is told as the engine resolved it."""
+
+    BASE = {
+        "found": True, "service": "a seat on the coach to Magnimar", "provider_label": "Hesper Cobb",
+        "price_text": "1 gold piece, 8 silver pieces", "input": "buy a ride",
+    }
+
+    def test_an_arrival_names_the_destination_and_the_time_on_the_road(self):
+        prompt = narrate_service(None, dict(
+            self.BASE, travelled=True, location_name="Magnimar", location_description="A sprawling port city.",
+            blocks_spent=2, time={"day": 1},
+        ))
+        self.assertIn("Magnimar", prompt)
+        self.assertIn("2 block(s)", prompt)
+        self.assertNotIn("Time passes", prompt)
+        self.assertIn("1 gold piece, 8 silver pieces", prompt)
+
+    def test_an_interrupted_ride_does_not_claim_an_arrival(self):
+        prompt = narrate_service(None, dict(self.BASE, travelled=False, interrupted=True))
+        self.assertIn("cut short", prompt)
+        self.assertNotIn("carries the player to", prompt)
+
+    def test_each_route_refusal_is_stated(self):
+        for reason, words in (("no_route", "cannot take the player"), ("already_there", "already there"),
+                              ("downtime_interrupted", "unfinished")):
+            with self.subTest(reason=reason):
+                prompt = narrate_service(None, dict(self.BASE, found=False, reason=reason))
+                self.assertIn(words, prompt)
+
+
+class TestTravelServiceValidation(unittest.TestCase):
+    """!@brief Data_Validation.py's travel_to / travel_speed checks."""
+
+    LOCATIONS = {"magnimar": {"grid": {"x": 210, "y": 0}}, "cellar": {}}
+
+    def _problems(self, **fields):
+        world = WorldContext(
+            entities={"npc": {"name": "npc", "supertype": "creature", "service": [dict({"name": "a ride", "price": 1}, **fields)]}},
+            rules={}, skills={},
+        )
+        return " | ".join(p.message for p in DataValidator(world, {}, self.LOCATIONS).validate())
+
+    def test_a_gridded_destination_and_a_positive_speed_are_clean(self):
+        self.assertEqual(self._problems(travel_to="magnimar", travel_speed=30), "")
+
+    def test_an_unknown_or_ungridded_destination_is_reported(self):
+        self.assertIn("travel_to 'nowhere'", self._problems(travel_to="nowhere"))
+        self.assertIn("travel_to 'cellar'", self._problems(travel_to="cellar"))
+
+    def test_a_bad_speed_is_reported(self):
+        for speed in (0, -5, "fast", True):
+            with self.subTest(speed=speed):
+                self.assertIn("travel_speed should be a positive", self._problems(travel_to="magnimar", travel_speed=speed))
+
+    def test_a_speed_without_a_destination_is_reported(self):
+        self.assertIn("no effect without travel_to", self._problems(travel_speed=30))
 
 
 if __name__ == "__main__":
