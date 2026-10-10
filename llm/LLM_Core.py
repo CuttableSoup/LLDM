@@ -93,6 +93,11 @@ class LLMCore:
         # potentially minutes of first-time PDF extraction/embedding.
         self.rag_index = RagIndex(event_bus, source_dir=rag_source_dir)
         self.context_window = []
+        # How plainly a service tagged content = "sexual" is narrated (intents/service.py's
+        # CONTENT_LEVELS): "fade" by default, "explicit" only when the player chose it -- the CLI's
+        # --content, or the GUI's Content menu ("content_level_selected").
+        self.content_level = "fade"
+        self.event_bus.subscribe("content_level_selected", self._on_content_level_selected)
         # The scenario, the cast, where the player is -- what the prompt builders read.
         self.narrator = NarratorState()
         self.event_bus.subscribe("scenario_loaded", self.generate_scene_intro)
@@ -145,6 +150,14 @@ class LLMCore:
         """!@brief Keeps the current location's real exits for location_rule (names only)."""
         self.exit_names = [d["name"] for d in data.get("destinations", []) if d.get("name")]
 
+
+    def set_content_level(self, level):
+        """!@brief Sets how plainly a sexual service is narrated; anything but "explicit" is "fade"."""
+        self.content_level = "explicit" if level == "explicit" else "fade"
+
+    def _on_content_level_selected(self, data):
+        """!@brief The GUI's Content menu: {"level": "fade" | "explicit"}."""
+        self.set_content_level((data or {}).get("level"))
 
     def set_setting(self, setting):
         """!

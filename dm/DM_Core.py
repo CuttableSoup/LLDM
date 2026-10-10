@@ -24,6 +24,7 @@ from dm.DM_Movement import MovementMixin
 from dm.DM_NpcGeneration import NpcGenerationMixin
 from dm.DM_Persistence import PersistenceMixin, WorldSlice
 from dm.DM_Rules import RulesMixin, scenario_exists
+from dm.DM_Services import ServiceMixin
 from dm.DM_Social import SocialMixin
 from dm.DM_Status import StatusMixin
 from dm.DM_Summoning import SummoningMixin
@@ -100,7 +101,7 @@ class SessionSlice(Persistable):
 
 
 
-class DMCore(InventoryMixin, SocialMixin, StatusMixin, MovementMixin, RulesMixin, PersistenceMixin, CharacterCreationMixin, NpcGenerationMixin, DialogueMixin, HelpMixin, ImprovisationMixin, EncounterMixin, SummoningMixin, CraftingMixin, TimeMixin, TravelMixin, LawMixin, EnforcementMixin):
+class DMCore(InventoryMixin, SocialMixin, StatusMixin, MovementMixin, RulesMixin, PersistenceMixin, CharacterCreationMixin, NpcGenerationMixin, DialogueMixin, HelpMixin, ImprovisationMixin, EncounterMixin, SummoningMixin, CraftingMixin, TimeMixin, TravelMixin, LawMixin, EnforcementMixin, ServiceMixin):
     """!
     @brief Main class handling the core mechanics of the RPG system. The implementation is
         composed from domain mixins in sibling files -- DM_Rules.py (rules/scenario
@@ -1310,6 +1311,15 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, MovementMixin, RulesMixin
                 intent, item_name, input_text, found, quiet=data.get("quiet", False),
                 phrase=data.get("phrase"), target_name=target_name, **extra,
             )
+
+        # Someone here sells a service the phrase names ("his sword", "a night"): bought, not looked
+        # up as an item -- unless the seller actually holds an item by that name. Found by playtest:
+        # "buy the sword" was matched to a catalog longsword and refused as "no sword here".
+        if (
+            intent in ("trade", "take") and not target_has_item and not already_owned
+            and self._try_service_purchase(data.get("phrase") or "", input_text)
+        ):
+            return
 
         handler = FREE_STANDING_INTENT_HANDLERS.get(intent)
         if handler:

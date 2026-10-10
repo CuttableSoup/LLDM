@@ -139,6 +139,12 @@ class ImprovisationMixin(DMCoreProtocol):
         shown_phrase = data.get("item_phrase") or phrase
         input_text = data.get("input", "")
 
+        # A priced service someone present offers ("buy a night", "hire the mercenary") is bought,
+        # not conjured: checked before any item is asked of the model.
+        # "take" counts too: "i'll take your services" opens on the take verb, not a buying one.
+        if intent in ("trade", "take") and self._try_service_purchase(shown_phrase, input_text):
+            return
+
         # include_background: "trade" is the one improvisation intent that addresses a person,
         # and in a town square the only people present are often exactly the ambient crowd --
         # without this, "buy some figs" in a location whose entire roster is background

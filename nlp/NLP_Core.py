@@ -601,7 +601,7 @@ class SentenceTransformerMatcher(IntentMatcher):
                 return name, re.sub(r"\s+", " ", stripped).strip()
         return None, processed_text
 
-    def adjudicate(self, text, present_names=(), partner=None, recent_narration=""):
+    def adjudicate(self, text, present_names=(), partner=None, recent_narration="", offers=()):
         """!
         @brief The one matcher call that asks the local LLM instead of embeddings -- see
             IntentMatcher.adjudicate and AdHoc_Generation.py's adjudicate_player_input. A
@@ -609,7 +609,7 @@ class SentenceTransformerMatcher(IntentMatcher):
             ({"kind", "game_action", "item", "tone"}).
         """
         verdict, reason = adjudicate_player_input(
-            text, present_names, partner, recent_narration, gesture_tones=self.gesture_tones,
+            text, present_names, partner, recent_narration, gesture_tones=self.gesture_tones, offers=offers,
         )
         if verdict is None:
             self.event_bus.publish("log_warning" if reason == "unavailable" else "log_info",

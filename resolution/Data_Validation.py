@@ -4,6 +4,7 @@ from resolution.Combat_Actions import MOVEMENT_ACTIONS, TRANSFER_ACTIONS
 from resolution.World_Context import PLAYER_PLACEHOLDER
 from resolution.Law_Resolution import AUTOMATIC, CRIMES
 import resolution.Combat_Actions as Combat_Actions
+from resolution.Service_Resolution import CONTENT_TAGS
 
 # Entity fields (see Rules/Fantasy/reference/template_schema.toml's own note) an
 # [[entity_template]] must never author -- NPC_Generation.py fills these in at instancing time,
@@ -872,6 +873,7 @@ class DataValidator:
                 self._check_equipped_table(label, entity)
                 self._check_attitudes_table(label, entity, allow_varied=is_template)
                 self._check_behavior_list(label, entity)
+                self._check_services(label, entity.get("service"))
                 self._check_entity_conditions_shape(label, entity.get("conditions"))
                 for program_field in ("on_round_upkeep", "on_enter", "on_damage", "on_heal"):
                     self._check_program_condition_durations(label, entity.get(program_field))
@@ -885,6 +887,46 @@ class DataValidator:
 
                 if is_template:
                     self._check_template_generation_fields(label, entity)
+
+    def _check_services(self, owner_label, services):
+        """!
+        @brief An entity's [[entity.service]] list (docs/services.md): each needs a name and a
+            non-negative price; aliases are strings; `rest`/`overnight`/`joins_party` are booleans;
+            `blocks` is a whole number; `content` is a known tag; `attitude_event` names an
+            [[attitude_event]] that exists; `on_buy` is an ordinary program.
+        """
+        if services is None:
+            return
+        if not isinstance(services, list):
+            self._log(owner_label, "service should be a list of [[entity.service]] tables.")
+            return
+        events = {event.get("name") for event in self.rules.get("attitude_event", [])}
+        for index, service in enumerate(services, start=1):
+            label = f"{owner_label} service #{index}"
+            if not isinstance(service, dict):
+                self._log(label, "should be a table.")
+                continue
+            if not isinstance(service.get("name"), str) or not service["name"].strip():
+                self._log(label, "needs a name.")
+            price = service.get("price")
+            if isinstance(price, bool) or not isinstance(price, (int, float)):
+                self._log(label, "needs a numeric price (in the setting's value unit).")
+            elif price < 0:
+                self._log(label, "price should not be negative.")
+            self._check_string_list(label, "aliases", service.get("aliases"))
+            for flag in ("rest", "overnight", "joins_party"):
+                self._check_field_type(label, flag, service.get(flag), bool)
+            self._check_field_type(label, "min_disposition", service.get("min_disposition"), (int, float))
+            self._check_field_type(label, "follow_offset", service.get("follow_offset"), (int, float))
+            blocks = service.get("blocks")
+            if blocks is not None and (isinstance(blocks, bool) or not isinstance(blocks, int) or blocks < 0):
+                self._log(label, "blocks should be a whole number of blocks, 0 or more.")
+            if service.get("content") is not None and service["content"] not in CONTENT_TAGS:
+                self._log(label, f"content should be one of {list(CONTENT_TAGS)}, got {service['content']!r}.")
+            event = service.get("attitude_event")
+            if event is not None and event not in events:
+                self._log(label, f"attitude_event '{event}' is not an [[attitude_event]] in rules.toml.")
+            self._check_program_condition_durations(label, service.get("on_buy"))
 
     def _check_law_list(self, owner_label, laws):
         """!@brief A [[polity.law]]/[[location.law]] list -- a known crime kind, numeric

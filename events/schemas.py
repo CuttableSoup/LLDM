@@ -69,6 +69,12 @@ class ItemInteractionResolved(TypedDict, total=False):
     skill: str
     puller: str
     vehicle: str
+    # -- service
+    service: str
+    provider: str
+    provider_label: str
+    content: str | None
+    joined: bool
     # -- gesture
     tone: str
     target_label: str

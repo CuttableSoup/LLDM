@@ -62,7 +62,9 @@ this overview.
 - [docs/inventory-items.md](docs/inventory-items.md) — entity tests, currency/item transfer, the
   diceless item-interaction intents, and crafting (the one item-adjacent check that rolls).
 - [docs/social-dialogue.md](docs/social-dialogue.md) — the three-axis attitude model, action- and
-  tone-driven attitude drift, free-form dialogue, and language barriers.
+  tone-driven attitude drift, free-form dialogue, language barriers, and wordless gestures.
+- [docs/services.md](docs/services.md) — priced services an entity offers (`[[entity.service]]`):
+  a room, a courtesan's night, a hired sword; real prices, the content choice, hires that follow.
 - [docs/adam-improvisation.md](docs/adam-improvisation.md) — ADaM (out-of-character help), ad hoc
   entity creation/removal/editing, and summoning.
 - [docs/law.md](docs/law.md) — polity laws, crime detection, witnesses and what they know,

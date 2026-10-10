@@ -303,6 +303,9 @@ class SocialMixin(DMCoreProtocol):
         # Crimes this entity actually witnessed, or (an enforcer) knows are on record here --
         # the only route crime knowledge reaches an NPC's prompt (DM_Law.py, docs/law.md).
         parts.extend(self.legal_facts_for(entity_name))
+        # What they sell, at the price the engine will charge (DM_Services.py), so they quote
+        # it rather than a figure the model makes up.
+        parts.extend(self.service_offers_for(entity_name))
 
         if toward_name and toward_name != entity_name:
             attitude = self.describe_attitude(entity_name, toward_name)

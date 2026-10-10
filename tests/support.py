@@ -236,8 +236,9 @@ class FakeMatcher:
     # verdict is a kind ("speech") or the full {"kind", "game_action", "item"} dict.
     adjudications = {}
 
-    def adjudicate(self, text, present_names=(), partner=None, recent_narration=""):
+    def adjudicate(self, text, present_names=(), partner=None, recent_narration="", offers=()):
         self.adjudicated = getattr(self, "adjudicated", []) + [(text, tuple(present_names), partner, recent_narration)]
+        self.last_offers = list(offers)
         return self.adjudications.get(text)
 
     def set_present_entities(self, entities):

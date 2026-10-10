@@ -79,7 +79,7 @@ TAKE_KEYWORDS = ("take ", "grab ", "pick up", "loot ", "snatch ")
 # commerce, investigation, value, price, worth, cost, identify, examine), so a phrase like
 # "what's this worth" still reaches appraise instead of being swallowed here.
 GIVE_KEYWORDS = ("give ", "hand over", "offer ")
-TRADE_KEYWORDS = ("trade ", "buy ", "purchase ")
+TRADE_KEYWORDS = ("trade ", "buy ", "purchase ", "hire ", "pay for ")
 # Consuming or activating an item already in the player's own inventory -- see
 # DMCore._resolve_use_intent. The intent name is the generic "use" (not "drink"), so this one
 # mechanism can grow to cover more than potions later (ex: a wand's own "wave "/"point at ")
@@ -241,7 +241,8 @@ def stage_directions(text):
         content = (match.group(1) or match.group(2) or "").strip()
         first = re.match(r"[a-z']+", content)
         starred = match.group(0).startswith("*")
-        if starred or (first and first.group() in FIRST_PERSON_OPENERS) or content.endswith((".", "!")):
+        opens_line = match.start() == len(text) - len(text.lstrip()) and len(content.split()) >= 3
+        if starred or opens_line or (first and first.group() in FIRST_PERSON_OPENERS) or content.endswith((".", "!")):
             found.append((match.start(), match.end(), content))
     return found
 
@@ -587,7 +588,7 @@ class IntentMatcher:
             (and, if targetable, for map_to_target too)."""
         raise NotImplementedError
 
-    def adjudicate(self, text, present_names=(), partner=None, recent_narration=""):
+    def adjudicate(self, text, present_names=(), partner=None, recent_narration="", offers=()):
         """!
         @brief What a line the classifier's own rules can only guess at mainly is: "action",
             "speech", "game_question", "musing", or None (no model to ask, or no usable answer
@@ -1357,6 +1358,7 @@ class IntentClassifier:
         # nobody here, unmarked speech has no listener (see the dialogue gate in classify).
         self.anyone_present = False
         self.present_names = []
+        self.offers = []
         self.recent_narration = ""
 
     def on_rules_loaded(self, data):
@@ -1376,6 +1378,12 @@ class IntentClassifier:
         self.matcher.set_present_entities(entities)
         self.anyone_present = any(entity.get("key") for entity in entities or [])
         self.present_names = [entity.get("name") or entity.get("key") for entity in entities or [] if entity.get("key")]
+        # "Jorrick Dane: his sword (5 gold pieces)" -- told to the adjudicator, so an acceptance in
+        # conversation ("I'll take your services") is recognized as buying one of these.
+        self.offers = [
+            f"{entity.get('name') or entity.get('key')}: " + "; ".join(entity["services"])
+            for entity in entities or [] if entity.get("services")
+        ]
 
     def set_recent_narration(self, text):
         """!@brief The narrator's latest words, as context for _adjudicate."""
@@ -1398,9 +1406,10 @@ class IntentClassifier:
         @return "action"/"speech"/"game_question"/"musing", or None to leave the rules' call.
         """
         adjudicate = getattr(self.matcher, "adjudicate", None)
+        kwargs = {"offers": self.offers} if self.offers else {}
         verdict = adjudicate(
             processed, self.present_names,
-            (self.conversation_partner or {}).get("name"), self.recent_narration,
+            (self.conversation_partner or {}).get("name"), self.recent_narration, **kwargs,
         ) if adjudicate else None
         if isinstance(verdict, str):
             verdict = {"kind": verdict}
@@ -1790,13 +1799,22 @@ class IntentClassifier:
             clause for clause in turn_clauses
             if clause["kind"] == "item" or clause.get("score", 0.0) >= MIXED_ACTION_MIN_SCORE
         ]
-        if not turn_clauses and adjudication is not None and adjudication.may_ask():
+        # Nothing matched, or only a weak guess did ("i need a clean, reliable blade" -> blades at
+        # 0.55, narrated as an attack on the man being asked his prices): put the action half to the
+        # model once. A gesture keeps it as one; anything but an action keeps the line as talk.
+        weak = bool(turn_clauses) and all(
+            clause["kind"] == "action" and clause.get("score", 1.0) < WEAK_TURN_SCORE for clause in turn_clauses
+        )
+        if (not turn_clauses or weak) and adjudication is not None and adjudication.may_ask():
             gesture_text = action_text.strip("() ")
-            if self._adjudicate(gesture_text, "weak_split", adjudication) == "gesture":
+            verdict = self._adjudicate(gesture_text, "weak_split", adjudication)
+            if verdict == "gesture":
                 gesture = self._verdict_event("gesture", gesture_text, raw_input, adjudication)
                 if gesture:
                     turn_clauses = gesture["payload"]["clauses"]
                     action_text = gesture_text
+            elif turn_clauses and verdict is not None and verdict != "action":
+                return None
         if not turn_clauses:
             return None
 
@@ -2095,6 +2113,22 @@ class IntentClassifier:
         if routed:
             events.append(routed)
             return
+
+        if unmatched_item_verbs and self.offers and adjudication.may_ask() and (
+            self.conversation_partner is not None or self.anyone_present
+        ):
+            # Someone here sells something, and an item verb named nothing real ("give the word",
+            # "take it"): at that point it is as likely an acceptance as an item attempt, and only the
+            # model -- told what is for sale (see offers) -- can say which. Found by playtest: "Deal.
+            # Start when I give the word." was refused as an item nobody could give, with the hire
+            # it accepted never made.
+            verdict = self._adjudicate(processed, "offered", adjudication)
+            routed = (
+                self._adjudicated_item_event(processed, adjudication, raw_input) if verdict == "action" else None
+            ) or self._verdict_event(verdict, processed, raw_input, adjudication)
+            if routed:
+                events.append(routed)
+                return
 
         if unmatched_item_verbs:
             # The whole turn would otherwise resolve to nothing at all, but at least one clause

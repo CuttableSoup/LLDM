@@ -274,9 +274,16 @@ class TestGUICore(unittest.TestCase):
 
     def test_menu_bar_layout_character_create_file_save_load_scenario_load(self):
         self.assertEqual(
-            [self.gui.menu_bar.entrycget(i, "label") for i in range(4)],
-            ["File", "Ruleset", "Character", "Scenario"],
+            [self.gui.menu_bar.entrycget(i, "label") for i in range(5)],
+            ["File", "Ruleset", "Content", "Character", "Scenario"],
         )
+        # Fade-to-black unless the player chooses otherwise; picking publishes the choice for LLMCore.
+        self.assertEqual(self.gui.content_var.get(), "fade")
+        chosen = []
+        self.gui.event_bus.subscribe("content_level_selected", chosen.append)
+        self.gui.content_var.set("explicit")
+        self.gui.content_menu.invoke(1)
+        self.assertEqual(chosen, [{"level": "explicit"}])
         self.assertEqual(self.gui.setting_var.get(), "Pathfinder")
         ruleset_labels = [
             self.gui.ruleset_menu.entrycget(i, "label")

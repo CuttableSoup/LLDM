@@ -98,6 +98,9 @@ class WorldSlice(Persistable):
             "prompt_directive": entity.get("prompt_directive"),
             "mount": entity.get("mount"),
         }
+        if entity.get("hired"):
+            # Hired as a service (DM_Services.py): without these a reload would send them home.
+            state.update({"hired": True, "follow_offset": entity.get("follow_offset")})
         # Crime knowledge, assault marks and disguises (DM_Law.py) -- only when present.
         state.update({field: entity[field] for field in LAW_INSTANCE_FIELDS if field in entity})
         if entity.get("generated"):
@@ -277,6 +280,10 @@ class WorldSlice(Persistable):
         entity["current_language"] = state.get("current_language")
         entity["prompt_directive"] = state.get("prompt_directive")
         entity["mount"] = state.get("mount")
+        if state.get("hired"):
+            entity["hired"] = True
+            entity["is_party"] = True
+            entity["follow_offset"] = state.get("follow_offset") or 0
         for field in LAW_INSTANCE_FIELDS:
             if field in state:
                 entity[field] = state[field]

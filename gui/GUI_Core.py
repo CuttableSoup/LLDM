@@ -24,7 +24,7 @@ class GUICore:
     @brief Main class handling the display and user interaction.
     """
 
-    def __init__(self, event_bus, master=None, default_setting=DEFAULT_SETTING, slot_store=None):
+    def __init__(self, event_bus, master=None, default_setting=DEFAULT_SETTING, slot_store=None, default_content="fade"):
         """!
         @brief Initializes the GUI components.
         @param event_bus The central event bus instance.
@@ -116,9 +116,21 @@ class GUICore:
                 label=setting_name, variable=self.setting_var, value=setting_name,
             )
 
-        # Menu bar order follows the natural flow: File | Ruleset | Character | Scenario.
+        # How plainly a sexual service is narrated (intents/service.py). Unlike Ruleset it is never
+        # locked: it is a preference about narration, safe to change mid-game, and LLMCore reads it
+        # fresh on every narration.
+        self.content_menu = tk.Menu(self.menu_bar, tearoff=0)
+        self.content_var = tk.StringVar(value=default_content)
+        for label, value in (("Fade to black", "fade"), ("Explicit", "explicit")):
+            self.content_menu.add_radiobutton(
+                label=label, variable=self.content_var, value=value,
+                command=lambda: self.event_bus.publish("content_level_selected", {"level": self.content_var.get()}),
+            )
+
+        # Menu bar order follows the natural flow: File | Ruleset | Content | Character | Scenario.
         self.menu_bar.add_cascade(label="File", menu=self.file_menu)
         self.menu_bar.add_cascade(label="Ruleset", menu=self.ruleset_menu)
+        self.menu_bar.add_cascade(label="Content", menu=self.content_menu)
         self.menu_bar.add_cascade(label="Character", menu=self.character_menu)
         self.menu_bar.add_cascade(label="Scenario", menu=self.scenario_menu)
 

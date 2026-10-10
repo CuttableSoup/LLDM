@@ -14,6 +14,7 @@ from intents import advance_retreat, formation, hitch, lore_check, mount, rest, 
 from intents.advance_retreat import narrate_advance_retreat, resolve_advance_retreat
 from intents.formation import narrate_formation, resolve_formation
 from intents.gesture import narrate_gesture, resolve_gesture
+from intents.service import narrate_service, resolve_service
 from intents.hitch import narrate_hitch, narrate_unhitch, resolve_hitch, resolve_unhitch
 from intents.lore_check import narrate_lore_check, resolve_lore_check
 from intents.mount import narrate_dismount, narrate_mount, resolve_dismount, resolve_mount
@@ -40,6 +41,8 @@ HANDLERS = {
     # Reached only by the adjudicator's "gesture" verdict (no IntentMatch, so not in MATCHES): a
     # turn-costing, diceless item-kind clause -- see intents/gesture.py.
     "gesture": (resolve_gesture, narrate_gesture),
+    # Published by DM_Services.py from the improvisation seam, never keyword-gated.
+    "service": (resolve_service, narrate_service),
 }
 
 # intent string -> IntentMatch, in the order the classifier gates them: lore_check ahead of the

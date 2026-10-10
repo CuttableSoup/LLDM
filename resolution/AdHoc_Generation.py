@@ -568,7 +568,7 @@ ADJUDICATION_MAX_TOKENS = 64
 
 
 def adjudicate_player_input(
-    text, present_names=(), partner=None, recent_narration="", timeout=None, gesture_tones=None,
+    text, present_names=(), partner=None, recent_narration="", timeout=None, gesture_tones=None, offers=(),
 ):
     """!
     @brief Asks the model what a player's line mainly is -- one of INPUT_KINDS -- for the lines
@@ -584,6 +584,8 @@ def adjudicate_player_input(
     @param recent_narration The last thing the narrator said, for context.
     @param timeout Seconds before the rules decide alone; None for the backend's own
         adjudication_timeout.
+    @param offers "Name: service (price); ..." lines for what people present sell. Told to the model so
+        an acceptance ("I'll take your services", "deal") is a buy and the item is the service's own name.
     @param gesture_tones {tone name: what it means} the setting authors for a wordless gesture;
         empty or None leaves "gesture" out of the kinds, so a setting without tones is unchanged.
     @return (verdict, reason) -- verdict is {"kind", "game_action", "item", "tone"} (game_action
@@ -606,6 +608,11 @@ def adjudicate_player_input(
         tone_lines = "\n".join(f"- {tone}: {meaning}" for tone, meaning in gesture_tones.items())
         tone_prompt = f"If it's a gesture, which tone is it?\n{tone_lines}\n"
     context = [f"People here: {', '.join(present_names) or 'no one else'}."]
+    if offers:
+        context.append(
+            "For sale here: " + " | ".join(offers) + ". Agreeing to, asking for or accepting one of these "
+            "is buying it; name it by the service's own name."
+        )
     if partner:
         context.append(f"The player is talking to {partner}.")
     if recent_narration:

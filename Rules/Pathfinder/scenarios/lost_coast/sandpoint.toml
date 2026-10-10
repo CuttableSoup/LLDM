@@ -269,6 +269,8 @@ name = "The White Deer Tavern and Inn"
 description = "A grand three-story tavern and inn overlooking the gulf, rebuilt after the old fire, run by a gruff but generous Shoanti innkeeper."
 entities = [
     { name = "Garridan Viskalai" },
+    { name = "Ysolde Marrow" },
+    { name = "Jorrick Dane" },
 ]
 return_to = "sandpoint"
 
@@ -746,6 +748,99 @@ default = [ 20, 20, 0 ]
 [entity.skills]
 streetwise = { dice = 2, pips = 0 }
 survival = { dice = 2, pips = 0 }
+
+# A room for the night: 5 sp, a night's rest for the party (heals like any rest). The simplest use of
+# [[entity.service]] -- see docs/services.md.
+[[entity.service]]
+name = "a room for the night"
+aliases = [ "a room", "the room", "a bed", "lodging", "a room upstairs" ]
+price = 0.5
+overnight = true
+rest = true
+
+[[entity]]
+name = "Ysolde Marrow"
+supertype = "creature"
+subtype = "humanoid"
+aliases = [ "ysolde", "the courtesan", "the working girl" ]
+description = "A sharp-tongued courtesan who works the White Deer's upper rooms, taking a cut of the house for the privilege."
+voice = "Flirtatious and businesslike in the same breath; quotes a price before she quotes a compliment."
+quotes = [ "Company's not free, friend -- but it's good." ]
+
+max_hp = 12
+
+[entity.attitudes]
+default = [ 50, 50, 100 ]
+# disposition   Hostile <-> Friendly
+# threat        Fearful <-> Confident
+# familiarity   Disgusted <-> Enamored
+
+[entity.skills]
+charisma = { dice = 3, pips = 0 }
+
+# Her company for a night: 1 gp 2 sp, paid up front, and only to someone she does not already
+# dislike (min_disposition). content = "sexual" is what makes the narration follow the player's
+# content choice (--content / the Content menu) -- fade-to-black by default. The night passes as
+# a rest. No haggling: the price is fixed, and the dialogue prompt is told to quote exactly it.
+[[entity.service]]
+name = "a night"
+aliases = [ "the night", "a night with her", "her company", "company for the night", "a night with ysolde" ]
+price = 1.2
+min_disposition = 20
+overnight = true
+rest = true
+content = "sexual"
+
+[[entity]]
+name = "Jorrick Dane"
+supertype = "creature"
+subtype = "humanoid"
+aliases = [ "jorrick", "dane", "the mercenary", "the sellsword", "the hired sword" ]
+description = "A scarred, unhurried sellsword nursing a cheap ale in the White Deer's corner, his longsword never far from his hand and his rate never changing."
+voice = "Flat and practical; states his rate once and does not haggle."
+quotes = [ "Five gold, paid first, and I'll walk your road until it kills one of us." ]
+
+max_hp = 26
+
+[entity.attitudes]
+default = [ 10, 30, 0 ]
+
+[entity.qualities]
+race = "human"
+
+[entity.skills]
+blades = { dice = 4, pips = 0 }
+dodge = { dice = 3, pips = 0 }
+athletics = { dice = 3, pips = 0 }
+strength = { dice = 3, pips = 0 }
+fortitude = { dice = 3, pips = 0 }
+intimidation = { dice = 2, pips = 2 }
+observation = { dice = 2, pips = 2 }
+survival = { dice = 2, pips = 1 }
+
+[[entity.abilities]]
+name = "longsword cut"
+supertype = "innate"
+subtype = "weapon"
+skill = "blades"
+damage_tags = [ "slashing" ]
+damage_value = { dice = 1, pips = 2, bonus = "user.strength_damage" }
+
+# Fights beside whoever hired him once he has (see the service below); idle until then.
+[[entity.behavior]]
+requirements = [
+    { field = "hp_per_remain", operator = ">=", value = 0.01 },
+]
+action = "longsword cut"
+
+# Hired outright, once: 5 gp up front, and he joins the party and follows it from here on
+# (joins_party). Not tied to disposition -- he is a professional -- only to not being hostile.
+[[entity.service]]
+name = "his sword"
+aliases = [ "his services", "his blade", "a sellsword", "a mercenary", "the mercenary", "a hired sword" ]
+price = 5
+joins_party = true
+follow_offset = 0
 
 [[entity]]
 name = "Veznutt Parooh"

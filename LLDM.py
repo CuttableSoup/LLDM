@@ -85,6 +85,14 @@ def main():
              "or 'openrouter' (needs OPENROUTER_API_KEY); either key can instead go in "
              "llm_config.toml. Defaults to llm_config.toml's own 'backend', else 'local'.",
     )
+    parser.add_argument(
+        "--content",
+        choices=("fade", "explicit"),
+        default="fade",
+        help="How plainly a sexual service (a courtesan's night) is narrated: 'fade' cuts away after the "
+             "agreement (the default), 'explicit' narrates it in full. Every character involved is an adult "
+             "either way. Also in the window's Content menu.",
+    )
     args = parser.parse_args()
 
     try:
@@ -114,7 +122,7 @@ def main():
     # construction order, since nothing publishes them until DMCore exists.
     # One slot store for all three cores, so Save/Load agree on where slots live.
     slot_store = FileSlotStore()
-    gui_core = GUICore(event_bus, default_setting=args.setting, slot_store=slot_store)
+    gui_core = GUICore(event_bus, default_setting=args.setting, slot_store=slot_store, default_content=args.content)
 
     # 1.6. Best-effort local Ollama bootstrap -- installs a local copy if nothing's found
     # anywhere (one-time; see Ollama_Launcher.py's own module note) and makes sure the
@@ -165,6 +173,7 @@ def main():
     nlp_core = NLPCore(event_bus)
     # LLMCore needs to hear 'action_resolved' from DMCore
     llm_core = LLMCore(event_bus, slot_store=slot_store)
+    llm_core.set_content_level(args.content)
 
     # 2.5. No scenario/character is loaded automatically -- DMCore (and the scenario it
     # publishes "scenario_loaded" for during its own __init__) is only ever constructed in

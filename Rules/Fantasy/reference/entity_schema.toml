@@ -1086,3 +1086,25 @@ materials = [
 # than reusing the freeform "tags" field above -- tags is documented as narration-only, never
 # matched against anything else, and overloading it here would break that invariant.
 provides_station = "forge"
+
+# ---------------------------------------------------------------------------------------------
+# [[entity.service]] -- a priced service this entity offers (docs/services.md)
+#
+# Bought through the ordinary "trade" intent ("buy a night", "hire the mercenary", "pay for the
+# room"): when the phrase names a service someone present offers, it is bought instead of an item
+# being conjured. The price is what the entity's own dialogue prompt is told to quote, and what is
+# charged -- paid as a real currency transfer, never narrated into existence. No haggling.
+#
+#   [[entity.service]]
+#   name = "a room for the night"        # required; what the player buys
+#   aliases = [ "a room", "lodging" ]    # other ways to name it
+#   price = 0.5                          # required; in the setting's value unit (gp in Pathfinder)
+#   min_disposition = 20                 # optional; refused below this disposition toward the player
+#   overnight = true                     # optional; passes a whole night's blocks
+#   blocks = 2                           # optional; passes this many blocks (ignored if overnight)
+#   rest = true                          # optional; the time passes as a rest, healing the party
+#   joins_party = true                   # optional; this entity joins and follows the party
+#   follow_offset = 0                    # optional; band offset from the player once joined
+#   attitude_event = "favor"             # optional; an [[attitude_event]] applied to them
+#   content = "sexual"                   # optional; narration follows the player's content choice
+#   on_buy = { do = "condition", entity = "actor", name = "rested" }  # optional; an ordinary program

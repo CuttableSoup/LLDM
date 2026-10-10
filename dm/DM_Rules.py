@@ -8,6 +8,7 @@ from resolution.Program_Interpreter import run_program
 from paths import PROJECT_ROOT
 import resolution.Combat_Actions as Combat_Actions
 import resolution.Conveyance as Conveyance
+import resolution.Service_Resolution as Service_Resolution
 from resolution.World_Context import PLAYER_PLACEHOLDER  # resolved in _instance_entities, below
 
 def scenario_file_path(scenario_name, setting="Fantasy"):
@@ -307,6 +308,13 @@ class RulesMixin(DMCoreProtocol):
         """
         for name in Conveyance.mount_chain(self.world, self.player_name):
             if name not in self.scenario_entities:
+                self.scenario_entities.append(name)
+        # Someone hired as a service (DM_Services.py) follows the player, living, into every scene.
+        for name, entity in self.entities.items():
+            if (
+                entity.get("hired") and entity.get("is_party") and name not in self.scenario_entities
+                and Combat_Resolution.get_current_hp(self.world, name) > 0
+            ):
                 self.scenario_entities.append(name)
 
     def _resolve_player_name(self, template=None):
@@ -950,6 +958,12 @@ class RulesMixin(DMCoreProtocol):
                 "name": entity.get("name", entity_name),
                 "subtype": entity.get("subtype", ""),
                 "aliases": list(entity.get("aliases", [])),
+                # What they sell and at what price, so the model that sorts an ambiguous line can
+                # tell "I'll take it" is a purchase and name the service (IntentClassifier.offers).
+                "services": [
+                    f"{service['name']} ({self.format_currency(Service_Resolution.price_of(service))})"
+                    for service in Service_Resolution.services_of(self.entities, entity_name)
+                ],
             })
 
         self.event_bus.publish("scene_roster_updated", {
