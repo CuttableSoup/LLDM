@@ -50,6 +50,7 @@ MATCH = {
 _REASON_TEXT = {
     "no_exit": "there's no way through in that direction",
     "blocked_by_enemies": "something hostile is still standing in the way",
+    "barricaded": "the way out is barricaded -- piled-up furniture would have to be smashed or dragged clear first",
     "downtime_interrupted": "an unresolved threat from earlier is still keeping the party in place",
     "mount_overloaded": "whatever they're riding/hitched to is carrying more than it can bear and refuses to budge",
     "impassable_terrain": "the route crosses ground nothing in the party can actually get across",

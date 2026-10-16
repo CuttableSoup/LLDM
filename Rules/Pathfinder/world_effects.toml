@@ -1,0 +1,116 @@
+# World effects -- what a player's deliberate change to the scene itself does: set fire to the
+# curtains, bar the door, tie a guard up, put the fire out. Each is an ordinary maneuver-shaped
+# [[entity]] (see maneuvers.toml), listed under one skill's own "abilities" so a plain-words
+# attempt reaches it the way "trip" does, and rolled as a flat check at its authored
+# "difficulty" (3 very easy, 6 easy, 10 moderate -- rules.toml's [[difficulty_tier]]), so no model
+# is asked to rate it. Nothing here is narrated into existence: an effect either lands through
+# one of the engine's own primitives (a placed hazard entity, a condition, a crime report) or does
+# not, and a line no effect fits is rolled as whatever skill it matched and narrated as an
+# attempt with no mechanical change.
+#
+# The hazards are plain object entities placed with the existing "summon" mechanism, counted
+# down on the block clock ("unit" = "blocks": the fire burns out, a barricade stands until it is
+# smashed). What a hazard does is a [[status]] (statuses.toml): "blaze" burns whoever shares its
+# band every combat round (on_round) and every block that passes (on_block).
+#
+# Arson is a crime (report_crime, docs/law.md): witnesses and the polity's law fire from the
+# action itself, not from anything a model said happened.
+
+[[entity]]
+name = "blaze"
+supertype = "object"
+subtype = "hazard"
+description = "A spreading fire -- curtains, timber and thatch catching and burning."
+max_hp = 15
+immunity_tags = [ "any" ]
+
+[[entity]]
+name = "barricade pile"
+supertype = "object"
+subtype = "hazard"
+description = "Furniture and rubble heaped against the way out, wedged tight."
+max_hp = 12
+blocks_exits = true
+
+[[entity]]
+name = "set fire"
+supertype = "technique"
+subtype = "maneuver"
+# What the model is told does and does not count when it confirms this match (confirm_fit).
+confirm_with_model = "Anything that can burn and spread -- a building, curtains, a haystack, thatch, oil -- counts, however it is worded (burn it, torch it, set it alight). Lighting a candle, lamp, torch, pipe or campfire does not."
+description = "Set a building, hay or cloth ablaze so the fire spreads and burns out of control."
+keywords = [
+    "set fire", "set fire to", "set it on fire", "torch it", "torch the", "burn it down",
+    "burn the place", "set the curtains on fire",
+]
+skill = [ "survival" ]
+range = 10
+difficulty = 6
+summon = { name = "blaze", duration = 3, unit = "blocks" }
+on_pass = { do = "report_crime", crime = "arson" }
+
+[[entity]]
+name = "douse"
+supertype = "technique"
+subtype = "maneuver"
+description = "Put a fire out -- smother it, beat it down, or throw water on it -- or put out a burning person."
+keywords = [
+    "douse", "douse the lamp", "put out the fire", "put out the flames", "extinguish", "smother the flames",
+    "snuff out",
+]
+skill = [ "athletics" ]
+range = 1
+difficulty = 6
+dispel = { subtypes = [ "hazard" ] }
+on_pass = { do = "dismiss_condition", entity = "target", name = "burning" }
+
+[[entity]]
+name = "barricade"
+supertype = "technique"
+subtype = "maneuver"
+# What the model is told does and does not count when it confirms this match (confirm_fit).
+confirm_with_model = "Piling things against, wedging or blocking a door or way out counts. Merely closing, opening or locking a door does not."
+description = "Pile furniture against a door, or wedge it shut, so that nothing gets through until it is cleared."
+keywords = [
+    "barricade", "barricade the door", "wedge the door shut", "wedge it shut", "pile furniture against the door",
+    "block the door", "bar the door",
+]
+skill = [ "athletics" ]
+range = 10
+difficulty = 6
+summon = { name = "barricade pile", unit = "blocks" }
+
+[[entity]]
+name = "bind"
+supertype = "technique"
+subtype = "maneuver"
+# What the model is told does and does not count when it confirms this match (confirm_fit).
+confirm_with_model = "Tying up, trussing or gagging a person counts. Holding, grabbing, embracing or touching someone, or tying something that is not a person, does not."
+description = "Restrain someone with rope or cord, or gag them, so they cannot act until they work free."
+keywords = [ "tie up", "tie him up", "tie them up", "truss up", "hogtie", "gag them" ]
+skill = [ "athletics" ]
+assault = true
+range = 0
+on_pass = { do = "condition", entity = "target", name = "bound", duration = "permanent" }
+
+[[entity]]
+name = "cut"
+supertype = "technique"
+subtype = "maneuver"
+description = "Slice through a rope, strap, net or hanging cord so that whatever it held falls free."
+keywords = [ "cut the rope", "cut it loose", "cut it down", "cut the cord", "sever the rope", "slash the rope" ]
+skill = [ "blades" ]
+range = 0
+# Nothing is cut unless the thing is really there: the effect lands on a present object (a rope
+# entity in the scene), never on one the narration only mentioned.
+on_pass = { if = 'target.supertype == "object"', then = { do = "damage", entity = "target", dice = 4, pips = 0, bonus = 0 } }
+
+[[entity]]
+name = "topple"
+supertype = "technique"
+subtype = "maneuver"
+description = "Heave something tall over -- a shelf, a statue, a stack of crates -- so that it crashes down."
+keywords = [ "topple", "topple the shelf", "knock it over", "tip it over", "push it over", "heave it over" ]
+skill = [ "athletics" ]
+range = 0
+on_pass = { if = 'target.supertype == "object"', then = { do = "damage", entity = "target", dice = 3, pips = 0, bonus = 0 } }

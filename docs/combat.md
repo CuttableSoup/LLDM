@@ -576,6 +576,10 @@ absent/inert unless a piece of content actually authors it.
   simply has nothing cured, the same "used on the wrong thing just wastes it" shape `dispel`
   already has. `spells.toml`'s own `"cure disease"` (`{subtypes = ["disease"]}`, targeting
   `rules.toml`'s `"filth fever"` via its shared `subtype = "disease"`) is the shipped example.
+- **The `[[status]]` `"on_block"` trigger** (`DM_Time.py`'s `_evaluate_block_statuses`, from
+  `advance_blocks`) is `"on_round"`'s clock outside combat: once per block that passes, with the same
+  one implicit round of upkeep for whoever it lands on. What makes a set fire hurt while the party rests.
+  See [world-effects.md](world-effects.md).
 - **The `[[status]]` `"on_arrival"` trigger** + `DM_Rules.py`'s own `_evaluate_arrival_statuses`
   (called from both `_enter_location` and `enter_room` -- the only two "a scene was just
   entered" moments this engine has) -- the Pathfinder "Glyph of Warding"/"Magic Mouth" shape.

@@ -479,8 +479,11 @@ its confirmation step); words said aloud stay `speech`.
 - **Tones are data.** An `[[attitude_event]]` (`rules.toml`) carrying a `tone` field is one; its
   `description` is what the model is told it means (`Social_Resolution.gesture_tones`, published on
   `rules_loaded` as `gesture_tones` and held by the matcher). Fantasy and Pathfinder author `warm`,
-  `intimate`, `respectful`, `mocking` and `neutral` (a catch-all that moves nothing, so the model is
-  never forced to call a dance warm or rude). The same call that picks the kind names the tone; a
+  `intimate`, `respectful`, `mocking`, `hostile` (a glare or scowl that threatens nothing concrete),
+  `flirtatious` (a wink, a blown kiss) and `neutral` (a catch-all that moves nothing, so the model is
+  never forced to call a dance warm or rude). Found by a probe of 11 gestures, four of which (glare,
+  wink, spit, salute) came back `action`: with the two new tones, a wink, glare and kneel named in the
+  kind's own wording, 32/32 phrasings (terse and first-person) were gestures and none of 32 negatives was. The same call that picks the kind names the tone; a
   gesture with no tone the setting recognizes comes back as no answer and the rules stand.
 - **Unwelcome gestures.** A tone event may author `unwelcome_below` (a disposition) and
   `unwelcome_event`. A target already below that toward the player takes the other event instead and

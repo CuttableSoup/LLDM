@@ -37,6 +37,11 @@ fine = 100
 acclaim = -6
 
 [[polity.law]]
+crime = "arson"
+fine = 40
+acclaim = -3
+
+[[polity.law]]
 crime = "resisting_arrest"
 fine = 20
 acclaim = -2

@@ -68,7 +68,15 @@ class SummoningMixin(DMCoreProtocol):
         name = instanced[0]
         instance = self.entities[name]
         instance["ad_hoc"] = True
-        instance["summon_expires_in"] = summon_spec.get("duration", 1)
+        # "unit" = "blocks" is a hazard that burns on the block clock rather than the combat
+        # round's (a set fire, a barricade): _expire_summons_by_block counts it down.
+        # A block-denominated summon authoring no duration stands until something removes it (a
+        # barricade is smashed, not outwaited).
+        if summon_spec.get("unit") == "blocks":
+            if summon_spec.get("duration") is not None:
+                instance["summon_expires_in_blocks"] = summon_spec["duration"]
+        else:
+            instance["summon_expires_in"] = summon_spec.get("duration", 1)
         self.scenario_entities.append(name)
         self._publish_scene_roster()
         return name
@@ -108,6 +116,25 @@ class SummoningMixin(DMCoreProtocol):
         self.entities[spawn_name]["ad_hoc"] = True
         self.scenario_entities.append(spawn_name)
         self._publish_scene_roster()
+
+    def _expire_summons_by_block(self, blocks):
+        """!
+        @brief Counts every block-denominated summon's own "summon_expires_in_blocks" (see
+            _summon_creature's "unit" = "blocks") down by blocks elapsed, removing it from the
+            scene the block this reaches 0 -- advance_blocks's counterpart to
+            _expire_summon_if_due's per-round tick. Global, like _tick_conditions_by_block: a fire
+            burns out whether or not the player is still in the room.
+        @param blocks How many blocks just elapsed.
+        """
+        if blocks <= 0:
+            return
+        for entity_name, entity in list(self.entities.items()):
+            if "summon_expires_in_blocks" not in entity:
+                continue
+            entity["summon_expires_in_blocks"] -= blocks
+            if entity["summon_expires_in_blocks"] <= 0:
+                del entity["summon_expires_in_blocks"]
+                self.remove_entity_from_scene(entity_name)
 
     def _expire_summon_if_due(self, entity_name):
         """!

@@ -241,6 +241,14 @@ class FakeMatcher:
         self.last_offers = list(offers)
         return self.adjudications.get(text)
 
+    # {clause text: "yes"/"no"} -- the model's confirmation of a world effect's embedding match
+    # (confirm_fit); anything unlisted gets no answer, which leaves the match standing.
+    confirmations = {}
+
+    def confirm_fit(self, text, ability_name, has_target=False):
+        self.confirmed = getattr(self, "confirmed", []) + [(text, ability_name)]
+        return self.confirmations.get(text)
+
     def set_present_entities(self, entities):
         pass
 

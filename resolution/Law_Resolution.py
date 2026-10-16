@@ -18,7 +18,7 @@ from resolution.Inventory_Resolution import _settle
 from resolution.World_Context import WorldContext
 
 # Every crime kind a [[polity.law]] may name -- Data_Validation.py rejects anything else.
-CRIMES = ("theft", "assault", "murder", "banned_ability", "banned_presence", "resisting_arrest")
+CRIMES = ("theft", "assault", "murder", "arson", "banned_ability", "banned_presence", "resisting_arrest")
 
 # A recognition band naming this instead of a difficulty tier means "no roll at all" -- a
 # shambling corpse is recognized by anyone, trained or not (an untrained 0-dice roll would

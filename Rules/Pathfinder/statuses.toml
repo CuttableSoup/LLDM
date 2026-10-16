@@ -126,3 +126,20 @@ requirements = [
 ]
 apply = { condition = "burning", duration = "rounds", length = 1, radius = 0, side = "all" }
 self_dismiss = "armed"
+
+# world_effects.toml's "blaze" -- a set fire. Burns whoever shares its band (side = "all": fire does
+# not pick sides) once a combat round and once for every block that passes, so a fire left burning
+# while the party rests or travels still hurts. Reuses "burning" (conditions.toml) exactly as
+# "flame wall zone" does; duration = "rounds"/length = 1 makes it a zone that lapses once you are
+# no longer in it.
+[[status]]
+name = "blaze burns"
+trigger = "on_round"
+requirements = [ { field = "name", operator = "==", value = "blaze" } ]
+apply = { condition = "burning", duration = "rounds", length = 1, radius = 0, side = "all" }
+
+[[status]]
+name = "blaze burns on the clock"
+trigger = "on_block"
+requirements = [ { field = "name", operator = "==", value = "blaze" } ]
+apply = { condition = "burning", duration = "rounds", length = 1, radius = 0, side = "all" }

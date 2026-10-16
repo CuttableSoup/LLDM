@@ -954,7 +954,11 @@ class DMCore(InventoryMixin, SocialMixin, StatusMixin, MovementMixin, RulesMixin
             # A named spell/technique cast at no one keeps its long-standing automatic success --
             # spells.toml authors that on purpose ("summoning before a fight starts is trivial").
             if named_ability:
-                difficulty, trivial = 0, False
+                # A spell keeps that automatic success; a maneuver that authors its own flat
+                # "difficulty" (Rules/<setting>/world_effects.toml's set fire/barricade) is
+                # still a task with a bar, found by playtest: both always succeeded at no one.
+                authored = named_ability.get("difficulty") if named_ability.get("subtype") == "maneuver" else None
+                difficulty, trivial = authored or 0, False
             else:
                 difficulty, trivial = self._untargeted_difficulty(skill_name, input_text)
             if trivial:

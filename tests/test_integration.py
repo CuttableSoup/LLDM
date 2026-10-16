@@ -1546,9 +1546,15 @@ class TestGestureAdjudicationLive(unittest.TestCase):
         ("I spit at his feet", "mocking"),
         ("I stick my tongue out at him", "mocking"),
         ("I dance a little jig", "neutral"),
+        # The tones added after a probe found glare, wink and kneel dropped as "not understood".
+        ("I glare at the guard", "hostile"),
+        ("I scowl at him", "hostile"),
+        ("I wink at the barmaid", "flirtatious"),
+        ("I blow her a kiss", "flirtatious"),
+        ("I kneel before the captain", "respectful"),
         # From the gooner playtest, where each was called an action and rolled polearms, fly, dodge or
         # observation. The tone is only checked where it is not a matter of reading the room.
-        ("I stroll closer, letting my hip brush against his", "intimate"),
+        ("I stroll closer, letting my hip brush against his", None),  # intimate or flirtatious, by the room
         ("I let my hand glide up the front of his shirt, resting my palm on his chest", "intimate"),
         ("I step forward until I am nose to nose with him, my eyes on his mouth", None),
         ("I lean in close to his ear so he can feel my breath", None),

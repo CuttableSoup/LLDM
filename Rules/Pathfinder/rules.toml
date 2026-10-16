@@ -131,7 +131,7 @@ recognition_skill = "streetwise"
 spell_identify_base = 15
 # How hard witnessing each crime hits a witness's attitude toward the offender -- the
 # "witnessed_crime" [[attitude_event]]'s magnitude (0..1).
-witness_severity = { theft = 0.25, assault = 0.5, murder = 1.0, banned_ability = 0.4, banned_presence = 0.3 }
+witness_severity = { theft = 0.25, assault = 0.5, murder = 1.0, arson = 0.6, banned_ability = 0.4, banned_presence = 0.3 }
 # Enforcement (DM_Enforcement.py; docs/law.md "Enforcement"):
 #   jail_blocks_per_unit -- a surrender that can't cover the bounty serves the rest as jail time,
 #     this many blocks per unit of value unpaid (rounded up, at least 1).
@@ -576,6 +576,24 @@ description = "a derisive or insulting wordless act: a rude gesture, spitting at
 disposition = -8
 threat = 2
 familiarity = -3
+
+[[attitude_event]]
+name = "gesture_hostile"
+tone = "hostile"
+description = "a menacing or hostile look or posture that harms no one and asks for nothing: a glare, a scowl, a cold stare, a clenched fist, squaring up, bared teeth"
+disposition = -6
+threat = 4
+familiarity = -1
+
+[[attitude_event]]
+name = "gesture_flirtatious"
+tone = "flirtatious"
+description = "a playful, teasing or flirtatious act short of a caress: a wink, a blown kiss, a coy smile, a lingering look, a raised eyebrow"
+disposition = 4
+threat = 0
+familiarity = 4
+unwelcome_below = -5
+unwelcome_event = "gesture_unwelcome"
 
 # A wordless act that carries no feeling toward anyone (dancing, juggling, stretching) -- here so
 # the model is never forced to call it warm or rude. Moves nothing.

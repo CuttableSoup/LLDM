@@ -657,7 +657,9 @@ class TestGestureTones(unittest.TestCase):
                 rules = tomllib.load(handle)
             names = {event["name"] for event in rules["attitude_event"]}
             tones = Social_Resolution.gesture_tones(rules)
-            self.assertTrue({"warm", "intimate", "respectful", "mocking", "neutral"} <= set(tones), setting)
+            self.assertTrue(
+                {"warm", "intimate", "respectful", "mocking", "neutral", "hostile", "flirtatious"} <= set(tones), setting,
+            )
             for event in rules["attitude_event"]:
                 if event.get("unwelcome_event"):
                     self.assertIn(event["unwelcome_event"], names, setting)

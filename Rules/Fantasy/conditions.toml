@@ -202,3 +202,10 @@ form = "coyote"
 name = "wild shape"
 subtype = "transmutation"
 form = "wild boar"
+
+# world_effects.toml's "bind" -- tied hand and foot. Like "pinned": it stops the target acting at all
+# (prevents_action) beyond trying to get free (maneuvers.toml's "escape artist" dismisses it).
+[[condition]]
+name = "bound"
+modifier = { dice = -4, pips = 0, bonus = 0 }
+prevents_action = true

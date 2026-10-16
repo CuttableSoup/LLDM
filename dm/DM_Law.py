@@ -28,6 +28,7 @@ CRIME_PHRASES = {
     "theft": "steal from {victim}",
     "assault": "attack {victim}",
     "murder": "kill {victim}",
+    "arson": "set a fire here",
     "banned_ability": "cast {subject}, which is forbidden here",
     "banned_presence": "bring {subject} here, which is forbidden",
 }

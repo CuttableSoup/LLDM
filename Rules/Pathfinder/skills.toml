@@ -18,10 +18,12 @@ combat_role = "offense"
 # maneuvers.toml's own "Universal (untrained) abilities". "disarm" now lands via the
 # "destroy_equipped" program op (Program_Interpreter.py -> Inventory_Resolution.py), replacing
 # the removed "disarmed" condition.
-abilities = [ "trip", "sunder", "bull rush", "grapple", "pin", "disarm" ]
+abilities = [ "trip", "sunder", "bull rush", "grapple", "pin", "disarm", "douse", "barricade", "bind", "topple" ]
 
 [[skill]]
 name = "blades"
+# Confirmed with the model when the line names no target (docs/world-effects.md).
+confirm_with_model = "Attacking or striking a person or creature with it counts. Searching for, looking for, fetching, climbing, swinging from or otherwise merely handling something does not."
 description = "Using swords and knives in close combat."
 # "attack the creature"/"attack the creature with my weapon" -- deliberately fuller phrases,
 # not bare words, alongside the single-word keywords below: a plain "attack"/"sword" already
@@ -42,10 +44,12 @@ opposes = ["dodge", "blades", "brawling", "axes", "polearms"]
 combat_role = "offense"
 # See maneuvers.toml's own "sunder" -- accessible via any melee weapon skill, not just
 # athletics (Pathfinder's own Sunder is a CMB maneuver performed as part of a weapon attack).
-abilities = [ "sunder" ]
+abilities = [ "sunder", "cut" ]
 
 [[skill]]
 name = "throwing"
+# Confirmed with the model when the line names no target (docs/world-effects.md).
+confirm_with_model = "Attacking or striking a person or creature with it counts. Searching for, looking for, fetching, climbing, swinging from or otherwise merely handling something does not."
 description = "Hurling weapons or objects at a target."
 keywords = ["combat", "ranged", "projectile", "throw", "hurl", "toss"]
 opposes = ["dodge", "reflexes"]
@@ -55,7 +59,7 @@ combat_role = "offense"
 [[skill]]
 name = "fortitude"
 description = "Resisting fatigue, disease, or poison."
-keywords = ["defense", "resistance", "passive", "endure", "survive", "toughness"]
+keywords = ["defense", "resistance", "passive", "endure", "survive", "toughness", "hold my breath", "hold breath"]
 opposes = []
 # See athletics' own combat_role comment.
 combat_role = "resistive"
@@ -68,6 +72,8 @@ opposes = ["strength", "brawling", "fortitude"]
 
 [[skill]]
 name = "axes"
+# Confirmed with the model when the line names no target (docs/world-effects.md).
+confirm_with_model = "Attacking or striking a person or creature with it counts. Searching for, looking for, fetching, climbing, swinging from or otherwise merely handling something does not."
 description = "Wielding axes in melee combat."
 keywords = ["combat", "melee", "armed", "axe", "hatchet", "cleave", "chop"]
 opposes = ["dodge", "blades", "axes", "polearms"]
@@ -77,6 +83,8 @@ abilities = [ "sunder" ]
 
 [[skill]]
 name = "polearms"
+# Confirmed with the model when the line names no target (docs/world-effects.md).
+confirm_with_model = "Attacking or striking a person or creature with it counts. Searching for, looking for, fetching, climbing, swinging from or otherwise merely handling something does not."
 description = "Wielding long hafted weapons in combat."
 keywords = ["combat", "melee", "reach", "spear", "halberd", "pike", "lance", "thrust"]
 opposes = ["dodge", "blades", "axes", "polearms"]
@@ -86,12 +94,15 @@ abilities = [ "sunder" ]
 
 [[skill]]
 name = "brawling"
+# Confirmed with the model when the line names no target (docs/world-effects.md).
+confirm_with_model = "Attacking or striking a person or creature with it counts. Searching for, looking for, fetching, climbing, swinging from or otherwise merely handling something does not."
 description = "Unarmed melee combat."
 # "hit"/"strike"/"tackle"/"charge"/"slap": found by playtest, where "hit her again!",
 # "(charges her again)" and "(swings and tackles her)" all scored under 0.5 and rolled nothing.
 keywords = [
     "combat", "melee", "unarmed", "punch", "kick", "unarmed strike", "fight",
     "hit", "strike", "tackle", "charge", "slap", "hit someone", "charge at someone",
+    "headbutt", "head-butt", "elbow",
 ]
 opposes = ["dodge", "brawling", "blades", "axes", "polearms"]
 # See athletics' own combat_role comment.
@@ -101,7 +112,7 @@ abilities = [ "sunder" ]
 [[skill]]
 name = "acrobatics"
 description = "Tumbling, balancing, and executing flips."
-keywords = ["movement", "agility", "balance", "flip", "tumble", "roll", "dodge", "evade"]
+keywords = ["movement", "agility", "balance", "flip", "tumble", "roll", "dodge", "evade", "slide down", "vault", "swing from", "swing from the chandelier", "hang from", "somersault", "cartwheel"]
 opposes = ["observation", "reflexes"]
 
 [[skill]]
@@ -143,7 +154,7 @@ abilities = [ "dirty trick", "feint" ]
 [[skill]]
 name = "stealth"
 description = "Moving silently and remaining hidden."
-keywords = ["movement", "concealment", "covert", "hide", "sneak", "silent", "shadows"]
+keywords = ["movement", "concealment", "covert", "hide", "sneak", "silent", "shadows", "play dead", "feign death"]
 opposes = ["observation", "reflexes"]
 
 [[skill]]
@@ -165,6 +176,8 @@ combat_role = "resistive"
 
 [[skill]]
 name = "missiles"
+# Confirmed with the model when the line names no target (docs/world-effects.md).
+confirm_with_model = "Attacking or striking a person or creature with it counts. Searching for, looking for, fetching, climbing, swinging from or otherwise merely handling something does not."
 description = "Using bows, crossbows, and slings."
 keywords = ["combat", "ranged", "projectile", "bow", "arrow", "shoot", "aim", "fire"]
 opposes = ["dodge", "reflexes"]
@@ -219,6 +232,8 @@ name = "survival"
 description = "Staying alive in hostile wilderness environments."
 keywords = ["wilderness", "exploration", "foraging", "camp", "nature", "track", "outdoor"]
 opposes = ["survival"]
+# world_effects.toml: setting a fire is a survival skill (fire-making), not a weapon attack.
+abilities = [ "set fire" ]
 # See arcane's own lore_types comment. "giant" added alongside "animal" -- Pathfinder's own
 # Knowledge (nature) covers both animals and giants, and creatures.toml's "troll" was corrected
 # from subtype = "monstrous humanoid" to the real "giant" (see that entity's own comment), so it
@@ -246,7 +261,7 @@ lore_types = { subtypes = ["undead"] }
 [[skill]]
 name = "artistry"
 description = "Creating fine art or performing for an audience."
-keywords = ["performance", "creation", "expression", "art", "music", "sing", "paint", "draw", "dance"]
+keywords = ["performance", "creation", "expression", "art", "music", "sing", "paint", "draw", "dance", "carve", "engrave", "carve a symbol"]
 opposes = ["observation"]
 
 [[skill]]
@@ -270,7 +285,7 @@ opposes = ["streetwise"]
 [[skill]]
 name = "observation"
 description = "Spotting hidden things or noticing fine details."
-keywords = ["perception", "investigation", "awareness", "search", "spot", "look", "notice", "see", "hear", "listen", "find", "study", "scan", "watch", "observe", "glance", "gaze", "peer", "survey", "scrutinize"]
+keywords = ["perception", "investigation", "awareness", "search", "spot", "look", "notice", "see", "hear", "listen", "find", "study", "scan", "watch", "observe", "glance", "gaze", "peer", "survey", "scrutinize", "eavesdrop", "listen at the door", "listen at the keyhole"]
 opposes = ["stealth", "disguise", "trickery", "finesse", "forgery"]
 
 [[skill]]
@@ -295,7 +310,7 @@ abilities = [ "don a disguise", "drop the disguise" ]
 [[skill]]
 name = "husbandry"
 description = "Caring for, handling, and training animals."
-keywords = ["animal handling", "care", "training", "beast", "pet", "ride", "tame"]
+keywords = ["animal handling", "care", "training", "beast", "pet", "ride", "tame", "feed the animal", "feed the crow", "whistle for", "spook the horses", "shoo", "calm the beast"]
 opposes = ["husbandry"]
 
 [[skill]]

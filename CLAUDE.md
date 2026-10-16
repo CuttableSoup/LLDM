@@ -76,4 +76,7 @@ this overview.
   and what `load_rules` special-cases.
 - [docs/testing.md](docs/testing.md) — the offline unit-test files vs. `test_integration.py`, and the Textual
   headless mirror's own gotchas.
+- [docs/world-effects.md](docs/world-effects.md) — deliberate changes to the scene (set fire,
+  barricade, bind, douse): maneuver-shaped abilities placing hazards and conditions, the `on_block`
+  status trigger, barricaded exits, arson, and the model's narrow confirmation of a match.
 - [docs/extended-goals.md](docs/extended-goals.md) — not yet started, except where noted.

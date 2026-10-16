@@ -152,7 +152,8 @@ def _apply_summon(ctx, actor_name, result, named_ability):
         return
     summoned_name = ctx.hooks.summon_creature(summon_spec, actor_name)
     if summoned_name:
-        result.effects.append(SummonEffect(name=summoned_name))
+        hazard = ctx.entities.get(summoned_name, {}).get("subtype") == "hazard"
+        result.effects.append(SummonEffect(name=summoned_name, hazard=hazard))
 
 
 def _apply_dispel(ctx, result, named_ability, target_name):

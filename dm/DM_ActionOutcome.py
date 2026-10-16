@@ -53,8 +53,10 @@ class LootEffect:
 
 @dataclass
 class SummonEffect:
-    """!@brief A temporary ally conjured by a successful summoning cast."""
+    """!@brief A temporary ally conjured by a successful summoning cast -- or, with hazard set, a
+        fire, barricade or other piece of the scene a world effect placed (world_effects.toml)."""
     name: str
+    hazard: bool = False
 
 
 @dataclass

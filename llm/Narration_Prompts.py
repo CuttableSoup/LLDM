@@ -83,6 +83,8 @@ def _format_loot_effect(effect, actor):
     return f" The player gains: {', '.join(gained)}." if gained else ""
 
 def _format_summon_effect(effect, actor):
+    if effect.hazard:
+        return f" {actor.capitalize()} causes {effect.name} -- it is part of the scene now, not an ally."
     return f" {actor.capitalize()} summons {effect.name} to fight at their side."
 
 def _format_craft_effect(effect, actor):

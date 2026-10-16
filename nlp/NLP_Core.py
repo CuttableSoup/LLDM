@@ -16,7 +16,7 @@ import threading
 import numpy as np
 import torch
 from sentence_transformers import SentenceTransformer, util
-from resolution.AdHoc_Generation import adjudicate_player_input, classify_arrest_reply
+from resolution.AdHoc_Generation import adjudicate_player_input, classify_arrest_reply, confirm_mechanic_fit
 from transformers import pipeline
 
 from nlp.Intent_Classification import (
@@ -169,6 +169,8 @@ class SentenceTransformerMatcher(IntentMatcher):
         # {tone: meaning} the setting authors for a wordless gesture (Social_Resolution.gesture_tones),
         # told to the adjudicator; empty means that kind is never offered.
         self.gesture_tones = {}
+        # {ability name: description} for world effects confirmed by the model before they commit.
+        self.confirmed_abilities = {}
         # Below this cosine-similarity score, treat the input as not matching any skill at
         # all rather than forcing it onto whatever phrase happened to score highest
         self.confidence_threshold = 0.5
@@ -272,6 +274,18 @@ class SentenceTransformerMatcher(IntentMatcher):
         self.skill_names = list(self.skills_data.keys())
         self.gesture_tones = data.get("gesture_tones", {})
         entities_data = data.get("entities", {})
+        # World effects whose embedding match is checked with the model before it commits
+        # (confirm_fit) -- the ones that change the world or break a law.
+        # An ability is always confirmed; a skill only when the line names no target (see
+        # confirm_fit) -- "attack the wolf with my sword" is plainly an attack, while "look for
+        # something I can use as a weapon" has the same similarity score and no one to attack.
+        self.confirmed_abilities = {
+            name: (entity.get("description", name), entity["confirm_with_model"], False)
+            for name, entity in entities_data.items() if entity.get("confirm_with_model")
+        }
+        for name, skill in self.skills_data.items():
+            if skill.get("confirm_with_model") and name not in self.confirmed_abilities:
+                self.confirmed_abilities[name] = (skill.get("description", name), skill["confirm_with_model"], True)
 
         # Every live supertype == "modifier" entity's own name (ex: "power attack",
         # "empowered") -- matched literally (match_modifier), not semantically, so a modifier
@@ -600,6 +614,20 @@ class SentenceTransformerMatcher(IntentMatcher):
                 stripped = processed_text[:match.start()] + processed_text[match.end():]
                 return name, re.sub(r"\s+", " ", stripped).strip()
         return None, processed_text
+
+    def confirm_fit(self, text, ability_name, has_target=False):
+        """!
+        @brief For an ability its data marks "confirm_with_model": whether the line really is an
+            attempt at it ("yes"/"no"), None for any other ability or no usable answer (the match
+            stands). See AdHoc_Generation.py's confirm_mechanic_fit.
+        """
+        authored = self.confirmed_abilities.get(ability_name)
+        if authored is None:
+            return None
+        description, hint, only_untargeted = authored
+        if only_untargeted and has_target:
+            return None
+        return confirm_mechanic_fit(text, ability_name, description, hint if isinstance(hint, str) else "")
 
     def adjudicate(self, text, present_names=(), partner=None, recent_narration="", offers=()):
         """!

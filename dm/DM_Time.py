@@ -1,4 +1,5 @@
 import resolution.Calendar as Calendar
+import resolution.Combat_Actions as Combat_Actions
 import resolution.Combat_Resolution as Combat_Resolution
 from dm.DM_Types import DMCoreProtocol
 from persistence.slot import Persistable
@@ -93,10 +94,28 @@ class TimeMixin(DMCoreProtocol):
         self.current_block += blocks
         self._expire_prompt_directives(blocks)
         self._tick_conditions_by_block(blocks)
+        self._evaluate_block_statuses(blocks)
+        self._expire_summons_by_block(blocks)
         if blocks:
             # Witnesses who lived long enough to tell someone (DM_Law.py).
             self.law_enforcement.file_pending_reports()
         return self.get_time_state()
+
+    def _evaluate_block_statuses(self, blocks):
+        """!
+        @brief Fires every [[status]] trigger = "on_block" once per block elapsed, against every
+            present scene entity (Combat_Actions.evaluate_proximity_statuses) -- the non-combat
+            counterpart to "on_round": a set fire that keeps burning whoever shares its band
+            while time passes, outside any fight. Whoever a status lands a condition on gets one
+            implicit round of upkeep resolved at once, exactly as _evaluate_arrival_statuses does,
+            since no round clock runs outside combat to tick an upkeep_damage condition.
+        @param blocks How many blocks just elapsed.
+        """
+        for _ in range(max(0, blocks)):
+            for entity_name in list(self.scenario_entities):
+                for target_name in Combat_Actions.evaluate_proximity_statuses(self.world, entity_name, "on_block"):
+                    self.apply_round_upkeep(target_name)
+                    Combat_Resolution.tick_condition_durations(self.world, target_name, "rounds")
 
     def _tick_conditions_by_block(self, blocks):
         """!

@@ -446,7 +446,7 @@ class TestUniversalAbilities(DMTestCase):
     def test_athletics_lists_its_own_cmb_style_maneuvers(self):
         self.assertEqual(
             set(self.dm_core.skills["athletics"]["abilities"]),
-            {"trip", "sunder", "bull rush", "grapple", "pin", "disarm"},
+            {"trip", "sunder", "bull rush", "grapple", "pin", "disarm", "douse", "barricade", "bind", "topple"},
         )
 
     def test_trickery_lists_its_own_maneuvers(self):
@@ -462,7 +462,7 @@ class TestUniversalAbilities(DMTestCase):
             {
                 "trip", "sunder", "disarm", "bull rush", "grapple", "pin", "intimidate",
                 "dirty trick", "feint", "escape artist", "sleight of hand", "treat wounds", "charm",
-                "don a disguise", "drop the disguise",
+                "don a disguise", "drop the disguise", "set fire", "douse", "barricade", "bind", "cut", "topple",
             },
         )
 

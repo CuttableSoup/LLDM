@@ -517,6 +517,20 @@ class MovementMixin(DMCoreProtocol):
                 return exit_def, None
         return None, "wrong_band"
 
+    def _barricade_standing(self):
+        """!
+        @brief The name of a living scene entity authoring "blocks_exits" (a barricade a world
+            effect piled up -- Rules/<setting>/world_effects.toml), or None. While one stands, no
+            exit of this room or location can be taken: the way out has to be smashed (sunder
+            works on any object) or the barricade dismantled first. A deliberate simplification --
+            it blocks every way out, not one named door.
+        """
+        for name in self.scenario_entities:
+            entity = self.entities.get(name, {})
+            if entity.get("blocks_exits") and Combat_Resolution.get_current_hp(self.world, name) > 0:
+                return name
+        return None
+
     def _resolve_room_transition_intent(self, direction, resolved):
         """!
         @brief Handles "move" -- taking a declared exit to a different room *within the current
@@ -537,6 +551,10 @@ class MovementMixin(DMCoreProtocol):
         exit_def, reason = self._find_room_exit(self._current_room(), direction)
         if exit_def is None:
             resolved(False, reason=reason, direction=direction)
+            return
+
+        if self._barricade_standing():
+            resolved(False, reason="barricaded", direction=direction)
             return
 
         if self._any_hostile_present():
@@ -643,6 +661,10 @@ class MovementMixin(DMCoreProtocol):
             self._resume_pending_downtime()
         if self.pending_downtime:
             resolved(False, reason="downtime_interrupted")
+            return
+
+        if self._barricade_standing():
+            resolved(False, reason="barricaded")
             return
 
         exit_def = self._resolve_location_exit(input_text, destination_key)

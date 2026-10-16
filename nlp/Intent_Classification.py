@@ -588,6 +588,14 @@ class IntentMatcher:
             (and, if targetable, for map_to_target too)."""
         raise NotImplementedError
 
+    def confirm_fit(self, text, ability_name, has_target=False):
+        """!
+        @brief "yes"/"no": whether text really is an attempt at ability_name, asked only for an
+            ability whose data marks "confirm_with_model" (a world effect that changes the scene
+            or breaks a law). None -- any other ability, or no usable answer -- leaves the match.
+        """
+        return None
+
     def adjudicate(self, text, present_names=(), partner=None, recent_narration="", offers=()):
         """!
         @brief What a line the classifier's own rules can only guess at mainly is: "action",
@@ -2069,6 +2077,12 @@ class IntentClassifier:
                 target_name, _target_score = self.matcher.map_to_target(processed)
             if target_name:
                 action["target"] = target_name
+            confirm_fit = getattr(self.matcher, "confirm_fit", None)
+            if confirm_fit and confirm_fit(matched_clause, clause_skill, bool(target_name)) == "no":
+                # A similarity score proposed a mechanic the line is not (a candle is not arson, a
+                # search for a weapon is not an attack); the line is left to the adjudicator and the
+                # rules' own fallbacks.
+                continue
             turn_clauses.append(action)
         return best_score
 

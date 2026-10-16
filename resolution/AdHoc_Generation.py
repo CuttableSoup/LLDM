@@ -544,7 +544,8 @@ INPUT_KINDS = {
 GESTURE_KIND = (
     "a wordless social or physical expression toward someone, or at no one, that the game would never "
     "roll dice for and that harms no one -- affection, flirting, greeting, deference, derision or idle "
-    "play: a kiss, a bow, a dance, a caress, leaning close, a lingering look, a rude sign; a touch or "
+    "play: a kiss, a bow, a kneel, a dance, a caress, leaning close, a lingering look, a wink, a glare, "
+    "a rude sign, spitting at someone's feet; a touch or "
     "closeness that only expresses a feeling counts, however suggestive; anything that hurts, "
     "restrains, shoves, grabs hold of or takes something from someone is an action, and words said "
     "aloud are speech"
@@ -681,6 +682,49 @@ def adjudicate_player_input(
     if kind != "action" or game_action not in GAME_ACTIONS or game_action == "other" or not item:
         game_action = item = None
     return {"kind": kind, "game_action": game_action, "item": item, "tone": tone}, ""
+
+
+def confirm_mechanic_fit(text, mechanic, description, hint="", timeout=None):
+    """!
+    @brief Asks the model whether a player's line is really an attempt at the named world effect
+        (Rules/<setting>/world_effects.toml's "confirm_with_model" entries) -- the embedding match
+        that proposed it is only a similarity score, and "light a candle for the dead" scored close
+        enough to "set fire" to commit arson. One yes/no tool call, reasoning off, temperature 0,
+        waiting the backend's own adjudication_timeout.
+    @param text The player's line (the clause that matched), as typed.
+    @param mechanic The matched ability's name.
+    @param description What the ability is, as the setting authors it.
+    @param hint What does and does not count, as the setting authors it (the entity's own
+        "confirm_with_model" text) -- told to the model verbatim.
+    @param timeout Seconds before the rules decide alone; None for the backend's own.
+    @return "yes", "no", or None when the model was unreachable or answered outside the enum --
+            the caller keeps the match, since a missing answer is not evidence against it.
+    """
+    timeout = timeout or get_backend().adjudication_timeout
+    messages = [
+        {"role": "system", "content": "You check whether a tabletop game's rules mechanic is what a player is actually attempting."},
+        {"role": "user", "content": (
+            f"The player typed: \"{text}\"\n"
+            f"The game matched it to the action \"{mechanic}\": {description}\n"
+            f"Is the player really attempting that? {hint} Merely saying or asking something is "
+            "never an attempt. Answer yes or no.\nCall confirm_match."
+        )},
+    ]
+    tools = [
+        {"type": "function", "function": {
+            "name": "confirm_match", "description": "Says whether the player's line is the matched action.",
+            "parameters": {"type": "object", "properties": {"answer": {"type": "string", "enum": ["yes", "no"]}}, "required": ["answer"]},
+        }},
+        decline_tool_schema("Call this only if the line is empty or unreadable."),
+    ]
+    function_name, payload = decide(
+        messages, tools, {"confirm_match"}, timeout,
+        max_tokens=ADJUDICATION_MAX_TOKENS, reasoning_effort=DIFFICULTY_REASONING, temperature=0,
+    )
+    if function_name is None:
+        return None
+    answer = str(payload.get("answer", "")).strip().lower()
+    return answer if answer in ("yes", "no") else None
 
 
 # How a player can answer a guard's arrest demand (DM_Enforcement.py) -- see

@@ -178,7 +178,7 @@ description = "A practiced wriggle and twist, meant to slip free of a grapple."
 keywords = [ "escape the grapple", "break free", "wriggle free", "slip free" ]
 skill = [ "escape" ]
 range = 0
-on_pass = { do = "dismiss_condition", entity = "actor", name = "grappled" }
+on_pass = [ { do = "dismiss_condition", entity = "actor", name = "grappled" }, { do = "dismiss_condition", entity = "actor", name = "bound" } ]
 
 # Pathfinder's own "Sleight of Hand" (already a literal finesse keyword, skills.toml) -- the
 # first authored program to actually need the transfer_currency op (see
@@ -226,6 +226,9 @@ victim = "target"
 name = "treat wounds"
 supertype = "technique"
 subtype = "maneuver"
+# Confirmed with the model (docs/world-effects.md): "carry the wounded man" and a hug both scored
+# close enough to tending wounds to roll medicine.
+confirm_with_model = "Bandaging, dressing, healing or otherwise tending someone's injuries counts. Carrying, lifting, dragging, hugging, holding or comforting someone does not."
 description = "Bandages, salves, and a steady hand, tending to someone's injuries."
 keywords = [ "treat their wounds", "bandage them", "bandage him up", "tend to their wounds", "patch them up" ]
 skill = [ "medicine" ]

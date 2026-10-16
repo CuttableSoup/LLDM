@@ -11,6 +11,7 @@ _REASON_TEXT = {
     "no_exit": "there's no way through in that direction",
     "wrong_band": "the player isn't standing in the right spot to reach that way out",
     "blocked_by_enemies": "something hostile is still standing in the way",
+    "barricaded": "the way out is barricaded -- piled-up furniture would have to be smashed or dragged clear first",
 }
 
 

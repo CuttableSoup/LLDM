@@ -1128,6 +1128,15 @@ class TestIntentClassification(unittest.TestCase):
         self.assertEqual(events[0]["payload"]["clauses"], [{"kind": "action", "skill": "brawling", "score": 0.8}])
         self.assertFalse(adjudication.asked)
 
+    def test_a_world_effect_the_model_denies_is_dropped_and_one_it_confirms_stands(self):
+        # "light a candle for the dead" scored close enough to "set fire" to commit arson.
+        for answer, expected in (("no", "action_not_understood"), ("yes", "turn_detected"), (None, "turn_detected")):
+            matcher = FakeMatcher(actions={"light a candle for the dead": ("set fire", 0.7)})
+            matcher.confirmations = {"light a candle for the dead": answer} if answer else {}
+            _processed, events, _adjudication = IntentClassifier(matcher).classify("Light a candle for the dead")
+            self.assertEqual(events[0]["event"], expected, answer)
+            self.assertEqual(matcher.confirmed, [("light a candle for the dead", "set fire")])
+
     def test_no_listener_means_a_gesture_is_never_asked_about(self):
         alone = FakeMatcher()
         alone.adjudications = {"dance": {"kind": "gesture", "game_action": None, "item": None, "tone": "neutral"}}
